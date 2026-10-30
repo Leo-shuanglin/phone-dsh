@@ -211,7 +211,7 @@ recorded in [README.md](README.md) §4. The states are ordered, followed by that
 
 ## 5. MCP calls
 
-Every MCP tool request sent by the worker crosses the host loopback `/mcp` reverse proxy with an
+Proxied MCP tool requests cross the host loopback `/mcp` reverse proxy with an
 `Idempotency-Key: <idem_key>` header (64 lowercase hex, §1). The host records the request and
 response in the same ledger under that key with entry kind `mcp`, and replays the recorded response
 for a repeated key instead of forwarding a duplicate side effect.
@@ -222,7 +222,7 @@ for a repeated key instead of forwarding a duplicate side effect.
 - The MCP JSON-RPC `id` is a transport correlation only and is never used as an idempotency key.
   Header names are case-insensitive on HTTP; the value is opaque and echoed unchanged.
 - A request without the header is forwarded but cannot be deduplicated; side-effecting tools are
-  expected to send the header.
+  expected to send the header. Native Android tools use the separate [/mcp/native contract](native-mcp.md) and [HTTP golden](golden/native-mcp/tap.json).
 
 ## 6. Later waves
 The fence token, admission and the handoff/reclaim sequence are fixed by handoff.md (W1); the host

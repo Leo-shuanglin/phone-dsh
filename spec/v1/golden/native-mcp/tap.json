@@ -1,0 +1,7 @@
+{
+  "path": "/mcp/native",
+  "method": "POST",
+  "request": {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "android_tap", "arguments": {"x": 12, "y": 34}}},
+  "android_command": "input tap 12 34",
+  "response": {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "exitCode: 0\nfixture"}], "isError": false}}
+}

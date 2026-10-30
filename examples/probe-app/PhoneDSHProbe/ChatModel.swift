@@ -21,6 +21,7 @@ import struct PhoneDSHController.BudgetTable
 import struct PhoneDSHController.RestartPolicy
 import PhoneDSHEngine
 import PhoneDSHShell
+import PhoneDSHADB
 
 // MARK: - Settings persistence
 
@@ -935,6 +936,7 @@ final class ChatModel {
         appendStatus("Booting the host (Worker bundle + image)…")
         observeHost(launch.host)
         do {
+            try await ADBMCPServer.shared.setWorkspaceDirectory(materializedWorkspace)
             try await launch.host.start()
         } catch {
             Self.appendDiagnostic("host start failed: \(error)")
@@ -1081,6 +1083,7 @@ final class ChatModel {
                 configuration.acceleratorNames = names
             }
         }
+        configuration.nativeMCP = ADBMCPServer.shared
         configuration.engine.bootTimeout = ChatHostConfiguration.defaultBootTimeout
         configuration.engine.environment = environment
         let anchor = self.anchor
@@ -1147,6 +1150,7 @@ final class ChatModel {
         observeHost(launch.host)
         do {
             do {
+                try await ADBMCPServer.shared.setWorkspaceDirectory(materializedWorkspace)
                 try await launch.host.start()
             } catch {
                 let state = await launch.host.state

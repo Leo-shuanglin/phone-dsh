@@ -76,6 +76,9 @@ struct SettingsPage: View {
                 link(NativeText("手机权限", "Phone permissions"), icon: "hand.raised",
                      value: phonePermissionSummary) { PhonePermissionsPage(embedded: true) }
                 link(NativeText("网络访问", "Network access"), icon: "network") { EgressAllowListPage() }
+                link(NativeText("Android ADB", "Android ADB"), icon: "iphone.gen3") {
+                    AndroidADBSettingsPage()
+                }
             }
 
             Section(NativeText("对话", "Conversation")) {

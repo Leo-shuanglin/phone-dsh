@@ -28,6 +28,15 @@ import PhoneDSH
 import PhoneDSHEngine
 import PhoneDSHLog
 import PhoneDSHWire
+import PhoneDSHADB
+
+private actor SmokeAndroidExecutor: ADBCommandExecuting {
+    var commands: [String] = []
+    func shell(endpoint: ADBEndpoint, command: String, timeout: TimeInterval, outputLimit: Int) async throws -> ADBShellResult {
+        commands.append(command)
+        return ADBShellResult(stdout: Data("package:/data/app/example/base.apk=com.example.smoke installer=com.android.vending\n".utf8))
+    }
+}
 
 @MainActor
 final class PhoneDSHSmokeTests: XCTestCase {
@@ -66,6 +75,7 @@ final class PhoneDSHSmokeTests: XCTestCase {
         report.set("target_path", Self.targetPath)
 
         let mock = MockModelUpstream()
+        let android = SmokeAndroidExecutor()
         var window: NSWindow?
         var engine: WebEngine?
         var host: PhoneDSHHost?
@@ -118,6 +128,14 @@ final class PhoneDSHSmokeTests: XCTestCase {
                 drainDeadline: 2,
                 helloTimeout: 240)
             configuration.engine.bootTimeout = 240
+            // Real Worker MCP transport, with only the Android device simulated.
+            let adbDefaultsName = "phone-dsh-adb-smoke-" + UUID().uuidString
+            let adbDefaults = UserDefaults(suiteName: adbDefaultsName)!
+            addTeardownBlock { adbDefaults.removePersistentDomain(forName: adbDefaultsName) }
+            let adbSettings = ADBSettings(defaults: adbDefaults)
+            try adbSettings.save(ADBConfiguration(enabled: true, host: "192.0.2.1"))
+            configuration.nativeMCP = ADBMCPServer(settings: adbSettings, executor: android,
+                receiptDirectory: workspace.appendingPathComponent("adb-receipts"))
             // The host injects the launch token/channel/gateway environment
             // itself (D24). Only the scripted model route is App-provided; an
             // explicit entry wins over the injected value of the same name.
@@ -275,6 +293,10 @@ final class PhoneDSHSmokeTests: XCTestCase {
             let inventory = try await nativeTransport.call("phone/listTools", args: .object([:]))
             XCTAssertEqual(inventory["scope"]?.stringValue, "global")
             XCTAssertNotNil(inventory["tools"]?.arrayValue)
+            let androidTools = inventory["tools"]?.arrayValue?.filter {
+                $0["name"]?.stringValue?.hasPrefix("mcp__phone__android_") == true
+            } ?? []
+            XCTAssertEqual(androidTools.count, 25, "native Android tools must reach the real Worker registry")
             let scheduled = try await nativeTransport.call("phone/createSchedule", args: .object(["request": .object([
                 "sessionId": .string(session.id), "title": .string("Native UI fixture"),
                 "prompt": .string("Disposable local test reminder"), "after_seconds": .number(600)
@@ -440,6 +462,26 @@ final class PhoneDSHSmokeTests: XCTestCase {
             ])
             report.set("not_implemented_fail_count",
                        eventLog.notImplementedFailLines.count)
+            // A scripted model tool call must traverse the real DSH registry,
+            // Worker fetch, authenticated loopback MCP, and native ADB harness.
+            mock.script = .tool(name: "mcp__phone__android_list_packages", argumentsJSON: Data("{\"kind\":\"third_party\"}".utf8), finalText: "Android apps listed.")
+            let androidSession = try await resumedHarness.openSession(HarnessSessionRequest(workspace: "/dsh/workspace"))
+            let androidStart = mock.requestCount
+            try await resumedHarness.send(.prompt(text: "List third-party apps on the configured Android device.", attachments: [],
+                                                  requestID: "smoke-android"), to: androidSession.id)
+            try await smokeWait(timeout: 120, label: "native Android tool result reaches model") {
+                mock.requests.dropFirst(androidStart).contains {
+                    MockModelUpstream.lastMessageHasToolResult($0.body)
+                        && String(decoding: $0.body, as: UTF8.self).contains("com.example.smoke")
+                }
+            }
+            let androidCommands = await android.commands
+            XCTAssertEqual(androidCommands, ["pm list packages -f -i --user current -3"])
+            let receiptFiles = try FileManager.default.contentsOfDirectory(at: workspace.appendingPathComponent("adb-receipts"),
+                                                                           includingPropertiesForKeys: nil)
+            XCTAssertEqual(receiptFiles.count, 1, "Worker MCP must carry a durable idempotency key")
+            report.set("android_native_mcp", ["tool_count": androidTools.count, "command_count": androidCommands.count,
+                                               "model_received_result": true, "physical_device": false])
             report.finish(ok: true)
         } catch {
             failure = error

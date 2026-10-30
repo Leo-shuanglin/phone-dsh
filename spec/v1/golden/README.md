@@ -4,6 +4,10 @@ These files are the interoperability oracle for the Swift and TypeScript codecs.
 is an independent example: `seq` and `mseq` values from different files are not one connection
 history and MUST NOT be replayed as a stream.
 
+`native-mcp/tap.json` and `native-mcp/package-management.json` are additive
+native MCP HTTP request/result goldens, consumed by `ADBMCPTests`; they are
+not binary channel frames.
+
 ## 1. Frame vector shape
 
 Every `golden/frames/<type-name>-<n>.json` is a JSON object with exactly these members:

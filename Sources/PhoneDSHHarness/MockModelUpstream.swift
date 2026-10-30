@@ -57,6 +57,8 @@ public enum MockModelScript: Sendable {
     /// One fixed tool call per user turn, then a fixed final message after the
     /// tool result. Works for any prompt, which is what a scenario mock needs.
     case generic(command: String, toolText: String, finalText: String)
+    /// One named tool call per user turn, for integration paths outside bash.
+    case tool(name: String, argumentsJSON: Data, finalText: String)
     /// Several actual tool executions, one per model reply, then final text.
     case sequence(tools: [MockModelToolCall], finalText: String)
 }
@@ -363,6 +365,7 @@ public final class MockModelUpstream: @unchecked Sendable {
         let finalText: String
         var scriptedTool: MockModelToolCall?
         var scriptedToolID: String?
+        var namedTool: (name: String, arguments: Data)?
         switch script {
         case .fileWrite:
             respondWithTool = Self.transcriptHasToolResult(body) == false
@@ -376,6 +379,13 @@ public final class MockModelUpstream: @unchecked Sendable {
             toolDescription = "Run the scenario's fixed command"
             pendingText = toolText
             finalText = reply
+        case .tool(let name, let arguments, let reply):
+            respondWithTool = Self.lastMessageHasToolResult(body) == false
+            toolCommand = ""
+            toolDescription = "Run the configured integration tool"
+            pendingText = "I will run the configured tool."
+            finalText = reply
+            namedTool = (name, arguments)
         case .sequence(let tools, let reply):
             let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
             let messages = object?["messages"] as? [[String: Any]] ?? []
@@ -430,16 +440,16 @@ public final class MockModelUpstream: @unchecked Sendable {
                 "command": toolCommand,
                 "description": toolDescription,
             ]
-            let inputJSON = (try? JSONSerialization.data(withJSONObject: input,
-                                                         options: [.sortedKeys]))
-                .map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+            let inputJSON = namedTool.map { String(decoding: $0.arguments, as: UTF8.self) }
+                ?? (try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys]))
+                    .map { String(decoding: $0, as: UTF8.self) } ?? "{}"
             emit("content_block_start", [
                 "type": "content_block_start",
                 "index": 1,
                 "content_block": [
                     "type": "tool_use",
                     "id": scriptedToolID ?? "toolu_smoke_\(helper)",
-                    "name": scriptedTool?.name ?? "bash",
+                    "name": namedTool?.name ?? scriptedTool?.name ?? "bash",
                     "input": [:],
                 ],
             ])

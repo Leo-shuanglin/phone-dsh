@@ -655,6 +655,7 @@
       config:
         serverName: phone
         transport: streamable-http
+        toolCallTimeoutMs: 130000
         url: !!js "process.env.PDSH_PHONE_MCP_URL ?? 'http://127.0.0.1:1/mcp'"
         headers:
           Authorization: !!js "`Bearer ${process.env.PDSH_PHONE_MCP_TOKEN ?? ''}`"
