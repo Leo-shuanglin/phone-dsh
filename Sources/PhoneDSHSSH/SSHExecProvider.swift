@@ -124,7 +124,11 @@ public final class SSHExecProvider: ExecProvider, @unchecked Sendable {
                 } catch {
                     code = 1
                     if !operation.cancelled {
-                        continuation.yield(.stderr(seq: 0, data: Data("\(request.argv[0]): \(error.localizedDescription)\n".utf8)))
+                        // NIO/Citadel errors often have no LocalizedError
+                        // conformance: Foundation then hides the useful enum
+                        // case behind an opaque numeric error code.
+                        let detail = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                        continuation.yield(.stderr(seq: 0, data: Data("\(request.argv[0]): \(detail)\n".utf8)))
                     }
                 }
                 await operation.close()

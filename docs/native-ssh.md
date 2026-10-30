@@ -47,6 +47,10 @@ password authentication can be used. Prefer Ed25519. RSA authentication uses the
 legacy ssh-rsa signature algorithm and will fail on servers which disable it;
 the app does not change server policy or enable weaker server algorithms.
 
+Password authentication must also be enabled by the server for that user.
+A saved password cannot authenticate to a key-only server; authorize a dedicated
+Ed25519 public key there and import its private key into the app instead.
+
 Examples in chat shell tools:
 
 ```sh
@@ -61,6 +65,14 @@ paths are literal SFTP paths: no wildcard/tilde/shell expansion. Native SSH
 does not inherit the Worker's cwd or environment. Background iOS suspension
 can interrupt a connection; interrupted remote writes are not automatically
 retried. Native networking does not need an intermediary HTTP server.
+
+## Installing an updated build
+
+Rebuild/stage the Worker assets with `examples/probe-app/scripts/copy-bundle-assets.sh`
+before building and installing the iOS app. Updating only Swift code leaves the old
+Worker in the app bundle: it can apply the local accelerator's three-second deadline
+to SSH and send raw SCP operands which the native transfer provider rejects.
+The updated Worker must include the SCP VFS adapter and the SSH/SCP remote deadline.
 
 ## Verification
 

@@ -52,6 +52,21 @@ final class SSHConnectionTests: XCTestCase {
         XCTAssertTrue(bounded.truncated)
     }
 
+    func testPasswordDisabledAndRejectedHaveActionableErrors() async throws {
+        let config = try fixture()
+        var keyOnly = config.connection
+        keyOnly.port = config.keyOnlyPort
+        let start = Date()
+        do { _ = try await keyOnly.connect(timeout: 5); XCTFail("Key-only server accepted a password") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("authorized key"), String(describing: error)) }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 3)
+
+        var wrongPassword = config.connection
+        wrongPassword.password = "deliberately-wrong-fixture-password"
+        do { _ = try await wrongPassword.connect(timeout: 5); XCTFail("Wrong password accepted") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("password") && error.localizedDescription.contains("Settings"), String(describing: error)) }
+    }
+
     func testKeyAuthenticationAndChangedHostKeyRefusal() async throws {
         let config = try fixture()
         let observed = try await SSHConnection.inspectHostKey(host: "127.0.0.1", port: config.port)
@@ -116,7 +131,7 @@ final class SSHConnectionTests: XCTestCase {
     }
 
     private struct Fixture: Decodable {
-        var port: Int; var stalledPort: Int; var password: String; var hostKey: String; var otherHostKey: String; var privateKey: String; var encryptedKey: String; var rsaKey: String; var remote: String
+        var port: Int; var stalledPort: Int; var keyOnlyPort: Int; var password: String; var hostKey: String; var otherHostKey: String; var privateKey: String; var encryptedKey: String; var rsaKey: String; var remote: String
         var connection: SSHConnection { SSHConnection(host: "127.0.0.1", port: port, username: "fixture", password: password, trustedHostKey: hostKey) }
     }
     private func fixture() throws -> Fixture {

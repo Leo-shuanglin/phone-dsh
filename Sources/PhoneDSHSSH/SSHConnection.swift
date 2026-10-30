@@ -50,7 +50,21 @@ public struct SSHConnection: Sendable {
         var settings = SSHClientSettings(host: host, port: port, authenticationMethod: authentication,
                                          hostKeyValidator: .trustedKeys([key]))
         settings.connectTimeout = .milliseconds(Int64(max(1, min(15, timeout)) * 1000))
-        return try await Self.connect(settings: settings, timeout: timeout)
+        do {
+            return try await Self.connect(settings: settings, timeout: timeout)
+        } catch let error as SSHClientError {
+            switch error {
+            case .allAuthenticationOptionsFailed:
+                throw SSHFailure(privateKey.isEmpty
+                    ? "SSH authentication failed: the server rejected the password or requires an authorized key. Check Settings → SSH; do not keep retrying the same credential."
+                    : "SSH key authentication failed. Check the username and whether this public key is authorized on the server.")
+            case .unsupportedPasswordAuthentication:
+                throw SSHFailure("Server does not allow password authentication. Configure an authorized key in Settings → SSH.")
+            case .unsupportedPrivateKeyAuthentication:
+                throw SSHFailure("Server does not allow this SSH key authentication method.")
+            default: throw error
+            }
+        }
     }
 
     /// Observe the server key and deliberately reject the handshake before

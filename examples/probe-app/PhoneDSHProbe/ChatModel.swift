@@ -1807,7 +1807,15 @@ final class ChatModel {
                 appendStatus("Autostop requested by the launch environment; the send below must boot the engine")
             }
             if let prompt, !prompt.isEmpty {
-                let sent = await send(prompt)
+                var sent = false
+                // onAppear may still be booting the host/session. Wait for the
+                // chat transport before dispatching an unattended test prompt.
+                for _ in 0..<300 {
+                    if canSend { sent = await send(prompt); break }
+                    guard busy || isStarted else { break }
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+                if !sent { appendStatus("Autoprompt not sent: the chat session did not become ready") }
                 appendStatus("Autostart prompt delivered=\(sent) started=\(isStarted)")
             }
         }

@@ -46,11 +46,15 @@ async def main():
 
     server = await asyncssh.create_server(Server, '127.0.0.1', 0, server_host_keys=[host_key],
         process_factory=process, sftp_factory=lambda channel: asyncssh.SFTPServer(channel, chroot=str(remote)))
+    class KeyOnlyServer(Server):
+        def password_auth_supported(self): return False
+    key_only = await asyncssh.create_server(KeyOnlyServer, '127.0.0.1', 0, server_host_keys=[host_key],
+        process_factory=process)
     async def stall(reader, writer):
         try: await reader.read()
         finally: writer.close()
     stalled = await asyncio.start_server(stall, '127.0.0.1', 0)
-    config = dict(stalledPort=stalled.sockets[0].getsockname()[1], port=server.get_port(), password=password, hostKey=host_key.export_public_key().decode().strip(),
+    config = dict(keyOnlyPort=key_only.get_port(), stalledPort=stalled.sockets[0].getsockname()[1], port=server.get_port(), password=password, hostKey=host_key.export_public_key().decode().strip(),
         privateKey=client_key.export_private_key('openssh').decode(),
         encryptedKey=client_key.export_private_key('openssh', passphrase='fixture-passphrase', cipher_name='aes256-ctr', rounds=16).decode(),
         rsaKey=rsa_key.export_private_key('openssh').decode(), remote=str(remote), otherHostKey=asyncssh.generate_private_key('ssh-ed25519').export_public_key().decode().strip())
