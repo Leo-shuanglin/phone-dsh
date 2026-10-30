@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import PhoneDSHSSH
 // phone-dsh phone DSH — iOS probe app: interactive chat over the phone host.
 //
 // The Chat page boots the same `PhoneDSHHost` the scenario runner uses, opens
@@ -1083,6 +1084,12 @@ final class ChatModel {
                 configuration.acceleratorNames = names
             }
         }
+        configuration.execProvider = SSHExecProvider(
+            workspace: materializedWorkspace, home: materializedHome, fallback: shell,
+            byteLimit: configuration.budgets.singleFileBytes,
+            connections: { await SSHSettingsStore.shared.list() },
+            resolve: { destination in try await SSHSettingsStore.shared.resolve(destination) })
+        configuration.acceleratorNames = shell.channelAcceleratorNames + ["ssh", "scp"]
         configuration.nativeMCP = ADBMCPServer.shared
         configuration.engine.bootTimeout = ChatHostConfiguration.defaultBootTimeout
         configuration.engine.environment = environment

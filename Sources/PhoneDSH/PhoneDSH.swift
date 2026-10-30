@@ -139,7 +139,7 @@ public struct PhoneDSHConfiguration: Equatable, Sendable {
     public var engine: WebEngineConfiguration
     /// Read-only accelerator provider used when ``execProvider`` is `nil`.
     public var accelerators: PDSHShellProvider
-    /// Read-only accelerator provider; overrides ``accelerators`` when set.
+    /// Native accelerator provider (local mounts stay read-only); overrides ``accelerators`` when set.
     public var execProvider: (any ExecProvider)?
     /// Names advertised in the host HELLO caps as `accelerator:<name>`.
     ///
@@ -261,7 +261,7 @@ public struct PhoneDSHConfiguration: Equatable, Sendable {
     ///     endpoint must use `https`.
     ///   - credentialProvider: Host-side model and remote-DSH credentials;
     ///     never sent to the Worker.
-    ///   - execProvider: Read-only accelerator process launcher. `nil` uses
+    ///   - execProvider: Native accelerator launcher; must not write local mounts. `nil` uses
     ///     the bundled ``PhoneDSHShell/PDSHShellProvider``.
     ///   - acceleratorNames: Commands advertised as `accelerator:<name>` in the
     ///     host HELLO caps.

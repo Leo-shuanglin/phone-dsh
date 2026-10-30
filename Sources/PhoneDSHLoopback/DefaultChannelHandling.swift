@@ -206,6 +206,9 @@ public actor DefaultChannelHandling: ChannelHandling {
         guard body.cwd.hasPrefix("/") else {
             throw PhoneWireError(code: .badPayload, message: "cwd must be absolute")
         }
+        if body.stdin?.mode == "data" && body.stdin?.data.flatMap({ Data(base64Encoded: $0) }) == nil {
+            throw PhoneWireError(code: .badPayload, message: "stdin data must be base64")
+        }
         if let grace = body.graceMS, !(1...60000).contains(grace) {
             throw PhoneWireError(code: .badPayload, message: "grace_ms must be 1-60000")
         }
@@ -291,7 +294,9 @@ public actor DefaultChannelHandling: ChannelHandling {
                                   deadline: body.deadline.map {
                                       Date(timeIntervalSince1970: Double($0) / 1000)
                                   },
-                                  tier: body.tierDate)
+                                  tier: body.tierDate,
+                                  standardInput: body.stdin?.mode == "data"
+                                    ? body.stdin?.data.flatMap { Data(base64Encoded: $0) } : nil)
         Task { [weak self] in
             await self?.drive(record: record, request: request, provider: execProvider)
         }

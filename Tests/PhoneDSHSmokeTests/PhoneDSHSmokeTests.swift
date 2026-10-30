@@ -28,6 +28,8 @@ import PhoneDSH
 import PhoneDSHEngine
 import PhoneDSHLog
 import PhoneDSHWire
+import PhoneDSHSSH
+import PhoneDSHShell
 import PhoneDSHADB
 
 private actor SmokeAndroidExecutor: ADBCommandExecuting {
@@ -127,6 +129,18 @@ final class PhoneDSHSmokeTests: XCTestCase {
                 ]),
                 drainDeadline: 2,
                 helloTimeout: 240)
+            let sshFixturePath = ProcessInfo.processInfo.environment["PDSH_SSH_TEST_CONFIG"]
+            if let sshFixturePath {
+                let fixture = try JSONDecoder().decode(SmokeSSHFixture.self,
+                    from: Data(contentsOf: URL(fileURLWithPath: sshFixturePath)))
+                let connection = SSHConnection(host: "127.0.0.1", port: fixture.port,
+                    username: "fixture", password: fixture.password, trustedHostKey: fixture.hostKey)
+                configuration.execProvider = SSHExecProvider(
+                    workspace: workspace.appendingPathComponent("materialized/workspace"),
+                    home: workspace.appendingPathComponent("materialized/home"),
+                    fallback: PDSHShellProvider(), connections: { "test" }, resolve: { _ in connection })
+                configuration.acceleratorNames = ["ssh", "scp"]
+            }
             configuration.engine.bootTimeout = 240
             // Real Worker MCP transport, with only the Android device simulated.
             let adbDefaultsName = "phone-dsh-adb-smoke-" + UUID().uuidString
@@ -199,6 +213,23 @@ final class PhoneDSHSmokeTests: XCTestCase {
                 "sessionId": .string(session.id)
             ])]))
             XCTAssertFalse(restored["archivedSessionIds"]?.arrayValue?.contains(.string(session.id)) == true)
+            if sshFixturePath != nil {
+                let remote = "/smoke-" + UUID().uuidString + ".bin"
+                let command = "printf AP+A | base64 -d > ssh-source.bin && scp ssh-source.bin test:" + remote
+                    + " && scp test:" + remote + " ssh-result.bin && cmp ssh-source.bin ssh-result.bin && ssh test connected"
+                let result = try await nativeTransport.call("phone/shellRun", args: .object(["request": .object([
+                    "command": .string(command), "cwd": .string("/dsh/workspace"),
+                    "timeoutMs": .number(30_000), "execId": .string("ssh-smoke-" + UUID().uuidString)
+                ])]))
+                guard result["exitCode"] == .number(0), result["stdout"]?.stringValue?.contains("connected") == true else {
+                    throw SmokeError.assertion("SSH/SCP Worker round trip failed: \(result)")
+                }
+                try await smokeWait(timeout: 10, label: "SCP download materialized via VFS WAL") {
+                    (try? Data(contentsOf: workspace.appendingPathComponent("materialized/workspace/ssh-result.bin"))) == Data([0, 255, 128])
+                }
+                report.set("ssh_scp_worker_roundtrip", "PASS")
+                print("NATIVE_SSH_SCP_ROUNDTRIP PASS")
+            }
             report.set("native_management_contracts", "PASS")
             report.set("session_id", session.id)
             eventLog.attach(harness: harness, sessionID: session.id)
@@ -533,4 +564,10 @@ final class PhoneDSHSmokeTests: XCTestCase {
     private static func ms(since start: Date) -> Double {
         (Date().timeIntervalSince(start) * 1000).rounded()
     }
+}
+
+private struct SmokeSSHFixture: Decodable {
+    let port: Int
+    let password: String
+    let hostKey: String
 }

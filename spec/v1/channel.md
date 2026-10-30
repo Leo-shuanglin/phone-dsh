@@ -160,7 +160,7 @@ HELLO is the first frame of each direction with `seq = 1`; a later HELLO is `PRO
 **Fence object.** `{owner: string, generation: u64, wal_seq: u64}`. `owner` is 1–64 characters of `[A-Za-z0-9._:-]`; `generation` and `wal_seq` are non-negative integers.
 The host rejects a worker HELLO whose `fence.generation` is below the host's current generation, or whose `owner` differs from the current owner, with `FENCE_STALE`, then closes.
 
-**Capabilities.** Worker caps are exactly `["channel/1","vfs-sink/1","journal/1","api/1"]`. Host caps contain at least `channel/1`, `wal/1` and `exec/1`, plus zero or more read-only `accelerator:<name>` entries (names: `rg`, `jaq`, `ts-parse`, `ts-query`, `phone`, `ctx`).
+**Capabilities.** Worker caps are exactly `["channel/1","vfs-sink/1","journal/1","api/1"]`. Host caps contain at least `channel/1`, `wal/1` and `exec/1`, plus optional `accelerator:<name>` entries (`rg`, `jaq`, `ts-parse`, `ts-query`, `phone`, `ctx`, `ssh`, `scp`); local materialized mounts stay read-only (exec.md §3).
 A missing required capability is `PROTO_MISMATCH`. Other capability strings are reserved.
 ### 4.2 EXEC_REQ (`0x20`, worker → host)
 

@@ -690,7 +690,9 @@ function markdownFor(document: CapabilityManifestDocument, compactCommands = fal
     `- <= ${String(limits.max_sub_agents)} sub-agents (1 thermal); restart only at a tool-call boundary (heap/WebContent/24 h).`,
     '',
     '## Network',
-    '- no sockets/DNS/TLS; `curl` only via App `/v1/http` proxy; no wget/nc/ssh/downloads.',
+    document.accelerators.includes('ssh')
+      ? '- curl: /v1/http; native ssh/scp: ssh --help. Remote writes allowed; no Worker sockets.'
+      : '- no sockets/DNS/TLS; `curl` only via App `/v1/http` proxy; no wget/nc/ssh/downloads.',
     `- egress allow-list: ${document.network.egress_reported
       ? boundedList(document.network.egress_allow, egressLimit, 'egress')
       : 'not reported by the host this boot; /v1/http still enforces the host allow-list'}.`,

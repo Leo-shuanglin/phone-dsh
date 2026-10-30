@@ -278,3 +278,20 @@ test('bridge: a session id that is not a D6 identifier is dropped, never forward
   assert.equal(result.exitCode, 0)
   assert.equal(client.requests[0]?.env?.[TOOL_CALL_SESSION_ENV], undefined)
 })
+
+test('bridge streams raw stdout to a consumer and cancels when that consumer fails', async () => {
+  const client = new FakeClient()
+  const bytes = Buffer.from([0, 255, 128])
+  client.events = [
+    { type: 'output', exec_id: 'x', seq: 1, stream: 'stdout', data: bytes.toString('base64') },
+    { type: 'exit', exec_id: 'x', seq: 2, code: 0, signal: null, status: 'exited', quiescent: true },
+  ]
+  const host = createExecBridgeAccelerators({ client, hello: hello(['scp']), revision: () => 0, idempotencyKey: 'scp-test' })
+  const received: Uint8Array[] = []
+  const request = { argv: ['scp'], cwd: '/dsh/workspace', env: {}, stdin: '' }
+  const result = await host.exec({ ...request, onStdout: async data => { received.push(data) } })
+  assert.deepEqual(received, [new Uint8Array(bytes)])
+  assert.equal(result.stdout, '')
+  await assert.rejects(host.exec({ ...request, onStdout: async () => { throw new Error('VFS full') } }), /VFS full/)
+  assert.equal(client.cancelled.length, 1)
+})

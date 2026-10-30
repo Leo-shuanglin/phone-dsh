@@ -86,6 +86,8 @@ targets:
       - package: PhoneDSH
         product: PhoneDSHShell
       - package: PhoneDSH
+        product: PhoneDSHSSH
+      - package: PhoneDSH
         product: PhoneDSHADB
       - package: SwiftMarkdown
         product: Markdown

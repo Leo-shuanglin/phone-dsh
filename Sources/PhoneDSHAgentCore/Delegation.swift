@@ -27,20 +27,25 @@ public struct ExecRequest: Codable, Equatable, Sendable {
     public var env: [String: String]
     public var deadline: Date?
     public var tier: Tier
+    /// Initial bytes from the exec bridge. Providers must not silently drop
+    /// input; a provider without stdin support can explicitly refuse it.
+    public var standardInput: Data?
 
     public init(execID: String, argv: [String], cwd: String, env: [String: String] = [:],
-                deadline: Date? = nil, tier: Tier = .interactive) {
+                deadline: Date? = nil, tier: Tier = .interactive, standardInput: Data? = nil) {
         self.execID = execID
         self.argv = argv
         self.cwd = cwd
         self.env = env
         self.deadline = deadline
         self.tier = tier
+        self.standardInput = standardInput
     }
 
     private enum CodingKeys: String, CodingKey {
         case execID = "exec_id"
         case argv, cwd, env, deadline, tier
+        case standardInput = "stdin_data"
     }
 }
 

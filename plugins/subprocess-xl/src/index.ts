@@ -610,7 +610,7 @@ export class XlSubprocessRuntime extends SubprocessRuntime {
     const identity = workerShellIdentity(resolveProgramIdentity(program, bridge.hello.capabilities.accelerators ?? []))
     // D12: only an advertised read-only accelerator may leave the Worker; the
     // desktop reference transport keeps sending everything to its provider.
-    const workerAccelerator = bridge.transport.kind !== 'node-http' && isAccelerator(identity, bridge.hello)
+    const workerAccelerator = bridge.transport.kind !== 'node-http' && identity !== 'scp' && isAccelerator(identity, bridge.hello)
     const host = bridge.transport.kind === 'node-http' || workerAccelerator
     const spill = this.spill ??= prepareManagedProcessBinding({ onSpillFailure: logSpillFailure(this.ctx.logger('subprocess-xl'), 'subprocess-xl') })
     if (!host) {

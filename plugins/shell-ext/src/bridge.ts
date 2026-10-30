@@ -85,6 +85,8 @@ export interface AcceleratorRequest {
    */
   readonly stdin: string
   readonly signal?: AbortSignal | undefined
+  /** Consume large native transfer output without retaining a second copy. */
+  readonly onStdout?: ((bytes: Uint8Array) => Promise<void>) | undefined
 }
 
 /** One accelerator result. */
@@ -203,7 +205,7 @@ export function createExecBridgeAccelerators(options: ExecBridgeAcceleratorOptio
         argv: [...request.argv],
         cwd: request.cwd,
         env,
-        deadline: Date.now() + deadlineMs,
+        deadline: Date.now() + (options.deadlineMs === undefined && ['ssh', 'scp'].includes(request.argv[0] ?? '') ? 120_000 : deadlineMs),
         grace_ms: graceMs,
         requires_mseq: requiresMseq,
         idem_key: idemKey,
@@ -232,7 +234,8 @@ export function createExecBridgeAccelerators(options: ExecBridgeAcceleratorOptio
         for await (const event of stream) {
           if (event.type === 'output') {
             const bytes = Buffer.from(event.data, 'base64')
-            if (event.stream === 'stdout') stdout.push(new Uint8Array(bytes))
+            if (event.stream === 'stdout' && request.onStdout !== undefined) await request.onStdout(new Uint8Array(bytes))
+            else if (event.stream === 'stdout') stdout.push(new Uint8Array(bytes))
             else stderr += decodeUtf8(new Uint8Array(bytes))
           } else if (event.type === 'exit') {
             exit = event
@@ -247,8 +250,8 @@ export function createExecBridgeAccelerators(options: ExecBridgeAcceleratorOptio
           }
         }
       } catch (error) {
+        await options.client.cancel(execId, { signal: 'SIGTERM', grace_ms: graceMs }).catch(() => {})
         if (request.signal?.aborted === true) {
-          await options.client.cancel(execId, { signal: 'SIGTERM', grace_ms: graceMs }).catch(() => {})
           return { stdout: bytesToByteString(concatBytes(stdout)), stderr: `${stderr}accelerator cancelled\n`, exitCode: 130, signal: 'SIGTERM' }
         }
         throw error instanceof Error ? error : new Error(String(error))

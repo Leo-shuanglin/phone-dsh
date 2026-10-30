@@ -66,6 +66,8 @@ event, not a separate binary prefix.
 
 ## 4. Required variants
 
+- `exec-req-2.json` and `exec-req-3.json` cover optional native SSH command and SFTP download requests.
+
 - `hello-host-1.json` and `hello-worker-1.json` cover both HELLO variants.
 - `error-1.json` — a closing protocol ERROR; `error-2.json` — the non-closing `VFS_REFUSED`
   diagnostic with `path`/`limit`/`reason` (channel.md §4.8, §10); `error-3.json` — the host-side

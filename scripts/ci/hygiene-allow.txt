@@ -46,6 +46,11 @@ userinfo-password@channel\.invalid
 user@api\.example\.com
 docs\.example\.org
 
+# Public OpenSSH protocol/release documentation.
+www\.openssh\.org
+
+# Public third-party license attributions, including upstream author contacts.
+examples/probe-app/PhoneDSHProbe/Resources/SSH-LICENSES\.txt:
 # Public Android setup and AOSP protocol references in the ADB integration docs.
 developer\.android\.com
 android\.googlesource\.com
