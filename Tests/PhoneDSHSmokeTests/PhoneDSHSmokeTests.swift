@@ -327,7 +327,7 @@ final class PhoneDSHSmokeTests: XCTestCase {
             let androidTools = inventory["tools"]?.arrayValue?.filter {
                 $0["name"]?.stringValue?.hasPrefix("mcp__phone__android_") == true
             } ?? []
-            XCTAssertEqual(androidTools.count, 25, "native Android tools must reach the real Worker registry")
+            XCTAssertEqual(androidTools.count, 26, "native Android tools must reach the real Worker registry")
             let scheduled = try await nativeTransport.call("phone/createSchedule", args: .object(["request": .object([
                 "sessionId": .string(session.id), "title": .string("Native UI fixture"),
                 "prompt": .string("Disposable local test reminder"), "after_seconds": .number(600)

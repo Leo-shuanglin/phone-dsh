@@ -205,7 +205,7 @@ export function createExecBridgeAccelerators(options: ExecBridgeAcceleratorOptio
         argv: [...request.argv],
         cwd: request.cwd,
         env,
-        deadline: Date.now() + (options.deadlineMs === undefined && ['ssh', 'scp'].includes(request.argv[0] ?? '') ? 120_000 : deadlineMs),
+        deadline: Date.now() + (options.deadlineMs === undefined && request.argv[0] === 'adb' ? 3_600_000 : options.deadlineMs === undefined && ['ssh', 'scp'].includes(request.argv[0] ?? '') ? 120_000 : deadlineMs),
         grace_ms: graceMs,
         requires_mseq: requiresMseq,
         idem_key: idemKey,

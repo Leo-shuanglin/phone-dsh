@@ -23,7 +23,7 @@ This is crash recovery, not an atomic transaction with the Android device.
 
 The HTTP golden example is [golden/native-mcp/tap.json](golden/native-mcp/tap.json).
 Package management vectors are [golden/native-mcp/package-management.json](golden/native-mcp/package-management.json).
-The tool catalog contains 25 Android tools. Application mutations use the
+The tool catalog contains 26 Android tools. Application mutations use the
 current foreground Android user unless an explicit numeric `userId` is supplied.
 `android_install_apk` requires `source=workspace|device` and an absolute `apkPath`.
 Workspace paths are confined to `/dsh/workspace`, with no symlinks; their required
@@ -36,3 +36,38 @@ The JSON request remains limited to 16 KiB. Remote-device paths never resolve
 against the iPhone workspace. Install, uninstall and clear require both a zero
 exit status and the package manager's `Success` acknowledgement.
 See [Android ADB](../../docs/android-adb.md) for limits and tools.
+
+`android_connect` accepts `host` and optional integer `port` (default 5555),
+validates and persists an enabled target before checking model/OS/display. It
+works while control is disabled, is serialized with other operations and uses
+the same receipt rules. Failed connection checks retain the saved target.
+
+## Worker ADB file transfer bridge
+
+The host advertises accelerator `adb`. Worker commands `adb push LOCAL REMOTE`
+and `adb pull REMOTE [LOCAL]` dispatch `argv=["adb","--pdsh-v1",
+"push"|"pull",absoluteLocalPath,absoluteAndroidPath]` over the normal
+revision-fenced, journaled exec bridge. Pull stdout uses the existing SCP NDJSON
+file/data/end records; the Worker owns committing the destination via VFS/WAL.
+Push reads a regular non-symlink workspace file and sends bytes as shell_v2
+stdin into a temporary sibling, then renames it only after the byte count check.
+Workspace transfers are bounded by the host device file budget, at most
+128 MiB/120 seconds. `/dsh/transfers/NAME` uses the separate native on-disk store
+under Documents/adb-transfers, up to 1 GiB/3600 seconds. The native transfer route
+streams FileHandle input/output in bounded shell_v2 frames and returns only a
+completion message, without SCP records or VFS writes. Native pulls commit a
+sibling temporary file by rename only after success and fsync; failure removes
+the partial. Pull without a local operand defaults to the native store.
+Only individual regular files are supported. No native writes to the derived
+workspace and no automatic side-effect retries are permitted.
+
+`adb stat /dsh/transfers/NAME` dispatches
+`argv=["adb","--pdsh-v1","stat",absoluteLocalPath]`. Its stdout is JSON:
+`{"status":"running","path":"..."}` while a native transfer owns the path,
+or `{"status":"saved","path":"...","size":N}` for a committed regular file.
+Missing files return nonzero. Status does not require an Android connection.
+Concurrent native transfers to the same local path are rejected before dispatch.
+The app sets the independent Worker shell backstop to 3600000 ms; caller
+timeouts/abort signals remain authoritative. Normal action replies summarize
+the result and location; raw logs and repeated failure explanations are omitted
+unless requested.

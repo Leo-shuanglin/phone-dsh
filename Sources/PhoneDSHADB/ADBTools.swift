@@ -20,6 +20,9 @@ enum ADBTools {
     }
     static let coordinate = property("integer", "Pixel coordinate in the latest Android screenshot, from 0 to 32767.")
     static let descriptors: [JSONValue] = [
+        tool("android_connect", "Enable Android control, save the TCP/IP ADB target and check its connection directly from iPhone. Use this when the user supplies an address or control is disabled; no Settings visit is required. Android must accept this iPhone debugging key.",
+             ["host": property("string", "Android IP address or hostname, without adb prefix or port."),
+              "port": property("integer", "TCP/IP ADB port, 1–65535; default 5555. Pairing-code/TLS ports are unsupported.")], required: ["host"]),
         tool("android_status", "Check the Android device configured in iPhone Settings; returns model, Android release and screen size."),
         tool("android_screenshot", "Capture the configured Android screen as a PNG image. Inspect it before choosing tap/swipe pixel coordinates."),
         tool("android_tap", "Tap the Android screen at pixel coordinates from a recent screenshot.", ["x": coordinate, "y": coordinate], required: ["x", "y"]),
@@ -40,6 +43,7 @@ enum ADBTools {
 
     struct Plan: Sendable {
         var command: String
+        var connection: ADBConfiguration?
         var timeout: TimeInterval = 30
         var image = false
         var workspaceAPK: String?
@@ -67,6 +71,10 @@ enum ADBTools {
             return Int(number)
         }
         switch name {
+        case "android_connect":
+            let endpoint = try ADBEndpoint(host: text("host"), port: UInt16(integer("port", range: 1...65535, fallback: 5555)))
+            return Plan(command: "getprop ro.product.model; getprop ro.build.version.release; wm size",
+                        connection: ADBConfiguration(enabled: true, host: endpoint.host, port: endpoint.port))
         case "android_status": return Plan(command: "getprop ro.product.model; getprop ro.build.version.release; wm size")
         case "android_screenshot": return Plan(command: "screencap -p", image: true)
         case "android_ui_dump":

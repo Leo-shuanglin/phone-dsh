@@ -9,7 +9,7 @@ public struct ADBConfiguration: Codable, Equatable, Sendable {
         self.enabled = enabled; self.host = host; self.port = port
     }
     public func endpoint() throws -> ADBEndpoint {
-        guard enabled else { throw ADBFailure("Android control is disabled. Configure Android ADB in the app's Settings first.") }
+        guard enabled else { throw ADBFailure("Android control is disabled. Call android_connect with the user-provided host and port to enable it.") }
         return try ADBEndpoint(host: host, port: port)
     }
 }

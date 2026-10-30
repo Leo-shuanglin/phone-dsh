@@ -10,7 +10,7 @@ enum ADBWorkspaceAPK {
     /// symlinks. A resolved-path prefix check alone would permit a rename race.
     /// Copy and hash the bytes before contacting Android; the Worker-provided
     /// digest also fences a stale materialized copy without guessing WAL timing.
-    static func read(path: String, root: URL?, sha256: String) throws -> Data {
+    static func read(path: String, root: URL?, sha256: String? = nil, apk: Bool = true, maximumBytes: Int = limit) throws -> Data {
         guard let root else { throw ADBFailure("The host has not configured an APK workspace directory") }
         let prefix = "/dsh/workspace/"
         guard path.hasPrefix(prefix) else { throw ADBFailure("APK must be inside /dsh/workspace/") }
@@ -29,20 +29,20 @@ enum ADBWorkspaceAPK {
         }
         var info = stat()
         guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
-              info.st_size >= 4, info.st_size <= limit else { throw ADBFailure("APK must be a regular file of 4 bytes to 128 MiB") }
+              info.st_size >= (apk ? 4 : 0), info.st_size <= maximumBytes else { throw ADBFailure("APK must be a regular file of 4 bytes to 128 MiB") }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
         var bytes = Data()
         while true {
             try Task.checkCancellation()
-            let part = try handle.read(upToCount: min(256 * 1024, limit + 1 - bytes.count)) ?? Data()
+            let part = try handle.read(upToCount: min(256 * 1024, maximumBytes + 1 - bytes.count)) ?? Data()
             if part.isEmpty { break }
             bytes.append(part)
-            guard bytes.count <= limit else { throw ADBFailure("APK exceeds 128 MiB") }
+            guard bytes.count <= maximumBytes else { throw ADBFailure("APK exceeds 128 MiB") }
         }
         guard bytes.count == info.st_size else { throw ADBFailure("APK changed while being read; recompute its sha256") }
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-        guard digest == sha256 else { throw ADBFailure("APK sha256 mismatch: workspace may not be synchronized or file changed. No Android command was sent; verify sha256sum and retry after synchronization.") }
-        guard bytes.prefix(4) == Data([80, 75, 3, 4]) else { throw ADBFailure("File is not an APK/ZIP archive") }
+        guard sha256 == nil || digest == sha256 else { throw ADBFailure("APK sha256 mismatch: workspace may not be synchronized or file changed. No Android command was sent; verify sha256sum and retry after synchronization.") }
+        guard !apk || bytes.prefix(4) == Data([80, 75, 3, 4]) else { throw ADBFailure("File is not an APK/ZIP archive") }
         return bytes
     }
 }

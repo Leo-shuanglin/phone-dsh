@@ -33,7 +33,7 @@ final class ADBMCPTests: XCTestCase {
         XCTAssertEqual(initialized.fields["protocolVersion"], .string("2025-03-26"))
         let listed = try result(await server.handle(request("tools/list")))
         guard case .array(let tools) = listed.fields["tools"] else { return XCTFail("missing tools") }
-        XCTAssertEqual(tools.count, 25)
+        XCTAssertEqual(tools.count, 26)
         XCTAssertTrue(tools.contains { $0.fields["name"] == .string("android_screenshot") })
         let notification = await server.handle(try request("notifications/initialized", id: nil))
         XCTAssertEqual(notification.status, 202)
@@ -64,6 +64,35 @@ final class ADBMCPTests: XCTestCase {
         let commands = await recorder.commands
         XCTAssertEqual(commands, [golden["android_command"]!.text!])
     }
+    func testConnectGoldenFromDisabledState() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let golden = try JSONValue.parse(Data(contentsOf: root.appendingPathComponent("spec/v1/golden/native-mcp/connect.json"))).fields
+        let (server, _) = try fixture(enabled: false)
+        let req = LoopbackRequest(method: "POST", path: "/mcp/native", body: try golden["request"]!.encoded())
+        let response = await server.handle(req)
+        XCTAssertEqual(try JSONValue.parse(response.body), golden["response"])
+    }
+
+    func testConnectEnablesDisabledControlAndPersistsTarget() async throws {
+        let (server, recorder) = try fixture(enabled: false)
+        for args: [String: JSONValue] in [["host": .string("")], ["host": .string("192.0.2.2"), "port": .number(0)],
+                                         ["host": .string("192.0.2.2"), "port": .number(1.5)]] {
+            let bad = try result(await server.handle(call("android_connect", args)))
+            XCTAssertEqual(bad.fields["isError"], .bool(true))
+        }
+        let args: [String: JSONValue] = ["host": .string("192.0.2.2"), "port": .number(5556)]
+        let connected = try result(await server.handle(call("android_connect", args, key: "connect-once")))
+        XCTAssertEqual(connected.fields["isError"], .bool(false))
+        let replay = try result(await server.handle(call("android_connect", args, key: "connect-once")))
+        XCTAssertEqual(replay, connected)
+        let status = try result(await server.handle(call("android_status")))
+        XCTAssertEqual(status.fields["isError"], .bool(false))
+        let commands = await recorder.commands
+        XCTAssertEqual(commands.count, 2)
+        let endpoints = await recorder.endpoints
+        XCTAssertEqual(endpoints, [try ADBEndpoint(host: "192.0.2.2", port: 5556), try ADBEndpoint(host: "192.0.2.2", port: 5556)])
+    }
+
     func testDisabledDeviceAndInvalidArgumentsNeverReachADB() async throws {
         let (disabled, recorder) = try fixture(enabled: false)
         let value = try result(await disabled.handle(call("android_status")))
@@ -194,7 +223,7 @@ final class ADBMCPTests: XCTestCase {
             url: process.env.ADB_TEST_URL, headers: { Authorization: `Bearer ${process.env.ADB_TEST_TOKEN}` },
             failOnStartupError: true, toolCallTimeoutMs: 5000 })
           const names = ctx.tools.schemas().map(t => t.name)
-          assert.equal(names.filter(n => n.startsWith('mcp__phone__android_')).length, 25)
+          assert.equal(names.filter(n => n.startsWith('mcp__phone__android_')).length, 26)
           const result = await ctx.tools.execute({ callId: ToolCallId('android-native-test'),
             name: 'mcp__phone__android_tap', arguments: { x: 20, y: 30 }, signal: new AbortController().signal })
           assert.equal(result.isError, false, JSON.stringify(result))
@@ -227,14 +256,21 @@ final class ADBMCPTests: XCTestCase {
 
 actor RecordingADB: ADBCommandExecuting {
     var commands: [String] = []
+    var endpoints: [ADBEndpoint] = []
     var inputs: [Data] = []
     let output: ADBShellResult
     let delay: Bool
     init(output: ADBShellResult = ADBShellResult(stdout: Data("fixture".utf8)), delay: Bool = false) {
         self.output = output; self.delay = delay
     }
+    func transfer(endpoint: ADBEndpoint, command: String, input: FileHandle?, output: FileHandle?, byteLimit: Int, timeout: TimeInterval) async throws -> ADBShellResult {
+        if let input { inputs.append(try input.readToEnd() ?? Data()) }
+        if let output { try output.write(contentsOf: self.output.stdout) }
+        return try await shell(endpoint: endpoint, command: command, timeout: timeout, outputLimit: byteLimit)
+    }
     func shell(endpoint: ADBEndpoint, command: String, timeout: TimeInterval, outputLimit: Int) async throws -> ADBShellResult {
         commands.append(command)
+        endpoints.append(endpoint)
         if delay { try await Task.sleep(nanoseconds: 30_000_000_000) }
         return output
     }

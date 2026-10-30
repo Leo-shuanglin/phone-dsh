@@ -21,7 +21,7 @@ struct AndroidADBSettingsPage: View {
                 Button(busy ? "正在连接…" : "测试连接") { check() }.disabled(busy || !enabled)
                 Button("停止当前 Android 操作", role: .cancel) { Task { await ADBMCPServer.shared.cancel() } }
             } footer: {
-                Text("保存后立即生效。模型可控制屏幕、查询和管理应用、安装或卸载 APK、读取日志和执行 Android shell。首次连接请解锁 Android，并允许这台 iPhone 的调试密钥。")
+                Text("可直接告诉模型“连接 Android 地址和端口”，由模型启用控制并保存连接，无需手动填写。保存后立即生效。模型可控制屏幕、查询和管理应用、安装或卸载 APK、读取日志和执行 Android shell。首次连接请解锁 Android，并允许这台 iPhone 的调试密钥。")
             }
             if !status.isEmpty {
                 Section("连接状态") {

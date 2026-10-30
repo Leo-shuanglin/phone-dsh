@@ -15,13 +15,17 @@ public struct ADBEndpoint: Codable, Equatable, Sendable {
 }
 
 public protocol ADBCommandExecuting: Sendable {
+    func transfer(endpoint: ADBEndpoint, command: String, input: FileHandle?, output: FileHandle?, byteLimit: Int, timeout: TimeInterval) async throws -> ADBShellResult
     func shell(endpoint: ADBEndpoint, command: String, timeout: TimeInterval, outputLimit: Int) async throws -> ADBShellResult
     func shell(endpoint: ADBEndpoint, command: String, stdin: Data, timeout: TimeInterval, outputLimit: Int) async throws -> ADBShellResult
 }
 
 public extension ADBCommandExecuting {
+    func transfer(endpoint: ADBEndpoint, command: String, input: FileHandle?, output: FileHandle?, byteLimit: Int, timeout: TimeInterval) async throws -> ADBShellResult {
+        throw ADBFailure("This ADB executor does not support streaming file transfers")
+    }
     func shell(endpoint: ADBEndpoint, command: String, stdin: Data, timeout: TimeInterval, outputLimit: Int) async throws -> ADBShellResult {
-        throw ADBFailure("This ADB executor does not support APK streaming")
+        throw ADBFailure("This ADB executor does not support stdin streaming")
     }
 }
 
@@ -29,6 +33,12 @@ public extension ADBCommandExecuting {
 /// connection; commands are never retried after OPEN because they may mutate.
 public struct ADBClient: ADBCommandExecuting, Sendable {
     public init() {}
+    public func transfer(endpoint: ADBEndpoint, command: String, input: FileHandle?, output: FileHandle?, byteLimit: Int, timeout: TimeInterval) async throws -> ADBShellResult {
+        let identity = try ADBIdentity.loadOrCreate()
+        return try await Self.shell(transport: ADBTCPTransport(host: endpoint.host, port: endpoint.port), identity: identity,
+                                    command: command, timeout: timeout, outputLimit: output == nil ? 65536 : byteLimit,
+                                    inputFile: input, outputFile: output)
+    }
     public func shell(endpoint: ADBEndpoint, command: String, timeout: TimeInterval = 30,
                       outputLimit: Int = 8 * 1024 * 1024) async throws -> ADBShellResult {
         try await shell(endpoint: endpoint, command: command, stdin: Data(), timeout: timeout, outputLimit: outputLimit)
@@ -42,10 +52,16 @@ public struct ADBClient: ADBCommandExecuting, Sendable {
     }
 
     static func shell(transport: any ADBTransport, identity: ADBIdentity, command: String, stdin: Data = Data(),
-                      timeout: TimeInterval, outputLimit: Int) async throws -> ADBShellResult {
+                      timeout: TimeInterval, outputLimit: Int, inputFile: FileHandle? = nil, outputFile: FileHandle? = nil) async throws -> ADBShellResult {
+        let inputSize: Int
+        if let inputFile {
+            let size = try inputFile.seekToEnd()
+            guard size <= 1_073_741_824 else { throw ADBFailure("ADB input exceeds 1 GiB") }
+            try inputFile.seek(toOffset: 0); inputSize = Int(size)
+        } else { inputSize = stdin.count }
         guard !command.utf8.contains(0), command.utf8.count < 3800,
               stdin.count <= 128 * 1024 * 1024,
-              timeout.isFinite, (0.1...120).contains(timeout), (1...16 * 1024 * 1024).contains(outputLimit) else {
+              timeout.isFinite, (0.1...3600).contains(timeout), (1...1_073_741_824).contains(outputLimit) else {
             throw ADBFailure("Invalid ADB command or execution limits")
         }
         let timer = Task {
@@ -92,11 +108,15 @@ public struct ADBClient: ADBCommandExecuting, Sendable {
         var inputClosed = false
         func sendInput() async throws {
             var frame: Data
-            if inputOffset < stdin.count {
-                let count = min(4091, stdin.count - inputOffset)
+            if inputOffset < inputSize {
+                let count = min(4091, inputSize - inputOffset)
                 frame = Data([0]); frame.appendLE(UInt32(count))
                 let start = stdin.startIndex + inputOffset
-                frame.append(stdin.subdata(in: start..<(start + count)))
+                if let inputFile {
+                    let bytes = try inputFile.read(upToCount: count) ?? Data()
+                    guard bytes.count == count else { throw ADBFailure("Input file changed during upload") }
+                    frame.append(bytes)
+                } else { frame.append(stdin.subdata(in: start..<(start + count))) }
                 inputOffset += count
             } else {
                 frame = Data([4]); frame.appendLE(0); inputClosed = true
@@ -105,6 +125,7 @@ public struct ADBClient: ADBCommandExecuting, Sendable {
         }
         try await sendInput()
         var decoder = ADBShellDecoder(limit: outputLimit)
+        var outputBytes = 0
         while true {
             try Task.checkCancellation()
             let packet = try await ADBPacket.read(from: transport)
@@ -112,12 +133,19 @@ public struct ADBClient: ADBCommandExecuting, Sendable {
             switch packet.command {
             case ADBPacket.write:
                 try decoder.append(packet.payload)
+                if let outputFile {
+                    let bytes = decoder.takeStdout()
+                    outputBytes += bytes.count
+                    guard outputBytes <= outputLimit else { throw ADBFailure("ADB output exceeds transfer limit") }
+                    guard decoder.result.stderr.count <= 65536 else { throw ADBFailure("ADB stderr exceeds limit") }
+                    try outputFile.write(contentsOf: bytes)
+                }
                 try await transport.write(ADBPacket(command: ADBPacket.okay, arg0: 1, arg1: remote).encoded)
             case ADBPacket.close:
                 try await transport.write(ADBPacket(command: ADBPacket.close, arg0: 1, arg1: remote).encoded)
                 let result = try decoder.finish()
-                guard result.exitCode != 0 || inputOffset == stdin.count else {
-                    throw ADBFailure("Android exited before receiving the entire APK")
+                guard result.exitCode != 0 || inputOffset == inputSize else {
+                    throw ADBFailure("Android exited before receiving the entire input")
                 }
                 return result
             case ADBPacket.okay:

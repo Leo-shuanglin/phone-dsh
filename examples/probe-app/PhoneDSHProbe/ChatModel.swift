@@ -997,6 +997,9 @@ final class ChatModel {
             // The host gateway injects the real key; the Worker never holds it.
             "DEEPSEEK_API_KEY": "phone-host-injects-key",
             "DSH_TELEMETRY_DISABLED": "1",
+            // Caller bash timeouts still apply through its fused abort signal.
+            // The independent Worker backstop must allow 1 GiB transfers.
+            "PDSH_SHELL_TIMEOUT_MS": "3600000",
         ]
         do {
             let settings = PhoneModelProviderSettings.shared
@@ -1084,12 +1087,14 @@ final class ChatModel {
                 configuration.acceleratorNames = names
             }
         }
-        configuration.execProvider = SSHExecProvider(
+        let sshProvider = SSHExecProvider(
             workspace: materializedWorkspace, home: materializedHome, fallback: shell,
             byteLimit: configuration.budgets.singleFileBytes,
             connections: { await SSHSettingsStore.shared.list() },
             resolve: { destination in try await SSHSettingsStore.shared.resolve(destination) })
-        configuration.acceleratorNames = shell.channelAcceleratorNames + ["ssh", "scp"]
+        configuration.execProvider = ADBExecProvider(workspace: materializedWorkspace, fallback: sshProvider,
+                                                      byteLimit: configuration.budgets.singleFileBytes)
+        configuration.acceleratorNames = shell.channelAcceleratorNames + ["ssh", "scp", "adb"]
         configuration.nativeMCP = ADBMCPServer.shared
         configuration.engine.bootTimeout = ChatHostConfiguration.defaultBootTimeout
         configuration.engine.environment = environment

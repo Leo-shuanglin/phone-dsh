@@ -108,6 +108,28 @@ final class ADBProtocolTests: XCTestCase {
         XCTAssertEqual(transport.sent[3].le32(0), ADBPacket.okay, "output is acknowledged before waiting for the upload ack")
     }
 
+    func testFileHandleTransportStreamsWithoutRetainingStdoutAndEnforcesAggregateLimit() async throws {
+        let bytes = Data([0, 255, 10, 128])
+        for limit in [bytes.count, bytes.count - 1] {
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            FileManager.default.createFile(atPath: file.path, contents: nil)
+            defer { try? FileManager.default.removeItem(at: file) }
+            let output = try FileHandle(forWritingTo: file)
+            defer { try? output.close() }
+            let ack = ADBPacket(command: ADBPacket.okay, arg0: 42, arg1: 1)
+            let transport = ScriptedADB(packets: [connected(), ack, ack,
+                ADBPacket(command: ADBPacket.write, arg0: 42, arg1: 1, payload: shellFrame(1, Data(bytes.prefix(2)))),
+                ADBPacket(command: ADBPacket.write, arg0: 42, arg1: 1, payload: shellFrame(1, Data(bytes.suffix(2))) + shellFrame(3, Data([0]))),
+                ADBPacket(command: ADBPacket.close, arg0: 42, arg1: 1)])
+            do {
+                let result = try await ADBClient.shell(transport: transport, identity: identity(), command: "cat /file", timeout: 1, outputLimit: limit, outputFile: output)
+                XCTAssertEqual(limit, bytes.count)
+                XCTAssertTrue(result.stdout.isEmpty)
+                XCTAssertEqual(try Data(contentsOf: file), bytes)
+            } catch { XCTAssertEqual(limit, bytes.count - 1) }
+        }
+    }
+
     func testEarlyInstallExitStopsUploadAndRejectsPrematureSuccess() async throws {
         for code: UInt8 in [0, 1] {
             let ack = ADBPacket(command: ADBPacket.okay, arg0: 42, arg1: 1)

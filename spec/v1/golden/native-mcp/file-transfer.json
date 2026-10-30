@@ -1,0 +1,52 @@
+{
+  "argv": [
+    "adb",
+    "--pdsh-v1",
+    "pull",
+    "/dsh/workspace/result.bin",
+    "/sdcard/result.bin"
+  ],
+  "stdout_records": [
+    {
+      "type": "file",
+      "path": "",
+      "name": "result.bin",
+      "size": 3
+    },
+    {
+      "type": "data",
+      "data": "AP8K"
+    },
+    {
+      "type": "end",
+      "path": ""
+    }
+  ],
+  "exitCode": 0,
+  "native_disk_transfer": {
+    "argv": [
+      "adb",
+      "--pdsh-v1",
+      "pull",
+      "/dsh/transfers/large.apk",
+      "/sdcard/large.apk"
+    ],
+    "max_bytes": 1073741824,
+    "deadline_ms": 3600000,
+    "stdout_kind": "completion_text",
+    "worker_vfs_write": false
+  },
+  "saved_status": {
+    "argv": [
+      "adb",
+      "--pdsh-v1",
+      "stat",
+      "/dsh/transfers/large.apk"
+    ],
+    "stdout": {
+      "status": "saved",
+      "path": "/dsh/transfers/large.apk",
+      "size": 173254137
+    }
+  }
+}

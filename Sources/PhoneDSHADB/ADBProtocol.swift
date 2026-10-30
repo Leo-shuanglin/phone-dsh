@@ -76,7 +76,7 @@ struct ADBShellDecoder {
         while pending.count >= 5 {
             guard !exited else { throw ADBFailure("Data after ADB shell exit") }
             let size = Int(pending.le32(1))
-            guard size <= limit else { throw ADBFailure("Android output exceeds size limit") }
+            guard size <= min(limit, 1_048_576) else { throw ADBFailure("Android output exceeds size limit") }
             guard pending.count >= size + 5 else { return }
             let kind = pending[pending.startIndex]
             let data = Data(pending.dropFirst(5).prefix(size))
@@ -93,6 +93,12 @@ struct ADBShellDecoder {
                 throw ADBFailure("Android output exceeds size limit")
             }
         }
+    }
+
+    mutating func takeStdout() -> Data {
+        let data = result.stdout
+        result.stdout = Data()
+        return data
     }
 
     func finish() throws -> ADBShellResult {

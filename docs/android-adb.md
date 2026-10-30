@@ -8,13 +8,20 @@ command harness, settings and MCP tool endpoint.
 
 ## Connect
 
+The probe app starts new sessions in `danger-full-access` mode (approval never).
+Existing sessions retain their selected permission mode; it can be changed in
+the session permissions menu. This does not grant Android root or bypass its
+debugging authorization.
+
 1. Put both devices on the same reachable Wi-Fi network. Enable Android
    developer options and USB debugging.
 2. Enable **TCP/IP ADB** on Android. If the device has no network-ADB switch,
    connect it to a computer once and run `adb tcpip 5555`. After this setup,
    the iPhone connects directly; the computer is not a relay. Android may
    require this setup again after reboot.
-3. Open iPhone **Settings → Android ADB**, enable control, enter the Android
+3. Tell the iPhone agent to connect to the Android host and port; it calls
+   `android_connect` to enable control, persist the target and check connectivity.
+   Alternatively, open iPhone **Settings → Android ADB**, enable control, enter the Android
    IP/hostname and TCP/IP ADB port (usually `5555`), then save.
 4. Tap **Test connection**, unlock Android and accept the iPhone's debugging
    key. A successful check returns the model, Android version and screen size.
@@ -32,6 +39,7 @@ The existing official DSH MCP client mounts the native endpoint under `phone`:
 
 | Tool name suffix (`mcp__phone__…`) | Behavior |
 | --- | --- |
+| `android_connect` | Enable control, save host/port and check connection without visiting Settings |
 | `android_status` | Model, OS release and display size |
 | `android_screenshot` | PNG image content, preserving binary bytes |
 | `android_tap` | Tap screenshot pixel coordinates |
@@ -127,9 +135,46 @@ Examples for capabilities beyond the structured tools:
 
 ADB shell permissions still apply: private app directories, signature
 permissions and privileged operations may require device-side support/root.
-`adb connect`, `adb pair`, `adb push/pull`, port forwarding and reboot service
-commands are desktop/protocol operations, not commands to paste into the
-Android shell. This client does not implement those extra protocol services.
+For file transfers, run these in the **Worker bash tool**, not `android_shell`:
+
+```sh
+adb push /dsh/workspace/example.bin /sdcard/Download/example.bin
+adb pull /sdcard/Download/example.bin /dsh/workspace/example-copy.bin
+# Large files (up to 1 GiB), stored on iPhone disk:
+adb pull /sdcard/Download/large.apk
+adb push /dsh/transfers/large.apk /sdcard/Download/copy.apk
+```
+
+These commands use the saved Android endpoint and iPhone native shell_v2 binary
+transport, without a desktop ADB server. Uploads read the acknowledged workspace
+at the exec bridge revision. Downloads emit bounded transfer records and are
+written by the Worker VFS through its normal WAL, never directly to its derived
+materialized tree. An incomplete download preserves an existing destination;
+uploads stage a temporary sibling then rename after a complete byte count check.
+Each transfer supports one regular file (including empty/binary files). The
+native `/dsh/transfers/NAME` store streams files directly to iPhone disk up to
+**1 GiB (1,073,741,824 bytes)** with bounded memory and a one-hour deadline.
+`adb pull REMOTE` defaults to this store. It maps to `Documents/adb-transfers`,
+available in the iOS Files app via this app's file sharing. Files there remain
+available as push sources but are outside the Worker's in-memory VFS. Use an
+explicit `/dsh/workspace/NAME` destination for small files the model must read;
+that route retains the device Worker single-file budget (at most 128 MiB) and
+120-second deadline. The Worker bash tool's own timeout must also allow the
+transfer to finish. Keep the iPhone app foregrounded for long transfers. The probe app configures
+its independent Worker shell backstop to one hour; caller bash timeouts and
+cancellation still apply. For large transfers request `timeoutMs=3600000`.
+After an interrupted tool wait, query `adb stat /dsh/transfers/NAME` before
+starting another download. It returns `running`, or `saved` with the actual byte
+count after atomic commit, without contacting Android. A saved file can also be
+queried after an app restart. Compare the saved size to the Android source size;
+absence of a tool success message alone does not establish transfer failure.
+Concurrent native transfers to the same local path are rejected. Directory recursion, preservation
+flags, ADB sync service and six-digit/TLS pairing are not implemented. Remote
+paths must be absolute file paths; pull may target an existing local directory.
+The Android ADB shell user's filesystem permissions apply. Failed/interrupted
+uploads can leave a remote temporary file or have an uncertain rename outcome;
+inspect before retrying. `adb pair`, forwarding and reboot protocol services are
+not supported.
 
 Command references: [Android's ADB/pm/am documentation](https://developer.android.com/tools/adb),
 [AOSP package manager command implementation/help](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android14-release/services/core/java/com/android/server/pm/PackageManagerShellCommand.java),
@@ -151,7 +196,10 @@ that exact same-origin path. The DSH `mcp-phone` profile row registers the
 tools, with a 130-second tool timeout. Rebuild the Worker image after changing
 the profile or fetch bridge; an old image does not contain this routing fix.
 
-The Android endpoint comes from native settings, never tool arguments. The
+The Android endpoint is persisted in native settings. `android_connect` accepts
+a host and optional port (default 5555), enables control and saves the validated
+target before checking it. Other tools use the saved endpoint. A failed check
+keeps the target so authorization can be accepted and status checked again. The
 2048-bit RSA private key stays in a device-only Keychain entry. Disabling
 control takes effect on subsequent calls without restarting the engine.
 One operation runs at a time; a concurrent call reports busy. Cancellation,
@@ -184,7 +232,7 @@ MCP registration through the official DSH client, authenticated loopback access,
 input validation, PNG content, serialization and restart deduplication. Package
 tests cover command vectors, workspace confinement/digests, byte-exact APK stdin,
 upload backpressure/early exit, and package-manager failure acknowledgements. The
-macOS smoke asserts all 25 tools appear in the real WKWebView Worker.
+macOS smoke asserts all 26 tools appear in the real WKWebView Worker.
 These use simulated Android responses. Physical iPhone → Android operation
 and the Android authorization dialog still require device acceptance testing.
 
