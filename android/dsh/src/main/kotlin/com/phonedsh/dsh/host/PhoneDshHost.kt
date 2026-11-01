@@ -550,6 +550,7 @@ class DefaultPhoneDshHost(
             // `Backoff` is the one booted state whose only exit needs a producer
             // in this process.
             armRetryAfterBoot()
+            resumeParkedAfterBoot()
             persistHostState()
             if (!current(generation)) return@launch
             val engineJob = launch { engine.state.collect { onEngineState(it) } }
@@ -965,6 +966,27 @@ class DefaultPhoneDshHost(
      * missing or already-past deadline arms the ordinary first window instead
      * of trapping the host.
      */
+    /**
+     * A cold start happens in the foreground, so a host that booted from the
+     * persisted `Parked` must be fed `scenePhase(active)` — otherwise nothing in
+     * the D14 table is a legal edge out of `Parked`, admission stays closed, and
+     * every `exec` is refused until the user backgrounds the app and returns.
+     *
+     * Measured 2026-11-02: kill the app after a turn that finished in the
+     * background, relaunch, and the run button is disabled with
+     * "宿主不可用：Parked" while `exec refused: admission closed` repeats. A
+     * HOME round trip then drove `Parked -> Recovering -> Running`, which is
+     * exactly the edge this call supplies at the moment it is already true.
+     */
+    private fun resumeParkedAfterBoot() {
+        if (controller.state != HostState.PARKED) return
+        logger.info(
+            "boot restored Parked: the app starts in the foreground, " +
+                "so feeding scenePhase(active) to take the one legal exit",
+        )
+        handle(ControllerSignal.ScenePhaseChanged(ScenePhase.ACTIVE))
+    }
+
     private fun armRetryAfterBoot() {
         if (controller.state != HostState.BACKOFF) return
         val remaining = stateStore?.load()?.backoffUntilMillis?.let { deadline ->

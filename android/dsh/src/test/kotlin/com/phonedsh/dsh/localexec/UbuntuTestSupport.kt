@@ -55,14 +55,33 @@ internal object TestDurability : Durability {
     override fun level(): DurabilityLevel = DurabilityLevel.LEVEL_1_PROCESS_KILL
 }
 
-/** A temp directory removed on close. */
+/**
+ * A temp directory removed on close.
+ *
+ * `close()` retries: a test's `finally` cancels the lane's scope, but a job that
+ * is already inside the store can still create a file **after** `walk` has
+ * enumerated the directory and before the parent is unlinked. One pass then
+ * throws `DirectoryNotEmptyException` and fails the test on teardown rather than
+ * on anything it asserts — measured as a ~1-in-6 flake, and it is a teardown
+ * artifact, not a defect in the lane.
+ */
 internal class TempDir : AutoCloseable {
     val path: Path = Files.createTempDirectory("pdsh-ubuntu-job")
 
     override fun close() {
-        if (!Files.exists(path)) return
-        Files.walk(path).use { stream ->
-            stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+        repeat(10) {
+            if (!Files.exists(path)) return
+            try {
+                Files.walk(path).use { stream ->
+                    stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+                }
+                return
+            } catch (_: java.nio.file.DirectoryNotEmptyException) {
+                // A writer landed between the walk and the unlink; look again.
+                Thread.sleep(20)
+            } catch (_: java.nio.file.NoSuchFileException) {
+                return
+            }
         }
     }
 }
