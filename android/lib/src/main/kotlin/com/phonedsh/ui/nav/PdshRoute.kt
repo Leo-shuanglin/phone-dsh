@@ -423,6 +423,7 @@ public object PdshSettingsRows {
         SettingsDestination.COMMAND -> PdshRoute.Tools
         SettingsDestination.RUNTIME_DETAILS -> PdshRoute.Runtime
         SettingsDestination.EXPORT_DIAGNOSTICS -> PdshRoute.Export
+        SettingsDestination.SHORTCUTS -> PdshRoute.Shortcuts
         SettingsDestination.PERMISSION_DEFAULTS,
         SettingsDestination.LICENSES,
         -> null

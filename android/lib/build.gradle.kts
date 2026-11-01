@@ -312,12 +312,19 @@ dependencies {
         api(project(":dsh"))
     }
     api(project(":platform"))
-    // The device-connector pages read the `:domain` connector seam (`DeviceConnector`,
-    // `ConnectorStateMachine`'s state, the read-only session transport and the paging
-    // window). `api` rather than `implementation`: the page layer's public
-    // `DeviceConnectionScreenState` / `DeviceSessionScreenState` factories take the
-    // domain snapshots, so a consumer that embeds a page compiles against the same
-    // types instead of a private copy.
+    // The device-connector pages take `:domain` **snapshot value types** as their
+    // factory parameters (the connector's projected state, the transcript items, the
+    // paging window), so a consumer that embeds a page compiles against the same
+    // types instead of a private copy — that is why this is `api`.
+    //
+    // What they do *not* read is the connector machinery: `DeviceConnector`,
+    // `ConnectorStateMachine` and `ReadOnlyDeviceSessionTransport` are referenced only
+    // from `src/test` / `src/androidTest` here, against the in-memory fixtures. The
+    // production wiring (`DeviceConnectionSource` / `DeviceSessionSource`) lives in
+    // `:domain` itself, and the App hands the page an `InMemoryConnector`-backed
+    // source. An earlier version of this comment claimed the pages read that seam —
+    // they do not, and a maintainer who believed it would go looking for a binding
+    // that isn't there.
     api(project(":domain"))
     implementation(libs.androidx.core.ktx)
 

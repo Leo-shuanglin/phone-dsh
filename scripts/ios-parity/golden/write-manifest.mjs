@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+# SPDX-License-Identifier: MIT
 /**
  * Assemble the official-screenshot manifest from cdp-capture.mjs reports.
  *

@@ -313,7 +313,12 @@ def home_path_is_placeholder(line, match):
     relative component to a symbolic root; neither names a real home directory.
     """
     matched = match.group(0)
-    if ELLIPSIS_HOST_RE.match(matched.rsplit("/", 1)[-1]):
+    # The marker must be the segment that would name the person. Checking the
+    # LAST segment let `/Users/<real name>/...` through — the ellipsis was in the
+    # tail while the user name sat in the clear, which is the one thing this rule
+    # exists to catch.
+    segments = [seg for seg in matched.split("/") if seg]
+    if segments and ELLIPSIS_HOST_RE.match(segments[1] if len(segments) > 1 else segments[0]):
         return True
     return PLACEHOLDER_ROOT_RE.search(line[: match.start()].rstrip()) is not None
 

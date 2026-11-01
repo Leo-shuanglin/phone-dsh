@@ -17,7 +17,9 @@
 // the engine's one view, HELLO presence (the page that sent HELLO is loaded), the
 // foreground-service fact (this app declares none), the battery-exemption fact,
 // the launch's exact egress grant, whether the app's one workspace directory
-// exists, and the sessions the journal lane stored.
+// exists, the sessions the journal lane stored, and the phone-permission matrix's
+// device reads (the app's own declared/granted permissions, device-admin denials,
+// the notification app-op, DND access and hardware presence).
 //
 // Not measured (so `null`): archived sessions, pinned order, the session queue,
 // schedules, session configuration, model profiles, web-search settings, MCP
@@ -27,6 +29,7 @@
 package com.phonedsh.probe
 
 import android.view.View
+import com.phonedsh.domain.device.HostPermissionReadings
 import com.phonedsh.engine.EngineState
 import com.phonedsh.engine.HandshakeSummary
 import com.phonedsh.gateway.GatewayHostRule
@@ -46,6 +49,7 @@ import com.phonedsh.ui.page.NewSessionBlock
 import com.phonedsh.ui.page.ProviderKeyStatus
 import com.phonedsh.ui.page.ProviderProfile
 import com.phonedsh.ui.page.ModelProviderFacts
+import com.phonedsh.ui.page.RuntimeLastError
 import com.phonedsh.ui.page.RuntimeFacts
 import com.phonedsh.ui.page.RuntimeSnapshot
 import com.phonedsh.ui.page.SessionListing
@@ -81,6 +85,10 @@ import java.time.ZoneId
  * @param workspacePresent whether `<filesDir>/xl/materialized/workspace` is a
  *   directory: the measured existence of the tree the files page lists. `false`
  *   means the host measured no workspace on disk, not an empty one.
+ * @param permissions this app's own permission/hardware reading, taken from
+ *   `:domain`'s `AndroidHostPermissions` over the platform snapshot
+ *   `AndroidDeviceCapabilities.platformFacts`. It is one walk of the platform's
+ *   permission state; the phone-permissions page is its only consumer today.
  */
 internal data class HostReadings(
     val webView: View?,
@@ -91,6 +99,7 @@ internal data class HostReadings(
     val egressGrant: GatewayHostRule?,
     val batteryExemption: FactState,
     val workspacePresent: Boolean,
+    val permissions: HostPermissionReadings,
 )
 
 /**
@@ -199,6 +208,15 @@ internal fun buildNavFacts(
                 // foreground service can never be started for a background turn.
                 foregroundService = foregroundService,
                 foregroundServiceReason = FOREGROUND_SERVICE_REASON,
+                // `null` means "this host has not read it" and the page prints
+                // 读取不到; a `RuntimeLastError(null)` means "it read it and there was
+                // no error". Conflating the two would let an idle app claim it had
+                // no failures, which is a claim it has not earned.
+                lastError = when (turn) {
+                    AppTurnState.Idle, AppTurnState.Running -> null
+                    is AppTurnState.Completed -> RuntimeLastError(message = null)
+                    is AppTurnState.Failed -> RuntimeLastError(message = turn.reason)
+                },
             ),
         ),
         // The App's own /v1/http policy is exactly this one exact-origin rule.
@@ -226,6 +244,11 @@ internal fun buildNavFacts(
         ),
         webSurface = webSurface,
         // One field per mirrored settings row; 未知 wherever this host read nothing.
+        // The permission matrix is the one page whose whole input is a device read:
+        // the host reports only the rows something on this device actually answered
+        // and leaves the rest to the page's unread state, and it reports no audit
+        // because it has none. See `HostPhonePermissions.kt` for the row-by-row rule.
+        phonePermissions = phonePermissionsFacts(readings.permissions),
         settings = SettingsFacts(
             // No permission editor exists on this host, so no preset is stored.
             defaultPermissionTier = null,

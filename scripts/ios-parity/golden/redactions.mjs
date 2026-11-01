@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+# SPDX-License-Identifier: MIT
 /**
  * Publishing redactions shared by the official-screenshot capture tooling.
  *

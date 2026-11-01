@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Capture the 402pt native session screens used by the parity review.
 #
 # This is NOT an official-DSH golden: the app is the iOS implementation. It

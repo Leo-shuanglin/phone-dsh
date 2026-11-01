@@ -19,6 +19,18 @@
 // never treated as normal). The FGS availability row is the Android signal that
 // decides whether a background turn can outlive the foreground.
 //
+// Since L35 the page is a superset of both baselines, not a port of either. The
+// iOS runtime-status page opens with 本次运行 (模型调用 / 输入 Token / 输出 Token)
+// and 最近出错 before its stop/restart action; those two groups sit at the top of
+// this page, and the five Android diagnostics groups follow. The five are not
+// invented here: they are registered as `androidOnly` sections in
+// `spec/ui/v1/pages/_android-only-items.json`, the contract's mechanism for a
+// group Android must have and the iOS page does not carry (deliberately not
+// `_whitelist.json`, which is for platform-forced copy differences). The three
+// iOS rows are host reads this host does not perform yet — [RuntimeRunCounts] and
+// [RuntimeLastError] are nullable — so an absent read renders 未知 / 读取不到
+// instead of borrowing iOS's in-process answer; a measured zero stays a zero.
+//
 // Geometry: this page adds no length of its own. It reads the page-level tokens
 // `geometry.pageOuterMarginH` and `geometry.pageRowMinHeight` for its action and
 // note rows (the header and InfoRow floors live in `PageScaffold.kt`), plus the
@@ -139,6 +151,54 @@ public data class RuntimePower(
 }
 
 /**
+ * 本次运行 as the host read it: this run's model requests and token counts.
+ *
+ * The baseline shows the group only when it has counts (`model.modelRequests >
+ * 0 || model.inputTokens > 0 || model.outputTokens > 0`). Android must not read
+ * `null` as zero, so the two questions are separated: a `null` counter is 未知
+ * (the host did not read it), a measured `0` is a real zero, and [isIdle] is true
+ * only when every counter was measured and all of them are zero — the one case
+ * the baseline's condition would hide.
+ *
+ * @param modelRequests how many model requests this run made; `null` when unread.
+ * @param inputTokens prompt tokens summed for this run; `null` when unread.
+ * @param outputTokens completion tokens summed for this run; `null` when unread.
+ */
+@Immutable
+public data class RuntimeRunCounts(
+    public val modelRequests: Long? = null,
+    public val inputTokens: Long? = null,
+    public val outputTokens: Long? = null,
+) {
+    /** True when at least one counter was measured. */
+    public val hasMeasurement: Boolean
+        get() = modelRequests != null || inputTokens != null || outputTokens != null
+
+    /**
+     * The baseline's `hasCounts == false`: every counter measured, every one zero.
+     *
+     * A `null` counter is not zero, so an unread count is never idle.
+     */
+    public val isIdle: Boolean
+        get() = modelRequests == 0L && inputTokens == 0L && outputTokens == 0L
+}
+
+/**
+ * 最近出错 as the host read it.
+ *
+ * The baseline renders `model.userFacingError ?? "最近没有出错"`, which folds
+ * "no error" and "not read" together because the model is in-process. Android
+ * reads the session's last error across the process boundary, so the page keeps
+ * the two answers apart: a `null` object means the host never reported the read
+ * (the row says 读取不到), while an object with a `null` [message] means the read
+ * happened and found no error (the row says 最近没有出错).
+ *
+ * @param message the last user-facing error, or `null` when the read found none.
+ */
+@Immutable
+public data class RuntimeLastError(public val message: String? = null)
+
+/**
  * The host's read-only runtime snapshot.
  *
  * @param engine whether the local engine is started; unread when unknown.
@@ -149,6 +209,8 @@ public data class RuntimePower(
  * @param power the thermal/battery facts; `null` when that read did not happen.
  * @param foregroundService whether a foreground service can be started.
  * @param foregroundServiceReason the host's own reason when it cannot.
+ * @param run this run's model/token counters; `null` when that read did not happen.
+ * @param lastError the last user-facing error; `null` when that read did not happen.
  */
 @Immutable
 public data class RuntimeSnapshot(
@@ -159,6 +221,8 @@ public data class RuntimeSnapshot(
     public val power: RuntimePower? = null,
     public val foregroundService: FactState = FactState.UNKNOWN,
     public val foregroundServiceReason: String? = null,
+    public val run: RuntimeRunCounts? = null,
+    public val lastError: RuntimeLastError? = null,
 ) {
     /** True when the snapshot carries at least one measured fact. */
     public val hasMeasurement: Boolean
@@ -167,7 +231,9 @@ public data class RuntimeSnapshot(
             webView?.hasMeasurement == true ||
             memory?.hasMeasurement == true ||
             power?.hasMeasurement == true ||
-            foregroundService != FactState.UNKNOWN
+            foregroundService != FactState.UNKNOWN ||
+            run?.hasMeasurement == true ||
+            lastError != null
 }
 
 /**
@@ -209,15 +275,31 @@ public enum class RuntimeAction {
     NONE,
 }
 
-/** One label/value row. */
+/** How one row draws; the two shapes the baseline page uses. */
+public enum class RuntimeRowKind {
+    /** A label on the left and a value on the right (every diagnostics row). */
+    LABEL_VALUE,
+
+    /**
+     * One sentence that fills the row (`最近出错`).
+     *
+     * The baseline deliberately does not repeat the group title inside the row
+     * (`// 组标题已经说了「最近出错」`), so the sentence is the row's whole text.
+     */
+    TEXT,
+}
+
+/** One label/value row, or one sentence row when [kind] is [RuntimeRowKind.TEXT]. */
 @Immutable
 public data class RuntimeRowView(
     public val id: String,
     public val title: String,
-    public val value: String,
+    /** The right-hand value; `null` for a [RuntimeRowKind.TEXT] row. */
+    public val value: String?,
     public val tone: PageTone = PageTone.NORMAL,
     /** The explanation under the value; an unmeasured row says why it is 未知. */
     public val subtitle: String? = null,
+    public val kind: RuntimeRowKind = RuntimeRowKind.LABEL_VALUE,
 )
 
 /** One collapsible runtime group. */
@@ -240,7 +322,9 @@ public data class RuntimeSectionView(
  * @param action the offered action; [RuntimeAction.NONE] for an unread state.
  * @param actionLabel the action's copy, or `null` when [action] is [NONE].
  * @param stopConfirmationOpen true while the inline stop confirmation is open.
- * @param sections the visible groups; empty unless [status] is READY.
+ * @param sections the visible groups; empty unless [status] is READY. The order is
+ *   the superset's: 本次运行 (when it is not a measured, idle run) and 最近出错
+ *   first, then the five Android diagnostics groups.
  * @param failure the host's failure message, re-shown by the page.
  * @param notes cross-cutting degradation lines.
  * @param hasUnmeasuredValues true when a visible row is 未知, so the page can
@@ -289,6 +373,8 @@ public data class RuntimeDetailsScreenState(
     }
 
     public companion object {
+        public const val RUN_SECTION_ID: String = "runtime.run"
+        public const val ERROR_SECTION_ID: String = "runtime.error"
         public const val ENGINE_SECTION_ID: String = "runtime.engine"
         public const val WEBVIEW_SECTION_ID: String = "runtime.webview"
         public const val MEMORY_SECTION_ID: String = "runtime.memory"
@@ -343,6 +429,24 @@ public data class RuntimeDetailsScreenState(
             val batteryPercent = power?.batteryPercent?.takeIf { it in 0..100 }
             val thermal = power?.thermal
             val gate = webView?.featureGate ?: FactState.UNKNOWN
+            val runRows = listOf(
+                countRow(
+                    "runtime.run.requests",
+                    UiStrings.RUNTIME_MODEL_REQUESTS,
+                    measured.run?.modelRequests,
+                ),
+                countRow(
+                    "runtime.run.input",
+                    UiStrings.RUNTIME_INPUT_TOKENS,
+                    measured.run?.inputTokens,
+                ),
+                countRow(
+                    "runtime.run.output",
+                    UiStrings.RUNTIME_OUTPUT_TOKENS,
+                    measured.run?.outputTokens,
+                ),
+            )
+            val errorRows = listOf(lastErrorRow(measured.lastError))
             val engineRows = listOf(
                 RuntimeRowView(
                     id = "runtime.engine.status",
@@ -511,13 +615,35 @@ public data class RuntimeDetailsScreenState(
                     },
                 ),
             )
-            val sections = listOf(
-                RuntimeSectionView(ENGINE_SECTION_ID, UiStrings.RUNTIME_SECTION_ENGINE, engineRows, true),
-                RuntimeSectionView(WEBVIEW_SECTION_ID, UiStrings.RUNTIME_SECTION_WEBVIEW, webViewRows, true),
-                RuntimeSectionView(MEMORY_SECTION_ID, UiStrings.RUNTIME_SECTION_MEMORY, memoryRows, true),
-                RuntimeSectionView(POWER_SECTION_ID, UiStrings.RUNTIME_SECTION_POWER, powerRows, true),
-                RuntimeSectionView(FGS_SECTION_ID, UiStrings.RUNTIME_SECTION_FGS, fgsRows, true),
-            ).map { section ->
+            // The baseline hides 本次运行 when it has no counts. A measured, all-zero
+            // run is that same "no activity" answer; an unread counter is not, so the
+            // group stays and its rows say 未知.
+            val runVisible = measured.run?.isIdle != true
+            val sections = buildList {
+                if (runVisible) {
+                    add(
+                        RuntimeSectionView(
+                            RUN_SECTION_ID,
+                            UiStrings.RUNTIME_SECTION_RUN,
+                            runRows,
+                            true,
+                        ),
+                    )
+                }
+                add(
+                    RuntimeSectionView(
+                        ERROR_SECTION_ID,
+                        UiStrings.RUNTIME_SECTION_ERROR,
+                        errorRows,
+                        true,
+                    ),
+                )
+                add(RuntimeSectionView(ENGINE_SECTION_ID, UiStrings.RUNTIME_SECTION_ENGINE, engineRows, true))
+                add(RuntimeSectionView(WEBVIEW_SECTION_ID, UiStrings.RUNTIME_SECTION_WEBVIEW, webViewRows, true))
+                add(RuntimeSectionView(MEMORY_SECTION_ID, UiStrings.RUNTIME_SECTION_MEMORY, memoryRows, true))
+                add(RuntimeSectionView(POWER_SECTION_ID, UiStrings.RUNTIME_SECTION_POWER, powerRows, true))
+                add(RuntimeSectionView(FGS_SECTION_ID, UiStrings.RUNTIME_SECTION_FGS, fgsRows, true))
+            }.map { section ->
                 section.copy(expanded = local.fold.isExpanded(section.id))
             }
             val action = when (engine) {
@@ -589,6 +715,52 @@ public data class RuntimeDetailsScreenState(
             FactState.YES -> UiStrings.RUNNING
             FactState.NO -> UiStrings.RUNTIME_STOPPED
             FactState.UNKNOWN -> UiStrings.UNKNOWN
+        }
+
+        /** One counter: a measured number, or 未知 with the shared explanation. */
+        private fun countRow(id: String, title: String, value: Long?): RuntimeRowView =
+            RuntimeRowView(
+                id = id,
+                title = title,
+                value = value?.toString() ?: UiStrings.UNKNOWN,
+                tone = if (value == null) PageTone.UNKNOWN else PageTone.NORMAL,
+                subtitle = if (value == null) UiStrings.SETTINGS_UNKNOWN_HINT else null,
+            )
+
+        /**
+         * The one sentence under 最近出错.
+         *
+         * Three answers, never two: a missing object is "the host did not report
+         * the read" (读取不到), a null message is "the read found no error"
+         * (最近没有出错), and a message is the error. The baseline folds the first
+         * two together because its model is in-process; Android must not borrow
+         * 最近没有出错 for a read that never happened.
+         */
+        private fun lastErrorRow(error: RuntimeLastError?): RuntimeRowView {
+            val message = error?.message
+            return when {
+                error == null -> RuntimeRowView(
+                    id = "runtime.error.last",
+                    title = UiStrings.RUNTIME_ERROR_UNREAD,
+                    value = null,
+                    tone = PageTone.UNKNOWN,
+                    subtitle = UiStrings.SETTINGS_UNKNOWN_HINT,
+                    kind = RuntimeRowKind.TEXT,
+                )
+                message == null -> RuntimeRowView(
+                    id = "runtime.error.last",
+                    title = UiStrings.RUNTIME_NO_ERROR,
+                    value = null,
+                    kind = RuntimeRowKind.TEXT,
+                )
+                else -> RuntimeRowView(
+                    id = "runtime.error.last",
+                    title = message,
+                    value = null,
+                    tone = PageTone.DEGRADED,
+                    kind = RuntimeRowKind.TEXT,
+                )
+            }
         }
 
         private fun engineTone(state: FactState): PageTone = when (state) {
@@ -787,12 +959,15 @@ private fun RuntimeContent(
             if (section.expanded) {
                 items(count = section.rows.size, key = { index -> section.rows[index].id }) { index ->
                     val row = section.rows[index]
-                    SettingsFormRow(
-                        title = row.title,
-                        value = row.value,
-                        tone = row.tone,
-                        subtitle = row.subtitle,
-                    )
+                    when (row.kind) {
+                        RuntimeRowKind.LABEL_VALUE -> SettingsFormRow(
+                            title = row.title,
+                            value = row.value,
+                            tone = row.tone,
+                            subtitle = row.subtitle,
+                        )
+                        RuntimeRowKind.TEXT -> RuntimeTextRow(row)
+                    }
                 }
             }
         }
@@ -808,6 +983,43 @@ private fun RuntimeContent(
                 onCancelStop = onCancelStop,
                 onConfirmStop = onConfirmStop,
                 onRestart = onRestart,
+            )
+        }
+    }
+}
+
+/**
+ * One sentence row (`最近出错`).
+ *
+ * The baseline renders this row as a `Text` with the group header already naming
+ * the group, so the row carries no second label. The ink is the row's own state:
+ * an error is the danger token, an unread read is the unknown ink, and "no error"
+ * is secondary ink. It never borrows a tone from the group.
+ */
+@Composable
+private fun RuntimeTextRow(row: RuntimeRowView) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val ink = when (row.tone) {
+        PageTone.DEGRADED -> tokens.colors.danger
+        PageTone.UNKNOWN -> tokens.colors.tertiary
+        else -> tokens.colors.secondary
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+            .padding(
+                horizontal = tokens.geometry.pageOuterMarginH,
+                vertical = tokens.spacing.iconText,
+            ),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        BasicText(text = row.title, style = type.body.copy(color = ink))
+        if (row.subtitle != null) {
+            BasicText(
+                text = row.subtitle,
+                style = type.caption.copy(color = tokens.colors.tertiary),
             )
         }
     }
@@ -855,7 +1067,10 @@ private fun RuntimeActionBlock(
                     .padding(horizontal = tokens.geometry.pageOuterMarginH),
             )
             RuntimeActionRow(
-                label = UiStrings.RUNTIME_STOP,
+                // The baseline's confirmation key is the short 停止, not the row's
+                // 停止本地引擎: the group already says what is being stopped
+                // (ChatPage.swift:4247, `Button("停止", role: .destructive)`).
+                label = UiStrings.STOP,
                 tag = UiPageTags.RUNTIME_STOP_CONFIRM_ACTION,
                 danger = true,
                 onClick = onConfirmStop,
@@ -985,6 +1200,7 @@ internal object RuntimeDetailsTokens {
         "colors.accent",
         "colors.danger",
         "colors.primary",
+        "colors.secondary",
         "colors.tertiary",
         "geometry.pageOuterMarginH",
         "geometry.pageRowMinHeight",

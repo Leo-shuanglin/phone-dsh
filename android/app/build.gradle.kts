@@ -295,8 +295,10 @@ dependencies {
     // UiTokenData over spec/ui/v1/tokens.json. The screen keeps no copy of a
     // token value, and the AAR was already on this module's classpath.
     implementation(project(":lib"))
-    // No :testkit edge: :app has no test sources and no import from it, so the
-    // dependency only shipped the scenario runner into the debug APK.
+    // No :testkit edge: no :app source imports it, so the dependency only shipped
+    // the scenario runner into the debug APK. The module's own host-side tests need
+    // plain JUnit only (they run against the `:domain` reading value types and the
+    // `:lib` page state, never against a device), so the runner stays out.
     // implementation(project(":testkit"))
 
     implementation(platform(libs.androidx.compose.bom))
@@ -311,4 +313,8 @@ dependencies {
 
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+
+    // Host-side unit tests: the permission matrix's row-by-row mapping and what the
+    // page prints for it. Pure JVM, no Robolectric and no device.
+    testImplementation(libs.junit)
 }

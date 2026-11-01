@@ -331,6 +331,48 @@
       "anchor": "Label(\"删除并撤销授权与密钥\", systemImage: \"trash\")",
       "extraction": "syntax",
       "labelAlternatives": []
+    },
+    {
+      "id": "本地命令",
+      "label": "本地命令",
+      "labelExpr": null,
+      "kind": "action",
+      "trigger": "tap",
+      "semantic": null,
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "extraction": "manual",
+      "androidOnly": {
+        "reason": {
+          "baselineLacks": "the iOS MCP editor is HTTP-only (`MCPSettingsPage.swift:193`): it has no transport concept, so there is no row to name",
+          "androidNeeds": "the phone host can launch a local command as well as reach a URL, so the draft's transport is the person's choice",
+          "withoutIt": "an existing stdio server could not be edited and a new one could only ever be HTTP"
+        },
+        "owner": "android-ui",
+        "reviewBy": "2027-01-31"
+      }
+    },
+    {
+      "id": "网络地址",
+      "label": "网络地址",
+      "labelExpr": null,
+      "kind": "action",
+      "trigger": "tap",
+      "semantic": null,
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "extraction": "manual",
+      "androidOnly": {
+        "reason": {
+          "baselineLacks": "same reason: the baseline editor has no transport picker, so the network-address row does not exist there",
+          "androidNeeds": "choosing the network transport is what makes a URL field meaningful; the row is the choice itself",
+          "withoutIt": "the person could not tell a URL server from a local-command server"
+        },
+        "owner": "android-ui",
+        "reviewBy": "2027-01-31"
+      }
     }
   ],
   "presentations": [],

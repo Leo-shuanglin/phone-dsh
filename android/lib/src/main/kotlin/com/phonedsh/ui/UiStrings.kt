@@ -593,6 +593,17 @@ public object UiStrings {
     public const val RUNTIME_UNMEASURED_HINT: String =
         "未测量的值显示为未知，不会当成 0 或默认档位"
 
+    // RuntimeDetailsPage's iOS trio, on top of the Android diagnostics groups
+    // (ChatPage.swift:4189 `本次运行`, :4198 `最近出错`). Every row is a host read,
+    // so an absent read says 未知 / 读取不到: 0 is a measurement, never a placeholder.
+    public const val RUNTIME_SECTION_RUN: String = "本次运行"
+    public const val RUNTIME_SECTION_ERROR: String = "最近出错"
+    public const val RUNTIME_MODEL_REQUESTS: String = "模型调用"
+    public const val RUNTIME_INPUT_TOKENS: String = "输入 Token"
+    public const val RUNTIME_OUTPUT_TOKENS: String = "输出 Token"
+    public const val RUNTIME_NO_ERROR: String = "最近没有出错"
+    public const val RUNTIME_ERROR_UNREAD: String = "读取不到最近一次出错"
+
     // EgressAllowListPage: the effective rules, the deny-all empty table and
     // the matching form each entry stands for.
     /**

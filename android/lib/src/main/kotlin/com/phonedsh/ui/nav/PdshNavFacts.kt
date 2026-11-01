@@ -29,6 +29,7 @@ import com.phonedsh.ui.page.MCPRegistryFacts
 import com.phonedsh.ui.page.MCPServerDraft
 import com.phonedsh.ui.page.ModelProviderFacts
 import com.phonedsh.ui.page.PermissionTier
+import com.phonedsh.ui.page.PhonePermissionsFacts
 import com.phonedsh.ui.page.RuntimeFacts
 import com.phonedsh.ui.page.SettingsFacts
 import com.phonedsh.ui.page.WebSearchFacts
@@ -82,6 +83,10 @@ public sealed interface SettingsWrite {
  * @param webSurface the engine/WebView/page facts; no read by default.
  * @param settings the mirrored settings index's row values, one field per row,
  *   including the platform appendix.
+ * @param phonePermissions the phone-capability matrix's read-only input: what this
+ *   host read about its own permissions, and the use audit it has (or has not). The
+ *   default reports no read at all, so a host that never wired the matrix renders
+ *   未知 on every row instead of borrowing a status.
  */
 @Immutable
 public data class PdshNavFacts(
@@ -97,6 +102,7 @@ public data class PdshNavFacts(
     public val configuration: ConfigurationFacts = ConfigurationFacts(),
     public val webSurface: WebSurfaceFacts = WebSurfaceFacts(),
     public val settings: SettingsFacts = SettingsFacts(),
+    public val phonePermissions: PhonePermissionsFacts = PhonePermissionsFacts(),
 )
 
 /**

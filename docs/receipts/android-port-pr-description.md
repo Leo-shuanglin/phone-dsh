@@ -169,7 +169,7 @@ JVM 测试   1746 tests / 0 failing
 构建       :app:assembleDebug BUILD SUCCESSFUL
 ```
 
-`phone-hygiene` 从 **148 → 0**，其中 **76 条是真泄漏**：24 个回执文件里写着本地绝对路径（`/Users/<name>/...`），而本仓有公开镜像——它们会把开发机的用户名和目录结构发出去。已脱敏，并把生成器改成 **fail-closed**（`assertRedacted` 幂等，脏产物写不出来）。
+`phone-hygiene` 从 **148 → 0**，其中 **76 条是真泄漏**：24 个回执文件里写着开发机上的家目录绝对路径，而本仓有公开镜像——它们会把开发机的用户名和目录结构发出去。已脱敏，并把生成器改成 **fail-closed**（`assertRedacted` 幂等，脏产物写不出来）。
 
 ---
 
@@ -178,12 +178,91 @@ JVM 测试   1746 tests / 0 failing
 - **17 条 known divergence**（`_baseline.json`，只减不增）
 - **3 条 platform whitelist**（`copy-forced`，引用 `spec/platform/whitelist.json` 的真实 id）
 - **6 个采集状态 PENDING**（`ParityState` 27 条里 21 条 CAPTURED）
+- **2,160 行模块层零生产消费者**（DomainStore 1,019 + 设备能力契约/解码器 1,141，见下）
+- **1 条 spec 漂移**（`wal.md §8` 的「uncompressed ustar」vs 实现的 gzip 外壳，无安全含义，见下）
 
 其中一条特别值得记：
 
 > `files / 完成` 是「3D 示例」demo sheet 的取消键（`FilesPage.swift:70`，`sheet-62`）。Android 从未实现该 sheet。**以前是预览工具栏的 `完成` 按标签假顶替了它**——删掉那段死代码，这个一直存在的缺口才第一次被看见。
 
 **门禁在绿的，而它绿的原因是两个完全不同的控件标签相同。**
+
+### 模块层：DomainStore 零消费者，设备能力契约/解码器仍无生产入口
+
+`android/README.md` 把 `:domain` 写成两块招牌：「P6：DomainStore（framework SQLite）+ DeviceCapabilities」。
+复核 HEAD + 2026-11-01 20:45 工作树：DomainStore 零消费者；DeviceCapabilities 的测量半边已被本轮电话权限
+改动接进 `:app`，契约/解码半边仍为零。
+
+**1. DomainStore：1,019 行，零生产消费者。**
+
+```text
+$ grep -rn "\bDomainStore\b" android/*/src/main --include="*.kt" | grep -v "android/domain/"
+（空）
+```
+
+8 个文件 1,019 行：`DomainStore.kt` 191、`DomainStoreCore.kt` 211、`sqlite/SqliteConnection.kt` 220、
+`testing/InMemoryConnection.kt` 123、`Connection.kt` 95、`KeyRange.kt` 56、`QuotaPolicy.kt` 64、
+`DomainText.kt` 59（同簇的 `DomainStoreException.kt` 59 行是错误类型，未计入这 1,019）。调用它的只有测试：
+`DomainStoreContract` 的 22 条用例分别跑在 JVM 内存假实现和 instrumented SQLite 上，另有
+`SqliteDomainStoreDeviceTest` 的 2 条设备级用例。**生产零入口**——这一簇唯一的调用者就是测试
+（`android/README.md` 的 2026-10-31 快照把 `:domain` 记为 79 条测试，本轮未复跑）。
+
+**2. DeviceCapabilities：契约/解码半边仍是死的，测量半边刚被接上。** `device/` 当前 10 个文件 1,964 行
+（2026-11-01 20:45 工作树）。生产代码引用到的有 4 个：`DeviceManifest` 226 + `CapabilityValue` 134 是
+`PdshNavHost.kt` 里手写的 demo 清单字面量；`AndroidDeviceCapabilities` 166 与新增的 `AndroidHostPermissions`
+297 已被本轮电话权限改动接进 `:app`（`ProbeEngineViewModel.kt` 调 `platformFacts`，
+`HostPhonePermissions.kt` 读 23 项手机权限）。**仍零生产引用的是契约/解码这一半**：SPI 接口
+`DeviceCapabilities` 130、能力词表 `DeviceCapability` 124、解码器家族 887（`DeviceManifestDecoder` 532 +
+`DeviceManifestJson` 137 + `DeviceManifestException` 81 + `LocalDeviceManifest` 137），共 **1,141 行**；
+`DeviceManifest.parse` 在生产代码里仍无调用点。
+
+**3. 需要 owner 做的决定：接线，还是删除。**
+
+- **接线的成本不是一条依赖，而是一个真实消费者。** PRD:169 要求原始证据 / 转写 / Main 过程 / 任务引用 /
+  Memory 都指向同一个本地 DomainStore（`DomainStore.kt` 的 KDoc 展开成 session / memory / task 三类记录）；
+  这些功能在 Android 上尚未实现。`:dsh` 已有 `HostStateStore`（JSON）与 `JournalStore`
+  两条持久化路径；现在把 DomainStore 接进去只会多出第三条写路径和第二个 authority。
+- **删除的成本是 1,019 行 + 22 条 contract × 2 驱动 + 2 条设备级测试**，可逆（git 历史仍在），但 P6 的
+  交付叙事要相应收窄。
+- **本车道不删**（1,019 行不是文档车道能处置的），只登记。**倾向：在第一个真实消费者出现前，按「未接线的
+  候选实现」处置（移出默认构建或删除）；不要为了让死代码「有消费者」而硬接到 `:app`。** 若要保住 P6
+  承诺，正确做法是同时命名那个消费者（memory / session 持久化），那是一条功能车道，不是本轮。
+
+**4. 模块层死簇清单（UI 层自查的盲区）。**
+
+| 簇 | 位置 | 行数 | 生产引用 |
+| --- | --- | --- | --- |
+| DomainStore | `domain/{DomainStore,DomainStoreCore,Connection,KeyRange,QuotaPolicy,DomainText}.kt` + `sqlite/` + `testing/` | 1,019 | **0** |
+| 解码器家族 | `device/{DeviceManifestDecoder,DeviceManifestJson,DeviceManifestException,LocalDeviceManifest}.kt` | 887 | **0**（`DeviceManifest.parse` 无生产调用点） |
+| 设备能力 SPI 接口 | `device/DeviceCapabilities.kt` | 130 | **0** |
+| 能力词表 | `device/DeviceCapability.kt` | 124 | 仅被上面两个死簇引用 |
+
+`device/` 另外 823 行有生产引用：`DeviceManifest` 226 + `CapabilityValue` 134（demo 字面量）、
+`AndroidDeviceCapabilities` 166 + `AndroidHostPermissions` 297（电话权限接线）。所以「设备能力簇」不是整簇
+死，死的是契约/解码半边；审计时记的 1,283 行里，142 行（旧的 `AndroidDeviceCapabilities`）已在工作树里接走。
+
+**这四行是 UI 层自查的盲区。** 本轮 UI 死代码自查做了 11 次独立复核，数字精确一致、可信；但它的扫描面是
+`:lib` 的页面与组件簇，**没有扫 `android/*/src/main` 的非 UI 模块**。「页面上没有入口」和「模块里没有死代码」
+是两个命题：本轮页面数从 README 快照的 21 涨到 36，而 `:domain` 的 1,019 + 1,141 行一直没进过死簇名单。
+
+对照：`domain/connector/`（2,493 行）**不在**死簇里——`DeviceConnectionSource` / `DeviceSessionSource` 和
+transcript 值类型被 `:lib` 页面真实引用，`PdshNavHost.kt` 用 `InMemory*` 夹具把它们接成了 demo。它的问题是
+「demo 级接线」而不是「零消费者」，两件事不该混在一起登记。
+
+### spec 漂移：`wal.md §8` 写「uncompressed ustar」，实现是 `gzip(ustar)`
+
+- `spec/v1/wal.md §8`：boot overlay 是「**uncompressed** ustar archive」。
+- `:engine` 的 `BootOverlay.kt` 产出的是 `gzip(ustar(entries))`：一个 gzip member 包住一个 plain ustar。
+  原因是 D21（iOS 的 `OverlayPacker.swift` 已如此；`spec/v1` 里没有这条文字）：pinned runtime 的
+  `storage/image-gzip.ts` 拒绝首字节不是 `1f 8b` 的 body，image 与 overlay 共用 `readImage`；发 plain
+  ustar 不是「被宽容接受」，是 **boot 失败**。
+- **没有解包穿越含义。** 两侧都有 `home/` | `workspace/` 首段门禁（packer 只看这两个目录；
+  `BootOverlay.kt` 的注释引用 `memory.ts` 的 `loadVfsOverlay`：`IMAGE_OVERLAY_DIRECTORIES` 恰为
+  `['home', 'workspace']`），symlink / 特殊文件在 packer 里 fail-loud（`Refusal.SYMLINK`），不落盘、
+  不跳过。所以这是**纯规范同步**，不是安全缺口。
+- **本车道不改 `spec/**`**（spec 是只读判据，改动要 owner）。需要 owner 做的是把 D21 的 gzip 外壳写进
+  `wal.md §8`（或在 §8 明确「archive 是 ustar，传输外壳是 gzip」）。同一漂移在
+  `docs/receipts/android-port-2026-10-31.md` 的 P28 节已详细记录；PR 描述此前没有登记它。
 
 ---
 

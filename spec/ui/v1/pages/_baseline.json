@@ -10,12 +10,6 @@
    "reason": "known divergence on daily-brief (missing-section); shrink only"
   },
   {
-   "page": "export",
-   "kind": "extra-action",
-   "name": "重试",
-   "reason": "known divergence on export (extra-action); shrink only"
-  },
-  {
    "page": "files",
    "kind": "missing-action",
    "name": "完成",
@@ -26,90 +20,6 @@
    "kind": "extra-action",
    "name": "保存",
    "reason": "known divergence on mcp-editor (extra-action); shrink only"
-  },
-  {
-   "page": "mcp-editor",
-   "kind": "extra-action",
-   "name": "本地命令",
-   "reason": "known divergence on mcp-editor (extra-action); shrink only"
-  },
-  {
-   "page": "mcp-editor",
-   "kind": "extra-action",
-   "name": "网络地址",
-   "reason": "known divergence on mcp-editor (extra-action); shrink only"
-  },
-  {
-   "page": "native-automation",
-   "kind": "extra-action",
-   "name": "加载更早记录",
-   "reason": "known divergence on native-automation (extra-action); shrink only"
-  },
-  {
-   "page": "native-automation",
-   "kind": "extra-action",
-   "name": "查看投递记录",
-   "reason": "known divergence on native-automation (extra-action); shrink only"
-  },
-  {
-   "page": "runtime-details",
-   "kind": "extra-section",
-   "name": "WebView",
-   "reason": "known divergence on runtime-details (extra-section); shrink only"
-  },
-  {
-   "page": "runtime-details",
-   "kind": "extra-section",
-   "name": "内存",
-   "reason": "known divergence on runtime-details (extra-section); shrink only"
-  },
-  {
-   "page": "runtime-details",
-   "kind": "extra-section",
-   "name": "前台服务",
-   "reason": "known divergence on runtime-details (extra-section); shrink only"
-  },
-  {
-   "page": "runtime-details",
-   "kind": "extra-section",
-   "name": "引擎",
-   "reason": "known divergence on runtime-details (extra-section); shrink only"
-  },
-  {
-   "page": "runtime-details",
-   "kind": "extra-section",
-   "name": "电源与散热",
-   "reason": "known divergence on runtime-details (extra-section); shrink only"
-  },
-  {
-   "page": "runtime-details",
-   "kind": "missing-action",
-   "name": "停止",
-   "reason": "known divergence on runtime-details (missing-action); shrink only"
-  },
-  {
-   "page": "runtime-details",
-   "kind": "missing-section",
-   "name": "最近出错",
-   "reason": "known divergence on runtime-details (missing-section); shrink only"
-  },
-  {
-   "page": "runtime-details",
-   "kind": "missing-section",
-   "name": "本次运行",
-   "reason": "known divergence on runtime-details (missing-section); shrink only"
-  },
-  {
-   "page": "task-screen",
-   "kind": "extra-action",
-   "name": "重试",
-   "reason": "known divergence on task-screen (extra-action); shrink only"
-  },
-  {
-   "page": "files",
-   "kind": "missing-action",
-   "name": "完成",
-   "reason": "FilesPage.swift:70 is the cancel key of the `3D 示例` demo sheet (sheet-62), a preview host page this App does not have: `onOpenDemo` has no host implementation, so the sheet never presents and its cancel key has no Android counterpart. The gate used to match this label against the in-page preview's own `完成`, which was a different control — deleting that dead preview is what exposed the gap. Implementing the demo sheet needs a page-surface host; tracked separately."
   }
  ]
 }

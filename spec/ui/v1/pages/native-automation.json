@@ -242,6 +242,48 @@
       "anchor": "Button(saving ? \"保存中…\" : \"保存\") { save() }",
       "extraction": "syntax",
       "presentedBy": "sheet-92"
+    },
+    {
+      "id": "查看投递记录",
+      "label": "查看投递记录",
+      "labelExpr": null,
+      "kind": "action",
+      "trigger": "tap",
+      "semantic": null,
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "extraction": "manual",
+      "androidOnly": {
+        "reason": {
+          "baselineLacks": "`ScheduleDetailPage` reaches this from a NavigationLink; the extractor does not collect actions from navigated subpages",
+          "androidNeeds": "Android renders the detail in the page's own file, so the row is drawn where the contract does not look",
+          "withoutIt": "the delivery history could not be opened from the schedule row"
+        },
+        "owner": "android-ui",
+        "reviewBy": "2027-01-31"
+      }
+    },
+    {
+      "id": "加载更早记录",
+      "label": "加载更早记录",
+      "labelExpr": null,
+      "kind": "action",
+      "trigger": "tap",
+      "semantic": null,
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "extraction": "manual",
+      "androidOnly": {
+        "reason": {
+          "baselineLacks": "`ScheduleHistoryPage` is a navigated subpage for the same reason, so its paging row is absent from the parent contract",
+          "androidNeeds": "Android draws the history paging in the same file as the schedule list",
+          "withoutIt": "long histories would stop at the first page with no way back"
+        },
+        "owner": "android-ui",
+        "reviewBy": "2027-01-31"
+      }
     }
   ],
   "presentations": [

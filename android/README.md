@@ -4,8 +4,10 @@
 > **状态：可构建、可测试、可在模拟器上跑通 boot→HELLO。**
 > 12 个 Gradle 模块：11 个 Swift 模块由 **7 个模块镜像**（合并规则见下），另 5 个不镜像 Swift
 > （`:platform` 承载 SPI、`:platform-android` 承载 SPI 的 Android 实现、`:domain` 承载 P6 的域名
-> 存储与设备能力、`:lib` 是可发布 AAR、`:app` 是 probe-app）。
-> **56,248 行 Kotlin 主代码 + 31,270 行单测 + 3,174 行 instrumented**（`wc -l`，2026-10-31 实测）。
+> 存储与设备能力、`:lib` 是可发布 AAR、`:app` 是 probe-app）。`:domain` 的 DomainStore 目前零生产
+> 消费者，见 PR 描述「已知缺口 / 模块层」。
+> **104,603 行 Kotlin 主代码 + 49,261 行单测 + 9,660 行 instrumented**（`wc -l`，**快照 2026-11-01
+> 20:45 工作树**；命令见「门禁与数字」#12–#14，合并前树若再变按同一条命令重跑）。
 > `bash android/tools/run-demo.sh` 一条命令完成 AVD→构建→装包→启动→抓 logcat→截图；
 > `bash android/tools/inject-renderer-death.sh` 验证 renderer 被杀后重建恢复。
 > 证据等级逐条标注在 `TonoWiki/briefs/2026-10-31-pdsh-android-full-port-plan.md`。
@@ -59,7 +61,7 @@ android/
 ├── testkit/                   # scenario runner / UI 状态录制 / fault driver
 ├── platform/                  # SPI 接口（纯 JVM）：Durability/Clock/SecureStore/LifecycleSignals/EngineHost/Notifier
 ├── platform-android/          # 上述 SPI 的 Android 实现（Keystore/Os.fsync/Lifecycle）
-├── domain/                    # P6：DomainStore（framework SQLite）+ DeviceCapabilities
+├── domain/                    # P6：DomainStore（framework SQLite，尚未接线）+ DeviceCapabilities
 ├── core/                      # wire + log + agentcore
 ├── net/                       # loopback + gateway
 ├── controller/ engine/ dsh/
@@ -120,6 +122,11 @@ android/
 `build/test-results/test`；**每个模块只计一个变体**，不把 debug/release 两份相加
 （旧表里 `:engine 92 = 46 × 2`、`:platform-android 22 = 11 × 2` 就是相加造成的虚高）。
 
+> **快照警告**：上表是 2026-10-31 的 `test-count.sh` 输出，2026-11-01 **未复跑**。当时 `:lib` 有
+> **21** 个 `*Page.kt`，当前是 **36** 个；所以 `:lib` 的 287 和合计 1,095 对应旧树，不能和「门禁与数字」
+> #10 的 36 个页面混着引用。要更新测试数，先重跑 `./gradlew test --rerun-tasks --no-daemon --continue`，
+> 再跑 `bash android/tools/test-count.sh`（陷阱 #7）。
+
 ### instrumented（**本轮未测量**）
 
 本轮没有跑模拟器/真机，下面几行是**上一轮的记录**，本轮未复跑，不作为本文任何数字的依据：
@@ -139,7 +146,7 @@ android/
 **未做的**：真机验证（掉电语义、OEM 查杀、华为 WebView 内核、32 位 ABI）按决定推迟到 PR 之后；
 `level-2` 掉电承诺在台架缺席时固定为 `NOT_VERIFIED`。
 
-## 门禁与数字（2026-10-31 实测，逐条命令）
+## 门禁与数字（2026-10-31 实测；#10、#12–#14 于 2026-11-01 复测）
 
 | # | 命令 | 结果 |
 | --- | --- | --- |
@@ -152,11 +159,11 @@ android/
 | 7 | `bash android/tools/test-count.sh` | 11 个模块、**1,095 条测试**、0 failing（见上表） |
 | 8 | `python3 -m unittest discover -s android/tools -p 'test_*.py'` | **19 条**，OK（0.5 s） |
 | 9 | `grep -c 'include(":' android/settings.gradle.kts` | **12** |
-| 10 | `ls android/lib/src/main/kotlin/com/phonedsh/ui/page/*Page.kt \| wc -l` | **21** 个页面 |
+| 10 | `ls android/lib/src/main/kotlin/com/phonedsh/ui/page/*Page.kt \| wc -l` | **36** 个页面（2026-11-01） |
 | 11 | `find shell/crates -name "*.rs" \| xargs wc -l \| tail -1` | **27,742** 行 Rust（`:shell` 依赖的加速器实现，见 `shell/README.md`） |
-| 12 | `find android -path "*/src/main/*" -name "*.kt" \| xargs wc -l \| tail -1` | **56,248** 行 Kotlin 主代码 |
-| 13 | `find android -path "*/src/test/*" -name "*.kt" \| xargs wc -l \| tail -1` | **31,270** 行 JVM 单测 |
-| 14 | `find android -path "*/src/androidTest/*" -name "*.kt" \| xargs wc -l \| tail -1` | **3,174** 行 instrumented |
+| 12 | `find android -path "*/src/main/*" -name "*.kt" \| xargs wc -l \| tail -1` | **104,603** 行 Kotlin 主代码（2026-11-01 20:45 工作树） |
+| 13 | `find android -path "*/src/test/*" -name "*.kt" \| xargs wc -l \| tail -1` | **49,261** 行 JVM 单测（2026-11-01 20:45） |
+| 14 | `find android -path "*/src/androidTest/*" -name "*.kt" \| xargs wc -l \| tail -1` | **9,660** 行 instrumented（2026-11-01） |
 
 ## 纪律
 

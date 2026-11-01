@@ -965,26 +965,6 @@ public fun SettingsGlassPill(
 private val SETTINGS_PILL_HEIGHT: Dp = 30.dp
 
 /**
- * One group header of the *old* flat list is gone; what remains is the
- * sub-pages' [SettingsSectionLabel]. This alias exists so a caller that read the
- * pre-#13 name does not silently keep the removed geometry.
- */
-@Deprecated(
-    message = "The pre-#13 flat-list group header is not rendered by the current baseline; " +
-        "use SettingsSectionLabel (sub-pages) or no header at all (the general tab).",
-    replaceWith = ReplaceWith("SettingsSectionLabel(title, trailing = trailing, tag = tag)"),
-)
-@Composable
-public fun SettingsGroupHeader(
-    title: String,
-    modifier: Modifier = Modifier,
-    trailing: String? = null,
-    tag: String? = null,
-) {
-    SettingsSectionLabel(title = title, modifier = modifier, trailing = trailing, tag = tag)
-}
-
-/**
  * The baseline's 34 pt large title, drawn as a block.
  *
  * See [settingsLargeTitleStyle] for the missing `typography.largeTitle` token.

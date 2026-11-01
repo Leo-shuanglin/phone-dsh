@@ -55,6 +55,7 @@ class PdshSettingsRouteTest {
                 SettingsDestination.COMMAND, // PdshRoute.Tools
                 SettingsDestination.RUNTIME_DETAILS, // PdshRoute.Runtime
                 SettingsDestination.EXPORT_DIAGNOSTICS, // PdshRoute.Export
+                SettingsDestination.SHORTCUTS, // PdshRoute.Shortcuts
                 // PERMISSION_DEFAULTS and LICENSES are the two null ones.
                 SettingsDestination.LICENSES,
                 SettingsDestination.PERMISSION_DEFAULTS,

@@ -72,7 +72,6 @@ import com.phonedsh.ui.page.NativePluginInventoryPage
 import com.phonedsh.ui.page.NativeWorkbenchPage
 import com.phonedsh.ui.page.PDSHShellPage
 import com.phonedsh.ui.page.PhoneCapabilityAction
-import com.phonedsh.ui.page.PhonePermissionsFacts
 import com.phonedsh.ui.page.PhonePermissionsLocalState
 import com.phonedsh.ui.page.PhonePermissionsPage
 import com.phonedsh.ui.page.PhonePermissionsScreenState
@@ -280,7 +279,7 @@ public fun PdshNavHost(
             is PdshRoute.SessionArtifacts -> SessionArtifactsRoute(route.sessionId, onBack)
             PdshRoute.AgentPresets -> AgentPresetsRoute(onBack)
             PdshRoute.PluginInventory -> PluginInventoryRoute(facts, onBack, onNavigate)
-            PdshRoute.PhonePermissions -> PhonePermissionsRoute(onBack)
+            PdshRoute.PhonePermissions -> PhonePermissionsRoute(facts, onBack)
             PdshRoute.ChatPreferences -> ChatPreferencesRoute(facts, onBack)
             PdshRoute.SettingsDocument -> SettingsDocumentRoute(onBack)
             PdshRoute.Shortcuts -> ShortcutsRoute(onBack)
@@ -750,7 +749,8 @@ private fun SettingsRoute(
                         onNavigate = onNavigate,
                         embedded = true,
                     )
-                    SettingsTab.PERMISSIONS -> PhonePermissionsRoute(onBack = onBack, embedded = true)
+                    SettingsTab.PERMISSIONS ->
+                        PhonePermissionsRoute(facts, onBack = onBack, embedded = true)
                     SettingsTab.PRESETS -> AgentPresetsRoute(onBack = onBack, embedded = true)
                 }
             },
@@ -1349,15 +1349,19 @@ private fun PluginInventoryRoute(
 
 @Composable
 private fun PhonePermissionsRoute(
+    facts: PdshNavFacts,
     onBack: () -> Unit,
     embedded: Boolean = false,
 ) {
     var local by remember { mutableStateOf(PhonePermissionsLocalState()) }
-    // The host reads no system permission yet, so `PhonePermissionsFacts()` reports
-    // `statuses == null`: every row says 未知 and no control is armed. That is the
-    // honest face of an unread permission, and the one thing this route must never
-    // do is fill the gap with 已允许.
-    val state = PhonePermissionsScreenState.from(PhonePermissionsFacts(), local)
+    // The read is the host's, not this route's: the composition root walks its own
+    // permissions into `PdshNavFacts.phonePermissions` (`:domain`'s
+    // `AndroidHostPermissions` + `AndroidDeviceCapabilities.platformFacts`), and this
+    // route only projects. A host that read nothing keeps the default facts
+    // (`statuses == null`): every row says 未知 and no control is armed, which is the
+    // honest face of an unread permission. The one thing this route must never do is
+    // fill that gap with 已允许.
+    val state = PhonePermissionsScreenState.from(facts.phonePermissions, local)
     PhonePermissionsPage(
         state = state,
         onDone = onBack,

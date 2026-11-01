@@ -24,7 +24,7 @@ CI_TMP=${CI_TMP%/}/phone-dsh-ci
 IDF_VERSION_WANT=${CI_IDF_VERSION:-5.5.2}
 IOS_RUNTIME=${CI_IOS_RUNTIME:-26.5}
 
-STAGES="phone-spec phone-p0-conformance phone-cross-tree phone-compat phone-plugins phone-bundle-fresh phone-image phone-sdk phone-no-dsh-patch phone-hygiene phone-license phone-modules phone-gate-contracts phone-android-structure phone-android-tests phone-android-release phone-xcode-resolve"
+STAGES="phone-spec phone-p0-conformance phone-cross-tree phone-compat phone-plugins phone-bundle-fresh phone-image phone-sdk phone-no-dsh-patch phone-hygiene phone-license phone-modules phone-gate-contracts phone-android-structure phone-android-tests phone-android-release phone-rust-tests phone-xcode-resolve"
 
 stage_desc() {
     case "$1" in
@@ -43,6 +43,7 @@ stage_desc() {
         phone-gate-contracts)  echo "Python regressions for scenario batch/evidence and gate contracts" ;;
         phone-android-structure) echo "android/tools structure_check (11 checks, incl. nested-comments and the two 16 KB page-alignment gates) + its tool unit tests" ;;
         phone-android-tests)   echo "cargo build -p pdsh-jni, then every test-bearing Gradle module's JVM tests; 0 tests counted = FAIL" ;;
+        phone-rust-tests)      echo "cargo test --workspace over shell/: the host read policy, the WAL planner and the accelerators; the JVM suite exercises them through JNI, but the authoritative policy tests live only here" ;;
         phone-android-release) echo "assembleRelease + 16 KB PT_LOAD alignment proof of the arm64-v8a libpdsh_jni.so (SKIP without the gitignored worker bundle/NDK product)" ;;
         phone-xcode-resolve)   echo "xcodegen + Xcode package resolution of examples/probe-app (no simulator; SKIP if XcodeGen is absent)" ;;
         *)                     return 1 ;;
@@ -370,6 +371,22 @@ stage_phone_android_structure() {
 
 # The JVM suite. :core, :dsh and :testkit drive the Rust codec through JNI and
 # their build scripts fail with "missing .../libpdsh_jni.*; build it first with:
+# The authoritative read policy, the WAL planner and the accelerators are Rust.
+# `phone-android-tests` builds `pdsh-jni` and exercises them through JNI, but the
+# policy tests that prove a host accelerator cannot see an internal root live
+# only in `shell/` — and nothing else runs them. The 2026-11-01 audit found the
+# fix for "rg and jaq leak DSH-internal state" guarded by tests that no stage ran:
+# a regression there would leave every gate green while the device leaked bytes.
+stage_phone_rust_tests() {
+    command -v cargo >/dev/null 2>&1 || { skip "cargo not found: cannot run the Rust suite"; return; }
+    [ -d "$ROOT/shell" ] || { skip "shell/ not present"; return; }
+    ( cd "$ROOT/shell" && cargo test --workspace ) || {
+        echo "cargo test --workspace failed; the host read policy / WAL planner / accelerators are not proven"
+        echo "  cd shell && cargo test --workspace"
+        return 1
+    }
+}
+
 # cd shell && cargo build -p pdsh-jni". Build the host library first, then run
 # every test-bearing module and refuse an aggregate count of 0.
 stage_phone_android_tests() {

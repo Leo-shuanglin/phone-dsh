@@ -242,6 +242,7 @@ public enum class SettingsDestination {
     RUNTIME_DETAILS,
     LICENSES,
     EXPORT_DIAGNOSTICS,
+    SHORTCUTS,
 }
 
 /** One entry of a menu row's menu. */
@@ -574,6 +575,9 @@ public data class SettingsScreenState(
                     SettingsRowView(
                         id = SHORTCUTS_ROW_ID,
                         kind = SettingsRowKind.NAVIGATION,
+                        // The row was drawn without a destination, so tapping it did
+                        // nothing while the contract calls this page `must`.
+                        destination = SettingsDestination.SHORTCUTS,
                         title = ROW_SHORTCUTS,
                         value = preferences.shortcutCount
                             ?.let { UiStrings.ROW_COUNT.format(it) }

@@ -412,11 +412,13 @@ private fun hostRouteNote(route: PdshRoute): String? = when (route) {
         "演示数据：产物来自内存存储，不是真实设备文件"
 
     // The settings family's reference sheets render their own state: the route
-    // hands each page the host's facts (聊天外观) or an empty snapshot that the
-    // page prints as 未知/读取不到 (配置文件, 快捷键), and the permission and
-    // plugin pages are local matrices. A host-wide line here would be a second,
-    // weaker version of the page's own disclosure. None of them is a drawer row;
-    // they are opened from the settings index.
+    // hands each page the host's facts (聊天外观, 手机权限 — whose rows are the
+    // host's own permission read, so an unread row prints no status line while the
+    // audit card says 宿主没有报告使用审计) or an empty snapshot that the page prints
+    // as 未知/读取不到 (配置文件, 快捷键), and the plugin page is a local matrix. A
+    // host-wide line here would be a second, weaker version of the page's own
+    // disclosure. None of them is a drawer row; they are opened from the settings
+    // index.
     PdshRoute.AgentPresets,
     PdshRoute.PluginInventory,
     PdshRoute.PhonePermissions,

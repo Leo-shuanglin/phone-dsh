@@ -1083,8 +1083,15 @@ class PageExtractor:
             if row.get("condition") is None:
                 row["condition"] = condition
         else_rows = []
+        # Look past `end` for the `else`: `split_statements` splits an
+        # `if cond { … } else { … }` into two statements, so this call's `end` is the
+        # closing brace of the first branch only. Bounding the scan by it made every
+        # `if/else` closure report no label at all — `MCPSettingsPage.swift:239`'s
+        # save button draws `Text(existing == nil ? "保存并连接" : "保存修改并重连")` in
+        # the `else` branch, and the contract ended up with `label: null`.
         k = close + 1
-        while k < end and masked[k] in " \t\r\n":
+        limit = len(masked)
+        while k < limit and masked[k] in " \t\r\n":
             k += 1
         if masked.startswith("else", k):
             rest = k + 4

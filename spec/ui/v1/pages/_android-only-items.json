@@ -102,6 +102,138 @@
    },
    "owner": "android-ui",
    "reviewBy": "2027-01-31"
+  },
+  {
+   "page": "mcp-editor",
+   "kind": "action",
+   "label": "本地命令",
+   "reason": {
+    "baselineLacks": "the iOS MCP editor is HTTP-only (`MCPSettingsPage.swift:193`): it has no transport concept, so there is no row to name",
+    "androidNeeds": "the phone host can launch a local command as well as reach a URL, so the draft's transport is the person's choice",
+    "withoutIt": "an existing stdio server could not be edited and a new one could only ever be HTTP"
+   },
+   "owner": "android-ui",
+   "reviewBy": "2027-01-31"
+  },
+  {
+   "page": "mcp-editor",
+   "kind": "action",
+   "label": "网络地址",
+   "reason": {
+    "baselineLacks": "same reason: the baseline editor has no transport picker, so the network-address row does not exist there",
+    "androidNeeds": "choosing the network transport is what makes a URL field meaningful; the row is the choice itself",
+    "withoutIt": "the person could not tell a URL server from a local-command server"
+   },
+   "owner": "android-ui",
+   "reviewBy": "2027-01-31"
+  },
+  {
+   "page": "native-automation",
+   "kind": "action",
+   "label": "查看投递记录",
+   "reason": {
+    "baselineLacks": "`ScheduleDetailPage` reaches this from a NavigationLink; the extractor does not collect actions from navigated subpages",
+    "androidNeeds": "Android renders the detail in the page's own file, so the row is drawn where the contract does not look",
+    "withoutIt": "the delivery history could not be opened from the schedule row"
+   },
+   "owner": "android-ui",
+   "reviewBy": "2027-01-31"
+  },
+  {
+   "page": "native-automation",
+   "kind": "action",
+   "label": "加载更早记录",
+   "reason": {
+    "baselineLacks": "`ScheduleHistoryPage` is a navigated subpage for the same reason, so its paging row is absent from the parent contract",
+    "androidNeeds": "Android draws the history paging in the same file as the schedule list",
+    "withoutIt": "long histories would stop at the first page with no way back"
+   },
+   "owner": "android-ui",
+   "reviewBy": "2027-01-31"
+  },
+  {
+   "page": "export",
+   "kind": "action",
+   "label": "重试",
+   "reason": {
+    "baselineLacks": "the baseline reads its export state from local storage and cannot fail the read",
+    "androidNeeds": "Android reads a host snapshot across a process boundary, so the read can fail and needs recovery in place",
+    "withoutIt": "a failed read leaves the page blank with no way back except killing the app"
+   },
+   "owner": "android-ui",
+   "reviewBy": "2027-01-31"
+  },
+  {
+   "page": "task-screen",
+   "kind": "action",
+   "label": "重试",
+   "reason": {
+    "baselineLacks": "the baseline reads its task list from local state and cannot fail the read",
+    "androidNeeds": "Android reads a host snapshot across a process boundary, so the read can fail and needs recovery in place",
+    "withoutIt": "a failed read leaves the page blank with no way back except killing the app"
+   },
+   "owner": "android-ui",
+   "reviewBy": "2027-01-31"
+  },
+  {
+   "page": "runtime-details",
+   "kind": "section",
+   "title": "引擎",
+   "reason": {
+    "baselineLacks": "the iOS page has no 引擎 group: it renders 状态 and 已运行 as one untitled row above 本次运行 (`runtimeRow(\"状态\", statusValue)`, ChatPage.swift:4184), and `statusValue` is assembled at runtime from `model.displayStatus` plus the elapsed time, so the extractor's section model has no group to compare",
+    "androidNeeds": "the Android page folds its diagnostics by group, and the engine rows are that group: `RuntimeSectionView(ENGINE_SECTION_ID, 引擎, …)` owns the fold and the `runtime.engine.status`/`runtime.engine.uptime` row ids, while the contract's untitled-group criterion only proves that the 停止本地引擎 row exists somewhere below",
+    "withoutIt": "the status and uptime rows would sit above 本次运行 with no header and no fold id, so the user could not collapse them and the stop action would lose the group it belongs to"
+   },
+   "owner": "android-ui",
+   "reviewBy": "2027-06-30"
+  },
+  {
+   "page": "runtime-details",
+   "kind": "section",
+   "title": "WebView",
+   "reason": {
+    "baselineLacks": "the iOS page shows no WebView row: WebKit ships with the OS, so `platform.webview-version-gate` records that iOS has no separately updatable core version and no boot-time feature probe to display",
+    "androidNeeds": "Android's WebView is a separately updated package that can be missing or disabled, so `platform.webview-version-gate` requires the provider, the version (telemetry only, never the gate) and the `WebViewFeature.isFeatureSupported` probe to be visible; this page is the only surface that shows them",
+    "withoutIt": "a device whose WebView lacks a required feature would degrade the page surface silently, with no on-device evidence of which feature is missing"
+   },
+   "owner": "android-ui",
+   "reviewBy": "2027-06-30"
+  },
+  {
+   "page": "runtime-details",
+   "kind": "section",
+   "title": "内存",
+   "reason": {
+    "baselineLacks": "the iOS page does not show the memory tier, budget or usage; `platform.budgettier-memory` keeps that read in `Sources/PhoneDSHController/Budgets.swift`, behind the budgets policy rather than on the runtime page",
+    "androidNeeds": "the Android host picks the tier once per boot from `ActivityManager.MemoryInfo` and enforces the budget, so the chosen tier and the measured usage are host facts the page must show; `overBudget` also raises a page note",
+    "withoutIt": "an over-budget session would surface only as a generic degradation with no numbers, and the tier chosen for this device could not be checked against what the host enforced"
+   },
+   "owner": "android-ui",
+   "reviewBy": "2027-06-30"
+  },
+  {
+   "page": "runtime-details",
+   "kind": "section",
+   "title": "电源与散热",
+   "reason": {
+    "baselineLacks": "the iOS page exposes neither the thermal state nor battery, charging or battery-saver; `platform.thermal-battery` records that the signals drive the budget policy on both platforms, but iOS does not render them here",
+    "androidNeeds": "`PowerManager.getCurrentThermalStatus` plus the `BatteryManager` signals are the inputs of the conservative policy; Android's thermal granularity is coarser than iOS's, so the page prints the platform's own level and never treats an unread signal as normal",
+    "withoutIt": "a severe thermal level or an enabled battery saver would change background behaviour with no on-page explanation, so the user would read a deliberately conservative engine as a fault"
+   },
+   "owner": "android-ui",
+   "reviewBy": "2027-06-30"
+  },
+  {
+   "page": "runtime-details",
+   "kind": "section",
+   "title": "前台服务",
+   "reason": {
+    "baselineLacks": "iOS has no foreground service: `platform.fgs-turn-notification` records that background progress is presented by the system UI and BGContinuedProcessing, so the baseline page has no availability row to show",
+    "androidNeeds": "whether a foreground service can start is the Android signal that decides whether a background turn can outlive the foreground; the row also carries the host's own reason when it cannot start (this App declares no service), which is a measured fact rather than an assumption",
+    "withoutIt": "the difference between 'the turn stopped because the app went to the background' and 'this build can never keep running in the background' would be invisible to the user"
+   },
+   "owner": "android-ui",
+   "reviewBy": "2027-06-30"
   }
  ]
 }

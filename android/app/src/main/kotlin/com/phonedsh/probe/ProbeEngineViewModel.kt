@@ -27,6 +27,8 @@ import com.phonedsh.dsh.host.ModelRoute
 import com.phonedsh.dsh.host.ModelRouteFact
 import com.phonedsh.dsh.host.PhoneDshHost
 import com.phonedsh.dsh.host.asHostWal
+import com.phonedsh.domain.device.AndroidDeviceCapabilities
+import com.phonedsh.domain.device.AndroidHostPermissions
 import com.phonedsh.dsh.journal.JournalException
 import com.phonedsh.dsh.journal.JournalPaths
 import com.phonedsh.dsh.journal.JournalStore
@@ -583,9 +585,10 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
      * One walk over every value the navigation facts are built from.
      *
      * Measured: the engine's view, the running duration (monotonic), the WebView
-     * provider/version, the launch egress grant, the battery-exemption fact, and
-     * whether the materialized workspace tree exists. Everything not measured stays
-     * `null`; no field defaults to a fake value.
+     * provider/version, the launch egress grant, the battery-exemption fact, whether
+     * the materialized workspace tree exists, and the app's own permission/hardware
+     * state (`HostPermissionReadings`). Everything not measured stays `null`; no
+     * field defaults to a fake value.
      */
     internal fun hostReadings(): HostReadings = HostReadings(
         webView = engine.view(),
@@ -606,6 +609,14 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         // ever recovered there is no tree on disk, and the folder list must stay 未知
         // rather than show a folder that opens nothing.
         workspacePresent = Files.isDirectory(walPaths.materializedWorkspace),
+        // The phone-permission matrix's device read: the platform snapshot comes from
+        // `:domain`'s `AndroidDeviceCapabilities`, the permission state from
+        // `AndroidHostPermissions` over it. Both are application-context reads; no
+        // permission is requested, and nothing here writes.
+        permissions = AndroidHostPermissions(
+            getApplication<Application>(),
+            AndroidDeviceCapabilities.platformFacts(getApplication<Application>()),
+        ).read(),
     )
 
     /** The facts every routed page reads, rebuilt from one host walk. */

@@ -15,7 +15,8 @@
 |---|---|
 | `android/engine/.../WebViewEngine.kt:1255` | `liveWebViews` —— **进程级**计数 |
 | `android/engine/.../WebViewEngine.kt:605-609` | `createWebView()` 里的断言：已有实例就抛 |
-| `android/engine/.../DemoEngine.kt:5-8` | `:app` 看不见 `android.webkit`，所以 UI 车道**构造不出来**；断言只是兜底 |
+| `android/engine/.../DemoEngine.kt:5-8` | `DemoEngine` 的**门面**不暴露 `WebView`，所以按门面写代码的车道构造不出来 |
+| ⚠️ **这条不是强制的** | `android/app/.../ProbeEngineViewModel.kt:11` 直接 `import android.webkit.WebView`（只用来读 kernel 包名）。**`:app` 编译期看得见 `android.webkit`**，自己 `WebView(context)` 不会经过 engine 的计数器，却共享同一个 `CookieManager` 单例。这是本文对应的**真实缺口**：断言只挡得住从 `:engine` 走的人 |
 
 ## 为什么存在：写下来的理由全是资源/正确性
 
