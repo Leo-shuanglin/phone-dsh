@@ -1,246 +1,203 @@
-# Android 完整适配：12 个模块、1475 个 JVM 测试、真模型回合跑通、27 个设备级缺陷闭合
+# Android PDSH — 对齐 iOS PR15 基线
 
-以 `spec/v1` 为唯一裁判、iOS 为基线，把 PDSH 移植到 Android。本 PR 覆盖 P0–P6，
-**真机测试按约定留到合并后**。
-
-本地验证：**1475 个 JVM 测试 0 失败**（`test-count.sh` 无 `WARN`）、**structure_check 11/11**、
-**spec golden 73 文件 0 error**、**spec 单测 185 通过**、`cargo test --workspace` 全绿。
+> **基线 SHA**：iOS `8dd17496`（`#15: direct native preview with paging and honest states`）
+> 前一个基线是 `86a39aac`（`#13` 之后一个收紧 composer 底距的提交）。
+> **本轮只换 iOS 源码的那 8 个文件，`android/` 不受影响。**
 
 ---
 
-## 做了什么
+## 一句话
 
-**12 个 Gradle 模块**：`:platform` `:platform-android` `:core` `:net` `:controller` `:engine`
-`:dsh` `:lib` `:testkit` `:domain` `:shell` `:app`。
+**Android 侧 12 个模块、1746 个 JVM 测试、13/13 CI 门禁全绿；页面结构契约 51 条分歧降到 0。**
 
-**4 棵契约树**（`spec/v1`、`spec/host/v1`、`spec/platform`、`spec/ui/v1`）+ 跨树不变量检查。
-
-**Rust 加速器**：WAL 内核、wire 编解码、`rg`/`jaq`/`jq` 进程内加速器，全部经 JNI 暴露。
-
-**Worker**：TS 运行时打成一个镜像，WebView 里跑，与宿主走有序通道（`spec/v1/channel.md`）。
-
-**能力面**：92 个声明命令，实测 **91 可用**、1 个诚实标注不可用（`curl`，phone profile 不下发 loopback token）。
+但这一轮最重要的产出不是「做了多少页面」，而是**证明了那 51 条里 40 条从来不是问题**——它们是契约提取器、结构检查器、门禁自己的错误。如果没人查，最省事的做法是给每个页面补一堆假控件把 51 变成 0：**门禁会绿，产品会变差，而且没人知道。**
 
 ---
 
-## 验证（每条带证据等级）
+## 一、那 40 条是怎么消失的
 
-| 项 | 结果 | 等级 |
-|---|---|---|
-| JVM 测试 | **1475 / 0 failing** | `jvm` |
-| 结构检查 | **11 / 11** | `jvm` |
-| spec golden | 73 文件 / 0 error | `jvm` |
-| spec 单测 | 185 通过 | `jvm` |
-| `cargo test --workspace` | 全绿 | `jvm` |
-| 真模型回合 | `APP_TURN_OK reason=completed` | `emulator` |
-| 92 命令对账 | 91 ok / 1 fail（`curl`，已标注） | `emulator` |
-| 冷启动 median | 4941 ms（API 35 模拟器，**不是真机**） | `emulator` |
-| 首回合 TTFT median | 1779 ms | `emulator` |
-| 单回合 RSS 峰 | ~289 MiB | `emulator` |
-| 进程被杀矩阵 | 5 种杀法 × 2 时机：**0 torn / 0 丢失** | `emulator` |
-| 真机任何数字 | **无** | `not-verified` |
-| 掉电（`level-2`） | **已降级，不承诺** | `not-verified` |
+`phone-p0-conformance` 的判据是「iOS 契约里的 section/action 标签，Android 页面上有没有」。它报 51 条缺失。逐条查下去，**有六类假话**：
 
----
-
-## 这一轮修掉的 27 个设备级缺陷
-
-**全部由设备实测发现**。1475 个 JVM 测试一个都没抓到——它们只存在于
-「真实进程 + 真实 WebView + 真实文件系统 + 真实加速器」的组合里。
-
-### 🔴 数据泄漏 / 可用性（5 个）
-
-| # | 缺陷 | 证据 |
-|---|---|---|
-| 1 | **`rg` / `jaq` 加速器能读 DSH 内部状态全文**（会话日志、tool journal），违反 `channel.md:262` | 宿主层 + Worker 层双修；设备实测三个根全 `EACCES`，`capabilities.json` 仍可读（正控） |
-| 2 | **WAL 三种形态都把工作区判死**：0 字节段、大记录 torn tail 被预算误判、「未列出的 epoch」被当损坏 | 用**真实砖化快照**恢复出 `next_mseq=583/582`；三条形态各自独立反向验证 |
-| 3 | **切后台 10 分钟后 App 永久不可用**：`DrainCompleted` 在任何 main 源集都没有生产者，`Draining` 结构上是终态 | 设备 10 分钟实测：52 ms drain → Parked → 回前台 Running → `APP_TURN_OK` |
-| 4 | **写满 128 MiB 后每次启动崩溃**：`JsonParser` 峰值达 9× 记录大小（1.2 GiB），2 GB 设备必 OOM | 流式恢复；峰值 165 MiB → 61–83 MiB；`-Xmx128m` 子进程（堆小于文件）恢复通过 |
-| 5 | **通道断开后永久不自愈**：worker 自己关通道（`BAD_MSEQ`），客户端置 `fatalError` 再不重连 | `ChannelReopenLane` 用既有状态机边；设备 1.1 s 恢复 → `APP_TURN_OK` |
-
-### 契约一致性（12 个）
-
-`python3`/`jq` 100% 失败；`phone` 工具面声明 19 个只有 1 个能用；同一个拒绝策略**四种渲染**
-（`ls`/`cp`/`cat`/`rg`）；`jq` 截断静默服务残缺视图；WASI guest 把「被拒」报成「不存在」；
-内部根名字仍可被 `glob` 展开；写侧能写 `/`、`/dsh/config`、`/dsh/bin`；超限不给 `EFBIG`；
-budgets 档位从未按内存选择；误配置产生真实外网流量。
-
-### 其他（10 个）
-
-无工具调用的完成回合被判失败、WebView 门槛写成 Chromium 99（实际 124）、16KB 页对齐缺失、
-ingress 幂等零实现、`admission` 关闭时烧掉 21,574 个 mseq、
-`ProbeLaunchConfig` 把自己的 KDoc 反着实现，等等。
-
-**每个修复都带反向验证**：去掉修复，对应测试必须红，且**错误文本与设备日志同形**。
-
----
-
-## 五个根源（不是 27 个孤立失误）
-
-这是本轮最重要的发现：
-
-| 根源 | 实例 | 表现 |
-|---|---|---|
-| **一个策略多套渲染/能力** | 6 | 同一个拒绝，`ls` 给 EACCES、`cat` 给 ENOENT、`rg` 直接放行；`bash` 能写 `/dsh/home` 而 `write`/`edit` 不能 |
-| **状态机有入口无出口** | 6 | `Draining`/`Backoff`/通道断开/`PlannedRestart`/handoff/429 —— 出口都停在纸面上 |
-| **修了源码没进产物** | 6 | 三份产物 × 一个 CJS 降级步骤；任何一环漏掉都白干 |
-| **把未知折成已知** | 6 | 「我没看到 X」→「X 不存在」：EACCES→ENOENT、torn tail→CORRUPT、没有模型路由→凭据无效 |
-| **测量工具与实现不同源** | 4 | 探测问原生而 worker 跑垫片；探针装 1 个属性而 worker 装 14 个；`test-count.sh` 读部分结果报「0 failing」 |
-
-所以每个修复都要求**机器检查**而不是「这次改对」：
-
-- 产物陈旧 → `bundle-freshness` 门禁（6 产物 × 源目录 mtime）
-- 渲染分叉 → 单一出口的统一渲染层 + 「新命令也不会漏」的测试
-- 探测漂移 → 跑**真实的** installer 抽属性名，差集非空即红并点名
-- 测试数假绿 → 结果文件数 < 测试源文件数就 `WARN`
-
----
-
-## ⚠️ UI 是本 PR 的明确缺口
-
-**这不是「还差一点」，是「没做」。** 单独列出来，避免被当作已完成。
-
-| 层 | 状态 |
+| 假话 | 后果 |
 |---|---|
-| **能力面**（通道、执行面、持久化、生命周期、安全边界） | 已实现并有设备证据 |
-| **UI 结构对齐** | **缺口** |
-| **布局/像素级对齐** | **缺口** |
-| **iOS 基线追平** | **缺口（且基线还在增长）** |
+| `android_mapping()` 只匹配 `^public fun` | 7 个页面的 `android.file` 落到「注释里提过」的猜测分支。**其中一个让 4 份契约比同一个文件**——`native-agent-presets` 拿 `SettingsPage.kt` 去比，报 6 条「缺控件」，而它的实现在另一条车道里本来是完整的 |
+| `mask_kotlin()` 没有字符字面量规则 | `'"'` 在 Kotlin 里是字符字面量，掩码器把它当成字符串开头，**吞掉文件剩下全部**。于是 `SessionArtifactsPage.kt` 里明明写着 `fun SessionArtifactsPage(`，却被报「函数丢了」 |
+| `*SectionLabel` 只读 `text =` | 所有 `SettingsSectionLabel(title = …)` 的标题**渲染正确却不可见**，报 4 条缺失 |
+| 模板标签只在 Android 侧过滤 | `删除 %@` 在 Android 侧被 `is_template_label` 滤掉，契约侧不过滤 → **数学上不可满足** |
+| 靠命名识别 section | `ShellSection(title = …)` 实现完全正确，但检查器只认 `*SectionLabel` / `*SectionHeader` / `*SectionView` 三种名字 |
+| picker 的 `items` 被当成页面动作 | 一个下拉框的选项 `文件` / `命令` 被报成两个「凭空多出的动作」 |
 
-### 为什么是缺口
+修复方向是**让工具如实描述现实**，不是让页面去适应工具：
 
-1. **iOS 基线在本轮期间仍在追加页面**：11:43–11:50 之间新增了
-   `NativeDeviceSessionPage`（18.9 KB）、`SessionArtifactsPage`（13.4 KB）、
-   `NativeDeviceConnectionPage`（6.7 KB）、`ChatPreferencesPage`、`SessionArtifactPreviewPage`。
-
-   **这三页不是 UI 重排，是设备连接器能力**（`DeviceTransportAdapter` / `DeviceControlPort`）——
-   Android 侧一行都没有。
-
-2. `spec/ui/v1` 的页面清单只覆盖到基线 11:43 之前的状态，
-   `phone-p0-conformance` 因此红：`README page inventory misses: ChatPreferencesPage,
-   NativeDeviceConnectionPage, NativeDeviceSessionPage, SessionArtifactPreviewPage,
-   SessionArtifactsPage`。
-
-3. `:lib` 里的 11 个路由页**结构已抽、未接路由**——它们不渲染，也没有会话数据。
-
-### 所以 UI 相关门禁的红**不作为本 PR 的进度指标**
-
-`phone-p0-conformance` 的红是**基线在动**，不是 Android 退步。
-
-### 基线冻结后要做的事
-
-1. 重新跑 `extract_ios_pages.py`，`--write-baseline` 刷新页面清单
-2. 补 `spec/ui/v1/README.md` 的 5 个新页面（当前 280 行，需要抬 cap）
-3. **新实现**设备连接 / 设备会话 / 会话产物三块能力——这是功能，不是界面调整
-4. 把 11 个未接路由的页面接上数据
-5. 逐像素对齐（`docs/receipts/ios-baseline-screens/` 有 27 张基线截图可用）
-
----
-
-## 没有验证的（重要）
-
-| 项 | 状态 |
-|---|---|
-| **真机任何数字** | 无。全部设备证据来自 API 35 模拟器 |
-| **掉电（`level-2`）** | **已降级**。模拟器是宿主上的 QCOW2，无 UFS write cache/FTL，`fsync` 经 QEMU 中转——做不了真掉电。承诺收窄为「进程被杀不丢 + 尾部可检出」。升级条件见 `docs/design/android-durability-decision-2026-11-01.md` |
-| **HarmonyOS** | 无设备，未测 |
-| **灭屏 / Doze 10 分钟** | 只做 HOME 后台；模拟器 Doze 与真机不等价 |
-| **真实 LMK** | `send-trim-memory` 实测 pid 不变；用后台 `am kill` 作同类证据并标注 |
-| **API 26–32 / 真机 WebView <124** | 未测。Chromium 109 已在模拟器上跑通（靠前置垫片） |
-| **P95 延迟** | 10 个样本给不出；且宿主同时跑多个模拟器 |
-| **StrongBox / TEE 下的锁屏矩阵** | 模拟器 Keystore 是 `SOFTWARE` |
-| **UI 结构对齐** | **暂停**。iOS 基线仍在追加页面（11:43–11:50 又加了 5 个），冻结后重做 |
-
-**测试数说明**：`test-count.sh` 的 `WARN` 机制是本轮新增的——一次过滤运行
-（`gradlew --tests X`）会留下部分结果，之后全量运行被判 UP-TO-DATE，于是**显示「0 failing」而只跑了 1.7%**。
-报出的 1475 是**全量重跑**后的数字。
-
----
-
-## 六项「已实现、待接线」
-
-**不是 bug，是没接。** 列出来是为了不让人以为已完成：
-
-1. 11 个页面结构已抽、未接路由
-2. `ChatRow.Context` 投影已算、未显示
-3. 入站附件未接
-4. sessions facts adapter 未接
-5. `IngressQueue`（持久 ingress + 重启去重）、`BackgroundExecutionFacts` 已实现、**无产品调用点**
-6. **`PDSH_MODEL_KEY_STATE`**：已发布，**全仓库零消费者**
-
----
-
-## 我们改不了的（契约 / 上游问题）
-
-| # | 问题 | 归属 |
-|---|---|---|
-| 1 | `channel.md:264` 写「tier default (64/48/32/16 MiB)」，`budgets.md:104` 是「256/128/48/32/16」——**四条对五行，且错的是 wire 契约那份** | spec owner |
-| 2 | `wal.md §3` 的 `len` 是 `u32`，**全文没有单条记录上限**；15 MiB 靠 `channel.md §3.1` 继承 | spec owner |
-| 3 | `channel.md` 只在 D4 提了「upstream sandbox grants /tmp」，**从未声明 `write`/`edit` 的写面比 VFS 根表更窄**（差集 `/dsh/home`、`/dev/null`） | spec owner |
-| 4 | `channel.md:262` 只列 `bash, python3, git` 为例，未列 `jq`/`jaq`（它们也是执行面且已合规） | spec owner |
-| 5 | **DSH 自相矛盾**：`user-approval` 的 `NEVER_SENTENCE` 说「不要请求提权」，同一请求的工具结果说「escalation available, retry with `sandbox_permissions`」。且 `tool-bash` 的判据只看「是否挂了强制沙箱」，**从不查 approval 策略** | 上游 DSH |
-| 6 | `tool-fs/src/sandbox.ts` 的 `mapError` 对 `FS_SANDBOX_DENIED` **整段替换** provider 的原因文本 → `write`/`edit` 被拒时模型**零诊断** | 上游 DSH |
-| 7 | `llm-deepseek` 在 `DEEPSEEK_BASE_URL` 缺失时**回落到官方 base**，用占位符发真实请求 | 上游 DSH |
-
-第 5–7 条我们做了降害（AGENTS.md 反向指令、追加第二个 text block 诊断、
-宿主显式发布 `PDSH_MODEL_ROUTE=none` 让 worker 本地拒发），但**根治需要上游改**。
-
----
-
-## 参考实现的 bug（本轮顺带修的）
-
-| # | 问题 |
-|---|---|
-| 1 | 本回执正文多处数字与实测不符（测试数、模块数、`level-2` 状态），已按实测更正 |
-| 2 | 「三份产物」表把 `shell-ext` 错记在 `worker-entry.js`，实际在 `image.tar.gz` |
-| 3 | 「`bundled worker` 对 `VFS_RESYNC` 只 decode 后 return」——错，`notify(frame)` 会触发整文件重发 |
-| 4 | 契约条款位置记错（`wal.md §3.4` 实际是 `channel.md §3.4`） |
-
----
-
-## 三个值得单独看的设计判断
-
-**1. 「不可见」不等于「不存在」**
-
-`ls /dsh/home` 不再列出三个内部根的名字（连 `glob` 展开也不行），但显式访问
-`ls /dsh/home/sessions` **仍返回 EACCES**——不是 ENOENT。
-
-契约补句建议：`invisibility is not absence`。
-
-**2. 「不知道」必须能被表达**
-
-`env` 里没有 `DEEPSEEK_BASE_URL` 是**二义**的（挂 edge 时 engine 也先省掉再注入），
-所以宿主显式发布 `PDSH_MODEL_ROUTE=none` + `PDSH_MODEL_ROUTE_MISSING=base-url`，
-worker 本地拒发并说明「缺的是端点，不是凭据」。
-
-**不从「缺失」推断「事实」**，是今晚 6 个缺陷的共同解药。
-
-**3. 证据等级写在代码里**
-
-```kotlin
-// ---- evidence level: JVM only, no device capture ----
-// There is no device-level evidence for this branch. … Do not read the device run
-// (2 GiB AVD: EFBIG … limited to 16777216 bytes) as proof that this branch fired.
+```diff
+- if re.search(rf"^public fun {screen_name}\s*\(", text, re.M):
++ # Visibility is not the extractor's business: a page composable may be
++ # `internal` and it is still the Android screen for this contract.
++ if re.search(rf"^(?:public|internal) fun {screen_name}\s*\(", text, re.M):
 ```
 
-明确写出**这条证据不能用来证明什么**，比「本分支有测试覆盖」有用。
+```diff
+- if value is None and dynamic is None and callee in CHIP_CONTROLS:
++ # `dynamic` does not disqualify the caption: the dynamic text is the *value*
++ # (the selected segment), while the caption beside it is the label.
++ if value is None and callee in CHIP_CONTROLS:
+```
+
+**两次我试过放宽检查器，两次都引入更多假阳性**（`SettingsFormRow` 连 `onClick` 都带上仍误报 10 条，因为它是 Settings 家族的**通用展示行**）。所以那两次回退了，并在代码里写明为什么不该再试。
 
 ---
 
-## 已知的门禁红（不是回归）
+## 二、三条不是「分歧」而是「口径」的
 
-| 门禁 | 原因 |
+### `copy-forced` —— 新增的 divergence class
+
+iOS 的插件面写着 `This iPhone Worker has no pnpm…`。契约要求 Android 页面也出现这句话。
+
+**但这是 Android 应用。照抄就是在屏幕上陈述一个假事实。**
+
+现有三个 class 用不了：`os-forced` 被 `platform_check.check_mechanism()` 强制要求一个具体的 `android_mechanism`，而文案差异**两端都没有可替换的 API**——填一个 Kotlin 常量能机械地过，但语义是谎。
+
+所以新增第四类：
+
+```python
+DIVERGENCE_CLASSES = ("os-forced", "hardware-absent", "policy-forbidden", "copy-forced")
+```
+
+> `copy-forced`：措辞强制。两端描述的是同一件事，但照抄另一端的说法就会在屏幕上陈述一个假事实。它没有可命名的 Android 机制，因此不属于 `os-forced`——把文案差异登记成机制差异会让 `android_mechanism` 变成检查器抓不到的谎。
+
+**这是加一条正确的规则，不是放宽检查。** 语义写在 schema 的 `x-class-definitions` 里，enum 和定义不会漂移。
+
+### `§6.3-5` 在仓库里没有家
+
+`grep -rn "6\.3-5" spec/` 只有 **1 处，而且是引用不是定义**。代码反复引用「方案 §6.3」，而那份方案的正文**不在树里**——读不到它的范围、理由、修改流程。
+
+三条独立车道（L28 / L29 / L33）先后撞上它，每条都重新推导一次。
+
+**补上了**：`docs/design/android-single-webview-invariant-2026-11-01.md`，代码里两处引用已指过去。
+
+它的结论值得单独说：这条不变式**写下来的理由全是资源/正确性**（一个 renderer、一个 view thread、一个构造点），**没有任何一处把它写成安全边界**。但它在效果上承担了隔离——`CookieManager` 是应用级单例，**同进程的第二个 WebView 共享同一个 cookie jar**，而页面唯一的凭据就是 D22 launch cookie。
+
+⇒ **安全的「第二个 WebView」必须是独立进程**，那是一个模块级项目。本轮裁决：保持一个，HTML / 3D 走诚实卡片。
+
+### `preview-surface.json` —— 手工登记的契约
+
+`PreviewSurface.swift` 不是 `*Page` struct，提取器不生成契约。**今晚第四次撞上「提取器只认 `*Page`」**（L23 / L25 / L28 / L30）。
+
+扩提取器会让「什么算入口 struct」变模糊（同文件还有 `PreviewDebugRoute` / `PreviewDebugChat`），所以做了**手工登记**：`handRegistered` 块写明它不是 `*Page`、提取器既不写也不删它、checker 每次校验它的 provenance。
+
+---
+
+## 三、实现
+
+| 项 | 内容 |
 |---|---|
-| `phone-p0-conformance` | iOS 基线 11:43–11:50 新增 5 个页面，清单未覆盖——**基线在动，冻结后处理** |
-| `phone-hygiene` | `docs/receipts/ios-session-audit/**` 含绝对路径与 `hostname: Chrome.app` |
-| `phone-license` | `spec/ui/v1/tools/*.py` 缺 SPDX |
-| `phone-bundle-fresh` | 本轮多人并行改 `plugins`，产物需最终原子重建 |
+| **6 个缺失页面** | `ChatPreferences` / `SettingsDocument` / `Shortcuts` / `AgentPresets` / `PluginInventory` / `PhonePermissions`（**23 个能力 × status/request/audit 三态**） |
+| **chat 三个嵌入子页** | 命令结果页、后台任务 sheet、定时任务 sheet；`刷新` 真的 handoff 到宿主，回调缺失时**可见但置灰** |
+| **automation 编辑器** | 页面内真表单 + 六种规则校验；提交走宿主 seam，**不谎报成功**（宿主观测不到 saved 就不关表单） |
+| **产物预览** | 真 `ACTION_SEND` → 设备上弹出系统 chooser（`ChooserActivityLauncher`，带真实文件名与 MIME） |
+| **文件预览面** | 路径解析器 + 512 KiB 分页 + 五类渲染器（文本 / Markdown / 图片 / PDF / 音视频）+ `FileProvider` 分享 + 有界重试 + 首帧 `正在读取…` |
+| **Settings 五分页** | `通用 / 模型 / 插件 / 手机权限 / 预设`，主入口达可比级 |
+| **抽屉 8 行** | `Files` 页首次可从 App 进入（设备证据：抽屉 → 手机工作区 → `notes.txt` → 预览） |
 
-**`Bundle/worker/**` 是 gitignore 的 65 MB 构建产物**，所以干净 CI 无法 `assembleRelease`
-（退出码 2）。这一点**没有伪造**，如实记录。
+### 路径解析器的安全边界（逐条对齐，不简化）
+
+```
+空路径 / 任何 `..` 段（触盘之前，含 %2E%2E、含 sub/../inside.txt）
+→ root.toRealPath()（非目录 = NO_WORKSPACE）
+→ 词法前缀包含（Path 元素比较，workspace-evil 不算根内）
+→ toRealPath() 后二次前缀包含（根内符号链接指向根外 = 拒绝）
+→ isRegularFile
+```
+
+### 三处刻意偏离 iOS，因为 iOS 那三处是错的
+
+| 处 | iOS 的行为 | Android |
+|---|---|---|
+| 预览原因 | 一律 `nil` → 连 `..` 也白等 6 秒 | 分 `REJECTED` / `NOT_A_FILE` / `MISSING` / `NO_WORKSPACE`，**只有后两类重试** |
+| 分页 `eof` | 用 trim 后字节数 → **页边界切在多字节标量中间会丢后半** | 用文件长度 |
+| 非法 UTF-8 | 拿同一 offset **死循环** | 标 `stalled` 并前进一个窗口 |
+
+### 一个判断：`webm` / `gif` 不该在「不支持」里
+
+L33 给它们的卡片文案是「这个视频格式还没有接到播放器上」。**但 Android 平台能解 VP8/VP9**——那句话是假话。
+
+| 格式 | 处理 |
+|---|---|
+| `gif` | → IMAGE（第一帧）+ 已有的「动图只显示第一帧」提示。**那条常量一直是死代码，现在真的生效** |
+| `webm` | → VIDEO，和 `mp4` 同一个 `MediaPlayer` |
+| `ogv` | 仍不支持：「本机没有 Theora 解码器」——**这句是真的** |
+
+**「架构做不到」和「平台没有解码器」是两件事，不该共用一张卡片。**
 
 ---
 
-## 完整证据
+## 四、度量：像素级对齐的真实进度
 
-`docs/receipts/android-port-2026-10-31.md`（65 节，逐条设备输出与反向验证）。
+**做到了**（都是设备实测，不是「看起来差不多」）：
+
+| 项 | 数字 |
+|---|---|
+| Settings 行距 | **52.33pt**，分隔线间距 157px 四倍一致 |
+| `model` 子页分隔线 | **2 vs iOS 2**，全中 |
+| `network` | **12/12 段 52.33pt**，全中 |
+| CTA | `x 32.0–370.0 / h 50.0`，**完全一致** |
+| composer | **94.10dp vs iOS 94.0（+0.10）** |
+| 抽屉 | `320 / 288 / 48 / 22`，全部实测复现 |
+| 气泡 | 内边距 16.8dp、宽度上限 277dp |
+
+**没做到**（全部有原因，全部登记）：
+
+- HTML / 3D / OGV —— 单 WebView 不变式（见上）
+- Office —— Android 无系统渲染器（PR15 研究本身建议 share-first）
+- 视频进度条 / 全屏 —— 需页面方向策略
+- 6 个采集状态仍 PENDING（Chat 家族 5 个 + env-home）
+
+---
+
+## 五、验证
+
+```
+13/13 CI 门禁 PASS
+  phone-spec · phone-p0-conformance · phone-cross-tree · phone-compat
+  phone-plugins · phone-bundle-fresh · phone-no-dsh-patch · phone-modules
+  phone-android-structure · phone-android-tests · phone-license
+  phone-hygiene · phone-gate-contracts
+
+页面结构   ok (17 known / 0 new / 0 stale / 3 whitelisted)
+JVM 测试   1746 tests / 0 failing
+截图       gate 11/11 · ios-parity 21/21 · android-only 22/22 · --profile all 54/54
+构建       :app:assembleDebug BUILD SUCCESSFUL
+```
+
+`phone-hygiene` 从 **148 → 0**，其中 **76 条是真泄漏**：24 个回执文件里写着本地绝对路径（`/Users/<name>/...`），而本仓有公开镜像——它们会把开发机的用户名和目录结构发出去。已脱敏，并把生成器改成 **fail-closed**（`assertRedacted` 幂等，脏产物写不出来）。
+
+---
+
+## 六、已知缺口：全部登记，一条没藏
+
+- **17 条 known divergence**（`_baseline.json`，只减不增）
+- **3 条 platform whitelist**（`copy-forced`，引用 `spec/platform/whitelist.json` 的真实 id）
+- **6 个采集状态 PENDING**（`ParityState` 27 条里 21 条 CAPTURED）
+
+其中一条特别值得记：
+
+> `files / 完成` 是「3D 示例」demo sheet 的取消键（`FilesPage.swift:70`，`sheet-62`）。Android 从未实现该 sheet。**以前是预览工具栏的 `完成` 按标签假顶替了它**——删掉那段死代码，这个一直存在的缺口才第一次被看见。
+
+**门禁在绿的，而它绿的原因是两个完全不同的控件标签相同。**
+
+---
+
+## 七、这一轮的方式
+
+- **多条车道并行**，每条都在隔离快照里验证，报告自己的 provenance
+- **不许 `--write-baseline`**——它会把分歧吸收成「已知」，门禁立刻变绿，但问题一个没解决
+- **不许为了让门禁过而改产品**：三条「真缺控件」查下去全是「已在，门禁读不到」；`This iPhone Worker` 至今红着并被如实登记，因为照抄是假话
+- **不许编测量**：每条残差都贴数字和出处，测不出来的写「测不出来 + 原因」
+
+### 这一轮我自己犯的两类错误
+
+**1. 登记理由没核实。** 我给 `ToolsPage` 写的理由是「删掉 public composable 属于 API 变更」，实际它是**旧页面的视图包装器**，和 `PDSHShellPage` 共用同一个 reducer。另一条 `native-workbench 重试` 的理由「从本地状态读文件夹列表」也是假的——它是**组合包装器**。**两条都被车道揪出来并改正。**
+
+**2. 登记了一个我自己刚修掉的症状。** 我把 `native-automation / 'text'` 写成「契约不可比」时，同一批改动里刚让检查器学会读 `title`——那个包装器存在的理由已经消失，正确的做法是删它，不是登记它。
+
+**我一直在要求车道「先验证原因再登记」，而我自己登记时在赶进度。**
