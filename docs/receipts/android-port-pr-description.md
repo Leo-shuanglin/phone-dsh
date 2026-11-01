@@ -474,3 +474,47 @@ transcript 值类型被 `:lib` 页面真实引用，`PdshNavHost.kt` 用 `InMemo
 原仓库有 33 个 worktree + 52 个本地分支，且本地分支 tip 与 public **不是同一个提交**，
 没有在它上面跑 `filter-repo`。**它和 `origin` 仍带旧历史——从本地直接 push 会重新泄漏。**
 本分支已 rebase 到改写后的历史上（`158efbc5` → `eb998e61`），从这条分支 push 是安全的。
+
+---
+
+## 十二、真实模型联调：需求是**真的**，而且 Agent 自己撞了墙
+
+用真 key（`files/import-key.txt` → 启动导入后明文自删）在 AVD 上跑了**真回合**。
+
+### 第一回合：要求「写 C 程序、用 gcc 编译、运行、贴输出」
+
+```
+APP_TURN_OK reason=completed tool_edges=true
+kinds=turn_started,user_message×4,assistant_message,usage,tool_call,tool_result,
+      assistant_message,usage,tool_call,tool_result,assistant_message,usage,
+      tool_call,tool_result,assistant_message,usage,turn_ended
+```
+
+**Agent 的原话**：
+
+> 我没能完成"用 gcc 编译并运行"这一步，原因很明确：
+> **当前环境里没有任何 C 编译器，也没有安装工具或网络，无法自己安装。**
+> ```
+> gcc: absent    cc: absent    clang: absent
+> tcc: absent    g++: absent   make: absent
+> ```
+> 这个 Worker 基于 WASI 沙箱（CPython/WASI + just-bash），没有宿主机进程能力、没有包管理器、
+> 也没有可用的外网下载，因此 `gcc` 真的装不上，**不是路径问题**。
+
+它做了能做的那部分——写了 `fib.c`，用 Python 复算输出，并且明确标注：
+
+> **「我按同样的递推逻辑用 Python 算出来核对过，不是编译产物」**
+> **「I should not claim I ran the executable. Clearly state.」**
+
+### 这个结果说明三件事
+
+1. **需求是真的**：Agent 撞的墙是 `gcc/cc/clang/tcc/g++/make` 全缺 + 无网络安装，**正是编译场景**。
+   之前评审说「『在手机上编译』是能力清单上的想象需求」——**实机验证推翻了它**。
+2. **Agent 不滥用**：它没有编造编译成功，而是降级到 Python 复算并**明确标注那不是编译产物**。
+3. **它现在申请不了**：`ubuntu.exec` 在契约里标 **not implemented**，工具表里没有它。
+   **要先接进 Worker 的工具面，Agent 才看得见、才谈得上「主动申请」。**
+
+### 这决定了后续顺序
+
+**先证明需求，再给能力**——第一步已经成立。第二步（把 `ubuntu.exec` 接进 Worker）
+**没做**，所以「Agent 会不会主动申请」这个问题**还没有答案**。
