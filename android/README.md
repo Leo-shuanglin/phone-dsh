@@ -3,9 +3,10 @@
 
 > **状态：可构建、可测试、可在模拟器上跑通 boot→HELLO。**
 > 12 个 Gradle 模块：11 个 Swift 模块由 **7 个模块镜像**（合并规则见下），另 5 个不镜像 Swift
-> （`:platform` 承载 SPI、`:platform-android` 承载 SPI 的 Android 实现、`:domain` 承载 P6 的域名
-> 存储与设备能力、`:lib` 是可发布 AAR、`:app` 是 probe-app）。`:domain` 的 DomainStore 目前零生产
-> 消费者，见 PR 描述「已知缺口 / 模块层」。
+> （`:platform` 承载 SPI、`:platform-android` 承载 SPI 的 Android 实现、`:domain` 承载设备能力契约
+> 与手机权限读数、`:lib` 是可发布 AAR、`:app` 是 probe-app）。`:domain` 的 **DomainStore 已删除**（2026-11-01：
+> 1,019 行零生产消费者，它要服务的 session/memory/task 持久化在 Android 上尚未实现；`:dsh` 已有
+> `HostStateStore` 与 `JournalStore` 两条写路径，留着它只会让下一个人以为 P6 已交付。
 > **104,603 行 Kotlin 主代码 + 49,261 行单测 + 9,660 行 instrumented**（`wc -l`，**快照 2026-11-01
 > 20:45 工作树**；命令见「门禁与数字」#12–#14，合并前树若再变按同一条命令重跑）。
 > `bash android/tools/run-demo.sh` 一条命令完成 AVD→构建→装包→启动→抓 logcat→截图；
@@ -61,7 +62,7 @@ android/
 ├── testkit/                   # scenario runner / UI 状态录制 / fault driver
 ├── platform/                  # SPI 接口（纯 JVM）：Durability/Clock/SecureStore/LifecycleSignals/EngineHost/Notifier
 ├── platform-android/          # 上述 SPI 的 Android 实现（Keystore/Os.fsync/Lifecycle）
-├── domain/                    # P6：DomainStore（framework SQLite，尚未接线）+ DeviceCapabilities
+├── domain/                    # 设备能力契约 + 手机权限读数（DomainStore 已于 2026-11-01 删除）
 ├── core/                      # wire + log + agentcore
 ├── net/                       # loopback + gateway
 ├── controller/ engine/ dsh/
