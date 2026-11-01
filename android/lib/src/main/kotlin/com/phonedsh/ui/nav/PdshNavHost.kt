@@ -199,6 +199,96 @@ import com.phonedsh.ui.surface.preview.PreviewShare
 import com.phonedsh.ui.surface.preview.rememberPreviewSource
 import java.io.File
 
+// Appended by the L44 lane: the one level of back that lives *inside* a route.
+// The system back gesture reaches the host, not the page, so a route that shows an
+// inner level (a sheet's child page, a folder drill-down, an embedded preview) has
+// nowhere to register it. These two declarations are that place; they are the only
+// state the back chain needs beyond the stack itself.
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.rememberUpdatedState
+
+/**
+ * One level of back that lives inside the top route.
+ *
+ * `spec/ui/v1/README.md` §5 `back-gesture` says one gesture pops one level; for the
+ * routes that render a child page of their own, "one level" is not the route stack
+ * but this. The host owns the single system-back callback, so it holds one of these
+ * and asks it before popping:
+ *
+ * ```
+ * drawer open? -> close it
+ * [PdshBackLevel.available]? -> consume()
+ * else -> pop the route stack
+ * ```
+ *
+ * The rendered route is the only writer, and only while it really shows an inner
+ * level ([enabled] in [RouteBackLevel]), so a pushed route never hides the level of
+ * the route below it.
+ */
+@Stable
+public class PdshBackLevel {
+    private var entry: (() -> Unit)? by mutableStateOf(null)
+
+    /** Whether the rendered route has an inner level to leave. */
+    public val available: Boolean get() = entry != null
+
+    /**
+     * Leaves one inner level.
+     *
+     * @return `true` when a level was left, `false` when there was none and the
+     *   caller should pop the route stack instead.
+     */
+    public fun consume(): Boolean {
+        val action = entry ?: return false
+        action()
+        return true
+    }
+
+    internal fun register(action: () -> Unit) {
+        entry = action
+    }
+
+    /**
+     * Removes [action] only while it is still the registered one.
+     *
+     * The identity check matters for the one nesting this router has: the settings
+     * sheet's 手机权限 tab renders the permissions page inside the settings route. A
+     * blindly-clearing dispose would drop the outer route's level when a page that
+     * never registered one left the composition.
+     */
+    internal fun unregister(action: () -> Unit) {
+        if (entry === action) entry = null
+    }
+}
+
+/**
+ * Registers [onBack] as the top route's inner level while [enabled] holds.
+ *
+ * The registration lives exactly as long as this route is the rendered one: the
+ * effect is disposed when the composable leaves the composition (another route
+ * replaced it) or when [enabled] turns false (the level closed).
+ *
+ * @param level the host's chain, or `null` when the host keeps none.
+ * @param enabled whether this route currently shows an inner level.
+ * @param onBack leaves that level.
+ */
+@Composable
+private fun RouteBackLevel(
+    backLevel: PdshBackLevel?,
+    enabled: Boolean,
+    onBack: () -> Unit,
+) {
+    val current by rememberUpdatedState(onBack)
+    DisposableEffect(backLevel, enabled) {
+        if (backLevel == null || !enabled) {
+            return@DisposableEffect onDispose {}
+        }
+        val action: () -> Unit = { current() }
+        backLevel.register(action)
+        onDispose { backLevel.unregister(action) }
+    }
+}
+
 /**
  * Renders the top route of [nav].
  *
@@ -231,6 +321,13 @@ import java.io.File
  *   over. A host that measures its own root passes it here; a host with no
  *   workspace passes a path that does not exist and the pages say "not reported"
  *   instead of inventing one.
+ * @param backLevel the host's one inner-level back chain (see [PdshBackLevel]), or
+ *   `null` when the host keeps none. A route whose "one step back" is inside the
+ *   page (the settings sheet's 新会话默认权限 child, the files list's folder
+ *   drill-down, the artifacts preview, the schedule editor) registers there, so the
+ *   system gesture leaves that level instead of closing the whole route. The
+ *   default is `null` because a host that renders these pages without a back
+ *   gesture is still a valid host.
  */
 @Composable
 public fun PdshNavHost(
@@ -246,6 +343,7 @@ public fun PdshNavHost(
     onSettingsWrite: (SettingsWrite) -> Unit = {},
     chatSubpages: ChatSubpageFacts = ChatSubpageFacts(),
     workspaceRoot: File? = null,
+    backLevel: PdshBackLevel? = null,
 ) {
     val route = nav.current
     if (route == PdshRoute.Home) {
@@ -259,27 +357,30 @@ public fun PdshNavHost(
                 if (sessions != null) sessions() else SessionsRoute(facts, onBack)
             PdshRoute.Chat -> ChatRoute(chatSubpages, onNavigate)
             PdshRoute.WorkspaceFolders -> WorkspaceFoldersRoute(facts, onBack, onHostAction, onNavigate)
-            is PdshRoute.Files -> FilesRoute(onBack, onNavigate, workspaceRoot)
+            is PdshRoute.Files -> FilesRoute(onBack, onNavigate, workspaceRoot, backLevel)
             is PdshRoute.Preview -> PreviewRoute(route, onBack, workspaceRoot)
-            PdshRoute.Automation -> AutomationRoute(facts, onBack, onHostAction)
+            PdshRoute.Automation -> AutomationRoute(facts, onBack, onHostAction, backLevel)
             PdshRoute.Configuration -> ConfigurationRoute(facts, onBack, onNavigate)
-            PdshRoute.Settings -> SettingsRoute(facts, onBack, onNavigate, onHostAction, onSettingsWrite)
+            PdshRoute.Settings ->
+                SettingsRoute(facts, onBack, onNavigate, onHostAction, onSettingsWrite, backLevel)
             PdshRoute.ModelProvider -> ModelProviderRoute(facts, onBack, onHostAction)
             PdshRoute.WebSearch -> WebSearchRoute(facts, onBack, onHostAction)
             PdshRoute.Mcp -> McpRoute(facts, onBack, onHostAction, onNavigate)
             is PdshRoute.McpEditor -> McpEditorRoute(route, facts, onBack, onHostAction)
-            PdshRoute.Runtime -> RuntimeRoute(facts, onBack, onHostAction)
+            PdshRoute.Runtime -> RuntimeRoute(facts, onBack, onHostAction, backLevel)
             PdshRoute.Egress -> EgressRoute(facts, onBack)
             PdshRoute.Tools -> ToolsRoute(onBack)
             PdshRoute.Export -> ExportRoute(onBack)
-            is PdshRoute.Workbench -> WorkbenchRoute(route, facts, onBack, onHostAction, onNavigate)
+            is PdshRoute.Workbench ->
+                WorkbenchRoute(route, facts, onBack, onHostAction, onNavigate, backLevel)
             PdshRoute.WebSurface -> WebSurfaceRoute(facts, onNavigate, onHome, onHostAction, webSurface)
             PdshRoute.DeviceConnection -> DeviceConnectionRoute(onNavigate, onBack)
             is PdshRoute.DeviceSession -> DeviceSessionRoute(route.deviceId, onBack)
-            is PdshRoute.SessionArtifacts -> SessionArtifactsRoute(route.sessionId, onBack)
+            is PdshRoute.SessionArtifacts ->
+                SessionArtifactsRoute(route.sessionId, onBack, backLevel)
             PdshRoute.AgentPresets -> AgentPresetsRoute(onBack)
             PdshRoute.PluginInventory -> PluginInventoryRoute(facts, onBack, onNavigate)
-            PdshRoute.PhonePermissions -> PhonePermissionsRoute(facts, onBack)
+            PdshRoute.PhonePermissions -> PhonePermissionsRoute(facts, onBack, backLevel = backLevel)
             PdshRoute.ChatPreferences -> ChatPreferencesRoute(facts, onBack)
             PdshRoute.SettingsDocument -> SettingsDocumentRoute(onBack)
             PdshRoute.Shortcuts -> ShortcutsRoute(onBack)
@@ -512,8 +613,27 @@ private fun AutomationRoute(
     facts: PdshNavFacts,
     onBack: () -> Unit,
     onHostAction: (PdshHostAction) -> Unit,
+    backLevel: PdshBackLevel?,
 ) {
     var local by remember { mutableStateOf(AutomationLocalState()) }
+    // The page's three child levels (detail, history, the embedded editor) and its
+    // delete confirmation are local state, so the gesture used to skip straight from
+    // the editor back to the previous route. It now leaves them one at a time, in
+    // the same order the page's own ✕/取消 controls do.
+    RouteBackLevel(
+        backLevel = backLevel,
+        enabled = local.editor != null ||
+            local.route != com.phonedsh.ui.page.AutomationRoute.CATALOG ||
+            local.deleteConfirmId != null,
+        onBack = {
+            local = when {
+                local.editor != null -> local.apply(AutomationUiEvent.CancelEditor)
+                local.route != com.phonedsh.ui.page.AutomationRoute.CATALOG ->
+                    local.apply(AutomationUiEvent.Back)
+                else -> local.apply(AutomationUiEvent.CancelDelete)
+            }
+        },
+    )
     val automationFacts = facts.automation
     // The draft the editor opens on: the reported schedule's own values, or the
     // baseline's defaults for a new one. The platform zone is measured here and
@@ -627,8 +747,15 @@ private fun FilesRoute(
     onBack: () -> Unit,
     onNavigate: (PdshRoute) -> Unit,
     workspaceRoot: File?,
+    backLevel: PdshBackLevel?,
 ) {
     var local by remember { mutableStateOf(FilesLocalState()) }
+    // §5's "one gesture pops one level" applies inside the listing too: in a folder
+    // that level is the folder. Without this the gesture closed the whole listing
+    // and left the person at the folder page — one level higher than they were.
+    RouteBackLevel(backLevel, local.directory.isNotEmpty()) {
+        local = local.apply(FilesUiEvent.NavigateUp)
+    }
     val source = rememberPreviewSource(workspaceRoot)
     // `null` until the read answers: the page's waiting state, not an empty list.
     var listing by remember(source) { mutableStateOf<List<WorkspaceFile>?>(null) }
@@ -693,10 +820,14 @@ private fun SettingsRoute(
     onNavigate: (PdshRoute) -> Unit,
     onHostAction: (PdshHostAction) -> Unit,
     onSettingsWrite: (SettingsWrite) -> Unit,
+    backLevel: PdshBackLevel?,
 ) {
     // 新会话默认权限 is the settings sheet's own child page in the baseline, so it
     // is a local page swap here, not a route the stack owns.
     var permissionDefaults by remember { mutableStateOf(false) }
+    // …which means the gesture had nothing to pop but the sheet: back from the child
+    // page closed the whole settings sheet. One level means the child page.
+    RouteBackLevel(backLevel, permissionDefaults) { permissionDefaults = false }
     // The sheet's five tabs are host state (§1: 通用 / 模型 / 插件 / 手机权限 / 预设).
     // Before this lane the tab was never set and the picker's callback was empty, so
     // the four non-通用 bodies were unreachable even though each page already ships
@@ -750,7 +881,12 @@ private fun SettingsRoute(
                         embedded = true,
                     )
                     SettingsTab.PERMISSIONS ->
-                        PhonePermissionsRoute(facts, onBack = onBack, embedded = true)
+                        PhonePermissionsRoute(
+                            facts,
+                            onBack = onBack,
+                            embedded = true,
+                            backLevel = backLevel,
+                        )
                     SettingsTab.PRESETS -> AgentPresetsRoute(onBack = onBack, embedded = true)
                 }
             },
@@ -878,8 +1014,14 @@ private fun RuntimeRoute(
     facts: PdshNavFacts,
     onBack: () -> Unit,
     onHostAction: (PdshHostAction) -> Unit,
+    backLevel: PdshBackLevel?,
 ) {
     var local by remember { mutableStateOf(RuntimeLocalState()) }
+    // 停止引擎's confirmation is this page's own modal, and the page's 取消 already
+    // dismisses it: the gesture must dismiss the same thing, not the page.
+    RouteBackLevel(backLevel, local.stopConfirmationOpen) {
+        local = local.apply(RuntimeUiEvent.CancelStop)
+    }
     RuntimeDetailsPage(
         state = RuntimeDetailsScreenState.from(facts.runtime, local),
         onBack = onBack,
@@ -914,6 +1056,7 @@ private fun WorkbenchRoute(
     onBack: () -> Unit,
     onHostAction: (PdshHostAction) -> Unit,
     onNavigate: (PdshRoute) -> Unit,
+    backLevel: PdshBackLevel?,
 ) {
     var local by remember(route) {
         mutableStateOf(
@@ -922,6 +1065,11 @@ private fun WorkbenchRoute(
                 previewPath = route.previewPath,
             ),
         )
+    }
+    // A workbench entered with a preview already on top (the home screen's write
+    // row) has one level inside the sheet: closing that preview, not the sheet.
+    RouteBackLevel(backLevel, local.previewPath != null) {
+        local = local.apply(WorkbenchUiEvent.ClosePreview)
     }
     NativeWorkbenchPage(
         state = WorkbenchScreenState.from(facts.workbench, local),
@@ -1035,13 +1183,22 @@ private fun DeviceSessionRoute(deviceId: String, onBack: () -> Unit) {
  * silently doing nothing.
  */
 @Composable
-private fun SessionArtifactsRoute(sessionId: String, onBack: () -> Unit) {
+private fun SessionArtifactsRoute(
+    sessionId: String,
+    onBack: () -> Unit,
+    backLevel: PdshBackLevel?,
+) {
     val scope = rememberCoroutineScope()
     var artifacts by remember { mutableStateOf(emptyList<SessionArtifactRef>()) }
     var waiting by remember { mutableStateOf(true) }
     var failure by remember { mutableStateOf<String?>(null) }
     var openFailure by remember { mutableStateOf<String?>(null) }
     var local by remember { mutableStateOf(SessionArtifactsLocalState()) }
+    // 产物预览 is a subpage of this route (`SessionArtifactsPage.swift:101`): one
+    // gesture closes the preview, the next one leaves the list.
+    RouteBackLevel(backLevel, local.preview != null) {
+        local = SessionArtifactsLocalState()
+    }
 
     suspend fun load() {
         waiting = true
@@ -1352,8 +1509,23 @@ private fun PhonePermissionsRoute(
     facts: PdshNavFacts,
     onBack: () -> Unit,
     embedded: Boolean = false,
+    backLevel: PdshBackLevel? = null,
 ) {
     var local by remember { mutableStateOf(PhonePermissionsLocalState()) }
+    // The request confirmation and the disable notice are this page's own modals:
+    // back dismisses the modal, exactly like the page's 取消 / 知道了, instead of
+    // closing the page under it.
+    RouteBackLevel(
+        backLevel = backLevel,
+        enabled = local.confirmation != null || local.disableNotice != null,
+        onBack = {
+            local = if (local.confirmation != null) {
+                local.apply(PhonePermissionsUiEvent.CancelConfirmation)
+            } else {
+                local.apply(PhonePermissionsUiEvent.AcknowledgeDisable)
+            }
+        },
+    )
     // The read is the host's, not this route's: the composition root walks its own
     // permissions into `PdshNavFacts.phonePermissions` (`:domain`'s
     // `AndroidHostPermissions` + `AndroidDeviceCapabilities.platformFacts`), and this

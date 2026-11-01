@@ -23,7 +23,8 @@
 # on each side. NO cross-platform pixel diff is run or implied by this script.
 # The iOS/Android comparison is done by a human, per state, by the page lane that
 # owns the state; the pixel threshold below is only ever used inside Android's own
-# golden.
+# golden. `python3 android/tools/ui-parity-sheet.py` lays each pair side by side in
+# docs/receipts/ui-parity-sheet/ so that review is looking at one image, not two.
 #
 # The state names are pinned by `ParityStates.kt` (27 entries, one per file in
 # docs/receipts/ios-baseline-screens/) and the mapping is documented in
@@ -84,13 +85,25 @@ com.phonedsh.ui.screenshot.FontScaleProbeTest"
 # The parity suites the `ios-parity` profile runs. Every state they write is
 # `ParityStatus.CAPTURED` in ParityStates.kt; `check_parity_registry` fails the run
 # when the device writes a name the registry does not call captured, so a PENDING
-# page cannot be frozen by accident. Deliberately absent:
-#   * ChatParityScreenshotTest  — its 5 states are PENDING (an in-flight page);
-#   * DeviceConnectorParityScreenshotTest — its 3 androidOnly states are PENDING.
-# Both still run ad hoc: `am instrument -e class <class>` (see README).
+# page cannot be frozen by accident.
+#
+# `ChatParityScreenshotTest` cannot be added as a whole class. Besides its five
+# parity captures it also writes `page-chat-route`, a routing receipt that is
+# deliberately NOT a registered state (there is no iOS counterpart for "the router
+# resolved the route"). A whole-class run makes the device write that PNG and the
+# registry check then fails with "the device wrote PNGs no registry row calls
+# captured" — which is why this suite was never wired in. The profile runs its
+# five parity methods by name; the routing receipt stays an ad-hoc run:
+#   adb shell am instrument -e class \
+#     com.phonedsh.ui.screenshot.ChatParityScreenshotTest#chatRouteThroughNavHost ...
+# Deliberately absent: `DeviceConnectorParityScreenshotTest` — its 3 androidOnly
+# states have no iOS baseline and no parity PNG to compare.
+CHAT_PARITY_CLASS="com.phonedsh.ui.screenshot.ChatParityScreenshotTest"
+CHAT_PARITY_METHODS="pageChatAssistant pageChatOfficial pageChatQueued pageChatPermission surfaceCodeBlock"
 PARITY_CLASSES="com.phonedsh.ui.screenshot.ParityScreenshotTest,\
 com.phonedsh.ui.screenshot.SessionsParityScreenshotTest,\
-com.phonedsh.ui.screenshot.ShellFilesParityScreenshotTest"
+com.phonedsh.ui.screenshot.ShellFilesParityScreenshotTest,\
+$CHAT_PARITY_CLASS"
 # The Android-only capture suites: pages/surfaces the iOS baseline does not cover.
 # They run at the gate frame, but they write to android-only/ so the 11 historical
 # gate baselines keep their count and their meaning.
@@ -390,6 +403,9 @@ parity_owner_class() {
   case "$1" in
     page-chat-default|page-chat-failed|page-chat-long|page-chat-draft)
       echo "ParityScreenshotTest" ;;
+    page-chat-assistant|page-chat-official|page-chat-queued|page-chat-permission|\
+surface-code-block)
+      echo "ChatParityScreenshotTest" ;;
     page-settings-default|page-settings-model|page-settings-search|page-settings-network|\
 page-settings-plugins|page-settings-about|page-settings-runtime)
       echo "ParityScreenshotTest" ;;
@@ -400,6 +416,26 @@ page-sessions-nothing|page-sessions-ungrouped|page-sessions-schedules)
       echo "ShellFilesParityScreenshotTest" ;;
     *) return 1 ;;
   esac
+}
+
+# `-e class` accepts both `Class` and `Class#method` entries. Expand the suite that
+# has to stay method-scoped; every other suite runs whole. Kept as a function so the
+# expansion cannot drift from CHAT_PARITY_METHODS.
+parity_instrument_classes() {
+  local classes="$1" out="" class method
+  local -a entries methods
+  IFS=',' read -r -a entries <<<"$classes"
+  for class in "${entries[@]}"; do
+    if [ "$class" = "$CHAT_PARITY_CLASS" ]; then
+      read -r -a methods <<<"$CHAT_PARITY_METHODS"
+      for method in "${methods[@]}"; do
+        out="${out:+$out,}$class#$method"
+      done
+    else
+      out="${out:+$out,}$class"
+    fi
+  done
+  printf '%s\n' "$out"
 }
 
 # "captured <owner>" / "pending <owner>" for one Android state name, or nothing
@@ -426,8 +462,9 @@ state_class_filter() {
 baseline, so it cannot be selected here. A PENDING state is captured ad hoc by
 its lane (am instrument -e class <class>) and never baked into a baseline."
       fi
-      die "state '$state' has no wired capture suite. Wired: page-chat-{default,failed,long,draft},
-page-sessions-*, page-settings-*, page-shell, page-files, page-workspace-folders."
+      die "state '$state' has no wired capture suite. Wired: page-chat-{default,assistant,official,
+failed,queued,long,draft,permission}, surface-code-block, page-sessions-*, page-settings-*,
+page-shell, page-files, page-workspace-folders."
     fi
     case ",$PARITY_CLASSES," in
       *",com.phonedsh.ui.screenshot.$class,"*) ;;
@@ -440,12 +477,12 @@ page-sessions-*, page-settings-*, page-shell, page-files, page-workspace-folders
 }
 
 check_parity_registry() {
-  local registry="$1" capture_dir="$2"
-  python3 - "$registry" "$capture_dir" "$IOS_BASELINE_DIR" "$PARITY_STATE_COUNT" <<'PY'
+  local registry="$1" capture_dir="$2" require_all="$3"
+  python3 - "$registry" "$capture_dir" "$IOS_BASELINE_DIR" "$PARITY_STATE_COUNT" "$require_all" <<'PY'
 import pathlib
 import sys
 
-registry_path, capture_dir, ios_dir, expected = sys.argv[1:5]
+registry_path, capture_dir, ios_dir, expected, require_all = sys.argv[1:6]
 expected = int(expected)
 lines = pathlib.Path(registry_path).read_text(encoding="utf-8").splitlines()
 rows = [line.split("|") for line in lines if line.strip()]
@@ -521,6 +558,12 @@ if unregistered_pngs:
         f"{sorted(unregistered_pngs)}"
     )
 not_in_this_pass = sorted(captured - on_device)
+if require_all == "1" and not_in_this_pass:
+    raise SystemExit(
+        "FAIL: a full ios-parity run must write every captured state, but this pass did not "
+        f"write: {not_in_this_pass}. A suite in PARITY_CLASSES did not run — a wrong "
+        "class#method filter fails here instead of silently freezing 21 of 26 baselines."
+    )
 
 pending = [row for row in parity if row[3] == "pending"]
 print(
@@ -589,7 +632,7 @@ EOF
     ios-parity)
       # Always scope to a class list: `am instrument` without `-e class` runs
       # every test in the APK, and the gate suites refuse the parity frame (loudly).
-      PARITY_CLASSES_RUN="$PARITY_CLASSES"
+      PARITY_CLASSES_RUN="$(parity_instrument_classes "$PARITY_CLASSES")"
       if [ -n "$STATES" ]; then
         PARITY_CLASSES_RUN="$(state_class_filter "$STATES")"
         echo "  states requested: $STATES"
@@ -679,7 +722,9 @@ PYMATH
     # ---------------------------------------------------------- registry check
     say "verify the 27-state registry against the iOS baseline directory"
     [ -f "$PULLED/parity-registry.txt" ] || die "the device did not write parity-registry.txt"
-    check_parity_registry "$PULLED/parity-registry.txt" "$PULLED" || die "the parity registry does not match the iOS baseline"
+    if [ -n "$STATES" ]; then REGISTRY_REQUIRE_ALL=0; else REGISTRY_REQUIRE_ALL=1; fi
+    check_parity_registry "$PULLED/parity-registry.txt" "$PULLED" "$REGISTRY_REQUIRE_ALL" \
+      || die "the parity registry does not match the iOS baseline"
     # The parity frame is asserted per capture by the harness; assert it again from
     # the pulled metrics, so a baseline cannot be written from a mis-set display.
     grep -q "profile=ios-parity width=${BASELINE_WIDTH_PX} height=${BASELINE_HEIGHT_PX} dpi=${BASELINE_DENSITY_DPI}" \

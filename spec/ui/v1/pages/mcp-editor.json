@@ -232,8 +232,8 @@
       "collection": null,
       "rows": [
         {
-          "id": "action-239",
-          "label": null,
+          "id": "保存修改并重连",
+          "label": "保存修改并重连",
           "labelExpr": null,
           "kind": "action",
           "value": null,
@@ -242,9 +242,9 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "MCPSettingsPage.swift:239",
-          "anchor": "Button {",
-          "extraction": "manual"
+          "provenance": "MCPSettingsPage.swift:245",
+          "anchor": "Text(existing == nil ? \"保存并连接\" : \"保存修改并重连\")",
+          "extraction": "syntax"
         },
         {
           "id": "删除并撤销授权与密钥",
@@ -303,8 +303,8 @@
       "labelAlternatives": []
     },
     {
-      "id": "button-239",
-      "label": null,
+      "id": "保存修改并重连",
+      "label": "保存修改并重连",
       "labelExpr": null,
       "kind": "button",
       "trigger": "tap",
@@ -312,10 +312,12 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "MCPSettingsPage.swift:239",
-      "anchor": "Button {",
-      "extraction": "manual",
-      "labelAlternatives": []
+      "provenance": "MCPSettingsPage.swift:245",
+      "anchor": "Text(existing == nil ? \"保存并连接\" : \"保存修改并重连\")",
+      "extraction": "syntax",
+      "labelAlternatives": [
+        "保存并连接"
+      ]
     },
     {
       "id": "删除并撤销授权与密钥",

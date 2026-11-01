@@ -562,6 +562,17 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     private var runningSinceMillis: Long? = null
 
     /**
+     * What the merged APK declares for the background lane, read once.
+     *
+     * The declaration cannot change without a reinstall, so it is cached instead
+     * of paying four `PackageManager` reads on every facts build. The notification
+     * capability is *not* cached: the user can revoke it between two reads.
+     */
+    private val backgroundDeclaration: BackgroundDeclaration by lazy {
+        HostBackground.declaration(getApplication())
+    }
+
+    /**
      * The engine's one view, or `null`.
      *
      * UI thread only: the Web surface attaches this exact instance and never
@@ -585,8 +596,9 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
      * One walk over every value the navigation facts are built from.
      *
      * Measured: the engine's view, the running duration (monotonic), the WebView
-     * provider/version, the launch egress grant, the battery-exemption fact, whether
-     * the materialized workspace tree exists, and the app's own permission/hardware
+     * provider/version, the launch egress grant, the battery-exemption fact, the
+     * background lane's declaration and notification capability, whether the
+     * materialized workspace tree exists, and the app's own permission/hardware
      * state (`HostPermissionReadings`). Everything not measured stays `null`; no
      * field defaults to a fake value.
      */
@@ -603,6 +615,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         webViewKernel = engine.kernelReport(),
         egressGrant = launchConfig.egressGrant(),
         batteryExemption = batteryExemption,
+        background = HostBackground.readings(getApplication(), backgroundDeclaration),
         // The one workspace this app owns is `workspaceRoot`; its files page reads
         // the materialized mirror (`WalPaths.materializedWorkspace`). The directory's
         // existence is the measurement the folder row is built from: before the WAL
@@ -823,7 +836,17 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         // Durable tombstone before the first await: a process killed during the
         // turn leaves it behind, and the next launch reports "interrupted at step
         // N" instead of silently showing a half session.
-        ProbeRecovery.beginTurn(getApplication<Application>())
+        val epoch = ProbeRecovery.beginTurn(getApplication<Application>())
+        // The background window opens *before* the first await, while this button
+        // gesture still counts as visible: UIDT cannot be scheduled from a
+        // backgrounded app (plan §7.10-B2) and a foreground service cannot be
+        // started from the background on Android 12+. The result is the platform's
+        // answer, not an assumption; a foreground-only answer is logged as such.
+        HostBackground.startTurn(
+            getApplication<Application>(),
+            epoch,
+            backgroundDeclaration,
+        )
         mutableTurn.value = AppTurnState.Running
         turnScope.launch {
             try {
@@ -873,6 +896,14 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 failTurn(failureText(reasonOf(failure)))
             } finally {
                 turnRunning.set(false)
+                // A cancelled scope (ViewModel cleared, host stopped) is not an
+                // explicit end above, so the window and the marker are closed here:
+                // a background window left open holds a notification nothing owns.
+                // Every other path already ended the turn, and ending it twice is a
+                // no-op (the marker is gone and no window is running).
+                if (mutableTurn.value is AppTurnState.Running) {
+                    ProbeRecovery.endTurn(getApplication<Application>())
+                }
             }
         }
     }

@@ -234,6 +234,64 @@ class PageStructureCheckTests(unittest.TestCase):
         rc, out = run_check(self.fx.root)
         self.assertEqual(rc, 0, out)
 
+    # -- one control, several wordings -------------------------------------
+
+    def test_an_alternative_wording_satisfies_the_same_action(self) -> None:
+        """`labelAlternatives` is the other string one control renders.
+
+        `Text(existing == nil ? "保存并连接" : "保存修改并重连")` is ONE save button.
+        Rendering either wording must satisfy the contract, and neither may be
+        reported as an invented button.
+        """
+        data = contract()
+        data["actions"][0]["label"] = "Go"
+        data["actions"][0]["labelAlternatives"] = ["Go now"]
+        self.fx.write_contract(data)
+        self.fx.write_android(ANDROID.replace("UiStrings.GO", "UiStrings.GO_NOW"))
+        self.fx._write(UISTRINGS_REL, UISTRINGS.replace(
+            'public const val GO: String = "Go"',
+            'public const val GO: String = "Go"\n    public const val GO_NOW: String = "Go now"'))
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 0, out)
+
+    def test_an_action_with_only_alternatives_is_still_compared(self) -> None:
+        """A control with no single rendered label is judged on its wordings."""
+        data = contract()
+        data["actions"][0]["label"] = None
+        data["actions"][0]["labelAlternatives"] = ["Go"]
+        self.fx.write_contract(data)
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 0, out)
+
+    def test_a_shortened_copy_is_one_divergence_not_two(self) -> None:
+        """`保存` for `保存并连接`: one control, different copy — still red.
+
+        Reporting both `missing-action '保存并连接'` and `extra-action '保存'` would
+        put one defect in two ratchet rows and read as "lost one button, invented
+        another". The finding stays red either way; only the count changes.
+        """
+        data = contract()
+        data["actions"][0]["label"] = "Go now"
+        data["actions"][0]["labelAlternatives"] = ["Go later"]
+        self.fx.write_contract(data)
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("missing-action", out)
+        self.assertIn("'Go now'", out)
+        self.assertIn("shortened copy", out)
+        self.assertNotIn("extra-action", out)
+
+    def test_a_different_label_is_still_an_invented_action(self) -> None:
+        """The pairing is prefix-only: an unrelated label stays an extra action."""
+        data = contract()
+        data["actions"][0]["label"] = "Submit"
+        self.fx.write_contract(data)
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("extra-action", out)
+        self.assertIn("'Go'", out)
+        self.assertIn("missing-action", out)
+
     # -- standard Compose controls -----------------------------------------
 
     def _compose_page(self, body: str) -> None:

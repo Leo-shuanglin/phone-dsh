@@ -15,11 +15,13 @@
 //
 // Measured here: engine fact, engine uptime, WebView provider/version, help from
 // the engine's one view, HELLO presence (the page that sent HELLO is loaded), the
-// foreground-service fact (this app declares none), the battery-exemption fact,
-// the launch's exact egress grant, whether the app's one workspace directory
-// exists, the sessions the journal lane stored, and the phone-permission matrix's
-// device reads (the app's own declared/granted permissions, device-admin denials,
-// the notification app-op, DND access and hardware presence).
+// background lane's readings (the merged manifest's components, the notification
+// link and the API level, which together decide whether a background window can
+// open), the battery-exemption fact, the launch's exact egress grant, whether the
+// app's one workspace directory exists, the sessions the journal lane stored, and
+// the phone-permission matrix's device reads (the app's own declared/granted
+// permissions, device-admin denials, the notification app-op, DND access and
+// hardware presence).
 //
 // Not measured (so `null`): archived sessions, pinned order, the session queue,
 // schedules, session configuration, model profiles, web-search settings, MCP
@@ -82,6 +84,10 @@ import java.time.ZoneId
  * @param webViewVersion the provider's version name, or `null`.
  * @param egressGrant the exact origin the launch allow-listed, or `null`.
  * @param batteryExemption whether the app is exempt from battery optimisation.
+ * @param background the background lane's readings: what the merged APK declares,
+ *   what the notification link can do right now, and the API level. The
+ *   `foregroundService` and `notifications` facts are derived from these, never
+ *   from a constant.
  * @param workspacePresent whether `<filesDir>/xl/materialized/workspace` is a
  *   directory: the measured existence of the tree the files page lists. `false`
  *   means the host measured no workspace on disk, not an empty one.
@@ -98,6 +104,7 @@ internal data class HostReadings(
     val webViewKernel: WebViewKernelReport?,
     val egressGrant: GatewayHostRule?,
     val batteryExemption: FactState,
+    val background: HostBackgroundReadings,
     val workspacePresent: Boolean,
     val permissions: HostPermissionReadings,
 )
@@ -117,10 +124,13 @@ internal fun buildNavFacts(
     turn: AppTurnState,
 ): PdshNavFacts {
     val running = state is EngineHostState.Running
-    // This app declares no service in its manifest, so a background turn can never
-    // keep a foreground service alive. The runtime page's row and the settings
-    // switch read this one fact; it is a measurement, not a default.
-    val foregroundService = FactState.NO
+    // The background window is not a host opinion: it is the conjunction of what
+    // the merged manifest declares and what the notification link can do right
+    // now. `HostBackground` reads both, so this file only projects the verdict —
+    // YES when every precondition was measured true, NO with the one that failed.
+    val backgroundWindow = readings.background.window
+    val foregroundService = backgroundWindow.state
+    val notifications = notificationFact(readings.background.capability)
     val providerKey = ApiKeyStore.activeFact()
     val engineFact = when (state) {
         EngineHostState.Stopped, is EngineHostState.Failed -> FactState.NO
@@ -204,10 +214,11 @@ internal fun buildNavFacts(
                 webView = webViewProviderOrNull(readings),
                 memory = null,
                 power = null,
-                // This app declares no service at all in its manifest, so a
-                // foreground service can never be started for a background turn.
+                // The measured verdict from `HostBackground`: the components the
+                // merged APK declares, plus the notification link, plus the API
+                // level. A NO carries the precondition that failed.
                 foregroundService = foregroundService,
-                foregroundServiceReason = FOREGROUND_SERVICE_REASON,
+                foregroundServiceReason = backgroundWindow.detail,
                 // `null` means "this host has not read it" and the page prints
                 // 读取不到; a `RuntimeLastError(null)` means "it read it and there was
                 // no error". Conflating the two would let an idle app claim it had
@@ -272,13 +283,17 @@ internal fun buildNavFacts(
             engineStarted = engineFact,
             // The platform appendix reads are the same three this file always had.
             platform = SettingsPlatformFacts(
-                // Not measured: the app never requests POST_NOTIFICATIONS, so "denied"
-                // would be a claim about a prompt that never happened.
-                notifications = FactState.UNKNOWN,
+                // Measured, not 未知: the app asks for POST_NOTIFICATIONS before the
+                // first turn and the probe reads the answer back, so this row is
+                // the same predicate the background channel uses.
+                notifications = notifications,
                 batteryExemption = readings.batteryExemption,
-                // Not measured: the manifest declares no enableOnBackInvokedCallback,
-                // but the runtime form is the platform's to report, not this file's.
-                predictiveBack = FactState.UNKNOWN,
+                // Measured in `BackNavigation.kt`: the manifest opts in
+                // (`android:enableOnBackInvokedCallback`), the platform must have the
+                // invoker (API 33+), and on API 34+ this process must have seen the
+                // gesture arrive through it. A declaration alone is not a device
+                // answer, so the row says 未知 until the platform has said yes.
+                predictiveBack = predictiveBackFact(),
             ),
         ),
     )
@@ -526,9 +541,6 @@ private const val LOCAL_PROVIDER_NAME: String = "DeepSeek（本机）"
  * tree by construction, so the two cannot drift.
  */
 private const val LOCAL_WORKSPACE_NAME: String = PreviewWorkspace.WORKSPACE
-
-/** The host's own words for the missing foreground service. */
-private const val FOREGROUND_SERVICE_REASON: String = "App 未声明前台服务"
 
 /** Stable id of the single rule the launch installed. */
 private const val EGRESS_GRANT_ID: String = "pdsh.launch.grant"

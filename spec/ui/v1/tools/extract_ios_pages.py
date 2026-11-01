@@ -1003,9 +1003,23 @@ class PageExtractor:
         return found
 
     def _template_literal(self, content: tuple) -> tuple:
-        """A headerless section still names its shape: `\\(count) 个会话`."""
+        """A headerless section still names its shape: `\\(count) 个会话`.
+
+        Only a *direct child* of the section body can be that name. A counter
+        template nested one container deeper (`HStack { Text("\\(report.itemCount) 条内容") }`
+        in DailyBriefPage's first group) is one of the group's data rows: the
+        grouping here is positional (a `List` gap), so no header exists at all, and
+        reading the row's own label as a section title invents a section the page
+        never renders. Both header shapes are handled before this fallback — a
+        literal `Section("…")` and `header: { Text("…") }` — so a template that is
+        not the body's own first line has nowhere to be a title.
+        """
+        masked = self.source.masked
         for raw, pos in self.source.literals(content[0] + 1, content[1]):
             if "\\(" in raw and re.search(r"个|条|次|项", raw):
+                depth = masked.count("{", content[0] + 1, pos) - masked.count("}", content[0] + 1, pos)
+                if depth > 0:
+                    continue
                 return template_of(raw), pos
         return None, None
 
@@ -1158,8 +1172,8 @@ class PageExtractor:
             r"[ \t]*(Button|Menu)[ \t]*[({^]", source.masked[first_stmt[0][0]: first_stmt[0][1]]) is not None
         if first_is_button:
             inner = call_parts(source, first_stmt[0][0], first_stmt[0][1])
-            label, pos, label_expr = self._button_label(inner, first_stmt[0][0], first_stmt[0][1]) \
-                if inner else (None, None, None)
+            label, pos, label_expr, _alts = self._button_label(inner, first_stmt[0][0], first_stmt[0][1]) \
+                if inner else (None, None, None, [])
             self._add_action(action_of(source, pos if pos is not None else start, label, pos, "button", "tap",
                                        writes=writes(source, start, statement_end),
                                        label_expr=label_expr,
@@ -1183,18 +1197,42 @@ class PageExtractor:
         return [row_of(source, start, None, None, "dynamic", label_expr=expr,
                        templateLabels=template_labels[:6], extraction="manual")]
 
-    def _label_from_view_closure(self, closure: tuple) -> tuple:
+    def _label_from_view_closure(self, closure: tuple, root: bool = True) -> tuple:
         """The visible label of a view closure: first `Text`/`Label`, else its expression.
 
         `HStack { Image(systemName: "plus"); Text("新建会话") }` labels the button
         `新建会话`; `HStack { Image(...); Text(displayWorkspaceTitle(w)) }` has an
         expression label and is reported as `labelExpr` with extraction manual.
+
+        Returns `(label, pos, labelExpr, alternatives)`. `alternatives` is the other
+        wording the same control renders in another state (`if saving { ProgressView() }
+        else { Text("保存修改并重连") }`): see `_label_from_if`.
         """
         source = self.source
-        for s, e in split_statements(source.masked, closure[0] + 1, closure[1]):
+        statements = split_statements(source.masked, closure[0] + 1, closure[1])
+        for index, (s, e) in enumerate(statements):
             head = source.masked[s:e].lstrip()
             offset = s + (len(source.masked[s:e]) - len(head))
             if not head or head.startswith(("Image", "Spacer", "Divider", "Rectangle")):
+                continue
+            # A label closure that *is* one `if` with literal copy in a branch
+            # (`MCPSettingsPage`'s save button:
+            # `label: { if saving { ProgressView() } else { Text(existing == nil ? … : …) } }`)
+            # has no call for `call_parts` to inspect, and the old `if not call: continue`
+            # guard swallowed it before `_label_from_if` was ever reached — the whole
+            # reason a label that resolves when called directly still came out `None`
+            # in a real extraction.
+            #
+            # Bounded so that no closure whose label is not literal today changes:
+            #   * only at the closure's own root — a nested view keeps its old shape,
+            #     so `ZStack { if … { ProgressView() } else { Text("保存") } }.frame(…)`
+            #     (`WebSearchSettingsPage`'s save key) still reports no wording;
+            #   * only when a branch carries a literal — `ChatPage`'s model menu
+            #     branches are all `effortTitle(effort)` and stay `labelExpr`.
+            if root and re.match(r"if\b", head):
+                label, pos, expr, alternatives = self._label_from_if(source, offset, e)
+                if label is not None:
+                    return label, pos, expr, alternatives
                 continue
             call = call_parts(source, offset, e)
             if not call:
@@ -1203,54 +1241,102 @@ class PageExtractor:
             if callee in ("Text", "Label", "LabeledContent"):
                 label, pos = first_label(source, *call["positional"][0]) if call["positional"] else (None, None)
                 if label is not None:
-                    return label, pos, None
+                    return label, pos, None, []
                 expr = source.statement_lines(*call["positional"][0]) if call["positional"] else None
-                return None, None, expr
+                return None, None, expr, []
             if callee in self.members and self.members[callee]["kind"] == "func" and call["positional"]:
                 label, pos = first_label(source, *call["positional"][0])
                 if label is not None:
-                    return label, pos, None
-            if callee in ("HStack", "VStack", "ZStack", "Group", "If"):
-                pass
-            if re.match(r"if\b", head):
-                result = self._label_from_if(source, offset, e)
-                if result[0] is not None or result[2] is not None:
-                    return result
-                continue
+                    return label, pos, None, []
             if callee in ("HStack", "VStack", "ZStack", "Group"):
                 inner = call["trailing"] or (call["named"].get("label") if "label" in call["named"] else None)
                 if inner is None and call["named"]:
                     inner = next(iter(call["named"].values()))
                 if inner:
-                    result = self._label_from_view_closure(inner)
-                    if result[0] is not None or result[2] is not None:
-                        return result
+                    label, pos, expr, alternatives = self._label_from_view_closure(inner, root=False)
+                    if label is not None or expr is not None:
+                        return label, pos, expr, alternatives
                 continue
             # A non-text view is the label (an icon only): no wording to extract.
-            return None, None, None
-        return None, None, None
+            return None, None, None, []
+        return None, None, None, []
 
     def _label_from_if(self, source: Source, start: int, end: int) -> tuple:
-        """First label inside `if cond { … } else { … }` (both branches, in order)."""
+        """The label inside `if cond { … } else { … }`, plus the branches not chosen.
+
+        Both branches of a label `if` are wordings of the same control, and the
+        steady state is the later one — the same rule `_button_label` already uses
+        for `Button(saving ? "添加中…" : "添加")`, where `添加` is the label and
+        `添加中…` the transient alternative. So
+        `if saving { ProgressView() } else { Text(existing == nil ? "保存并连接" : "保存修改并重连") }`
+        is the button that saves and reconnects in the common (editing) case, with
+        `保存并连接` as the other wording.
+        """
         masked = source.masked
         brace = masked.find("{", start)
         if brace < 0 or brace > end:
-            return None, None, None
+            return None, None, None, []
         close = match_delim(masked, brace)
         if close < 0:
-            return None, None, None
-        result = self._label_from_view_closure((brace, close))
-        if result[0] is not None or result[2] is not None:
-            return result
+            return None, None, None, []
+        first = self._branch_label((brace, close))
         k = close + 1
         while k < end and masked[k] in " \t\r\n":
             k += 1
+        second = None
         if masked.startswith("else", k):
             ebrace = masked.find("{", k)
             if ebrace > 0:
-                eclose = match_delim(masked, ebrace)
-                return self._label_from_view_closure((ebrace, eclose))
-        return None, None, None
+                second = self._branch_label((ebrace, match_delim(masked, ebrace)))
+        if second is None or (second[0] is None and second[2] is None):
+            # The `else` renders no wording (or there is none): the `if` branch is
+            # the whole answer. Before this, an `if` branch that resolved but had no
+            # wording of its own returned `None` without ever looking at `else`.
+            return first
+        if first[0] is None and first[2] is None:
+            return second
+        alternatives = list(second[3])
+        for value in (first[0], *first[3]):
+            if value is not None and value != second[0] and value not in alternatives:
+                alternatives.append(value)
+        return second[0], second[1], second[2], alternatives
+
+    def _branch_label(self, closure: tuple) -> tuple:
+        """A branch's wording, reading a nested `cond ? "A" : "B"` the same way.
+
+        `_label_from_view_closure` answers the first literal; for a ternary the
+        steady state is the last one, exactly as `_button_label` reads
+        `Button(saving ? "添加中…" : "添加")`. Without this the save button's two
+        wordings would be reported with the wrong one as the label, and the other
+        would be lost entirely.
+        """
+        label, pos, expr, alternatives = self._label_from_view_closure(closure, root=False)
+        if label is None:
+            return label, pos, expr, alternatives
+        for s, e in split_statements(self.source.masked, closure[0] + 1, closure[1]):
+            span = self._ternary_span(s, e)
+            if span is None:
+                continue
+            literals = [(unescape(raw), at) for raw, at in self.source.literals(*span)
+                        if unescape(raw).strip() and not SYMBOL_LITERAL_RE.match(unescape(raw))]
+            values = [value for value, _at in literals]
+            if label not in values:
+                continue
+            steady, steady_pos = literals[-1]
+            rest = [value for value in values[:-1] if value not in alternatives]
+            return steady, steady_pos, None, alternatives + rest
+        return label, pos, expr, alternatives
+
+    def _ternary_span(self, start: int, end: int):
+        """The argument span of a `Text(cond ? "A" : "B")` statement, if it is one."""
+        call = call_parts(self.source, start, end)
+        if not call or call["callee"] not in ("Text", "Label", "LabeledContent"):
+            return None
+        if not call["positional"]:
+            return None
+        span = call["positional"][0]
+        expr = self.source.text[span[0]:span[1]]
+        return span if " ? " in expr and " : " in expr else None
 
     def _classify_element(self, callee: str, call: dict, start: int, end: int) -> list:
         source = self.source
@@ -1285,7 +1371,7 @@ class PageExtractor:
                 # The label is a view: take its first real Text, and when that Text is
                 # an expression keep it as `labelExpr` instead of the next literal
                 # (`1 个会话` in WorkspaceFoldersPage's row is a trailing count, not a name).
-                label, label_pos, label_expr = self._label_from_view_closure(call["named"]["label"])
+                label, label_pos, label_expr, _alts = self._label_from_view_closure(call["named"]["label"])
             self._add_action(action_of(source, label_pos if label_pos is not None else start, label, label_pos,
                                        "navigation", "tap", destination=dest, label_expr=label_expr,
                                        semantic=f"navigate:{dest}" if dest else None,
@@ -1294,9 +1380,7 @@ class PageExtractor:
                            clickable=True, destination=dest, label_expr=label_expr,
                            extraction="syntax" if label else "manual")]
         if callee == "Button":
-            self._last_alternatives = []
-            row_label, pos, label_expr = self._button_label(call, start, end)
-            alternatives = self._last_alternatives
+            row_label, pos, label_expr, alternatives = self._button_label(call, start, end)
             effect = source.statement_lines(*call["trailing"]) if call["trailing"] else None
             can_write = writes(source, start, end)
             self._add_action(action_of(source, pos if pos is not None else start, row_label, pos, "button", "tap",
@@ -1308,7 +1392,7 @@ class PageExtractor:
                            extraction="syntax" if row_label else "manual")]
         if callee == "Menu":
             if label is None and "label" in call["named"]:
-                label, label_pos, _expr = self._label_from_view_closure(call["named"]["label"])
+                label, label_pos, _expr, _alts = self._label_from_view_closure(call["named"]["label"])
             self._add_action(action_of(source, start, label, label_pos, "menu", "tap", writes=False,
                                        extraction="syntax" if label else "manual"))
             return [row_of(source, start, label, label_pos, "action", clickable=True,
@@ -1371,15 +1455,14 @@ class PageExtractor:
                         if unescape(raw) == literals[-1]:
                             pos = p
                             break
-                    self._last_alternatives = literals[:-1]
-                    return literals[-1], pos, None
+                    return literals[-1], pos, None, literals[:-1]
             label, pos = first_label(self.source, *span)
             if label is not None:
-                return label, pos, None
+                return label, pos, None, []
         closure = call["named"].get("label") or call["trailing"]
         if closure:
             return self._label_from_view_closure(closure)
-        return None, None, None
+        return None, None, None, []
 
     def _statement_end(self, start: int, end: int) -> int:
         for s, e in split_statements(self.source.masked, start, end + 1):
@@ -1430,7 +1513,7 @@ class PageExtractor:
             call = call_parts(source, pos, stmt_end)
             if not call:
                 continue
-            label, label_pos, label_expr = self._button_label(call, pos, stmt_end)
+            label, label_pos, label_expr, _alternatives = self._button_label(call, pos, stmt_end)
             trigger = self._button_trigger(pos, start, end)
             effect = source.statement_lines(*call["trailing"]) if call["trailing"] else None
             self._add_action(action_of(source, label_pos if label_pos is not None else pos, label, label_pos,
@@ -1460,7 +1543,7 @@ class PageExtractor:
             label = label_pos = None
             menu_call = call_parts(source, pos, self._statement_end(pos, self.body_end + 1))
             if menu_call and "label" in menu_call["named"]:
-                label, label_pos, _expr = self._label_from_view_closure(menu_call["named"]["label"])
+                label, label_pos, _expr, _alts = self._label_from_view_closure(menu_call["named"]["label"])
             if label is None:
                 tail = source.text[pos: min(len(source.text), pos + 900)]
                 acc = re.search(r"\.accessibilityLabel\(\s*\"([^\"]+)\"", tail)
@@ -1739,10 +1822,28 @@ class PageExtractor:
         Position-based comparison is not used: reordering two untitled groups would then
         read as a difference. A first-row criterion is stable and machine-checkable, and
         the checker reports the group as unresolved instead of silently skipping it.
+
+        A row whose own `Text` is a ternary is *not* a label: `Text(a ? "还没有简报" : "每日简报")`
+        has two renderable strings and the literal the extractor read is whichever
+        branch came first — matching it would mean the criterion only ever exists in
+        one of the two states, and the group would be reported missing whenever the
+        page is in the other. Such a row cannot identify the group; the next really
+        literal row can (DailyBriefPage's untitled first group: criterion
+        `添加来源后，打开页面就会更新`, not the headline's branch).
         """
-        clickable = next((r for r in rows if r.get("clickable") and r.get("label")), None)
-        labelled = next((r for r in rows if r.get("label")), None)
-        expr = next((r for r in rows if r.get("labelExpr")), None)
+        def names_the_group(row: dict) -> bool:
+            anchor = row.get("anchor") or ""
+            return not (" ? " in anchor and " : " in anchor)
+
+        stable = [r for r in rows if names_the_group(r)]
+        # A row whose label is itself a template renders a different string on every
+        # refresh; it can still identify the group (normalisation collapses the slot),
+        # but a plain literal is the stronger anchor, so it wins when one exists.
+        plain = [r for r in stable if r.get("label") and "{" not in r["label"]
+                 and not r.get("dynamicLabel")]
+        clickable = next((r for r in plain + stable if r.get("clickable") and r.get("label")), None)
+        labelled = next((r for r in plain + stable if r.get("label")), None)
+        expr = next((r for r in stable if r.get("labelExpr")), None)
         if clickable:
             return {"kind": "first-clickable-row", "label": clickable["label"],
                     "provenance": clickable["provenance"]}

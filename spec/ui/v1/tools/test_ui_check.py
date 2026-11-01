@@ -235,12 +235,15 @@ class UiCheckTests(unittest.TestCase):
     # -- 9. documentation shape and forbidden content -----------------------
 
     def test_readme_line_cap_fails(self) -> None:
-        self.write_readme(self.read_readme() + ("filler line\n" * 130))
-        self.assert_fails(run_checker(self.root), "cap is 300")
+        # Read the cap instead of hard-coding it: raising README_MAX_LINES for
+        # new normative text must not turn this test into a false failure.
+        cap = load_checker().README_MAX_LINES
+        self.write_readme(self.read_readme() + ("filler line\n" * (cap + 1)))
+        self.assert_fails(run_checker(self.root), f"cap is {cap}")
 
     def test_external_url_in_readme_fails(self) -> None:
         # Append in place, not as a new paragraph: this test is about the URL
-        # rule, so it must not trip the README line cap (300) as a side effect.
+        # rule, so it must not trip the README line cap as a side effect.
         self.write_readme(self.read_readme().rstrip("\n") + f" {FORBIDDEN_URL}\n")
         self.assert_fails(run_checker(self.root), "external URL")
 

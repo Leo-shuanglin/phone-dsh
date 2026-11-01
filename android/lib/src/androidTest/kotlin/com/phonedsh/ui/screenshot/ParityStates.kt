@@ -114,8 +114,9 @@ enum class ParityState(
         screen = "ChatPage",
         owner = "Chat lane",
         status = ParityStatus.CAPTURED,
-        note = "settled turn (user + thinking + one folded tool run + assistant) over READY; " +
-            "iOS sample also carries a pending permission card, which needs a PendingSlot sample",
+        note = "settled turn captured from ScreenshotSamples.chatState() under the header title " +
+            "像素基线复盘; the iOS shot is a different conversation (its own 等待授权 card and " +
+            "folded tool run), so the sheet compares chrome and geometry, not transcript content",
     ),
     PAGE_CHAT_ASSISTANT(
         androidName = "page-chat-assistant",
@@ -123,9 +124,9 @@ enum class ParityState(
         iosRoute = "chat.assistant",
         screen = "ChatPage",
         owner = "Chat lane",
-        status = ParityStatus.PENDING,
-        note = "engine-not-started empty state + one bubble + tool row + code block; " +
-            "needs a sample that puts a code block inside the transcript",
+        status = ParityStatus.CAPTURED,
+        note = "one settled turn from ChatParitySamples.chatAssistant: user bubble, Read tool row " +
+            "and one assistant answer carrying a swift code block, over the READY empty state",
     ),
     PAGE_CHAT_OFFICIAL(
         androidName = "page-chat-official",
@@ -133,9 +134,12 @@ enum class ParityState(
         iosRoute = "chat.official",
         screen = "ChatPage",
         owner = "Chat lane",
-        status = ParityStatus.PENDING,
-        note = "the iOS shot exists to evidence a bug (blank transcript); decide whether Android " +
-            "captures the fixed state or the same bug before registering pixels",
+        status = ParityStatus.CAPTURED,
+        note = "captured as the FIXED state (user bubble + one answer + the 5 轮 17 步 stats " +
+            "line), never as the old blank-transcript bug; the iOS shot was recaptured at " +
+            "86a39aac and is fixed too, but it draws the rich transcript (code block, E=mc², " +
+            "literal HTML, 脚注, 已编辑 6 个文件 card) while the sample is a 2-row thread, " +
+            "so the sheet shows a content gap, not a layout one",
     ),
     PAGE_CHAT_FAILED(
         androidName = "page-chat-failed",
@@ -153,8 +157,11 @@ enum class ParityState(
         iosRoute = "chat.queued",
         screen = "ChatPage",
         owner = "Chat lane",
-        status = ParityStatus.PENDING,
-        note = "queued bubble badge + queued strip; queue dock geometry is the chat lane's",
+        status = ParityStatus.CAPTURED,
+        note = "已排队 bubble badge captured; the 排队中 strip the iOS shot draws above the " +
+            "composer is absent because chatQueued() builds ChatScreenState directly and leaves " +
+            "ComposerState.queued empty (ChatScreenState.from() is what fills it), a sample gap " +
+            "the sheet makes visible",
     ),
     PAGE_CHAT_LONG(
         androidName = "page-chat-long",
@@ -182,8 +189,9 @@ enum class ParityState(
         iosRoute = "chat.permission",
         screen = "ChatPage",
         owner = "Chat lane",
-        status = ParityStatus.PENDING,
-        note = "two permission cards; needs `PendingSlot` samples and the pending-card fold state",
+        status = ParityStatus.CAPTURED,
+        note = "two permission cards from ChatParitySamples.chatPermission: 要写一个文件 primary " +
+            "plus folded 要跑一条命令, pending block expanded, no transcript and no engine",
     ),
 
     // --------------------------------------------------------------- sessions
@@ -366,9 +374,10 @@ enum class ParityState(
         iosRoute = "code.block",
         screen = "DSSCodeBlock swatch",
         owner = "Chat lane",
-        status = ParityStatus.PENDING,
-        note = "the code block is not a standalone surface in :lib (it renders inside the tool " +
-            "detail card), so a swatch entry point has to exist before it can be captured",
+        status = ParityStatus.CAPTURED,
+        note = "the code block is not a standalone surface in :lib, so the capture draws the " +
+            "CodeBlock composable alone in a page-width column with the iOS long-line swatch " +
+            "(ChatParitySamples.CODE_SWATCH), no header and no composer, like the iOS swatch",
     ),
 
     // ------------------------------------------------------------ environment

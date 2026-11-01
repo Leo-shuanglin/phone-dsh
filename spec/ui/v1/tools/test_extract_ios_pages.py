@@ -131,6 +131,110 @@ struct DemoPage: View {
 """
 
 
+HEADERLESS_SECTION_WITH_COUNTER_ROW = """\
+import SwiftUI
+
+struct DemoPage: View {
+    var body: some View {
+        List {
+            Section {
+                HStack {
+                    Text("\\(report.itemCount) 条内容")
+                    Spacer()
+                    Text("新增 \\(report.newItemCount)")
+                }
+            }
+            Section {
+                Text("\\(count) 个会话")
+            }
+            Section("最新一期") {
+                Text("行")
+            }
+        }
+    }
+}
+"""
+
+
+IF_SHAPED_LABEL = """\
+import SwiftUI
+
+struct DemoPage: View {
+    @State private var saving = false
+    @State private var existing: String?
+
+    var body: some View {
+        Form {
+            Section("块") {
+                Button {
+                    Task { await save() }
+                } label: {
+                    if saving {
+                        ProgressView()
+                    } else {
+                        Text(existing == nil ? "保存并连接" : "保存修改并重连")
+                    }
+                }
+                Button {
+                    toggle()
+                } label: {
+                    if flags.allow {
+                        Text("永远允许")
+                    } else {
+                        Text("询问")
+                    }
+                }
+                Button {
+                    toggle()
+                } label: {
+                    ZStack {
+                        if saving {
+                            ProgressView()
+                        } else {
+                            Text("保存")
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                Button {
+                    pick()
+                } label: {
+                    if chosen {
+                        Text(currentName)
+                    } else {
+                        Text(alternateName)
+                    }
+                }
+            }
+        }
+    }
+}
+"""
+
+
+HEADERLESS_SECTION_CRITERION = """\
+import SwiftUI
+
+struct DemoPage: View {
+    var body: some View {
+        List {
+            Section {
+                Text(model.snapshot == nil ? "还没有简报" : "每日简报")
+                if let date = model.lastSuccessfulAt {
+                    Text("最近成功 \\(date, style: .relative)")
+                } else {
+                    Text("添加来源后，打开页面就会更新")
+                }
+            }
+            Section("最新一期") {
+                Text("行")
+            }
+        }
+    }
+}
+"""
+
+
 def extract(swift: str) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -180,6 +284,110 @@ class ActionOwnershipTest(unittest.TestCase):
         page = extract(NESTED_SCREEN)
         self.assertIn("保存", labels(page),
                       "an embedded screen ships with the page that presents it")
+
+
+class UntitledGroupTitleTest(unittest.TestCase):
+    """A group title is declared, never read out of the group's own rows.
+
+    `DailyBriefPage.swift:18` is a `Section { … }` with no header argument at all:
+    the grouping is positional (a List gap). Its first row is a counter
+    (`Text("\\(report.itemCount) 条内容")`), and the extractor used to adopt that
+    row's label as the group's `titleTemplate` — inventing a section the page never
+    renders and a `missing-section` finding on every implementation that does not
+    render one either. The regressions pinned here are the two shapes that must
+    stay apart.
+    """
+
+    def test_a_counter_row_inside_a_container_is_not_a_group_title(self):
+        page = extract(HEADERLESS_SECTION_WITH_COUNTER_ROW)
+        first = page["sections"][0]
+        self.assertIsNone(first["title"],
+                          "the HStack's counter is a row, not the group's name")
+        self.assertIsNone(first["titleTemplate"])
+        self.assertEqual("absent", first["titleSource"])
+
+    def test_a_top_level_template_still_names_the_group(self):
+        """The fallback is not dead: a direct-child template names the shape."""
+        page = extract(HEADERLESS_SECTION_WITH_COUNTER_ROW)
+        second = page["sections"][1]
+        self.assertEqual("template", second["titleSource"])
+        self.assertEqual("{count} 个会话", second["titleTemplate"])
+
+    def test_a_literal_section_title_is_untouched(self):
+        page = extract(HEADERLESS_SECTION_WITH_COUNTER_ROW)
+        self.assertEqual("最新一期", page["sections"][2]["title"])
+
+
+class LabelClosureTest(unittest.TestCase):
+    """A label closure that *is* an `if` must be read, and only where that is safe.
+
+    `MCPSettingsPage.swift:239` labels its save button with
+    `if saving { ProgressView() } else { Text(existing == nil ? "保存并连接" : "保存修改并重连") }`.
+    `_label_from_if` could already return `保存并连接` when called by hand, yet the
+    real extraction produced `label: null`: `_label_from_view_closure` skipped the
+    statement at `if not call: continue`, because `call_parts` answers `{}` for a
+    bare `if`, so `_label_from_if` was never reached. These tests pin the chain and
+    the three bounds that keep the fix from rewriting every label closure.
+    """
+
+    def test_an_if_shaped_label_resolves_with_its_other_wording(self) -> None:
+        """The steady wording is the label; the other state's copy is the alternative.
+
+        Same rule as `Button(saving ? "添加中…" : "添加")` — `添加` is the label — so
+        the save button is `保存修改并重连` with `保存并连接` as the other wording.
+        """
+        page = extract(IF_SHAPED_LABEL)
+        save = next(a for a in page["actions"] if a.get("label") == "保存修改并重连")
+        self.assertEqual(["保存并连接"], save["labelAlternatives"])
+        self.assertEqual("DemoPage.swift:16", save["provenance"],
+                         "the anchor is the Text that renders the wording, not the Button")
+
+    def test_both_branches_are_wordings_of_one_control(self) -> None:
+        page = extract(IF_SHAPED_LABEL)
+        other = next(a for a in page["actions"] if a.get("label") == "询问")
+        self.assertEqual(["永远允许"], other["labelAlternatives"])
+        self.assertEqual(1, len([a for a in page["actions"] if a.get("label") == "询问"]),
+                         "an alternative is not a second action")
+
+    def test_an_if_inside_a_container_stays_unresolved(self) -> None:
+        """`ZStack { if … } .frame(…)` keeps its old shape: no invented label.
+
+        Treating any nested `if` as the label would also have relabeled
+        `WebSearchSettingsPage`'s save key, whose Android twin is built around the
+        contract carrying no wording for it.
+        """
+        page = extract(IF_SHAPED_LABEL)
+        self.assertNotIn("保存", labels(page))
+
+    def test_an_expression_only_if_stays_unresolved(self) -> None:
+        """No literal in either branch: no label, exactly as before the fix.
+
+        `ChatPage.swift:2174` labels its model menu the same way
+        (`Text(effortTitle(effort))`), so returning an expression here would rewrite
+        three dozen labels this lane has no business deciding.
+        """
+        page = extract(IF_SHAPED_LABEL)
+        last = page["actions"][-1]
+        self.assertIsNone(last["label"])
+        self.assertIsNone(last["labelExpr"])
+
+
+class UntitledCriterionTest(unittest.TestCase):
+    """What identifies a group with no header: a row that renders the same everywhere.
+
+    `DailyBriefPage`'s first `Section` has no header argument, its first row is a
+    ternary headline (two renderable strings) and its second is a counter template.
+    Neither is a stable name for the group, so the criterion has to be the plain
+    literal below them — otherwise the group is "missing" whenever the page happens
+    to render the other branch.
+    """
+
+    def test_a_plain_literal_beats_a_ternary_and_a_template(self) -> None:
+        page = extract(HEADERLESS_SECTION_CRITERION)
+        criterion = page["sections"][0]["criterion"]
+        self.assertEqual("first-row", criterion["kind"])
+        self.assertEqual("添加来源后，打开页面就会更新", criterion["label"])
+        self.assertEqual("DemoPage.swift:11", criterion["provenance"])
 
 
 if __name__ == "__main__":

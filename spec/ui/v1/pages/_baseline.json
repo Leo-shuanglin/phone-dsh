@@ -4,22 +4,16 @@
  "contracts": 33,
  "divergences": [
   {
-   "page": "daily-brief",
-   "kind": "missing-section",
-   "name": "N 条内容",
-   "reason": "known divergence on daily-brief (missing-section); shrink only"
-  },
-  {
    "page": "files",
    "kind": "missing-action",
    "name": "完成",
-   "reason": "`FilesPage.swift:70` is the cancel key of the `3D 示例` demo sheet (`sheet-62`), a preview host page that this App does not have: `onOpenDemo` has no host implementation, so the sheet never presents and its cancel key has no Android counterpart. The gate used to match this label against the in-page preview's own `完成`, which was a different control — deleting that dead preview is what exposed the gap. Implementing the demo sheet needs a page-surface host, tracked separately."
+   "reason": "`FilesPage.swift:70` is the cancel key of the `3D 示例` sheet (`sheet-62`), and that sheet is a product surface, not a debug tool: `FilesPage.swift` contains no `#if DEBUG` (every debug-only path in the probe is wrapped — `ChatPage.swift:17,28,155,…`), the toolbar entry and the sheet compile into every build, and `examples/probe-app/project.yml:61-63` ships `Web3DLib` (which holds `demo/spin.html`) as a resource folder in release builds too. So the iOS baseline really does render 「3D 示例」 → 「完成」. Android cannot host it yet, and not for lack of trying: the 2026-11-01 decision in `docs/design/android-single-webview-invariant-2026-11-01.md:63` keeps ONE WebView per process (`spec/v1/bridge.md:156`) and routes HTML/3D/OGV to the honest card + per-file reason + share path instead, so a page-surface sheet whose only content is `pdsh-page://lib/demo/spin.html` would be exactly the second WebView that decision forbids. The Android page already models the entry (`FilesPage.kt:454,465`: `onOpenDemo` hides it when null) and `PdshNavHost.kt`'s `FilesRoute` never passes it. Landing the sheet needs (1) the page-surface module, (2) the Web3DLib assets on the Android side, (3) the nav wiring — none of which this lane may touch. The row is the work item, and it is not a preview-host or demo-only affordance."
   },
   {
    "page": "mcp-editor",
-   "kind": "extra-action",
-   "name": "保存",
-   "reason": "known divergence on mcp-editor (extra-action); shrink only"
+   "kind": "missing-action",
+   "name": "保存修改并重连",
+   "reason": "The extractor now reads this control's label (`MCPSettingsPage.swift:245`: `Text(existing == nil ? \"保存并连接\" : \"保存修改并重连\")`): the steady wording `保存修改并重连` is the label, `保存并连接` its `labelAlternatives`, and the checker satisfies the action with either. Android renders a third wording: `MCPEditorPage.kt:874` labels the save action `UiStrings.MCP_SAVE` = `保存` in both the add and the edit case, and `MCPEditorPage.kt:15-17` records that choice. Under README §1 (iOS is the baseline) the phone copy should be state-specific, so the finding is real — one control whose copy was shortened, which is why it is one row and not a missing/extra pair (the checker pairs the two directions when the Android label is a shortened copy of a contract wording). The fix is one expression in `android/lib/.../page/MCPEditorPage.kt`: label the action `保存并连接` when `facts.server == null`, else `保存修改并重连`. That file belongs to another lane; this lane may not edit it. This row used to read `extra-action 保存`: the same defect seen from the far side while the label was invisible to the extractor."
   }
  ]
 }

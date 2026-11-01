@@ -1288,6 +1288,16 @@ class WorkspaceLog(
                 while (buffer.hasRemaining()) {
                     channel.write(buffer)
                 }
+                // The header is durable before the segment is registered anywhere.
+                //
+                // Without this the dirent and the 40-byte header can sit in the page
+                // cache until the epoch closes — a window of tens of seconds. A power
+                // cut inside it leaves the manifest naming a segment whose file is
+                // empty, which the listed-and-missing rule reads as `WAL_CORRUPT`: the
+                // whole workspace becomes unusable. `force(true)` closes the window
+                // for one fsync per epoch, and it also commits the new dirent, so the
+                // parent directory does not need its own fsync here.
+                channel.force(true)
             }
         } catch (error: IOException) {
             throw fatal(

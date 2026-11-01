@@ -41,10 +41,10 @@ stage_desc() {
         phone-license)         echo "SPDX MIT headers and plugins package licenses" ;;
         phone-modules)         echo "Package.swift dependency map of the 8 phone-DSH modules (SKIP without PhoneWire)" ;;
         phone-gate-contracts)  echo "Python regressions for scenario batch/evidence and gate contracts" ;;
-        phone-android-structure) echo "android/tools structure_check (11 checks, incl. nested-comments and the two 16 KB page-alignment gates) + its tool unit tests" ;;
+        phone-android-structure) echo "android/tools structure_check (11 checks, incl. nested-comments and the two 16 KB page-alignment gates) + its tool unit tests + the packaged-APK 16 KB gate's mutation suite" ;;
         phone-android-tests)   echo "cargo build -p pdsh-jni, then every test-bearing Gradle module's JVM tests; 0 tests counted = FAIL" ;;
         phone-rust-tests)      echo "cargo test --workspace over shell/: the host read policy, the WAL planner and the accelerators; the JVM suite exercises them through JNI, but the authoritative policy tests live only here" ;;
-        phone-android-release) echo "assembleRelease + 16 KB PT_LOAD alignment proof of the arm64-v8a libpdsh_jni.so (SKIP without the gitignored worker bundle/NDK product)" ;;
+        phone-android-release) echo "assembleRelease + 16 KB proof of the arm64-v8a libpdsh_jni.so and of the .so packaged in the APK (SKIP without the gitignored worker bundle/NDK product)" ;;
         phone-xcode-resolve)   echo "xcodegen + Xcode package resolution of examples/probe-app (no simulator; SKIP if XcodeGen is absent)" ;;
         *)                     return 1 ;;
     esac
@@ -367,6 +367,18 @@ stage_phone_android_structure() {
     [ -n "$ran" ] || { echo "unittest printed no 'Ran N tests' line; the tool tests did not run"; return 1; }
     [ "$ran" -gt 0 ] || { echo "unittest collected 0 tests from android/tools; that is not a pass"; return 1; }
     log "unittest executed $ran tool test(s)"
+
+    # The packaged-APK half of the 16 KB proof has its own mutation suite. It
+    # needs no APK (the fixtures are written to a temp dir), so it runs here
+    # instead of behind the release stage's worker-bundle/NDK skip: a gate whose
+    # red path is never exercised is a gate nobody should trust.
+    for t in check-android-16k.py test_check_android_16k.py; do
+        [ -f "$ROOT/scripts/ci/$t" ] || { echo "missing scripts/ci/$t"; return 1; }
+    done
+    ( cd "$ROOT" && "$PYTHON" -m unittest discover -s scripts/ci -p 'test_check_android_16k.py' ) || {
+        echo "the packaged-APK 16 KB gate's mutation suite failed: the gate no longer goes red"
+        return 1
+    }
 }
 
 # The JVM suite. :core, :dsh and :testkit drive the Rust codec through JNI and
@@ -477,6 +489,24 @@ stage_phone_android_release() {
     [ "${CI_GRADLE_OFFLINE:-0}" = 1 ] && gradle_args="$gradle_args --offline"
     ( cd "$ROOT/android" && bash ./gradlew $gradle_args ${CI_GRADLE_ARGS:-} :app:assembleRelease ) || return 1
     log "assembleRelease wrote android/app/build/outputs/apk/release/"
+
+    # The APK holds the only bytes that ship: `PackagePdshJni` copied and
+    # llvm-stripped the cargo artifact, and AGP chose the zip entry's
+    # compression and offset. The check above reads shell/target/, so it cannot
+    # see a strip step that rewrote the program headers, a deflated entry or a
+    # 4 KB-aligned offset. This one can.
+    apk=""
+    for candidate in "$ROOT"/android/app/build/outputs/apk/release/*.apk; do
+        [ -f "$candidate" ] || continue
+        apk="$candidate"
+        break
+    done
+    [ -n "$apk" ] || { echo "assembleRelease succeeded but wrote no APK under android/app/build/outputs/apk/release/"; return 1; }
+    "$PYTHON" "$ROOT/scripts/ci/check-android-16k.py" --root "$ROOT" --apk "$apk" || {
+        echo "the packaged .so is not 16 KB-page ready: Android 15+ 16 KB-page devices would reject it"
+        return 1
+    }
+    log "16 KB alignment proven on the packaged APK: ${apk#"$ROOT"/}"
 }
 
 # G2-FIX-22: Xcode's package resolver rejects a test target that depends on

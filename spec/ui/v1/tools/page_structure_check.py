@@ -324,6 +324,42 @@ def is_template_label(value: str) -> bool:
     return bool(value) and bool(PRINTF_SLOT_RE.search(value))
 
 
+def shortened_copy(actual: str, wordings: list) -> str | None:
+    """The wording `actual` is a truncated copy of (`保存` for `保存并连接`), if any.
+
+    A control whose copy was cut short is ONE divergence, not two: the baseline's
+    `保存并连接` is missing *and* Android's `保存` is unclaimed, and reporting both
+    reads as "the page invented a button and lost another one". Pairing keeps one
+    row per defect and leaves the finding red — the copy still differs.
+    """
+    a = normalize(actual)
+    if len(a) < 2:
+        return None
+    for wording in wordings:
+        if a != normalize(wording) and normalize(wording).startswith(a):
+            return wording
+    return None
+
+
+def action_wording(action: dict) -> list:
+    """Every literal the baseline renders for one action, primary wording first.
+
+    `labelAlternatives` exists because one control can legitimately render more than
+    one string: `Text(existing == nil ? "保存并连接" : "保存修改并重连")` on the MCP
+    editor's save button. The alternative is not a second action and not a second
+    contract row — it is the same affordance, so either wording satisfies the
+    contract and neither may be reported as an invented (`extra-action`) button.
+    """
+    out = []
+    for value in [action.get("label"), *(action.get("labelAlternatives") or [])]:
+        if not isinstance(value, str) or not value.strip() or value in out:
+            continue
+        if is_template_label(value):
+            continue
+        out.append(value)
+    return out
+
+
 def normalize(text: str) -> str:
     """Compare titles/labels on meaning, not on spacing, digits or template syntax.
 
@@ -1530,9 +1566,10 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
     # BOTH sides. The Android reader already drops `%d 项需要处理`-shaped labels, but
     # the contract side kept `删除 %@` as a literal, so an action the page renders
     # correctly (the confirm key reads `删除 DeepSeek`) could never satisfy it.
+    # A label is not always one string: the contract records the other wording of a
+    # ternary/`if` label in `labelAlternatives`, so the comparison runs on the set.
     labelled = [a for a in live_actions
-                if a.get("label") and not a.get("dynamicLabel")
-                and not is_template_label(a["label"])]
+                if action_wording(a) and not a.get("dynamicLabel")]
     android_only_actions = [a for a in labelled if a.get("androidOnly")]
     labelled = [a for a in labelled if not a.get("androidOnly")]
     summary["actions"]["contract"] = len(contract_actions)
@@ -1556,7 +1593,9 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
     section_positions, action_positions = [], []
     consts = {**shared_consts, **local_constants(text)}
     section_positions, action_positions = [], []
-    fold_labels = frozenset(normalize(a["label"]) for a in labelled if a.get("label"))
+    # A fold header whose wording is the action's alternative is still that action's
+    # header, so the fold test reads every wording, not only the primary one.
+    fold_labels = frozenset(normalize(value) for a in labelled for value in action_wording(a))
     android_titles, unresolved_titles = android_sections(text, masked, strings, consts,
                                                         positions=section_positions)
     android_labels, unresolved_labels = android_actions(text, masked, strings, consts,
@@ -1640,7 +1679,12 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
                    "the baseline groups this page without Section/PageSection/GroupBox/header Text; "
                    "a human must name the group before the sections can be compared")
 
-    expected_labels = {normalize(a["label"]): a["label"] for a in labelled}
+    # Display wording -> every key that satisfies it. `保存并连接` with the
+    # alternative `保存修改并重连` is satisfied by either string on Android; when
+    # neither appears the finding names the primary wording and lists the rest.
+    expected_labels = [(wordings, [normalize(value) for value in wordings])
+                       for wordings in (action_wording(a) for a in labelled) if wordings]
+    expected_keys = {key for _wordings, keys in expected_labels for key in keys}
     actual_labels = {normalize(l): l for l in android_labels}
     for action in android_only_actions:
         if normalize(action["label"]) in actual_labels:
@@ -1675,13 +1719,44 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
                 picker_label_keys.add(normalize(action["label"]))
             for item in action.get("items") or []:
                 picker_option_keys.add(normalize(item))
-    for key, label in expected_labels.items():
-        if key in picker_label_keys or key in picker_option_keys:
+    # Android labels that match nothing on the contract side. One that merely
+    # shortens a contract wording (`保存` for `保存并连接`) is the same control with
+    # different copy: pair it so the defect is reported once, still red.
+    unclaimed = {key: label for key, label in actual_labels.items()
+                 if key not in expected_keys and key not in android_only_label_keys
+                 and key not in dead_action_keys and key not in picker_option_keys}
+    paired = {}
+    for wordings, keys in expected_labels:
+        if all(key in picker_label_keys or key in picker_option_keys for key in keys):
             continue
-        if key not in actual_labels:
-            report.add(page_id, "missing-action", label, "contract action label absent from the Android page")
+        if any(key in actual_labels for key in keys):
+            continue
+        for key in sorted(unclaimed):
+            if key in paired:
+                continue
+            if shortened_copy(unclaimed[key], wordings) is not None:
+                paired[key] = wordings[0]
+                break
+    for wordings, keys in expected_labels:
+        if all(key in picker_label_keys or key in picker_option_keys for key in keys):
+            continue
+        if any(key in actual_labels for key in keys):
+            continue
+        detail = "contract action label absent from the Android page"
+        if len(wordings) > 1:
+            detail += (" (the baseline renders this one control as "
+                       + " or ".join(f"`{value}`" for value in wordings)
+                       + "; any of them matches)")
+        short = [label for key, label in unclaimed.items()
+                 if paired.get(key) == wordings[0]]
+        if short:
+            detail += (f"; the Android page renders `{short[0]}`, a shortened copy of "
+                       "that wording, so this is one control with different copy")
+        report.add(page_id, "missing-action", wordings[0], detail)
     for key, label in actual_labels.items():
-        if key not in expected_labels and key not in android_only_label_keys \
+        if key in paired:
+            continue
+        if key not in expected_keys and key not in android_only_label_keys \
                 and key not in dead_action_keys and key not in picker_option_keys:
             report.add(page_id, "extra-action", label, "Android action label absent from the contract")
     for expr in sorted(set(unresolved_labels)):

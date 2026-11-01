@@ -186,6 +186,37 @@ Rust 测试  525 / 0 failing
 构建       :app:assembleDebug BUILD SUCCESSFUL
 ```
 
+### UI：从「21/27 采集」变成「26/27 并排可看」——而并排一看，问题就露了
+
+之前这一节写「ios-parity 21/21 PASS」。**那个数只说明「Android 没改过」**——工具自己写着
+`It does not prove visual parity with the iOS baseline`。**没有任何产物把 iOS 和 Android 摆在一起。**
+
+现在有了：`docs/receipts/ui-parity-sheet/`，**26 张** `<state>__ios-left.png`（iOS 左 / Android 右，
+同一把 frame-px 标尺，**不做像素 diff**），唯一未配对的是 `env-home`（`adb screencap` 截桌面，
+Compose 渲染不出来）。
+
+**并排之后立刻看到三类问题**：
+
+| 类型 | 实例 |
+|---|---|
+| **同框不同内容**（只能比外框） | `page-chat-default`：iOS 是「等待授权」卡 + 一段带工具调用的对话；Android 是空 transcript + **另一个会话**。根因：4 个老 chat 状态用的是 `ScreenshotSamples.chatState()`，不是为 iOS 写的 `ChatParitySamples` |
+| **真实布局差异** | `page-settings-default`：**同一行 iOS 在 y≈900、Android y≈770**；开关 **iOS 绿 / Android 蓝**；iOS 有状态栏、Android 沉浸式 |
+| **真实内容缺口** | `page-chat-official`：iOS 富 transcript（代码块、公式、原始 HTML、脚注、文件卡）vs Android **只有 2 行**——**不是布局，是内容** |
+
+**所以「21/27 已对齐」现在应该降级为「21/27 已采集，其中若干只可比外框」。** 这是这轮 UI 工作
+最有价值的地方——**不是证明了「对齐」，而是让「没对齐」变得可见**。
+
+**顺带修掉两条**：
+
+1. **5 个 Chat 状态翻正**（26 captured / 1 pending）。它们卡住的**真实原因不是采不到**：
+   `ChatParityScreenshotTest` 除了 5 个 parity 方法还写 `page-chat-route`（路由回执，故意不在
+   27 状态表），整类接进 `PARITY_CLASSES` 会让 registry 校验以
+   `device wrote PNGs no registry row calls captured` 失败。**脚本原来那句「5 states are PENDING」
+   是循环论证。**
+2. **并发条件下的采集纪律**：`--update` **没有**在共享树上跑（另一条车道持续写文件，180 秒静默
+   窗口从未出现）。改在 `/tmp` 的 `git archive HEAD` 隔离树上做，再把结果拷回，然后**在仓库内
+   重跑 `--profile ios-parity` 26/26 PASS** 证明基线与当前树渲染一致。**没有把在飞像素冻进基线。**
+
 ### 三个必须先说的更正
 
 **1. 我先前写的「13/13 门禁全绿」是挑出来的。** `check.sh` 有 **18** 个 stage；

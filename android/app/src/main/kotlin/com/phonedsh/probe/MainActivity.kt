@@ -2,16 +2,56 @@
 // SPDX-License-Identifier: MIT
 package com.phonedsh.probe
 
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import com.phonedsh.dsh.background.NotificationCapability
 
 class MainActivity : ComponentActivity() {
     private val engine: ProbeEngineViewModel by viewModels()
+
+    /**
+     * Bumped when the notification answer changes what the background facts may
+     * say, so `HostShell` rebuilds them instead of keeping the snapshot it took
+     * before the dialog was answered.
+     */
+    private var backgroundRevision by mutableIntStateOf(0)
+
+    /** True while a 跑一轮 tap waits for the POST_NOTIFICATIONS answer. */
+    private var turnAfterPermission = false
+
+    /**
+     * The one runtime permission this app asks for.
+     *
+     * `:dsh` declares POST_NOTIFICATIONS because both background channels stand
+     * on a visible progress notification: UIDT's contract is "progress visible",
+     * and a dataSync service without one is an invisible window. Asking is the
+     * only way that fact can ever be YES on Android 13+, and asking *at the turn*
+     * is the moment the promise is made — not at launch, where the user has asked
+     * for nothing yet.
+     */
+    private val notificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        Log.i(TAG, "POST_NOTIFICATIONS_ANSWER granted=$granted")
+        backgroundRevision++
+        if (turnAfterPermission) {
+            turnAfterPermission = false
+            // Denied still runs the turn: it becomes a foreground-only turn, which
+            // is the honest degradation rather than a refusal to work.
+            engine.runTurn()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,10 +90,38 @@ class MainActivity : ComponentActivity() {
                 channel = channel,
                 turn = turn,
                 recoveryNotice = recoveryNotice,
+                backgroundRevision = backgroundRevision,
                 onStart = engine::start,
                 onStop = engine::stop,
-                onRunTurn = engine::runTurn,
+                onRunTurn = ::runTurnOrAskForNotifications,
             )
         }
+    }
+
+    /**
+     * The 跑一轮 intent: ask for the notification permission first when Android
+     * 13+ has not answered it yet, then run the turn.
+     *
+     * The turn is deferred until the answer because the window is opened at the
+     * start of the turn: asking afterwards would make the *first* turn of every
+     * install run without a background window, which is the gap this lane closes.
+     * A denial does not block the turn.
+     */
+    private fun runTurnOrAskForNotifications() {
+        if (!notificationsGranted() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            turnAfterPermission = true
+            notificationPermission.launch(NotificationCapability.POST_NOTIFICATIONS)
+        } else {
+            engine.runTurn()
+        }
+    }
+
+    private fun notificationsGranted(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            checkSelfPermission(NotificationCapability.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private companion object {
+        const val TAG = "PDSHMain"
     }
 }

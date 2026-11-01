@@ -28,7 +28,6 @@ package com.phonedsh.probe
 
 import android.util.Log
 import android.view.View
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -67,6 +66,7 @@ import com.phonedsh.engine.HandshakeSummary
 import com.phonedsh.engine.KernelVerdict
 import com.phonedsh.platform.EngineHostState
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.nav.PdshBackLevel
 import com.phonedsh.ui.nav.PdshDrawer
 import com.phonedsh.ui.nav.PdshDrawerEntry
 import com.phonedsh.ui.nav.PdshDrawerIcon
@@ -91,6 +91,10 @@ import com.phonedsh.ui.theme.PdshThemeValues
  * @param turn the one turn's state (the workbench's tool output comes from it).
  * @param recoveryNotice the fail-loud report from a previous process death, a torn
  *   WAL tail or an unreadable reclaim token; `null` when nothing is wrong.
+ * @param backgroundRevision a counter the Activity bumps when the notification
+ *   permission answer changes what the background facts may say. It is a fact
+ *   key, not a value: the facts are still measured, this only says "measure
+ *   again", because the grant happens after the first snapshot was taken.
  * @param onStart start the engine.
  * @param onStop stop the engine.
  * @param onRunTurn run one turn through the App's own `/api` lane.
@@ -104,15 +108,23 @@ internal fun HostShell(
     channel: ChannelStatus,
     turn: AppTurnState,
     recoveryNotice: RecoveryNotice?,
+    backgroundRevision: Int,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onRunTurn: () -> Unit,
 ) {
     // The facts are one host walk per lifecycle/HELLO/turn change: a page never
-    // asks the host for anything itself.
-    val facts: PdshNavFacts = remember(state, handshake, turn) {
+    // asks the host for anything itself. `backgroundRevision` is the one key that
+    // is not engine state: a permission answer lands after the first walk and must
+    // not leave the runtime page showing the pre-answer verdict.
+    val facts: PdshNavFacts = remember(state, handshake, turn, backgroundRevision) {
         engine.navFacts(state, handshake, turn)
     }
+    // The one fact in that snapshot that is not an engine reading: whether the
+    // platform really carries this app's back gesture through the invoker. It is
+    // measured by the back callback (one gesture moves it), so it is applied here
+    // rather than inside the remembered walk.
+    val shownFacts = PredictiveBack.measured(facts)
     var nav by remember { mutableStateOf(PdshNavState()) }
     var drawerOpen by remember { mutableStateOf(false) }
     var webFaceOpened by remember { mutableStateOf(false) }
@@ -143,11 +155,19 @@ internal fun HostShell(
                 nav = nav.push(PdshRoute.WebSurface)
             }
         }
-        BackHandler(enabled = drawerOpen || nav.canGoBack) {
-            if (drawerOpen) {
-                drawerOpen = false
-            } else {
-                nav = nav.pop()
+        // `spec/ui/v1/README.md` §5 back-gesture: one gesture pops one level, and the
+        // root page exits the app. The chain is three deep because two of its levels
+        // are not routes: the drawer, the top route's own inner level (a sheet's
+        // child page, a folder drill-down, an embedded preview — registered by the
+        // route through `PdshBackLevel`), then the route stack. When none of the
+        // three can consume the gesture no callback is registered, which is what
+        // leaves "exit the app" to the platform's own default behaviour.
+        val backLevel = remember { PdshBackLevel() }
+        PdshBackHandler(enabled = drawerOpen || backLevel.available || nav.canGoBack) {
+            when {
+                drawerOpen -> drawerOpen = false
+                backLevel.consume() -> Unit
+                else -> nav = nav.pop()
             }
         }
         val note = notice ?: routeNote
@@ -172,7 +192,7 @@ internal fun HostShell(
                 Box(Modifier.weight(1f)) {
                     PdshNavHost(
                         nav = nav,
-                        facts = facts,
+                        facts = shownFacts,
                         onNavigate = { route ->
                             drawerOpen = false
                             nav = nav.push(route)
@@ -223,6 +243,9 @@ internal fun HostShell(
                                 onHostNotice = { notice = it },
                             )
                         },
+                        // The chain's middle level: what the top route can still go
+                        // back to inside itself.
+                        backLevel = backLevel,
                     )
                 }
             }
