@@ -139,7 +139,7 @@ LINE_CAPS = {
     # which segment is "the newest close", what proves an epoch durable, the fsync for a
     # removed path, whether the close record is charged, how much to drop, and whether
     # the 512 MiB is per workspace) are contract text now.
-    "wal.md": 370,
+    "wal.md": 374,
     # D16 amendment: `unsupported` was defined as "only an unadvertised argv[0]", but the
     # host also refuses request shapes it cannot honour (no stdin channel, protocol-level
     # refusal). The implementation and the spec disagreed; the spec was the narrower one.

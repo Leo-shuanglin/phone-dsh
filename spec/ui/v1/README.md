@@ -244,7 +244,8 @@ P5 工作项：由 `tokens.json` 生成 Swift/Compose token 文件（P0 不做�
 
 ## 5. 平台差异白名单
 
-只有下表 8 条允许两端呈现不同（方案 §9.2-5 的 7 条 + owner 追加的 `share-sheet`）；每条都要「语义等价声明」，
+只有下表 8 条 + 一个 **`copy-forced` 类**允许两端呈现不同（方案 §9.2-5 的 7 条 + owner 追加的 `share-sheet`）；
+每条都要「语义等价声明」，
 未列入按语义一致验收（像素对表仍限 §4 的 6 个面）。
 
 | id | Android | iOS | 语义等价声明 |
@@ -257,6 +258,24 @@ P5 工作项：由 `tokens.json` 生成 Swift/Compose token 文件（P0 不做�
 | fgs-notification | 前台服务常驻通知：回合状态 + 进度 + 「停止」按钮 | 后台保活静默期，无通知 | 通知是回合执行中的唯一界面；「停止」走同一 cancel 路径，副作用与 App 内停止一致 |
 | cjk-fallback | 系统 CJK 回退链，等宽字形按字体族回退 | 系统 CJK 回退链 | 同一字符串两端字形可不同，但行数、换行点、复制结果 MUST 一致 |
 | share-sheet | 页内动作「导出对话记录」调系统 share sheet | 系统 activity sheet | 同一动作、同一内容，面板形态由平台提供；**不注册外部分享目标、不做深链** |
+
+### §5.1 第 9 类：`copy-forced`（措辞强制）
+
+前 8 条是「同一件事，两端呈现方式不同」。`copy-forced` 是另一种：**两端描述同一件事，但照抄另一端的
+说法就会在屏幕上陈述一个假事实**。它没有可命名的 Android 机制可填（`os-forced` 要求 `android_mechanism`），
+所以单列一类，登记在 `spec/platform/whitelist.json` 的 `platform.phone-worker-copy`。
+
+**机器可验的判据**（`platform_check.py` 的 `check_copy_forced`）：
+
+1. 该 platform 条目必须带非空的 `android_mechanism`，且其值只能取自 `copy-forced` 允许的名词表
+   （`platform-terms.json`：`iPhone` / `iPad` / `iOS` / `App Store` / `TestFlight` / `iCloud`）；
+2. 每一条引用它的 `_whitelist.json` 行，两侧 label 必须**共享一个长度 ≥ 4 的公共子串**，
+   且两侧的差异部分**必须全部落在上表名词内**——即删除名词后两侧字符串必须**逐字节相等**；
+3. 不满足 1 或 2 的 `copy-forced` 条目在门禁里是 `copy-forced-not-forced`，与 `os-forced`
+   缺 `android_mechanism` 同等对待。
+
+判据 2 是这条规则的**牙齿**：它把「文案差异」收窄到「只差平台名词」，否则任何人都能塞进去。
+
 
 系统语义字号的 type-role 映射（只这两档走平台字号；其余字号仍是固定 token）：
 

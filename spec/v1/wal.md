@@ -291,9 +291,14 @@ applied position that the materialized copy has not reached.
 
 ## 8. Boot overlay
 
-After recovery, reconcile and tail replay, the host packs the materialized tree as an **uncompressed**
-ustar archive (the boot overlay) whose entries are only `home/...` and `workspace/...`; the loopback
-service hands it to the worker at boot. It contains no `tmp`, WAL, manifest or step files; `/dsh/tmp`
+After recovery, reconcile and tail replay, the host packs the materialized tree as a **ustar archive**
+(the boot overlay) whose entries are only `home/...` and `workspace/...`; the loopback service hands it
+to the worker at boot. The archive **format** is plain ustar; the **transport envelope** is a single
+gzip member around it (`1f 8b …`), because the pinned runtime's `readImage` accepts only gzip bodies and
+the overlay shares that reader with the image shards. Sending a bare ustar is not "tolerated" — it fails
+to boot. This has no unpacking consequence: both the packer and the loader admit only `home/` and
+`workspace/` as a first segment and refuse symlinks and special files outright, so the envelope changes
+neither the entry set nor the traversal rules. It contains no `tmp`, WAL, manifest or step files; `/dsh/tmp`
 is volatile and recreated empty. The overlay is rebuilt for each boot and is an input, not an authority.
 
 Image shards `lazy/<sha256>.tar.gz` are produced by the packaging tooling, served with
