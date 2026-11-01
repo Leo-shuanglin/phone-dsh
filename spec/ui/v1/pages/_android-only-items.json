@@ -109,8 +109,8 @@
    "label": "本地命令",
    "reason": {
     "baselineLacks": "the iOS MCP editor is HTTP-only (`MCPSettingsPage.swift:193`): it has no transport concept, so there is no row to name",
-    "androidNeeds": "the phone host can launch a local command as well as reach a URL, so the draft's transport is the person's choice",
-    "withoutIt": "an existing stdio server could not be edited and a new one could only ever be HTTP"
+    "androidNeeds": "the editor form is in place ahead of its transport; the host cannot run a stdio server today (`phone-mcp` accepts HTTP(S) only, and the App's SaveMcpServer is a disclosed no-op), so choosing stdio here ends in an honest refusal rather than a launch",
+    "withoutIt": "a future stdio transport would have no UI to land in, and the editor could only ever describe an HTTP server"
    },
    "owner": "android-ui",
    "reviewBy": "2027-01-31"
@@ -121,8 +121,8 @@
    "label": "网络地址",
    "reason": {
     "baselineLacks": "same reason: the baseline editor has no transport picker, so the network-address row does not exist there",
-    "androidNeeds": "choosing the network transport is what makes a URL field meaningful; the row is the choice itself",
-    "withoutIt": "the person could not tell a URL server from a local-command server"
+    "androidNeeds": "the editor form is in place ahead of its transport; the host cannot run a stdio server today (`phone-mcp` accepts HTTP(S) only, and the App's SaveMcpServer is a disclosed no-op), so choosing stdio here ends in an honest refusal rather than a launch",
+    "withoutIt": "a future stdio transport would have no UI to land in, and the editor could only ever describe an HTTP server"
    },
    "owner": "android-ui",
    "reviewBy": "2027-01-31"
@@ -132,24 +132,26 @@
    "kind": "action",
    "label": "查看投递记录",
    "reason": {
-    "baselineLacks": "`ScheduleDetailPage` reaches this from a NavigationLink; the extractor does not collect actions from navigated subpages",
-    "androidNeeds": "Android renders the detail in the page's own file, so the row is drawn where the contract does not look",
-    "withoutIt": "the delivery history could not be opened from the schedule row"
+    "baselineLacks": "the contract has no row for it, but iOS does draw it — NativeAutomationPage.swift:140, inside `ScheduleDetailPage` / `ScheduleHistoryPage`, which are NavigationLink destinations. The extractor walks those structs but does not collect a navigated subpage's actions into the parent contract, so the label is absent from the contract while it exists in the app.",
+    "androidNeeds": "Android renders the detail and history in the page's own file, so the row is drawn where the contract does not look.",
+    "withoutIt": "the delivery history could not be opened, or would stop at the first page with no way back."
    },
    "owner": "android-ui",
-   "reviewBy": "2027-01-31"
+   "reviewBy": "2027-06-30",
+   "note": "Registered as androidOnly because this gate cannot see it, not because iOS lacks it. The real fix is for the extractor to collect navigated-subpage actions; if it does, this entry should be deleted, not kept."
   },
   {
    "page": "native-automation",
    "kind": "action",
    "label": "加载更早记录",
    "reason": {
-    "baselineLacks": "`ScheduleHistoryPage` is a navigated subpage for the same reason, so its paging row is absent from the parent contract",
-    "androidNeeds": "Android draws the history paging in the same file as the schedule list",
-    "withoutIt": "long histories would stop at the first page with no way back"
+    "baselineLacks": "the contract has no row for it, but iOS does draw it — NativeAutomationPage.swift:199, inside `ScheduleDetailPage` / `ScheduleHistoryPage`, which are NavigationLink destinations. The extractor walks those structs but does not collect a navigated subpage's actions into the parent contract, so the label is absent from the contract while it exists in the app.",
+    "androidNeeds": "Android renders the detail and history in the page's own file, so the row is drawn where the contract does not look.",
+    "withoutIt": "the delivery history could not be opened, or would stop at the first page with no way back."
    },
    "owner": "android-ui",
-   "reviewBy": "2027-01-31"
+   "reviewBy": "2027-06-30",
+   "note": "Registered as androidOnly because this gate cannot see it, not because iOS lacks it. The real fix is for the extractor to collect navigated-subpage actions; if it does, this entry should be deleted, not kept."
   },
   {
    "page": "export",

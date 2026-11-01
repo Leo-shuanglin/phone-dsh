@@ -19,6 +19,13 @@ val nativeLibraryDir: File = repoRoot.resolve("shell/target/debug")
 val nativeLibrary: File = nativeLibraryDir.resolve(System.mapLibraryName("pdsh_jni"))
 
 tasks.test {
+    // The recovery tests read a 128 MiB workspace inside a child JVM (so they can
+    // prove the reader streams), but the runner that drives them also holds the
+    // 128 MiB fixture and Gradle's own state. Left at the default heap the suite
+    // fails with `NoClassDefFoundError` cascades under a loaded machine — a
+    // false red on the very tests that guard the OOM fix. Measured: 12 failures
+    // at default vs 0 at 2g on the same tree.
+    maxHeapSize = "2g"
     systemProperty("pdsh.repo.root", repoRoot.absolutePath)
     systemProperty("java.library.path", nativeLibraryDir.absolutePath)
     // Re-run the suite when the native library changes: the JVM tests exercise

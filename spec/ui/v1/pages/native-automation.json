@@ -256,12 +256,12 @@
       "extraction": "manual",
       "androidOnly": {
         "reason": {
-          "baselineLacks": "`ScheduleDetailPage` reaches this from a NavigationLink; the extractor does not collect actions from navigated subpages",
-          "androidNeeds": "Android renders the detail in the page's own file, so the row is drawn where the contract does not look",
-          "withoutIt": "the delivery history could not be opened from the schedule row"
+          "baselineLacks": "the contract has no row for it, but iOS does draw it — NativeAutomationPage.swift:140, inside `ScheduleDetailPage` / `ScheduleHistoryPage`, which are NavigationLink destinations. The extractor walks those structs but does not collect a navigated subpage's actions into the parent contract, so the label is absent from the contract while it exists in the app.",
+          "androidNeeds": "Android renders the detail and history in the page's own file, so the row is drawn where the contract does not look.",
+          "withoutIt": "the delivery history could not be opened, or would stop at the first page with no way back."
         },
         "owner": "android-ui",
-        "reviewBy": "2027-01-31"
+        "reviewBy": "2027-06-30"
       }
     },
     {
@@ -277,12 +277,12 @@
       "extraction": "manual",
       "androidOnly": {
         "reason": {
-          "baselineLacks": "`ScheduleHistoryPage` is a navigated subpage for the same reason, so its paging row is absent from the parent contract",
-          "androidNeeds": "Android draws the history paging in the same file as the schedule list",
-          "withoutIt": "long histories would stop at the first page with no way back"
+          "baselineLacks": "the contract has no row for it, but iOS does draw it — NativeAutomationPage.swift:199, inside `ScheduleDetailPage` / `ScheduleHistoryPage`, which are NavigationLink destinations. The extractor walks those structs but does not collect a navigated subpage's actions into the parent contract, so the label is absent from the contract while it exists in the app.",
+          "androidNeeds": "Android renders the detail and history in the page's own file, so the row is drawn where the contract does not look.",
+          "withoutIt": "the delivery history could not be opened, or would stop at the first page with no way back."
         },
         "owner": "android-ui",
-        "reviewBy": "2027-01-31"
+        "reviewBy": "2027-06-30"
       }
     }
   ],

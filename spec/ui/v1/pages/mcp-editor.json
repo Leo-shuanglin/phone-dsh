@@ -346,8 +346,8 @@
       "androidOnly": {
         "reason": {
           "baselineLacks": "the iOS MCP editor is HTTP-only (`MCPSettingsPage.swift:193`): it has no transport concept, so there is no row to name",
-          "androidNeeds": "the phone host can launch a local command as well as reach a URL, so the draft's transport is the person's choice",
-          "withoutIt": "an existing stdio server could not be edited and a new one could only ever be HTTP"
+          "androidNeeds": "the editor form is in place ahead of its transport; the host cannot run a stdio server today (`phone-mcp` accepts HTTP(S) only, and the App's SaveMcpServer is a disclosed no-op), so choosing stdio here ends in an honest refusal rather than a launch",
+          "withoutIt": "a future stdio transport would have no UI to land in, and the editor could only ever describe an HTTP server"
         },
         "owner": "android-ui",
         "reviewBy": "2027-01-31"
@@ -367,8 +367,8 @@
       "androidOnly": {
         "reason": {
           "baselineLacks": "same reason: the baseline editor has no transport picker, so the network-address row does not exist there",
-          "androidNeeds": "choosing the network transport is what makes a URL field meaningful; the row is the choice itself",
-          "withoutIt": "the person could not tell a URL server from a local-command server"
+          "androidNeeds": "the editor form is in place ahead of its transport; the host cannot run a stdio server today (`phone-mcp` accepts HTTP(S) only, and the App's SaveMcpServer is a disclosed no-op), so choosing stdio here ends in an honest refusal rather than a launch",
+          "withoutIt": "a future stdio transport would have no UI to land in, and the editor could only ever describe an HTTP server"
         },
         "owner": "android-ui",
         "reviewBy": "2027-01-31"
