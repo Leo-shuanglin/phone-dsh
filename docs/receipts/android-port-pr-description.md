@@ -747,3 +747,96 @@ This build is wired to a MOCK adapter. ... a mock exit=0 is not a real compile o
 - `ubuntu run` 是**同步等终态**，不是 §12 的 async JobRef API；长任务会撞 120 秒 shell 墙钟。
 - `ubuntu fetch` 没做成 CLI（lane 有实现，artifacts 只列不取）。
 - **mock 的 seal 不封任何东西**——靠输出与 JSON 的 `sealMock=true` / `backend=mock` 说明。
+
+---
+
+## 十八、最终验收里撞到的两个 bug
+
+### 🔴 冷启动后 App 不可用
+
+用最终 APK 跑完一轮「后台完成」的回合，宿主按设计进 `Parked`。**然后杀进程重启**：
+
+```
+D14 rejected networkPath(satisfied) in Parked (ILLEGAL_TRANSITION)
+D14 observed engineState(ready): an observation, not a D14 edge
+exec refused: admission closed exec_id=pdsh-ubuntu-probe-1-…
+```
+
+**没有任何边把 `Parked` 带出来**——它唯一的合法出口是 `scenePhase(active)`，
+而**冷启动不补发它**。后果：跑跑按钮禁用、所有 exec 被拒、`ubuntu` 探测失败（命令不注册）。
+用户唯一自救方式是**按 HOME 再切回来**（实测这条路能恢复）。
+
+**修**：`start()` 里读完持久化状态后补发一次 `scenePhase(active)`——冷启动本来就发生在前台。
+
+**设备验证**：
+```
+boot restored Parked: the app starts in the foreground, so feeding scenePhase(active) …
+D14 Parked -> Recovering via scenePhase(active)
+D14 Recovering -> Running via leaseCheckResult(verified=true)
+```
+界面回到「运行中」，`admission closed` 计数 **0**。
+
+**这是 L49 没抓到的**：它测了「后台完成 → drain → Parked」，没测「Parked 之后再启动」。
+而且它让 `Parked` 变得更常见了——后台回合现在能跑完，跑完就 drain。
+
+### teardown 竞态 flake（`~1/6` 概率红，HEAD 上就有）
+
+```
+java.nio.file.DirectoryNotEmptyException: …/pdsh-ubuntu-job…/jobs
+```
+
+**根因**：`TempDir.close()` 在 `finally` 里跑，而刚 cancel 的 scope 里还有 job 在写 store——
+`Files.walk` 枚举完之后又新建了文件，父目录删不掉。**teardown 造出来的假失败，不是 lane 的缺陷。**
+
+修：`close()` 重试（10 次 × 20ms）。**锤了 6 次全绿**（修之前 1/6 会红）。
+L50 也撞过同一个并判定「与本车道无关」——是对的，但它会让 `phone-android-tests` 随机变红。
+
+---
+
+## 十九、最终状态（2026-11-02 01:29）
+
+```
+18/18 CI 门禁 PASS
+   phone-spec · phone-p0-conformance · phone-cross-tree · phone-compat
+   phone-plugins · phone-bundle-fresh · phone-image · phone-sdk
+   phone-no-dsh-patch · phone-hygiene · phone-license · phone-modules
+   phone-gate-contracts · phone-android-structure · phone-android-tests
+   phone-android-release · phone-rust-tests · phone-xcode-resolve
+
+plugins        2389 tests / 0 fail
+:lib           752   tests / 0 fail
+:dsh           247   tests / 0 fail
+:controller     67   tests / 0 fail
+JVM 合计       1865  tests / 0 fail
+Rust           525   tests / 0 fail
+Swift          1442  tests / 0 fail
+
+页面结构       ok (2 known / 0 new / 0 stale / 3 whitelisted)
+截图           gate 11/11 · ios-parity 26/26 · android-only 22/22 · all 59/59
+APK            clean 重建 18 dex，AndroidSecureStore / WindowHold / TurnWindow / UbuntuHostTool 全在
+```
+
+### 设备验证（最终 APK，AVD android-35）
+
+| 项 | 结果 |
+|---|---|
+| **后台回合续跑** | HOME 后 `APP_TURN_OK reason=completed tool_edges=true`，21 秒内零 drain |
+| **冷启动恢复** | `boot restored Parked → Recovering → Running`，`admission closed` = 0 |
+| **真模型联调** | 真 key，`tool_edges=true`，3 次工具调用 |
+| **ubuntu 命令可见** | Agent 调了 `ubuntu status` 拿 usage 证明存在，reasoning 明说「mock adapter — cannot claim real compile」 |
+| **权限请求** | 真系统弹窗、批准/拒绝/持久化、`Unavailable` 行不可点 |
+| **预测性返回** | `platform delivered OnBackStarted`、根页退出、子页逐级出栈 |
+
+### 仍然开着的（全部登记，一条没藏）
+
+| # | 项 | 为什么没做 |
+|---|---|---|
+| 1 | **P6 设备连接器** | `InMemory*` demo；真实协议在 TonoTeam 侧预研清单里，不在本方案实施范围 |
+| 2 | **真机 gate** | 需求方明确本轮不做真机；全部证据是 `emulator`，`device` = 0 格 |
+| 3 | **`ubuntu` 的批准门** | 契约里 `not implemented`；说明已改成「本 build 不询问批准」而不是谎称有 |
+| 4 | **`ubuntu` 的传输** | 仍是 `0x20 EXEC_REQ`，不是 §12 的 bridge——Android 没有那套实现 |
+| 5 | **`ubuntu fetch` CLI** | lane 有实现，artifacts 只列不取 |
+| 6 | **「已排队未进执行槽」不算窗口** | 极早 HOME 仍会 drain；要读 pending 需 Context seam |
+| 7 | **12 个页面里 4 个字段不可聚焦** | 宿主 `writable=NO`，只能按结构判断，没拿到真实键盘截图 |
+| 8 | **11 个零调用页面 + `IngressQueue` 435 行** | 页面可达性缺口，见 §六 |
+| 9 | **3 份 spec 待 owner 决定** | `scenePhase` 口径已裁（§十三）、`fileLimitBytes` 默认值、并发上限按 session 还是 workspace |
