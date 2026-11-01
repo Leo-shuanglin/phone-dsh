@@ -237,7 +237,8 @@
                 "tokens": {
                   "type": "array",
                   "minItems": 1,
-                  "maxItems": 24,
+                  "maxItems": 26,
+                  "description": "Cap 24 -> 26 (L22, 2026-11-01): the composer genuinely gained composerControlRowHeight and composerPortTop. The cap tracks the surface's real size; it is not raised per edit.",
                   "items": {"type": "string", "pattern": "^(colors|geometry|typography|spacing|radius|stroke|motion)\\.[A-Za-z][A-Za-z0-9]*$"}
                 },
                 "unmeasured": {
@@ -357,7 +358,7 @@
             "required": ["value", "unit", "scalesWith"],
             "additionalProperties": false,
             "properties": {
-              "value": {"type": "number", "minimum": 0.05, "maximum": 2000},
+              "value": {"type": "number", "minimum": 0, "maximum": 2000, "description": "0 is a legal length (it means 'no inset'). Rule change L22 2026-11-01: the minimum used to be 0.05, which forced a fake value for a real 0 (commit 86a39aac sets composerOuterMarginBottom to 0); the floor is 0 now, negative lengths stay invalid."},
               "unit": {
                 "enum": ["pt", "screenRatio"]
               },

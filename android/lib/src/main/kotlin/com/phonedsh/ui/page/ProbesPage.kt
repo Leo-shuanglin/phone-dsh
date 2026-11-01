@@ -879,7 +879,12 @@ private fun LazyListScope.rowsSection(state: ProbesScreenState) {
     }
     item(key = "probes.rows.label") {
         SessionSectionLabel(
-            text = UiStrings.PROBES_SECTION_ROWS_COUNT_EN,
+            // `ProbesPage.swift:112` is `PageSection("Rows (\(model.probeRows.count))")`:
+            // the title is a template plus one rendered value, so the page formats the
+            // measured count instead of showing the baseline's interpolation source.
+            // `PROBES_SECTION_ROWS_COUNT_EN` is that source copied verbatim and must
+            // never be rendered; it stays because this lane only appends copy.
+            text = UiStrings.PROBES_SECTION_ROWS_COUNT.format(state.rows.size),
             modifier = Modifier.testTag(UiPageTags.PROBES_ROWS),
         )
     }

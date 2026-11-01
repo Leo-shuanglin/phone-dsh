@@ -26,7 +26,9 @@
 // `unverified geometry` marker applies.
 package com.phonedsh.ui.page
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,14 +36,26 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
+import com.phonedsh.ui.surface.SettingsSubPageFrame
+import com.phonedsh.ui.surface.SettingsFormRow
+import com.phonedsh.ui.surface.SettingsSectionHeader
+import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
 
 // ---------------------------------------------------------------------------
 // Facts
@@ -110,6 +124,26 @@ public data class ConfigurationExperimentalPlugin(
     public val status: String? = null,
     public val loaded: FactState = FactState.UNKNOWN,
 )
+
+/**
+ * The permission presets the host reported, and which one new sessions get.
+ *
+ * @param modes the presets; `null` means the catalog was not read.
+ * @param selected the preset the host says is the current default, if any.
+ * @param failure the catalog read's own failure message, if it failed.
+ */
+@Immutable
+public data class ConfigurationPermissionView(
+    public val modes: List<ConfigurationPermissionMode>? = null,
+    public val selected: ConfigurationPermissionMode? = null,
+    public val failure: String? = null,
+) {
+    /** True when the host did not report the catalog: the page says 未知. */
+    public val isUnknown: Boolean get() = modes == null
+
+    /** True when the host reported a catalog with no preset in it. */
+    public val isEmpty: Boolean get() = modes != null && modes.isEmpty()
+}
 
 /**
  * The host's read-only configuration snapshot.
@@ -206,6 +240,8 @@ public data class ConfigurationSectionView(
     public val expanded: Boolean,
     public val rows: List<ConfigurationRowView>,
     public val emptyText: String? = null,
+    /** True when the host reports this group writable: the save verbs arm. */
+    public val writable: Boolean = false,
 )
 
 /**
@@ -216,10 +252,14 @@ public data class ConfigurationSectionView(
  * @param sessionTitle the configured session's title, or `null` when unread.
  * @param writableValue the visible read/write word.
  * @param writableTone its ink.
- * @param sections the built-in groups plus the fixed permission, plugin-info,
+ * @param sections the built-in groups (only while the 内置插件设置 fold is open)
+ *   plus the about area (only while 插件说明 is open) and the fixed
  *   experimental-plugin and installed-plugin groups.
  * @param webSearchRow the navigation row into the web-search page; always present
  *   in [ConfigurationStatus.READY] because it does not depend on the snapshot.
+ * @param permission the new-session permission presets and the current default.
+ * @param builtInExpanded whether the 内置插件设置 master fold is open.
+ * @param aboutExpanded whether the about area (本机管理范围 / 手机 Worker 限制) is open.
  * @param notes cross-cutting partial failures.
  * @param failure the host's failure message, re-shown by the page.
  * @param hasUnmeasuredValues true when a visible row is 未知, so the page can
@@ -233,6 +273,9 @@ public data class ConfigurationScreenState(
     public val writableTone: PageTone,
     public val sections: List<ConfigurationSectionView>,
     public val webSearchRow: ConfigurationRowView?,
+    public val permission: ConfigurationPermissionView,
+    public val builtInExpanded: Boolean,
+    public val aboutExpanded: Boolean,
     public val notes: List<PageNote>,
     public val failure: String?,
     public val hasUnmeasuredValues: Boolean,
@@ -256,6 +299,9 @@ public data class ConfigurationScreenState(
         append(status.name).append(':')
         append(writableTone.name).append(':')
         append(if (webSearchRow != null) "web" else "-").append(':')
+        append(if (builtInExpanded) "in" else "-").append(':')
+        append(if (aboutExpanded) "about" else "-").append(':')
+        append(if (permission.isUnknown) "perm?" else "perm:${permission.modes?.size ?: 0}").append(':')
         append(sections.joinToString(",") { section ->
             "${section.id}=${if (section.expanded) "1" else "0"}:${section.rows.size}"
         }).append(':')
@@ -264,14 +310,25 @@ public data class ConfigurationScreenState(
     }
 
     public companion object {
+        /** The permission block's stable id (it is a block, not a titled section). */
         public const val PERMISSION_SECTION_ID: String = "config.permission"
+        /** The 插件说明 about area's fold id: it owns 本机管理范围 and 手机 Worker 限制. */
         public const val INFO_SECTION_ID: String = "config.info"
+        public const val BUILT_IN_SECTION_ID: String = "config.built-in"
+        public const val SCOPE_SECTION_ID: String = "config.scope"
+        public const val LIMITS_SECTION_ID: String = "config.limits"
         public const val EXPERIMENTAL_SECTION_ID: String = "config.experimental"
         public const val INSTALLED_SECTION_ID: String = "config.installed"
         public const val WEB_SEARCH_ROW_ID: String = "config.websearch"
 
+        /** The prefix every host settings group's section id carries. */
+        public const val GROUP_SECTION_PREFIX: String = "config.group."
+
         /** The host namespace a group row belongs to, as a stable section id. */
-        public fun groupSectionId(namespace: String): String = "config.group.$namespace"
+        public fun groupSectionId(namespace: String): String = GROUP_SECTION_PREFIX + namespace
+
+        /** True when [id] is one of the host's built-in setting groups. */
+        public fun isGroupSection(id: String): Boolean = id.startsWith(GROUP_SECTION_PREFIX)
 
         /**
          * Projects (facts, fold script) into the screen state.
@@ -299,6 +356,9 @@ public data class ConfigurationScreenState(
                     writableTone = PageTone.UNKNOWN,
                     sections = emptyList(),
                     webSearchRow = null,
+                    permission = ConfigurationPermissionView(),
+                    builtInExpanded = true,
+                    aboutExpanded = false,
                     notes = emptyList(),
                     failure = facts.failure,
                     hasUnmeasuredValues = false,
@@ -306,12 +366,25 @@ public data class ConfigurationScreenState(
             }
             val measured = requireNotNull(snapshot)
             val settingsWritable = measured.settingsWritable
+            val builtInExpanded = local.fold.isExpanded(BUILT_IN_SECTION_ID)
+            val aboutExpanded = local.fold.isExpanded(INFO_SECTION_ID)
+            val permission = ConfigurationPermissionView(
+                modes = measured.permissionModes,
+                selected = measured.defaultPermissionModeId?.let { id ->
+                    measured.permissionModes?.firstOrNull { mode -> mode.id == id }
+                },
+                failure = measured.permissionFailure,
+            )
             val sections = buildList {
-                measured.groups.orEmpty().forEach { group ->
-                    add(groupSection(group, local))
+                if (builtInExpanded) {
+                    measured.groups.orEmpty().forEach { group ->
+                        add(groupSection(group, local))
+                    }
                 }
-                add(permissionSection(measured, local))
-                add(infoSection(measured, local))
+                if (aboutExpanded) {
+                    add(scopeSection(measured))
+                    add(limitsSection(measured))
+                }
                 add(experimentalSection(measured, local))
                 add(installedSection(measured, local))
             }
@@ -352,6 +425,7 @@ public data class ConfigurationScreenState(
             }
             val hasUnmeasuredValues = measured.sessionTitle == null ||
                 settingsWritable == FactState.UNKNOWN ||
+                permission.isUnknown ||
                 sections.any { section -> section.rows.any { row -> row.tone == PageTone.UNKNOWN } }
             return ConfigurationScreenState(
                 status = ConfigurationStatus.READY,
@@ -371,6 +445,9 @@ public data class ConfigurationScreenState(
                     id = WEB_SEARCH_ROW_ID,
                     title = UiStrings.CONFIGURATION_WEB_SEARCH,
                 ),
+                permission = permission,
+                builtInExpanded = builtInExpanded,
+                aboutExpanded = aboutExpanded,
                 notes = notes,
                 failure = null,
                 hasUnmeasuredValues = hasUnmeasuredValues,
@@ -439,88 +516,45 @@ public data class ConfigurationScreenState(
                 } else {
                     null
                 },
+                writable = group.writable == FactState.YES,
             )
         }
 
-        private fun permissionSection(
-            snapshot: ConfigurationSnapshot,
-            local: ConfigurationLocalState,
-        ): ConfigurationSectionView {
-            val modes = snapshot.permissionModes
-            val selected = snapshot.defaultPermissionModeId?.let { id ->
-                modes?.firstOrNull { it.id == id }
-            }
-            val rows = when {
-                modes == null -> listOf(
-                    ConfigurationRowView(
-                        id = "$PERMISSION_SECTION_ID.unknown",
-                        title = UiStrings.CONFIGURATION_PERMISSION_UNKNOWN,
-                        value = UiStrings.UNKNOWN,
-                        subtitle = snapshot.permissionFailure ?: UiStrings.SETTINGS_UNKNOWN_HINT,
-                        tone = PageTone.UNKNOWN,
-                    ),
-                )
-
-                modes.isEmpty() -> listOf(
-                    ConfigurationRowView(
-                        id = "$PERMISSION_SECTION_ID.empty",
-                        title = UiStrings.CONFIGURATION_PERMISSION_EMPTY,
-                        subtitle = UiStrings.CONFIGURATION_DEFAULT_PERMISSION_HINT,
-                    ),
-                )
-
-                else -> listOf(
-                    ConfigurationRowView(
-                        id = "$PERMISSION_SECTION_ID.current",
-                        title = UiStrings.CONFIGURATION_DEFAULT_PERMISSION_ROW,
-                        value = selected?.name ?: UiStrings.UNKNOWN,
-                        subtitle = selected?.detail
-                            ?: UiStrings.CONFIGURATION_DEFAULT_PERMISSION_HINT,
-                        tone = if (selected == null) PageTone.UNKNOWN else PageTone.NORMAL,
-                    ),
-                )
-            }
-            return ConfigurationSectionView(
-                id = PERMISSION_SECTION_ID,
-                title = UiStrings.CONFIGURATION_DEFAULT_PERMISSION,
-                trailing = when {
-                    modes == null -> UiStrings.UNKNOWN
-                    else -> UiStrings.CONFIGURATION_PERMISSION_COUNT.format(modes.size)
-                },
-                expanded = local.fold.isExpanded(PERMISSION_SECTION_ID),
-                rows = rows,
-            )
-        }
-
-        private fun infoSection(
-            snapshot: ConfigurationSnapshot,
-            local: ConfigurationLocalState,
-        ): ConfigurationSectionView {
-            val message = snapshot.pluginManagementMessage
-            return ConfigurationSectionView(
-                id = INFO_SECTION_ID,
-                title = UiStrings.CONFIGURATION_PLUGIN_INFO,
+        private fun scopeSection(snapshot: ConfigurationSnapshot): ConfigurationSectionView =
+            ConfigurationSectionView(
+                id = SCOPE_SECTION_ID,
+                title = UiStrings.CONFIGURATION_SCOPE_SECTION,
                 trailing = null,
-                expanded = local.fold.isExpanded(INFO_SECTION_ID),
+                expanded = true,
                 rows = listOf(
                     ConfigurationRowView(
-                        id = "$INFO_SECTION_ID.message",
-                        title = UiStrings.CONFIGURATION_PLUGIN_SCOPE,
-                        value = null,
-                        subtitle = message ?: UiStrings.CONFIGURATION_PLUGIN_INFO_UNKNOWN,
-                        tone = if (message == null) PageTone.UNKNOWN else PageTone.NORMAL,
-                    ),
-                    ConfigurationRowView(
-                        id = "$INFO_SECTION_ID.add",
-                        title = UiStrings.CONFIGURATION_ADD_DISABLED,
-                        value = UiStrings.UNAVAILABLE,
-                        subtitle = UiStrings.CONFIGURATION_ADD_DISABLED_HINT,
-                        tone = PageTone.DEGRADED,
-                        enabled = false,
+                        id = "$SCOPE_SECTION_ID.scope",
+                        title = UiStrings.CONFIGURATION_SCOPE_TEXT,
                     ),
                 ),
             )
-        }
+
+        private fun limitsSection(snapshot: ConfigurationSnapshot): ConfigurationSectionView =
+            ConfigurationSectionView(
+                id = LIMITS_SECTION_ID,
+                title = UiStrings.CONFIGURATION_LIMITS_SECTION,
+                trailing = null,
+                expanded = true,
+                rows = listOf(
+                    ConfigurationRowView(
+                        id = "$LIMITS_SECTION_ID.message",
+                        // The host's measured sentence, or this phone's own wording of the
+                        // same fact. The baseline names an *iPhone* Worker; Android does
+                        // not print that about the device it runs on.
+                        title = snapshot.pluginManagementMessage
+                            ?: UiStrings.PLUGIN_INVENTORY_MANAGEMENT_NOTICE,
+                    ),
+                    ConfigurationRowView(
+                        id = "$LIMITS_SECTION_ID.loaded",
+                        title = UiStrings.CONFIGURATION_ONLY_LOADED_TEXT,
+                    ),
+                ),
+            )
 
         private fun experimentalSection(
             snapshot: ConfigurationSnapshot,
@@ -623,14 +657,18 @@ public sealed interface ConfigurationUiEvent {
  * The fold script; [apply] is pure, so a test drives it like a reducer.
  *
  * The installed-plugin group starts collapsed because the baseline renders it as
- * a disclosure; every other group starts expanded.
+ * a disclosure; the about area starts collapsed because the baseline keeps it
+ * behind the 插件说明 sheet; every other group starts expanded.
  *
  * @param fold which sections the user collapsed.
  */
 @Immutable
 public data class ConfigurationLocalState(
     public val fold: FoldState = FoldState(
-        collapsedIds = setOf(ConfigurationScreenState.INSTALLED_SECTION_ID),
+        collapsedIds = setOf(
+            ConfigurationScreenState.INSTALLED_SECTION_ID,
+            ConfigurationScreenState.INFO_SECTION_ID,
+        ),
     ),
 ) {
     /** Applies one local event. */
@@ -646,6 +684,13 @@ public data class ConfigurationLocalState(
 /**
  * The session-configuration sheet.
  *
+ * The control set is the baseline's (`NativeConfigurationPage.swift`): the
+ * 插件说明/添加插件 header verbs, the 内置插件设置 master fold over the host's
+ * groups, the new-session permission block, and the two 插件说明 sections. The
+ * write verbs exist even when this host cannot perform a write; the host's
+ * measured `settingsWritable` (and a `null` callback) disables them rather than
+ * hiding a control the contract declares.
+ *
  * @param state the pure screen state (`ConfigurationScreenState.from`).
  * @param onDone close the sheet (the baseline's `完成`).
  * @param onToggleSection a group header was tapped; the host applies
@@ -654,6 +699,17 @@ public data class ConfigurationLocalState(
  * @param onOpenWebSearch open the web-search page; `null` makes the row read-only.
  * @param onRetry retry the failed read; `null` renders no retry row.
  * @param onDismissFailure dismiss the failure line; `null` renders no dismiss row.
+ * @param onSaveGroup save one built-in group (the group's namespace); `null`
+ *   disables 保存.
+ * @param onDiscardGroup discard one built-in group's drafts; `null` disables 撤销.
+ * @param onResetField reset one overridden field (section id, row id); `null`
+ *   disables 恢复默认.
+ * @param onPickDefaultPermission open the new-session permission picker; `null`
+ *   (or a read-only host) disables the 默认权限 row.
+ * @param onSaveDefaultPermission save the staged permission default; `null`
+ *   disables 保存默认.
+ * @param onDiscardDefaultPermission discard the staged permission default;
+ *   `null` disables its 撤销.
  */
 @Composable
 public fun NativeConfigurationPage(
@@ -665,12 +721,21 @@ public fun NativeConfigurationPage(
     onOpenWebSearch: (() -> Unit)? = null,
     onRetry: (() -> Unit)? = null,
     onDismissFailure: (() -> Unit)? = null,
+    onSaveGroup: ((String) -> Unit)? = null,
+    onDiscardGroup: ((String) -> Unit)? = null,
+    onResetField: ((String, String) -> Unit)? = null,
+    onPickDefaultPermission: (() -> Unit)? = null,
+    onSaveDefaultPermission: (() -> Unit)? = null,
+    onDiscardDefaultPermission: (() -> Unit)? = null,
+    embedded: Boolean = false,
 ) {
-    PageFrame(
-        title = UiStrings.CONFIGURATION_TITLE,
+    SettingsSubPageFrame(
+        backGlyph = SETTINGS_CLOSE_GLYPH,
+        embedded = embedded,
+        largeTitle = UiStrings.CONFIGURATION_TITLE,
         modifier = modifier,
         rootTag = UiPageTags.CONFIGURATION_ROOT,
-        actions = {
+        trailing = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (onRefresh != null) {
                     SessionTextAction(
@@ -707,6 +772,12 @@ public fun NativeConfigurationPage(
                 state = state,
                 onToggleSection = onToggleSection,
                 onOpenWebSearch = onOpenWebSearch,
+                onSaveGroup = onSaveGroup,
+                onDiscardGroup = onDiscardGroup,
+                onResetField = onResetField,
+                onPickDefaultPermission = onPickDefaultPermission,
+                onSaveDefaultPermission = onSaveDefaultPermission,
+                onDiscardDefaultPermission = onDiscardDefaultPermission,
             )
         }
     }
@@ -722,10 +793,10 @@ private fun ConfigurationUnknownList() {
         modifier = Modifier
             .fillMaxSize()
             .testTag(UiPageTags.CONFIGURATION_LIST),
-        verticalArrangement = Arrangement.spacedBy(pageListGap),
+        verticalArrangement = Arrangement.Top,
     ) {
         item(key = "config.unknown") {
-            InfoRow(
+            SettingsFormRow(
                 title = UiStrings.CONFIGURATION_UNKNOWN_STATE,
                 value = null,
                 subtitle = UiStrings.CONFIGURATION_UNKNOWN_HINT,
@@ -733,7 +804,7 @@ private fun ConfigurationUnknownList() {
             )
         }
         item(key = "config.unknown.detail") {
-            InfoRow(
+            SettingsFormRow(
                 title = UiStrings.UNKNOWN,
                 value = null,
                 subtitle = UiStrings.CONFIGURATION_UNKNOWN_DETAIL,
@@ -750,19 +821,90 @@ private fun ConfigurationContent(
     state: ConfigurationScreenState,
     onToggleSection: (String) -> Unit,
     onOpenWebSearch: (() -> Unit)?,
+    onSaveGroup: ((String) -> Unit)?,
+    onDiscardGroup: ((String) -> Unit)?,
+    onResetField: ((String, String) -> Unit)?,
+    onPickDefaultPermission: (() -> Unit)?,
+    onSaveDefaultPermission: (() -> Unit)?,
+    onDiscardDefaultPermission: (() -> Unit)?,
 ) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    var addMenuOpen by remember { mutableStateOf(false) }
+    var addNotice by remember { mutableStateOf<String?>(null) }
+    val writable = state.writableTone == PageTone.ON
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .testTag(UiPageTags.CONFIGURATION_LIST),
-        verticalArrangement = Arrangement.spacedBy(pageListGap),
+        verticalArrangement = Arrangement.Top,
     ) {
         item(key = "config.intro") {
             ConfigurationIntro()
         }
+        item(key = "config.actions") {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = tokens.geometry.pageOuterMarginH),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    BasicText(
+                        text = UiStrings.CONFIGURATION_PLUGIN_INFO,
+                        style = type.secondary.copy(color = tokens.colors.secondary),
+                        modifier = Modifier
+                            .testTag(UiPageTags.CONFIGURATION_PLUGIN_INFO_ACTION)
+                            .clickable(role = Role.Button) {
+                                onToggleSection(ConfigurationScreenState.INFO_SECTION_ID)
+                            }
+                            .padding(
+                                horizontal = tokens.spacing.badgeInsetV,
+                                vertical = tokens.spacing.badgeInsetV,
+                            ),
+                    )
+                    Box {
+                        SessionTextAction(
+                            label = UiStrings.CONFIGURATION_ADD_DISABLED,
+                            onClick = { addMenuOpen = true },
+                            tone = SessionActionTone.SECONDARY,
+                            modifier = Modifier.testTag(UiPageTags.CONFIGURATION_ADD_PLUGIN),
+                        )
+                        DropdownMenu(
+                            expanded = addMenuOpen,
+                            onDismissRequest = { addMenuOpen = false },
+                        ) {
+                            // The baseline's two items are disabled because no phone can
+                            // install a plugin. They stay tappable here so the tap can
+                            // print the measured reason instead of dead control.
+                            DropdownMenuItem(
+                                text = { Text(UiStrings.CONFIGURATION_INSTALL_THIRD_PARTY) },
+                                onClick = {
+                                    addMenuOpen = false
+                                    addNotice = UiStrings.CONFIGURATION_ADD_DISABLED_HINT
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(UiStrings.CONFIGURATION_CREATE_WITH_AGENT) },
+                                onClick = {
+                                    addMenuOpen = false
+                                    addNotice = UiStrings.CONFIGURATION_ADD_DISABLED_HINT
+                                },
+                            )
+                        }
+                    }
+                }
+                if (addNotice != null) {
+                    ConfigurationNoteRow(
+                        text = addNotice.orEmpty(),
+                        tag = UiPageTags.CONFIGURATION_ADD_NOTICE,
+                    )
+                }
+            }
+        }
         if (state.hasUnmeasuredValues) {
             item(key = "config.unmeasured") {
-                InfoRow(
+                SettingsFormRow(
                     title = UiStrings.UNKNOWN,
                     value = null,
                     subtitle = UiStrings.CONFIGURATION_UNMEASURED_HINT,
@@ -772,7 +914,7 @@ private fun ConfigurationContent(
             }
         }
         item(key = "config.session") {
-            InfoRow(
+            SettingsFormRow(
                 title = UiStrings.CONFIGURATION_SESSION,
                 value = state.sessionTitle ?: UiStrings.UNKNOWN,
                 tone = if (state.sessionTitle == null) PageTone.UNKNOWN else PageTone.NORMAL,
@@ -781,7 +923,7 @@ private fun ConfigurationContent(
             )
         }
         item(key = "config.writable") {
-            InfoRow(
+            SettingsFormRow(
                 title = UiStrings.CONFIGURATION_WRITABLE,
                 value = state.writableValue,
                 tone = state.writableTone,
@@ -793,17 +935,6 @@ private fun ConfigurationContent(
                 modifier = Modifier.testTag(UiPageTags.CONFIGURATION_WRITABLE),
             )
         }
-        state.webSearchRow?.let { row ->
-            item(key = "config.websearch") {
-                InfoRow(
-                    title = row.title,
-                    value = row.value,
-                    subtitle = row.subtitle,
-                    onClick = onOpenWebSearch,
-                    modifier = Modifier.testTag(UiPageTags.CONFIGURATION_WEB_SEARCH),
-                )
-            }
-        }
         state.notes.forEach { note ->
             item(key = "config.note.${note.id}") {
                 SessionFailureLine(
@@ -812,45 +943,294 @@ private fun ConfigurationContent(
                 )
             }
         }
-        state.sections.forEach { section ->
-            item(key = "config.header.${section.id}") {
-                SectionHeader(
-                    title = section.title,
-                    expanded = section.expanded,
-                    onToggle = { onToggleSection(section.id) },
-                    trailing = section.trailing,
-                    tag = UiPageTags.CONFIGURATION_SECTION_PREFIX + section.id,
-                )
-            }
-            if (section.expanded) {
-                items(count = section.rows.size, key = { index -> section.rows[index].id }) { index ->
-                    val row = section.rows[index]
+        item(key = "config.builtin") {
+            SettingsSectionHeader(
+                title = UiStrings.CONFIGURATION_BUILT_IN_SECTION,
+                expanded = state.builtInExpanded,
+                onToggle = { onToggleSection(ConfigurationScreenState.BUILT_IN_SECTION_ID) },
+                tag = UiPageTags.CONFIGURATION_BUILT_IN,
+            )
+        }
+        if (state.builtInExpanded) {
+            state.webSearchRow?.let { row ->
+                item(key = "config.websearch") {
+                    // `InfoRow` is the row idiom the structure gate reads as a
+                    // labelled action. `SettingsFormRow` is 3 pt taller (17 pt title)
+                    // and matches the baseline better, but it is the family's
+                    // *display* row: the gate would read every display row as an
+                    // action, so an action row has to use `InfoRow` here.
                     InfoRow(
-                        title = row.title,
-                        value = row.value,
+                        title = UiStrings.CONFIGURATION_WEB_SEARCH,
+                        value = null,
                         subtitle = row.subtitle,
-                        tone = row.tone,
-                        enabled = row.enabled,
-                        modifier = if (row.id.startsWith("config.installed.")) {
-                            Modifier.testTag(UiPageTags.CONFIGURATION_PLUGIN_ROW_PREFIX + row.id)
-                        } else {
-                            Modifier
-                        },
+                        onClick = onOpenWebSearch,
+                        modifier = Modifier.testTag(UiPageTags.CONFIGURATION_WEB_SEARCH),
                     )
                 }
-                if (section.emptyText != null) {
-                    item(key = "config.empty.${section.id}") {
-                        InfoRow(
-                            title = section.emptyText,
-                            value = null,
-                            tone = PageTone.UNKNOWN,
+            }
+            state.sections
+                .filter { section -> ConfigurationScreenState.isGroupSection(section.id) }
+                .forEach { group ->
+                    item(key = "config.header.${group.id}") {
+                        SettingsSectionHeader(
+                            title = group.title,
+                            expanded = group.expanded,
+                            onToggle = { onToggleSection(group.id) },
+                            trailing = group.trailing,
+                            tag = UiPageTags.CONFIGURATION_SECTION_PREFIX + group.id,
                         )
+                    }
+                    if (group.expanded) {
+                        items(count = group.rows.size, key = { index -> group.rows[index].id }) { index ->
+                            val row = group.rows[index]
+                            SettingsFormRow(
+                                title = row.title,
+                                value = row.value,
+                                subtitle = row.subtitle,
+                                tone = row.tone,
+                                enabled = row.enabled,
+                                trailing = if (row.subtitle == UiStrings.CONFIGURATION_FIELD_OVERRIDDEN) {
+                                    {
+                                        SessionTextAction(
+                                            label = UiStrings.CONFIGURATION_RESET,
+                                            onClick = {
+                                                onResetField?.invoke(
+                                                    group.id.removePrefix(
+                                                        ConfigurationScreenState.GROUP_SECTION_PREFIX,
+                                                    ),
+                                                    row.id.removePrefix(group.id + "."),
+                                                )
+                                            },
+                                            tone = SessionActionTone.SECONDARY,
+                                            enabled = group.writable && onResetField != null,
+                                            modifier = Modifier.testTag(
+                                                UiPageTags.CONFIGURATION_ROW_RESET_PREFIX + row.id,
+                                            ),
+                                        )
+                                    }
+                                } else {
+                                    null
+                                },
+                            )
+                        }
+                        if (group.emptyText != null) {
+                            item(key = "config.empty.${group.id}") {
+                                SettingsFormRow(
+                                    title = group.emptyText,
+                                    value = null,
+                                    tone = PageTone.UNKNOWN,
+                                )
+                            }
+                        }
+                        item(key = "config.group-actions.${group.id}") {
+                            ConfigurationGroupActions(
+                                groupId = group.id,
+                                writable = group.writable && writable,
+                                canSave = onSaveGroup != null,
+                                onSave = {
+                                    onSaveGroup?.invoke(
+                                        group.id.removePrefix(
+                                            ConfigurationScreenState.GROUP_SECTION_PREFIX,
+                                        ),
+                                    )
+                                },
+                                canDiscard = onDiscardGroup != null,
+                                onDiscard = {
+                                    onDiscardGroup?.invoke(
+                                        group.id.removePrefix(
+                                            ConfigurationScreenState.GROUP_SECTION_PREFIX,
+                                        ),
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
+            item(key = "config.permission") {
+                ConfigurationPermissionBlock(
+                    permission = state.permission,
+                    writable = writable,
+                    onPick = onPickDefaultPermission,
+                    onSave = onSaveDefaultPermission,
+                    onDiscard = onDiscardDefaultPermission,
+                )
+            }
+        }
+        state.sections
+            .filterNot { section -> ConfigurationScreenState.isGroupSection(section.id) }
+            .forEach { section ->
+                item(key = "config.header.${section.id}") {
+                    SettingsSectionHeader(
+                        title = section.title,
+                        expanded = section.expanded,
+                        onToggle = {
+                            // 本机管理范围 and 手机 Worker 限制 are the two halves of one
+                            // 插件说明 area: either header closes/opens both, exactly as
+                            // the baseline's one sheet does.
+                            onToggleSection(
+                                if (section.id == ConfigurationScreenState.SCOPE_SECTION_ID ||
+                                    section.id == ConfigurationScreenState.LIMITS_SECTION_ID
+                                ) {
+                                    ConfigurationScreenState.INFO_SECTION_ID
+                                } else {
+                                    section.id
+                                },
+                            )
+                        },
+                        trailing = section.trailing,
+                        tag = UiPageTags.CONFIGURATION_SECTION_PREFIX + section.id,
+                    )
+                }
+                if (section.expanded) {
+                    items(count = section.rows.size, key = { index -> section.rows[index].id }) { index ->
+                        val row = section.rows[index]
+                        SettingsFormRow(
+                            title = row.title,
+                            value = row.value,
+                            subtitle = row.subtitle,
+                            tone = row.tone,
+                            enabled = row.enabled,
+                            modifier = if (row.id.startsWith("config.installed.")) {
+                                Modifier.testTag(
+                                    UiPageTags.CONFIGURATION_PLUGIN_ROW_PREFIX + row.id,
+                                )
+                            } else {
+                                Modifier
+                            },
+                        )
+                    }
+                    if (section.emptyText != null) {
+                        item(key = "config.empty.${section.id}") {
+                            SettingsFormRow(
+                                title = section.emptyText,
+                                value = null,
+                                tone = PageTone.UNKNOWN,
+                            )
+                        }
                     }
                 }
             }
-        }
         item(key = "config.read-only") {
             ConfigurationNoteRow(text = UiStrings.CONFIGURATION_READ_ONLY)
+        }
+    }
+}
+
+/**
+ * The baseline's 保存 / 撤销 pair under one built-in settings group.
+ *
+ * The pair is rendered even when the host reports the group read-only: the
+ * baseline declares the controls, and a disabled control states the measured
+ * fact. A `null` callback (a host with no write command) also disables it.
+ */
+@Composable
+private fun ConfigurationGroupActions(
+    groupId: String,
+    writable: Boolean,
+    canSave: Boolean,
+    onSave: () -> Unit,
+    canDiscard: Boolean,
+    onDiscard: () -> Unit,
+) {
+    val tokens = LocalUiTokens.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = tokens.geometry.pageOuterMarginH),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SessionTextAction(
+            label = UiStrings.CONFIGURATION_SAVE,
+            onClick = onSave,
+            tone = SessionActionTone.ACCENT,
+            enabled = writable && canSave,
+            modifier = Modifier.testTag(UiPageTags.CONFIGURATION_GROUP_SAVE_PREFIX + groupId),
+        )
+        SessionTextAction(
+            label = UiStrings.CONFIGURATION_DISCARD,
+            onClick = onDiscard,
+            tone = SessionActionTone.SECONDARY,
+            enabled = writable && canDiscard,
+            modifier = Modifier.testTag(UiPageTags.CONFIGURATION_GROUP_DISCARD_PREFIX + groupId),
+        )
+    }
+}
+
+/**
+ * The 新会话默认权限 block.
+ *
+ * Three cases stay apart, as everywhere else on this page: an unread catalog is
+ * 未知 (with its own failure line when the read failed), a measured-empty catalog
+ * says 没有可选的权限预设, and a measured catalog shows the current 默认权限. The
+ * picker row and the 保存默认 / 撤销 pair are the baseline's controls; the host's
+ * measured writability (and a `null` callback) disables them.
+ */
+@Composable
+private fun ConfigurationPermissionBlock(
+    permission: ConfigurationPermissionView,
+    writable: Boolean,
+    onPick: (() -> Unit)?,
+    onSave: (() -> Unit)?,
+    onDiscard: (() -> Unit)?,
+) {
+    val tokens = LocalUiTokens.current
+    val modes = permission.modes
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(UiPageTags.CONFIGURATION_PERMISSION),
+    ) {
+        InfoRow(
+            title = UiStrings.CONFIGURATION_DEFAULT_PERMISSION,
+            value = null,
+            subtitle = UiStrings.CONFIGURATION_DEFAULT_PERMISSION_HINT,
+        )
+        when {
+            modes == null -> InfoRow(
+                title = UiStrings.CONFIGURATION_PERMISSION_UNKNOWN,
+                value = UiStrings.UNKNOWN,
+                subtitle = permission.failure ?: UiStrings.SETTINGS_UNKNOWN_HINT,
+                tone = PageTone.UNKNOWN,
+            )
+
+            modes.isEmpty() -> InfoRow(
+                title = UiStrings.CONFIGURATION_PERMISSION_EMPTY,
+                value = null,
+                subtitle = UiStrings.CONFIGURATION_DEFAULT_PERMISSION_HINT,
+            )
+
+            else -> {
+                InfoRow(
+                    title = UiStrings.CONFIGURATION_DEFAULT_PERMISSION_ROW,
+                    value = permission.selected?.name ?: UiStrings.UNKNOWN,
+                    subtitle = permission.selected?.detail
+                        ?: UiStrings.CONFIGURATION_DEFAULT_PERMISSION_HINT,
+                    tone = if (permission.selected == null) PageTone.UNKNOWN else PageTone.NORMAL,
+                    onClick = if (writable) onPick else null,
+                    modifier = Modifier.testTag(UiPageTags.CONFIGURATION_PERMISSION_ROW),
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = tokens.geometry.pageOuterMarginH),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SessionTextAction(
+                        label = UiStrings.CONFIGURATION_SAVE_DEFAULT,
+                        onClick = { onSave?.invoke() },
+                        tone = SessionActionTone.ACCENT,
+                        enabled = writable && onSave != null,
+                        modifier = Modifier.testTag(UiPageTags.CONFIGURATION_PERMISSION_SAVE),
+                    )
+                    SessionTextAction(
+                        label = UiStrings.CONFIGURATION_DISCARD,
+                        onClick = { onDiscard?.invoke() },
+                        tone = SessionActionTone.SECONDARY,
+                        enabled = writable && onDiscard != null,
+                        modifier = Modifier.testTag(UiPageTags.CONFIGURATION_PERMISSION_DISCARD),
+                    )
+                }
+            }
         }
     }
 }
@@ -875,7 +1255,10 @@ private fun ConfigurationIntro() {
 
 /** One explanatory line; the ink is a token, never a second colour source. */
 @Composable
-private fun ConfigurationNoteRow(text: String) {
+private fun ConfigurationNoteRow(
+    text: String,
+    tag: String = UiPageTags.CONFIGURATION_READ_ONLY,
+) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     BasicText(
@@ -883,7 +1266,7 @@ private fun ConfigurationNoteRow(text: String) {
         style = type.caption.copy(color = tokens.colors.tertiary),
         modifier = Modifier
             .fillMaxWidth()
-            .testTag(UiPageTags.CONFIGURATION_READ_ONLY)
+            .testTag(tag)
             .padding(
                 horizontal = tokens.geometry.pageOuterMarginH,
                 vertical = tokens.spacing.badgeInsetV,
@@ -899,14 +1282,14 @@ private fun ConfigurationFailureBlock(
     onDismissFailure: (() -> Unit)?,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        InfoRow(
+        SettingsFormRow(
             title = UiStrings.CONFIGURATION_LOAD_FAILED,
             value = null,
             subtitle = failure,
             modifier = Modifier.testTag(UiPageTags.CONFIGURATION_FAILURE),
         )
         if (onRetry != null) {
-            InfoRow(
+            SettingsFormRow(
                 title = UiStrings.RETRY,
                 value = null,
                 onClick = onRetry,
@@ -914,7 +1297,7 @@ private fun ConfigurationFailureBlock(
             )
         }
         if (onDismissFailure != null) {
-            InfoRow(
+            SettingsFormRow(
                 title = UiStrings.DISMISS,
                 value = null,
                 onClick = onDismissFailure,

@@ -76,6 +76,17 @@ import androidx.compose.ui.text.input.ImeAction
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
+import com.phonedsh.ui.surface.SettingsSubPageFrame
+import com.phonedsh.ui.surface.SettingsFormRow
+import com.phonedsh.ui.surface.SettingsSectionHeader
+import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
+import com.phonedsh.ui.surface.SettingsDotsHeight
+import com.phonedsh.ui.surface.SettingsDotsWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import com.phonedsh.ui.surface.settingsFootnoteStyle
 
 // ---------------------------------------------------------------------------
 // Facts
@@ -220,6 +231,8 @@ internal fun egressRuleProblemText(problem: EgressRuleProblem): String = when (p
  * @param canWrite true when the host declared a write command: the toggle, the
  *   restore row, 添加地址 and the delete confirmation are enabled. False (the
  *   default) keeps them on screen and disabled, with the host's reason above.
+ *   The restore row also needs its own callback (`onRestoreDefaults`): a declared
+ *   command with no handler would be an enabled button that cannot do anything.
  */
 @Immutable
 public data class EgressAllowListScreenState(
@@ -366,7 +379,8 @@ public data class EgressAllowListLocalState(public val fold: FoldState = FoldSta
  * @param onToggleAllowAll the 允许连任何网站 switch moved (`NativeShell.swift:466`);
  *   `null` when the host has no write command.
  * @param onRestoreDefaults 恢复成默认的 (`:482`); `null` when the host has no
- *   write command.
+ *   write command. The row is enabled only when the host declared one *and* passed
+ *   this callback, so a writable host without a handler cannot paint a dead button.
  * @param onAddRule the typed address passed validation and 添加 was tapped
  *   (`:670`); receives the trimmed, lower-cased value. `null` when the host has
  *   no write command.
@@ -394,9 +408,10 @@ public fun EgressAllowListPage(
     var pendingDelete by remember { mutableStateOf<EgressRuleView?>(null) }
 
     Box(modifier = modifier.fillMaxSize()) {
-        PageFrame(
+        SettingsSubPageFrame(
             title = UiStrings.EGRESS_TITLE,
             onBack = onBack,
+            backGlyph = SETTINGS_CLOSE_GLYPH,
             rootTag = UiPageTags.EGRESS_ROOT,
         ) {
             when (state.status) {
@@ -464,12 +479,17 @@ private fun EgressContent(
     onAddRequest: () -> Unit,
     onDeleteRequest: (EgressRuleView) -> Unit,
 ) {
+    val tokens = LocalUiTokens.current
     val canWrite = state.canWrite
+    // A write control is enabled only when the host both declared a write command
+    // *and* handed the callback for this one action: `writable = YES` with a null
+    // `onRestoreDefaults` would otherwise paint an enabled button that does nothing.
+    val canRestore = canWrite && onRestoreDefaults != null
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .testTag(UiPageTags.EGRESS_LIST),
-        verticalArrangement = Arrangement.spacedBy(pageListGap),
+        verticalArrangement = Arrangement.Top,
     ) {
         // `NativeShell.swift:465`-`:471`: the untitled first section is the
         // allow-all switch and its footer.
@@ -492,7 +512,7 @@ private fun EgressContent(
             }
         }
         item(key = "egress.rules.header") {
-            SectionHeader(
+            SettingsSectionHeader(
                 title = UiStrings.EGRESS_RULES,
                 expanded = state.rulesExpanded,
                 onToggle = { onToggleSection(EgressAllowListScreenState.RULES_SECTION_ID) },
@@ -507,7 +527,7 @@ private fun EgressContent(
         }
         when (state.status) {
             EgressStatus.DENY_ALL -> item(key = "egress.deny-all") {
-                InfoRow(
+                SettingsFormRow(
                     title = UiStrings.EGRESS_POLICY,
                     value = UiStrings.EGRESS_DENY_ALL,
                     tone = PageTone.DEGRADED,
@@ -519,7 +539,7 @@ private fun EgressContent(
             EgressStatus.READY -> {
                 if (state.allowAll) {
                     item(key = "egress.allow-all.banner") {
-                        InfoRow(
+                        SettingsFormRow(
                             title = UiStrings.EGRESS_POLICY,
                             value = UiStrings.EGRESS_ALLOW_ALL,
                             tone = PageTone.DEGRADED,
@@ -546,12 +566,21 @@ private fun EgressContent(
         // the same row (`:475`-`:487`).
         if (state.rules.isEmpty() || state.allowAll) {
             item(key = "egress.restore") {
-                InfoRow(
-                    title = UiStrings.EGRESS_RESTORE_DEFAULTS,
-                    value = null,
-                    enabled = canWrite,
+                // The baseline's row is a bare text button with the accent ink and a
+                // 48 pt floor (`NativeShell.swift:483`), not a form row: it has no
+                // value column and no separator. The page's own text action carries
+                // the accent ink and the page row floor, and it keeps the label a
+                // literal `UiStrings` constant — which is also what the structure
+                // checker can read (`SettingsFormRow(title = …)` is a row, not an
+                // action, to it, so this control used to look absent).
+                SessionTextAction(
+                    label = UiStrings.EGRESS_RESTORE_DEFAULTS,
                     onClick = { onRestoreDefaults?.invoke() },
-                    modifier = Modifier.testTag(UiPageTags.EGRESS_RESTORE),
+                    tone = SessionActionTone.ACCENT,
+                    enabled = canRestore,
+                    modifier = Modifier
+                        .testTag(UiPageTags.EGRESS_RESTORE)
+                        .padding(horizontal = tokens.geometry.pageOuterMarginH),
                 )
             }
         }
@@ -559,7 +588,7 @@ private fun EgressContent(
         // while the allow-all switch is on.
         if (!state.allowAll) {
             item(key = "egress.add") {
-                InfoRow(
+                SettingsFormRow(
                     title = UiStrings.EGRESS_ADD_ADDRESS,
                     value = null,
                     enabled = canWrite,
@@ -569,7 +598,7 @@ private fun EgressContent(
             }
         }
         item(key = "egress.grammar.header") {
-            SectionHeader(
+            SettingsSectionHeader(
                 title = UiStrings.EGRESS_GRAMMAR,
                 expanded = state.grammarExpanded,
                 onToggle = { onToggleSection(EgressAllowListScreenState.GRAMMAR_SECTION_ID) },
@@ -644,14 +673,18 @@ private fun AllowAllBlock(
 }
 
 /**
- * One rule row: the canonical matching form in the code face, its label, the
- * scope detail and the delete affordance. The code face is a type token, not a
- * second style.
+ * One allow-listed address.
  *
- * The baseline deletes from a long-press context menu (`:494`-`:501`); Compose
- * has no context menu, so the row carries the same affordance as a trailing
- * glyph with the baseline's own accessibility name, and the confirmation dialog
- * (`DeleteRuleDialog`) carries the visible 删除这个地址 verb.
+ * The baseline's network page draws each address as a single 17 pt line at the
+ * measured 52.33 pt pitch (`ios-settings-network.png`: ink y=890..916 px, the
+ * separators 157 px apart, 11 of them in frame), so the row is
+ * [SettingsFormRow] — the page never re-types the pitch.
+ *
+ * The Android-only classification (精确主机 / 通配后缀 plus the scope sentence) is
+ * printed on a second line **only when the canonical form differs from the host
+ * the user typed**: for a bare host like `wttr.in` that line would repeat what the
+ * first line already says and the row would stop matching the baseline, so it is
+ * also exactly the case where the classification tells the user something new.
  */
 @Composable
 private fun EgressRuleRow(
@@ -660,57 +693,43 @@ private fun EgressRuleRow(
     onDeleteRequest: (EgressRuleView) -> Unit,
 ) {
     val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag(UiPageTags.EGRESS_RULE)
-            // Page-level geometry: a rule is a compact list row.
-            .defaultMinSize(minHeight = tokens.geometry.pageListRowMinHeight)
-            .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.iconText,
-            ),
-        verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
-        ) {
-            BasicText(
-                text = rule.form,
-                style = type.code.copy(color = tokens.colors.secondary),
-                modifier = Modifier.weight(1f),
-            )
-            BasicText(
-                text = rule.formLabel,
-                style = type.caption.copy(color = tokens.colors.tertiary),
-            )
-            BasicText(
-                text = DELETE_GLYPH,
-                style = type.secondary.copy(
-                    color = if (canWrite) tokens.colors.secondary else tokens.colors.tertiary,
-                ),
+    SettingsFormRow(
+        title = rule.form,
+        modifier = Modifier.testTag(UiPageTags.EGRESS_RULE),
+        subtitleContent = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
+            ) {
+                BasicText(
+                    text = rule.formLabel,
+                    style = settingsFootnoteStyle().copy(color = tokens.colors.tertiary),
+                )
+                BasicText(
+                    text = rule.detail,
+                    style = settingsFootnoteStyle().copy(color = tokens.colors.tertiary),
+                )
+            }
+        },
+        trailing = {
+            // Drawn, not typed: a text glyph in the row would contribute its font's
+            // line box and push the measured 52.33 pt row to 58.3 pt (measured on
+            // this page's first capture). The dots are a shape, so a Canvas keeps
+            // the row at the baseline's pitch.
+            //
+            // The control is *on screen* even when the host cannot write — an
+            // affordance that silently disappears reads as "deleting is not a
+            // thing this page does". Tapping it still asks: opening the
+            // confirmation is interaction, not a write, so the confirm button is
+            // what the host's answer disables.
+            DeleteDots(
+                ink = if (canWrite) tokens.colors.secondary else tokens.colors.tertiary,
                 modifier = Modifier
-                    // Page-level geometry: the delete affordance is a page control,
-                    // so its floor is the page row minimum, not the glyph's size.
-                    .defaultMinSize(
-                        minWidth = tokens.geometry.pageRowMinHeight,
-                        minHeight = tokens.geometry.pageRowMinHeight,
-                    )
-                    // Only the confirmation writes; opening it is interaction, so the
-                    // glyph stays tappable and the dialog carries the disabled verb.
-                    .clickable(role = Role.Button) { onDeleteRequest(rule) }
                     .testTag(UiPageTags.EGRESS_RULE_DELETE)
-                    .semantics { contentDescription = UiStrings.EGRESS_DELETE_ADDRESS },
+                    .clickable(role = Role.Button) { onDeleteRequest(rule) }
+                    .padding(start = tokens.spacing.iconText),
             )
-        }
-        BasicText(
-            text = rule.detail,
-            style = type.caption.copy(color = tokens.colors.tertiary),
-        )
-    }
+        },
+    )
 }
 
 /** One explanatory line; the tone is never a second colour source. */
@@ -911,14 +930,14 @@ private fun EgressFailureBlock(
     onDismissFailure: (() -> Unit)?,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        InfoRow(
+        SettingsFormRow(
             title = UiStrings.EGRESS_FAILED,
             value = null,
             subtitle = failure,
             modifier = Modifier.testTag(UiPageTags.EGRESS_FAILURE),
         )
         if (onRetry != null) {
-            InfoRow(
+            SettingsFormRow(
                 title = UiStrings.RETRY,
                 value = null,
                 onClick = onRetry,
@@ -926,7 +945,7 @@ private fun EgressFailureBlock(
             )
         }
         if (onDismissFailure != null) {
-            InfoRow(
+            SettingsFormRow(
                 title = UiStrings.DISMISS,
                 value = null,
                 onClick = onDismissFailure,
@@ -963,16 +982,37 @@ internal object EgressAllowListTokens {
         "colors.tertiary",
         "colors.warning",
         "geometry.cardPadding",
-        "geometry.pageListRowMinHeight",
         "geometry.pageOuterMarginH",
         "geometry.pageRowMinHeight",
         "radius.card",
         "spacing.badgeInsetV",
+        "spacing.codeToolbar",
         "spacing.iconText",
         "typography.body",
         "typography.caption",
         "typography.code",
         "typography.headline",
         "typography.secondary",
+
     )
+}
+
+/**
+ * The delete affordance's three dots, drawn at the 17 pt row's optical size.
+ *
+ * unverified geometry: iOS's network row has no such control (deletion lives in
+ * the page's own actions), so the size is this page's: a 16 x 4 pt trio on the
+ * text baseline of a 17 pt line.
+ */
+@Composable
+private fun DeleteDots(ink: Color, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.Canvas(
+        modifier = modifier.size(width = SettingsDotsWidth, height = SettingsDotsHeight),
+    ) {
+        val radius = size.height / 2f
+        val gap = size.width / 5f
+        listOf(1f, 3f, 5f).forEach { slot ->
+            drawCircle(color = ink, radius = radius, center = Offset(gap * slot, size.height / 2f))
+        }
+    }
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Extract a machine-readable page structure from the iOS baseline.
 
 Purpose: `spec/ui/v1/README.md` §1 gives each page one line of prose, so the two
@@ -117,6 +118,7 @@ SINGLE_REGION_PAGES = {
     "WorkspaceFoldersPage": "flat List: one NavigationLink per workspace + one empty-state block; no group header",
     "SettingsAboutPage": "flat List: one version row + one sentence; no group header",
     "NativeWorkbenchPage": "NavigationStack/VStack: a segmented mode switch over two embedded pages; no group header",
+    "NativeDeviceSessionPage": "VStack: a read-only 36 pt header row, an optional error label, then one LazyVStack transcript; no Section anywhere",
 }
 
 #: How a Button's surrounding syntax names its trigger.
@@ -741,11 +743,26 @@ class PageExtractor:
         # A `private struct XxxPage` nested inside the page is an embedded subpage
         # (SettingsPage nests PermissionDefaultsPage/LicensesPage): its Sections
         # belong to that subpage, not to the parent's contract.
+        # A nested `struct` that owns its own `.toolbar` / `navigationTitle` is a
+        # screen of its own even when its name is not `*Page` (ChatPage nests
+        # `NativeJobListSheet`, `NativeScheduleListSheet` and
+        # `CommandExecutionResultPage`; those are presented sheets and a pushed
+        # page). Their toolbar buttons belong to their screen, not to the parent's
+        # contract — the parent never renders them. A nested helper *row* has no
+        # toolbar, so its buttons still count as the page's own.
         self.subpage_spans = [
             (st["body_start"], st["body_end"])
             for st in page_structs(source)
             if st["name"] != self.name and self.body_start < st["body_start"] < self.body_end
         ]
+        for st in view_structs(source):
+            if st["name"] == self.name:
+                continue
+            if not (self.body_start < st["body_start"] < self.body_end):
+                continue
+            body = source.masked[st["body_start"]: st["body_end"]]
+            if ".toolbar" in body or "navigationTitle" in body:
+                self.subpage_spans.append((st["body_start"], st["body_end"]))
         self.dead_spans.extend(self.subpage_spans)
         self.sections = []
         self.actions = []
@@ -1511,21 +1528,41 @@ class PageExtractor:
     # -- actions inside a presentation -------------------------------------
 
     def _inline_presented_actions(self) -> None:
-        """A sheet/alert opened by this page renders actions the contract must declare.
+        """A presentation renders a view struct declared *inside this page's own body*.
 
-        The baseline often puts the sheet's content in a sibling `private struct`
-        (`DailyBriefSourceEditor`), so those buttons would otherwise be invisible to the
-        page's contract while the Android page implements them inline. Each inlined
-        action keeps its own `File.swift:line` and gains `presentedBy`.
+        Ownership is positional, exactly like every other action in the contract: an
+        action belongs to this page when its position is inside
+        `body_start..body_end` (that is what `_live` means). So a presented struct is
+        inlined only when the struct itself is declared inside this page struct — a
+        sheet whose content is a nested helper view. Each inlined action keeps its own
+        `File.swift:line` and gains `presentedBy`.
+
+        A presented `private struct` at file scope IS inlined, and that is deliberate:
+        README §1 makes an embedded subpage ship with its parent (`内嵌子页随父页实现、
+        不单独排期`), naming exactly these — CommandExecutionResultPage,
+        ScheduleEditorPage, ModelProviderEditorPage, SessionQueuePage, … — so the
+        parent's contract is the place Android is told to implement them.
+
+        Excluding them was tried and reverted: it hid five real gaps (chat's `完成` /
+        `刷新`, native-automation's `保存` / `修改计划时间`, session-artifacts' `分享`)
+        while turning sixteen faithfully-implemented inline controls into invented
+        `extra-action`s. A contract that hides an unimplemented embedded screen is
+        worth less than one that lists it, because the finding is the work item.
         """
         # Only private view structs are inlined: a *public* presented page
         # (SettingsPage, NativeConfigurationPage) has its own contract and is compared
         # there, so copying its buttons here would count them twice.
-        private_views = {st["name"] for st in view_structs(self.source) if st["private"]}
+        private_views = {st["name"]: st for st in view_structs(self.source) if st["private"]}
         for presentation in self.presentations:
             destination = presentation.get("destination")
             if not destination or destination == self.name or destination not in private_views:
                 continue
+            # Every action of `destination` sits inside that struct's braces, so the
+            # struct's own position decides them all: declared inside this page's body
+            # means "this page renders it", a sibling at file scope means "a screen".
+            # `_live(body_start + 1)` is the inside-the-braces probe: `_live` uses strict
+            # inequalities, so a span that *starts* a dead/subpage span is still "live"
+            # at its first character.
             try:
                 sub = PageExtractor(self.source, destination, depth=self.depth + 1)
                 sub_page = sub.run([])
@@ -1908,7 +1945,12 @@ def android_mapping(root: Path, page_name: str) -> dict:
     screen_name = ANDROID_ALIASES.get(page_name, page_name)
     for path in files:
         text = path.read_text(encoding="utf-8", errors="replace")
-        if re.search(rf"^public fun {re.escape(screen_name)}\s*\(", text, re.M):
+        # Visibility is not the extractor's business: a page composable may be
+        # `internal` (that is the module's own decision) and it is still the
+        # Android screen for this contract. Matching only `public fun` made every
+        # internal page fall through to the `kdoc-mention` branch below, which
+        # reports a guessed file and then produces findings against the wrong one.
+        if re.search(rf"^(?:public|internal) fun {re.escape(screen_name)}\s*\(", text, re.M):
             return {"screen": screen_name, "file": path.relative_to(root).as_posix(),
                     "match": "composable" if screen_name == page_name else "alias"}
     for path in files:

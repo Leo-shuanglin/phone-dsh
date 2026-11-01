@@ -7,14 +7,14 @@
   "sectionNote": "flat List: one version row + one sentence; no group header",
   "title": {
     "text": "关于",
-    "provenance": "NativeShell.swift:869",
+    "provenance": "NativeShell.swift:905",
     "anchor": ".navigationTitle(\"关于\")"
   },
   "source": {
     "file": "NativeShell.swift",
     "path": "examples/probe-app/PhoneDSHProbe/NativeShell.swift",
-    "lines": 996,
-    "structLine": 861,
+    "lines": 1037,
+    "structLine": 897,
     "renderedFrom": [
       "body"
     ],
@@ -27,7 +27,7 @@
   },
   "sections": [
     {
-      "id": "single-region-861",
+      "id": "single-region-897",
       "kind": "single-region",
       "title": null,
       "titleTemplate": null,
@@ -47,7 +47,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeShell.swift:864",
+          "provenance": "NativeShell.swift:900",
           "anchor": "LabeledContent(\"版本\", value: Bundle.main.infoDictionary?[\"CFBundleShortVersionStr",
           "extraction": "syntax"
         },
@@ -62,12 +62,12 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeShell.swift:865",
+          "provenance": "NativeShell.swift:901",
           "anchor": "Text(\"会话记录和文件都保存在这台手机上。\")",
           "extraction": "syntax"
         }
       ],
-      "provenance": "NativeShell.swift:861",
+      "provenance": "NativeShell.swift:897",
       "anchor": "struct SettingsAboutPage: View {",
       "criterion": {
         "kind": "single-region"
@@ -85,9 +85,9 @@
       "empty": [],
       "data": [
         {
-          "renders": "untitled section at 861",
+          "renders": "untitled section at 897",
           "when": null,
-          "provenance": "NativeShell.swift:861",
+          "provenance": "NativeShell.swift:897",
           "anchor": "struct SettingsAboutPage: View {",
           "note": "structural default: the sections above, when no condition overrides them"
         }
@@ -97,7 +97,7 @@
         {
           "renders": "—",
           "when": null,
-          "provenance": "NativeShell.swift:864",
+          "provenance": "NativeShell.swift:900",
           "anchor": "LabeledContent(\"版本\", value: Bundle.main.infoDictionary?[\"CFBundleShortVersionStr"
         }
       ],
@@ -119,22 +119,22 @@
   "subpages": [
     {
       "name": "WorkspaceFoldersPage",
-      "line": 318,
+      "line": 319,
       "private": false,
       "sections": [],
-      "provenance": "NativeShell.swift:318"
+      "provenance": "NativeShell.swift:319"
     },
     {
       "name": "EgressAllowListPage",
-      "line": 443,
+      "line": 444,
       "private": false,
       "sections": [
         {
           "title": "地址",
-          "provenance": "NativeShell.swift:473"
+          "provenance": "NativeShell.swift:474"
         }
       ],
-      "provenance": "NativeShell.swift:443"
+      "provenance": "NativeShell.swift:444"
     }
   ],
   "unreachable": [],

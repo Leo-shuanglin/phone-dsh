@@ -1,0 +1,455 @@
+{
+  "schema": "pdsh.ui.page-structure/1",
+  "page": "SessionArtifactsPage",
+  "pageId": "session-artifacts",
+  "structure": "swiftui-view",
+  "sectionModel": "section",
+  "sectionNote": null,
+  "title": {
+    "text": "本 session 产物",
+    "provenance": "SessionArtifactsPage.swift:92",
+    "anchor": ".navigationTitle(\"本 session 产物\")"
+  },
+  "source": {
+    "file": "SessionArtifactsPage.swift",
+    "path": "examples/probe-app/PhoneDSHProbe/SessionArtifactsPage.swift",
+    "lines": 349,
+    "structLine": 7,
+    "renderedFrom": [
+      "body",
+      "artifactRow"
+    ],
+    "sectionOrder": "declaration order inside the page struct"
+  },
+  "android": {
+    "screen": "SessionArtifactsPage",
+    "file": "android/lib/src/main/kotlin/com/phonedsh/ui/page/SessionArtifactsPage.kt",
+    "match": "composable"
+  },
+  "sections": [
+    {
+      "id": "section-44",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": "let loadError",
+      "collection": null,
+      "rows": [
+        {
+          "id": "text-45",
+          "label": null,
+          "labelExpr": "loadError",
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "SessionArtifactsPage.swift:45",
+          "anchor": "Text(loadError)",
+          "extraction": "manual"
+        },
+        {
+          "id": "重试",
+          "label": "重试",
+          "labelExpr": null,
+          "kind": "action",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "SessionArtifactsPage.swift:48",
+          "anchor": "Button(\"重试\") { Task { await loadArtifacts() } }",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "SessionArtifactsPage.swift:44",
+      "anchor": "Section {",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-clickable-row",
+        "label": "重试",
+        "provenance": "SessionArtifactsPage.swift:48"
+      }
+    },
+    {
+      "id": "section-55",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": "sessionArtifacts.isEmpty && !isLoading",
+      "collection": null,
+      "rows": [
+        {
+          "id": "本-session-还没有已确认归属的产物",
+          "label": "本 session 还没有已确认归属的产物",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "SessionArtifactsPage.swift:57",
+          "anchor": "Text(\"本 session 还没有已确认归属的产物\")",
+          "extraction": "syntax"
+        },
+        {
+          "id": "此会话生成或导入的文件会显示在这里-没有真实会话来源的记录不会被归入本-session",
+          "label": "此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本 session。",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "SessionArtifactsPage.swift:60",
+          "anchor": "Text(\"此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本 session。\")",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "SessionArtifactsPage.swift:55",
+      "anchor": "Section {",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-row",
+        "label": "本 session 还没有已确认归属的产物",
+        "provenance": "SessionArtifactsPage.swift:57"
+      }
+    },
+    {
+      "id": "本-session",
+      "title": "本 session",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "literal",
+      "condition": "!sessionArtifacts.isEmpty",
+      "collection": null,
+      "rows": [
+        {
+          "id": "action-72",
+          "label": null,
+          "labelExpr": null,
+          "kind": "action",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "SessionArtifactsPage.swift:72",
+          "anchor": "artifactRow(artifact, unassigned: false)",
+          "extraction": "manual",
+          "collection": "sessionArtifacts, id: \\.artifactID"
+        }
+      ],
+      "provenance": "SessionArtifactsPage.swift:70",
+      "anchor": "Section(\"本 session\") {",
+      "extraction": "syntax"
+    },
+    {
+      "id": "未归属",
+      "title": "未归属",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "header",
+      "condition": "!unassignedArtifacts.isEmpty",
+      "collection": null,
+      "rows": [
+        {
+          "id": "action-80",
+          "label": null,
+          "labelExpr": null,
+          "kind": "action",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "SessionArtifactsPage.swift:80",
+          "anchor": "artifactRow(artifact, unassigned: true)",
+          "extraction": "manual",
+          "collection": "unassignedArtifacts, id: \\.artifactID"
+        }
+      ],
+      "provenance": "SessionArtifactsPage.swift:83",
+      "anchor": "Text(\"未归属\")",
+      "extraction": "syntax",
+      "hasHeader": true,
+      "footer": {
+        "text": "这些记录没有当前会话的真实来源信息，不计为本 session 产物。",
+        "labelExpr": null,
+        "provenance": "SessionArtifactsPage.swift:85",
+        "anchor": "Text(\"这些记录没有当前会话的真实来源信息，不计为本 session 产物。\")"
+      }
+    }
+  ],
+  "actions": [
+    {
+      "id": "重试",
+      "label": "重试",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ Task { await loadArtifacts() }",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "SessionArtifactsPage.swift:48",
+      "anchor": "Button(\"重试\") { Task { await loadArtifacts() } }",
+      "extraction": "syntax",
+      "labelAlternatives": []
+    },
+    {
+      "id": "button-72",
+      "label": null,
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": null,
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "SessionArtifactsPage.swift:72",
+      "anchor": "artifactRow(artifact, unassigned: false)",
+      "extraction": "manual"
+    },
+    {
+      "id": "button-80",
+      "label": null,
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": null,
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "SessionArtifactsPage.swift:80",
+      "anchor": "artifactRow(artifact, unassigned: true)",
+      "extraction": "manual"
+    },
+    {
+      "id": "gesture-100",
+      "label": null,
+      "labelExpr": null,
+      "kind": "gesture",
+      "trigger": "pull-to-refresh",
+      "semantic": "refresh",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "SessionArtifactsPage.swift:100",
+      "anchor": ".refreshable { await loadArtifacts() }",
+      "extraction": "syntax"
+    },
+    {
+      "id": "完成",
+      "label": "完成",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "toolbar",
+      "semantic": "{ dismiss()",
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "SessionArtifactsPage.swift:96",
+      "anchor": "Button(\"完成\") { dismiss() }.leadingBarText()",
+      "extraction": "syntax"
+    },
+    {
+      "id": "好",
+      "label": "好",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ openError = nil",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "SessionArtifactsPage.swift:108",
+      "anchor": "Button(\"好\", role: .cancel) { openError = nil }",
+      "extraction": "syntax",
+      "presents": "alert-104"
+    },
+    {
+      "id": "button-115",
+      "label": null,
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ Task { await open(artifact) }",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "SessionArtifactsPage.swift:115",
+      "anchor": "Button {",
+      "extraction": "manual"
+    },
+    {
+      "id": "分享",
+      "label": "分享",
+      "labelExpr": null,
+      "kind": "share",
+      "trigger": "tap",
+      "semantic": null,
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "SessionArtifactsPage.swift:313",
+      "anchor": "Label(\"分享\", systemImage: \"square.and.arrow.up\")",
+      "extraction": "syntax",
+      "presentedBy": "navigationDestination-101"
+    }
+  ],
+  "presentations": [
+    {
+      "id": "navigationDestination-101",
+      "kind": "navigationDestination",
+      "title": null,
+      "destination": "SessionArtifactPreviewPage",
+      "triggerBindings": [
+        "preview"
+      ],
+      "span": [
+        101,
+        103
+      ],
+      "provenance": "SessionArtifactsPage.swift:101",
+      "anchor": ".navigationDestination(item: $preview) { item in",
+      "triggered": true
+    },
+    {
+      "id": "alert-104",
+      "kind": "alert",
+      "title": "无法打开产物",
+      "destination": null,
+      "triggerBindings": [
+        "openError"
+      ],
+      "span": [
+        104,
+        109
+      ],
+      "provenance": "SessionArtifactsPage.swift:104",
+      "anchor": ".alert(\"无法打开产物\", isPresented: Binding(",
+      "triggered": true
+    }
+  ],
+  "states": {
+    "advisory": true,
+    "note": "advisory only: marker-based; row placeholders (未配置/未设置/—) are not page states, so the checker never compares this object",
+    "sites": {
+      "empty": [
+        {
+          "renders": "本 session 还没有已确认归属的产物",
+          "when": "sessionArtifacts.isEmpty && !isLoading",
+          "provenance": "SessionArtifactsPage.swift:57",
+          "anchor": "Text(\"本 session 还没有已确认归属的产物\")"
+        },
+        {
+          "renders": "此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本 session。",
+          "when": "sessionArtifacts.isEmpty && !isLoading",
+          "provenance": "SessionArtifactsPage.swift:60",
+          "anchor": "Text(\"此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本 session。\")"
+        },
+        {
+          "renders": "这些记录没有当前会话的真实来源信息，不计为本 session 产物。",
+          "when": "!unassignedArtifacts.isEmpty",
+          "provenance": "SessionArtifactsPage.swift:85",
+          "anchor": "Text(\"这些记录没有当前会话的真实来源信息，不计为本 session 产物。\")"
+        }
+      ],
+      "data": [
+        {
+          "renders": "untitled section at 44 | untitled section at 55 | 本 session | 未归属",
+          "when": null,
+          "provenance": "SessionArtifactsPage.swift:7",
+          "anchor": "struct SessionArtifactsPage: View {",
+          "note": "structural default: the sections above, when no condition overrides them"
+        }
+      ],
+      "failure": [
+        {
+          "renders": "重试",
+          "when": "let loadError",
+          "provenance": "SessionArtifactsPage.swift:48",
+          "anchor": "Button(\"重试\") { Task { await loadArtifacts() } }"
+        },
+        {
+          "renders": "无法打开产物",
+          "when": null,
+          "provenance": "SessionArtifactsPage.swift:104",
+          "anchor": ".alert(\"无法打开产物\", isPresented: Binding("
+        },
+        {
+          "renders": "无法读取产物：\\(error.localizedDescription)",
+          "when": null,
+          "provenance": "SessionArtifactsPage.swift:168",
+          "anchor": "loadError = \"无法读取产物：\\(error.localizedDescription)\""
+        }
+      ],
+      "unknown": [],
+      "loading": [
+        {
+          "renders": "正在读取产物…",
+          "when": "isLoading && artifacts.isEmpty",
+          "provenance": "SessionArtifactsPage.swift:36",
+          "anchor": "Text(\"正在读取产物…\")"
+        },
+        {
+          "renders": "ProgressView",
+          "when": "isLoading && artifacts.isEmpty",
+          "provenance": "SessionArtifactsPage.swift:35",
+          "anchor": "ProgressView().controlSize(.small)"
+        },
+        {
+          "renders": "ProgressView",
+          "when": "openingID == artifact.artifactID",
+          "provenance": "SessionArtifactsPage.swift:137",
+          "anchor": "ProgressView().controlSize(.small)"
+        }
+      ]
+    },
+    "absent": [
+      "unknown"
+    ],
+    "coverage": {
+      "empty": 3,
+      "data": 1,
+      "failure": 3,
+      "unknown": 0,
+      "loading": 3
+    }
+  },
+  "subpages": [
+    {
+      "name": "SessionArtifactPreviewPage",
+      "line": 296,
+      "private": true,
+      "sections": [],
+      "provenance": "SessionArtifactsPage.swift:296"
+    }
+  ],
+  "unreachable": [],
+  "extraction": {
+    "tool": "extract_ios_pages.py",
+    "mode": "syntax",
+    "sectionKeywordsInPage": 4,
+    "regionsExtracted": 0,
+    "sectionsExtracted": 4,
+    "warnings": []
+  }
+}

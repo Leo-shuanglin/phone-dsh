@@ -583,8 +583,9 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
      * One walk over every value the navigation facts are built from.
      *
      * Measured: the engine's view, the running duration (monotonic), the WebView
-     * provider/version, the launch egress grant and the battery-exemption fact.
-     * Everything not measured stays `null`; no field defaults to a fake value.
+     * provider/version, the launch egress grant, the battery-exemption fact, and
+     * whether the materialized workspace tree exists. Everything not measured stays
+     * `null`; no field defaults to a fake value.
      */
     internal fun hostReadings(): HostReadings = HostReadings(
         webView = engine.view(),
@@ -599,6 +600,12 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         webViewKernel = engine.kernelReport(),
         egressGrant = launchConfig.egressGrant(),
         batteryExemption = batteryExemption,
+        // The one workspace this app owns is `workspaceRoot`; its files page reads
+        // the materialized mirror (`WalPaths.materializedWorkspace`). The directory's
+        // existence is the measurement the folder row is built from: before the WAL
+        // ever recovered there is no tree on disk, and the folder list must stay 未知
+        // rather than show a folder that opens nothing.
+        workspacePresent = Files.isDirectory(walPaths.materializedWorkspace),
     )
 
     /** The facts every routed page reads, rebuilt from one host walk. */

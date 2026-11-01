@@ -12,49 +12,126 @@
 // clock: `nextRun`, `latestDelivery`, `deliveredAt` and `scheduledAt` are already
 // formatted by the host, and a missing one renders 未知 with an explanation.
 //
-// The three outcomes that look alike are kept apart. A reported empty schedule
-// list is 还没有定时任务; an unreported list is 未知 (never `0 个任务`); a failed
-// read is 失败 and drops every schedule claim. The same rule applies inside the
-// history: a null delivery list is 未知, an empty one is 没有投递记录, and a
-// failure is 投递记录读取失败.
+// ---------------------------------------------------------------------------
+// Structure: the iOS page, element for element
+// ---------------------------------------------------------------------------
+// `NativeAutomationPage.swift` is one `List` under a 44 pt bar and a 34 pt large
+// title:
 //
-// The catalog, detail and history are one ScreenState with a pure route field.
-// The editor is not re-implemented here: the baseline's ScheduleEditorPage is a
-// host sheet, and the Android host currently exposes no schedule-write command.
-// The page hands creation and editing to the host through `onNewSchedule` and
-// `onEditSchedule`, so this file never invents a second schedule store. That
-// handoff is recorded as an open parity question in the lane receipt rather
-// than hidden.
+//   .navigationTitle("定时任务")                    -> 34 pt large title (17 pt inset,
+//                                                      14 pt below the 44 pt bar)
+//   ToolbarItem(.topBarLeading)  refresh            -> leading 刷新, beside the ✕
+//   ToolbarItem(.topBarTrailing) 新建 (accent)       -> trailing 新建
+//   if scheduleRecords.isEmpty                      -> empty block: 17/600 title,
+//                                                      13 pt secondary hint, a
+//                                                      50 pt / radius 12 accent
+//                                                      CTA (list row + 16 pt inset)
+//   else ForEach(scheduleRecords)                   -> one row per schedule
+//   if let error = management.error                 -> Section("需要处理") with the
+//                                                      host's sentence in red 13 pt
 //
-// Geometry: page-level tokens only (`geometry.pageOuterMarginH`,
-// `geometry.pageListRowMinHeight`); the header and InfoRow floors live in
-// `PageScaffold.kt`, and the list gap comes from `pageListGap`. No
-// signature-surface geometry is reused, so no `unverified geometry` marker
-// applies.
+// The failure is the structural point this page used to get wrong. On iOS
+// `management.error` is a field *beside* `scheduleRecords` (DSHManagementModel
+// .swift:120,137): a failed read keeps the catalog the host reported and adds a
+// red section under it. The Android page used to fold the failure into a
+// page-wide state that dropped the catalog, so the same facts rendered as one
+// grey sentence and the empty block, the CTA and the red line never appeared.
+// `AutomationScreenState` therefore carries the content outcome and the failure
+// as two fields, and the failure never erases a reported list.
+//
+// ---------------------------------------------------------------------------
+// Geometry
+// ---------------------------------------------------------------------------
+// The measured iOS boxes (1206 x 2622 px @3, `pt = px / 3`):
+//
+//   34 pt title ink      y 125.3..155.3, x 17.0
+//   empty title ink      y 194.7..209.7, centred (x 142.7..258.7)
+//   hint ink             y 222.3..234.7, centred
+//   CTA box              y 252.0..301.7 (50 pt), x 32.0..369.7 (337.7 pt), r 12
+//   "需要处理" ink        y 356.3..371.3, x 32.7
+//   red error ink        y 401.7..431.3, x 32.7, 18 pt line box
+//
+// The bar, the large title and their insets come from the shared surface chrome
+// (`SettingsNavBar`, `SettingsLargeTitle`, `settingsLargeTitleStyle` in
+// `ui/surface/SettingsChrome.kt`), the same pieces the five iOS-aligned settings
+// sub-pages use; `AutomationFrame` only spells the twelve-line Column around them,
+// because iOS puts two controls in the leading slot (✕ and 刷新) and the shared
+// frame exposes one. The page therefore does not re-type a bar height, a title
+// inset, a title role or a system-bar inset. The empty block reuses L6's measured
+// constants: the 8 pt gap and 24 pt vertical padding are
+// `ShellFilesMetrics.EMPTY_STATE_*` (the iOS `FilesPage.swift:101,112` values;
+// `NativeAutomationPage.swift:19,41` declares the same two numbers), the CTA
+// height is `SessionsMetrics.CTA_HEIGHT_PT` (`SessionsPage.swift:223`
+// `.frame(height: 50)`; `NativeAutomationPage.swift:14` declares
+// `primaryButtonHeight = 50` for the same control), and the CTA's corner is
+// `radius.card` (12, `NativeAutomationPage.swift:35`). The section label and the
+// red sentence both start at `SettingsSectionLabelIndent` (33 pt), which is the
+// measured 32.7 pt of both the 需要处理 header and the error text.
+//
+// The page body re-uses the page-level tokens (`geometry.pageOuterMarginH`,
+// `geometry.pageListRowMinHeight`) and the page's own list gap; it borrows no
+// signature-surface geometry, so no `unverified geometry` marker applies.
 package com.phonedsh.ui.page
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.phonedsh.ui.SessionsMetrics
+import com.phonedsh.ui.ShellFilesMetrics
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
+import com.phonedsh.ui.surface.SettingsLargeTitle
+import com.phonedsh.ui.surface.SettingsNavAction
+import com.phonedsh.ui.surface.SettingsNavBar
+import com.phonedsh.ui.surface.SettingsSectionLabel
+import com.phonedsh.ui.surface.SettingsSectionLabelIndent
+import com.phonedsh.ui.surface.SettingsSubPageFootnote
+import com.phonedsh.ui.surface.settingsLabelStyle
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
+import java.time.OffsetDateTime
+import java.time.ZoneId
 
 // ---------------------------------------------------------------------------
 // Facts
@@ -79,6 +156,10 @@ public enum class ScheduleStatus {
  * @param latestDelivery the host-formatted last delivery, if one happened.
  * @param sessionTitle the target session's title, if the host resolved it.
  * @param detail an optional host-supplied one-line detail.
+ * @param timing the rule's own fields when the host reported them
+ *   (`DSHManagementModel.expectedRecord` on the baseline); `null` when the host
+ *   only reported the rule's spelling. The editor seeds its form from this and
+ *   never invents a value it did not receive.
  */
 @Immutable
 public data class AutomationSchedule(
@@ -91,6 +172,7 @@ public data class AutomationSchedule(
     public val latestDelivery: String? = null,
     public val sessionTitle: String? = null,
     public val detail: String? = null,
+    public val timing: AutomationTiming? = null,
 )
 
 /**
@@ -108,6 +190,247 @@ public data class AutomationDelivery(
     public val scheduledAt: String,
     public val prompt: String? = null,
 )
+
+// ---------------------------------------------------------------------------
+// ScheduleEditorPage: the form's facts (`NativeAutomationPage.swift:212`–`:420`)
+// ---------------------------------------------------------------------------
+//
+// The baseline's editor is a `.sheet` over this page (`:92`, `:99`) whose
+// `@State` fields are seeded from `ManagedSchedule` and `expectedRecord`
+// (`:233`–`:248`), validated by `timingChange()` (`:350`) and reported by
+// `timingValidationMessage()` (`:397`). The iOS struct is `private` in
+// `NativeAutomationPage.swift` and README §1 makes it an embedded subpage, so the
+// port keeps the same three pieces in this file, in the same order: the facts
+// (below), the pure draft + its validation, and the composable.
+
+/**
+ * The six timing rules the editor's 规则 picker offers
+ * (`NativeAutomationPage.swift:264`–`:269`).
+ *
+ * @param wire the host's spelling, which is also the tag suffix of the option row.
+ * @param optionLabel the baseline's visible option word.
+ */
+public enum class AutomationRule(public val wire: String, public val optionLabel: String) {
+    AFTER("after", UiStrings.AUTOMATION_EDITOR_RULE_AFTER),
+    AT("at", UiStrings.AUTOMATION_EDITOR_RULE_AT),
+    EVERY("every", UiStrings.AUTOMATION_EDITOR_RULE_EVERY),
+    DAILY("daily", UiStrings.AUTOMATION_EDITOR_RULE_DAILY),
+    WEEKLY("weekly", UiStrings.AUTOMATION_EDITOR_RULE_WEEKLY),
+    CRON("cron", UiStrings.AUTOMATION_EDITOR_RULE_CRON),
+    ;
+
+    public companion object {
+        /** The rule [wire] names, or `null` when the host reported another spelling. */
+        public fun fromWire(wire: String?): AutomationRule? =
+            values().firstOrNull { rule -> rule.wire == wire }
+    }
+}
+
+/**
+ * One schedule's rule as the host reported its fields.
+ *
+ * iOS keeps them in `ManagedSchedule.expectedRecord` (`afterSeconds`,
+ * `everySeconds`, `time`, `timeZone`, `weekdays`, `expression`), which the editor
+ * reads to seed the form. Every field is `null` when the host did not report it,
+ * so the editor can tell "not reported" from an empty value.
+ */
+@Immutable
+public data class AutomationTiming(
+    public val rule: AutomationRule,
+    public val afterSeconds: String? = null,
+    public val at: String? = null,
+    public val everySeconds: String? = null,
+    public val localTime: String? = null,
+    public val timeZone: String? = null,
+    public val weekdays: String? = null,
+    public val cron: String? = null,
+)
+
+/**
+ * The editable form, as typed.
+ *
+ * It is the baseline's twelve `@State` fields (`:218`–`:228`) in one value: a new
+ * schedule starts from the same defaults the baseline's `init` uses, and an
+ * existing one is seeded by [from].
+ *
+ * Two deliberate differences from the baseline, both because this page is pure
+ * (§3.1: no clock, no I/O):
+ *
+ *  * the 指定时间 field starts **blank** instead of `now + 1h` — the page never
+ *    reads a clock, and an invented timestamp would be a value nobody measured.
+ *    The baseline's own hint (`:296`) is printed above the field instead;
+ *  * the IANA timezone default comes from the caller ([from]'s `timeZone`
+ *    argument) rather than `TimeZone.current`: a platform read belongs to the
+ *    route, not to the state function.
+ *
+ * @param id the schedule being edited; `null` for a new one (iOS `schedule == nil`).
+ * @param title the 名称 field.
+ * @param prompt the 提醒内容 field.
+ * @param changeTiming the 修改计划时间 toggle (`:260`); ignored for a new schedule.
+ * @param rule the 规则 picker's selection.
+ * @param afterSeconds / @param at / @param everySeconds / @param localTime /
+ *   @param timeZone / @param weekdays / @param cron the rule's own fields, as typed.
+ */
+@Immutable
+public data class AutomationScheduleDraft(
+    public val id: String? = null,
+    public val title: String = "",
+    public val prompt: String = "",
+    public val changeTiming: Boolean = true,
+    public val rule: AutomationRule = AutomationRule.AFTER,
+    public val afterSeconds: String = DEFAULT_AFTER_SECONDS,
+    public val at: String = "",
+    public val everySeconds: String = DEFAULT_EVERY_SECONDS,
+    public val localTime: String = DEFAULT_LOCAL_TIME,
+    public val timeZone: String = "",
+    public val weekdays: String = DEFAULT_WEEKDAYS,
+    public val cron: String = DEFAULT_CRON,
+) {
+    /** True for the 新建自动化 form (`schedule == nil`). */
+    public val isNew: Boolean get() = id == null
+
+    /**
+     * True while the timing block is shown: always for a new schedule, and for an
+     * edit only after 修改计划时间 is on (`:262`).
+     */
+    public val editsTiming: Boolean get() = isNew || changeTiming
+
+    /** iOS disables 保存 while either text field is blank (`:284`–`:285`). */
+    public val canSubmit: Boolean get() = title.isNotBlank() && prompt.isNotBlank()
+
+    /**
+     * The rule's validation sentence, or `null` when the timing block validates.
+     *
+     * `null` also when the timing block is not being edited: the baseline sends
+     * `timing: nil` then (`:327`, `:333`) and validates nothing.
+     */
+    public fun timingError(): String? {
+        if (!editsTiming) return null
+        return when (rule) {
+            AutomationRule.AFTER -> if ((afterSeconds.trim().toIntOrNull() ?: 0) > 0) {
+                null
+            } else {
+                UiStrings.AUTOMATION_EDITOR_ERROR_AFTER
+            }
+
+            AutomationRule.AT ->
+                if (offsetDateTimeOrNull(at) != null) {
+                    null
+                } else {
+                    UiStrings.AUTOMATION_EDITOR_ERROR_AT
+                }
+
+            AutomationRule.EVERY -> if ((everySeconds.trim().toIntOrNull() ?: 0) >= MINIMUM_INTERVAL_SECONDS) {
+                null
+            } else {
+                UiStrings.AUTOMATION_EDITOR_ERROR_EVERY
+            }
+
+            AutomationRule.DAILY ->
+                if (isLocalTime(localTime) && zoneOrNull(timeZone) != null) {
+                    null
+                } else {
+                    UiStrings.AUTOMATION_EDITOR_ERROR_DAILY
+                }
+
+            AutomationRule.WEEKLY ->
+                if (isLocalTime(localTime) && zoneOrNull(timeZone) != null && parseWeekdays(weekdays) != null) {
+                    null
+                } else {
+                    UiStrings.AUTOMATION_EDITOR_ERROR_WEEKLY
+                }
+
+            AutomationRule.CRON ->
+                if (cron.split(WHITESPACE).count { it.isNotEmpty() } == CRON_FIELD_COUNT &&
+                    zoneOrNull(timeZone) != null
+                ) {
+                    null
+                } else {
+                    UiStrings.AUTOMATION_EDITOR_ERROR_CRON
+                }
+        }
+    }
+
+    public companion object {
+        /**
+         * Seeds a form from a reported schedule, or the baseline's defaults for a
+         * new one.
+         *
+         * @param schedule the schedule to edit; `null` for a new one.
+         * @param timeZone the IANA zone the caller measured
+         *   (`TimeZone.current.identifier` on the baseline, `:225`). A field the
+         *   host reported wins over it.
+         */
+        public fun from(schedule: AutomationSchedule?, timeZone: String): AutomationScheduleDraft {
+            val timing = schedule?.timing
+            val reported = timing?.rule ?: AutomationRule.fromWire(schedule?.rule?.substringBefore(' '))
+            return AutomationScheduleDraft(
+                id = schedule?.id,
+                title = schedule?.title.orEmpty(),
+                prompt = schedule?.prompt.orEmpty(),
+                // The baseline shows the timing block for a new schedule only
+                // (`:247`: `changeTiming = schedule == nil`).
+                changeTiming = schedule == null,
+                rule = reported ?: AutomationRule.AFTER,
+                afterSeconds = timing?.afterSeconds ?: DEFAULT_AFTER_SECONDS,
+                at = timing?.at.orEmpty(),
+                everySeconds = timing?.everySeconds ?: DEFAULT_EVERY_SECONDS,
+                localTime = timing?.localTime ?: DEFAULT_LOCAL_TIME,
+                timeZone = timing?.timeZone ?: timeZone,
+                weekdays = timing?.weekdays ?: DEFAULT_WEEKDAYS,
+                cron = timing?.cron ?: DEFAULT_CRON,
+            )
+        }
+    }
+}
+
+/** The form's local state: the draft, plus whether 保存 has been attempted. */
+@Immutable
+public data class AutomationEditorState(
+    public val draft: AutomationScheduleDraft,
+    /** False until 保存 is pressed; the baseline reports the rule only then (`:320`). */
+    public val submitted: Boolean = false,
+) {
+    /** The sentence the 错误 section prints, or `null`. */
+    public val error: String? get() = if (submitted) draft.timingError() else null
+
+    /** 保存 is enabled exactly while the two required fields carry text (`:284`). */
+    public val canSubmit: Boolean get() = draft.canSubmit
+}
+
+/**
+ * The `指定时间` field's parser.
+ *
+ * iOS uses `ISO8601DateFormatter` (`:390`–`:395`), which accepts an RFC 3339
+ * instant with a mandatory zone designator; `OffsetDateTime.parse` is the same
+ * grammar (an offset or `Z` is required, a date alone is refused). The rule the
+ * baseline cares about — "需要包含时区" — is therefore enforced on both sides.
+ */
+internal fun offsetDateTimeOrNull(value: String): OffsetDateTime? =
+    runCatching { OffsetDateTime.parse(value.trim()) }.getOrNull()
+
+/** The IANA zone [value] names, or `null` (`TimeZone(identifier:)`, `:364`). */
+internal fun zoneOrNull(value: String): ZoneId? = runCatching { ZoneId.of(value.trim()) }.getOrNull()
+
+/** `HH:mm` or `HH:mm:ss[.SSS]`, the baseline's regex (`:386`–`:388`). */
+internal fun isLocalTime(value: String): Boolean = LOCAL_TIME_PATTERN.matches(value.trim())
+
+/**
+ * The ISO weekdays [value] lists, or `null` when the list is unusable.
+ *
+ * The baseline splits on `,`, drops tokens that are not integers and then requires
+ * a non-empty, duplicate-free list inside `1...7` (`:369`–`:371`). This port
+ * refuses an unparsable token instead of dropping it: "1,x,2" is a typo, and
+ * silently running on Monday and Tuesday would hide it.
+ */
+internal fun parseWeekdays(value: String): List<Int>? {
+    val tokens = value.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+    if (tokens.isEmpty()) return null
+    val days = tokens.map { it.toIntOrNull() ?: return null }
+    if (days.toSet().size != days.size) return null
+    if (days.any { it !in ISO_MIN_WEEKDAY..ISO_MAX_WEEKDAY }) return null
+    return days
+}
 
 /**
  * One schedule's delivery history as the host reported it.
@@ -147,27 +470,42 @@ public data class AutomationSnapshot(
  *
  * @param snapshot the host's snapshot; `null` means no snapshot was reported.
  * @param failure the host's read failure; non-null when the last read failed.
+ *   It is carried beside [snapshot], never instead of it: iOS keeps
+ *   `scheduleRecords` and sets `error` in the same read (`DSHManagementModel
+ *   .swift:702-717`).
+ * @param writable whether the host can persist a schedule the editor submits.
+ *   `NO` does not disable 保存 — §1 keeps the save a handoff to the host — but it
+ *   prints [UiStrings.AUTOMATION_EDITOR_HANDOFF_HINT] beside the form so the
+ *   person knows the save is a handoff rather than a local commit. `UNKNOWN` is
+ *   not `NO`: a host that did not report writability has not said it is
+ *   read-only, and asserting a negative we did not measure is the one thing this
+ *   page never does.
  */
 @Immutable
 public data class AutomationFacts(
     public val snapshot: AutomationSnapshot? = null,
     public val failure: String? = null,
+    public val writable: FactState = FactState.UNKNOWN,
 )
 
 // ---------------------------------------------------------------------------
 // ScreenState
 // ---------------------------------------------------------------------------
 
-/** The four outcomes the catalog distinguishes. */
+/**
+ * The three outcomes the catalog content has.
+ *
+ * There is deliberately no `FAILED` member. On iOS a failed read is not a
+ * content state: it leaves the reported catalog on screen and adds the
+ * 需要处理 section, so folding it into this enum would delete the very rows a
+ * failure does not disprove. [AutomationScreenState.failure] carries it instead.
+ */
 public enum class AutomationStatus {
     /** At least one schedule was reported. */
     READY,
 
     /** The host reported an empty schedule list. */
     EMPTY,
-
-    /** The last host read failed; no schedule claim survives it. */
-    FAILED,
 
     /** The schedule list was not reported: the page says 未知, never `0 条`. */
     UNKNOWN,
@@ -178,6 +516,15 @@ public enum class AutomationRoute {
     CATALOG,
     DETAIL,
     HISTORY,
+
+    /**
+     * The embedded `ScheduleEditorPage` (`NativeAutomationPage.swift:212`).
+     *
+     * The baseline presents it as a `.sheet` over this page; the port keeps it a
+     * child view of the same page (README §1: an embedded subpage ships with its
+     * parent, it is not a route of its own).
+     */
+    EDITOR,
 }
 
 /** The four outcomes of one schedule's delivery history. */
@@ -217,13 +564,12 @@ public data class AutomationDeliveryView(
 /**
  * The complete automation screen state.
  *
- * @param status the four-state catalog outcome; [AutomationStatus.FAILED] wins
- *   because a failed read proves nothing about the schedules.
+ * @param status the three-state catalog outcome, from the snapshot alone.
  * @param route the pure child route; forced to [AutomationRoute.CATALOG] unless
  *   the catalog is [AutomationStatus.READY], so a stale detail page cannot
  *   outlive the schedule list it belongs to.
  * @param schedules the display-ready catalog rows, in host order.
- * @param scheduleCount the reported count; `null` for 未知/失败, `0` only for a
+ * @param scheduleCount the reported count; `null` for 未知, `0` only for a
  *   reported empty list.
  * @param selectedScheduleId the resolved selected id, or `null`.
  * @param detail the selected schedule's display row, or `null` when missing.
@@ -235,8 +581,14 @@ public data class AutomationDeliveryView(
  * @param historyNotice the host's own history notice, or `null`.
  * @param historyHasMore true while the host offers older rows.
  * @param historyFailure the history-specific failure message, or `null`.
- * @param failure the catalog failure message, or `null`.
+ * @param failure the host's last read failure, or `null`. Orthogonal to
+ *   [status]: it renders as the 需要处理 section below whatever content the
+ *   snapshot still supports.
  * @param hasUnmeasuredValues true when a visible catalog/detail value is 未知.
+ * @param editor the embedded `ScheduleEditorPage`'s form while
+ *   [route] is [AutomationRoute.EDITOR]; `null` on every other route.
+ * @param writable whether the host can persist a submitted schedule
+ *   ([AutomationFacts.writable]); `NO` prints the handoff hint beside the form.
  */
 @Immutable
 public data class AutomationScreenState(
@@ -255,6 +607,10 @@ public data class AutomationScreenState(
     public val historyFailure: String?,
     public val failure: String?,
     public val hasUnmeasuredValues: Boolean,
+    /** The schedule whose 删除 confirmation is open; `null` when it is closed. */
+    public val confirmDeleteId: String? = null,
+    public val editor: AutomationEditorState? = null,
+    public val writable: FactState = FactState.UNKNOWN,
 ) {
     /** True when the catalog list was not reported. */
     public val isUnknown: Boolean get() = status == AutomationStatus.UNKNOWN
@@ -262,8 +618,8 @@ public data class AutomationScreenState(
     /** True when the host reported an empty catalog. */
     public val isEmpty: Boolean get() = status == AutomationStatus.EMPTY
 
-    /** True when the last catalog read failed. */
-    public val isFailed: Boolean get() = status == AutomationStatus.FAILED
+    /** True when the host reported something to handle; the content stays on screen. */
+    public val hasFailure: Boolean get() = failure != null
 
     /**
      * A stable, display-free signature of the sequence-relevant state.
@@ -279,7 +635,10 @@ public data class AutomationScreenState(
         append(historyStatus.name).append(':')
         append(historyCount?.toString() ?: "-").append(':')
         append(if (historyHasMore) "more" else "end").append(':')
+        append(if (hasFailure) "failure" else "clear").append(':')
         append(if (hasUnmeasuredValues) "partial" else "complete").append(':')
+        append(editor?.draft?.rule?.wire ?: "-").append(':')
+        append(if (editor?.submitted == true) "submitted" else "draft").append(':')
         append(schedules.joinToString(",") { it.id }).append(':')
         append(deliveries.joinToString(",") { it.id })
     }
@@ -291,6 +650,10 @@ public data class AutomationScreenState(
          * Pure: no clock, no I/O and no engine call. The host supplies every time
          * string, so the same facts and the same route script always yield the
          * same state sequence (§3.1).
+         *
+         * The failure is copied through in every branch and subtracts nothing:
+         * `status` answers "what did the snapshot say", `failure` answers "what
+         * did the last read report". iOS renders both at once.
          */
         public fun from(
             facts: AutomationFacts,
@@ -298,15 +661,19 @@ public data class AutomationScreenState(
         ): AutomationScreenState {
             val rawSchedules = facts.snapshot?.schedules
             val status = when {
-                facts.failure != null -> AutomationStatus.FAILED
                 rawSchedules == null -> AutomationStatus.UNKNOWN
                 rawSchedules.isEmpty() -> AutomationStatus.EMPTY
                 else -> AutomationStatus.READY
             }
+            // The editor is the one child view that does not need a reported
+            // schedule: the baseline opens 新建自动化 from the empty state too
+            // (`NativeAutomationPage.swift:27`), so it survives every status.
+            val editorRoute = local.route == AutomationRoute.EDITOR && local.editor != null
+            val editor = local.editor.takeIf { editorRoute }
             if (status != AutomationStatus.READY) {
                 return AutomationScreenState(
                     status = status,
-                    route = AutomationRoute.CATALOG,
+                    route = if (editorRoute) AutomationRoute.EDITOR else AutomationRoute.CATALOG,
                     schedules = emptyList(),
                     scheduleCount = if (status == AutomationStatus.EMPTY) 0 else null,
                     selectedScheduleId = null,
@@ -320,6 +687,8 @@ public data class AutomationScreenState(
                     historyFailure = null,
                     failure = facts.failure,
                     hasUnmeasuredValues = false,
+                    editor = editor,
+                    writable = facts.writable,
                 )
             }
             val schedules = rawSchedules.orEmpty().map(::scheduleView)
@@ -346,7 +715,9 @@ public data class AutomationScreenState(
             } else {
                 emptyList()
             }
-            val route = if (local.route == AutomationRoute.CATALOG) {
+            val route = if (local.route == AutomationRoute.EDITOR && editor == null) {
+                // No draft means no form: fall back to the list instead of
+                // rendering an empty editor frame.
                 AutomationRoute.CATALOG
             } else {
                 local.route
@@ -373,8 +744,12 @@ public data class AutomationScreenState(
                 historyNotice = history?.notice,
                 historyHasMore = historyStatus == AutomationHistoryStatus.READY && history?.hasMore == true,
                 historyFailure = history?.failure,
-                failure = null,
+                failure = facts.failure,
                 hasUnmeasuredValues = schedules.any { it.hasUnmeasuredValues },
+                // A confirmation for a schedule the new snapshot dropped is stale.
+                confirmDeleteId = local.deleteConfirmId?.takeIf { id -> schedules.any { it.id == id } },
+                editor = editor,
+                writable = facts.writable,
             )
         }
 
@@ -416,7 +791,7 @@ public data class AutomationScreenState(
     }
 }
 
-/** The local UI events of the automation page: navigation only. */
+/** The local UI events of the automation page: navigation, the delete confirmation and the editor. */
 public sealed interface AutomationUiEvent {
     /** Open one schedule's detail. */
     public data class OpenDetail(public val id: String) : AutomationUiEvent
@@ -426,6 +801,31 @@ public sealed interface AutomationUiEvent {
 
     /** Go back one child level; the catalog is the root of this page. */
     public data object Back : AutomationUiEvent
+
+    /** Ask for the 删除 confirmation on one schedule (`NativeAutomationPage.swift:64`). */
+    public data class RequestDelete(public val id: String) : AutomationUiEvent
+
+    /** Close the 删除 confirmation without deleting. */
+    public data object CancelDelete : AutomationUiEvent
+
+    /**
+     * Present the embedded editor on [draft] — the 新建任务 / 新建 / 编辑 gestures
+     * (`NativeAutomationPage.swift:30`, `:83`, `:63`).
+     *
+     * The draft is built by the caller ([AutomationScheduleDraft.from]) because
+     * seeding it needs the platform timezone, a read the state function must not
+     * make (§3.1).
+     */
+    public data class OpenEditor(public val draft: AutomationScheduleDraft) : AutomationUiEvent
+
+    /** One field changed; [draft] is the whole form after the edit. */
+    public data class EditDraft(public val draft: AutomationScheduleDraft) : AutomationUiEvent
+
+    /** 保存 (`NativeAutomationPage.swift:283`): record the attempt, keep the values. */
+    public data object SubmitDraft : AutomationUiEvent
+
+    /** 取消 (`:281`): drop the draft and return to the catalog. */
+    public data object CancelEditor : AutomationUiEvent
 }
 
 /**
@@ -433,33 +833,77 @@ public sealed interface AutomationUiEvent {
  *
  * @param route which child view is showing.
  * @param selectedScheduleId the schedule the child view belongs to.
+ * @param deleteConfirmId the schedule whose 删除 confirmation is open, or `null`.
+ * @param editor the form's draft while the embedded editor is presented, or `null`.
  */
 @Immutable
 public data class AutomationLocalState(
     public val route: AutomationRoute = AutomationRoute.CATALOG,
     public val selectedScheduleId: String? = null,
+    public val deleteConfirmId: String? = null,
+    public val editor: AutomationEditorState? = null,
 ) {
     /** Applies one local event. */
     public fun apply(event: AutomationUiEvent): AutomationLocalState = when (event) {
         is AutomationUiEvent.OpenDetail -> copy(
             route = AutomationRoute.DETAIL,
             selectedScheduleId = event.id,
+            deleteConfirmId = null,
         )
 
         is AutomationUiEvent.OpenHistory -> copy(
             route = AutomationRoute.HISTORY,
             selectedScheduleId = event.id,
+            deleteConfirmId = null,
+        )
+
+        is AutomationUiEvent.RequestDelete -> copy(deleteConfirmId = event.id)
+
+        AutomationUiEvent.CancelDelete -> copy(deleteConfirmId = null)
+
+        // The editor is a child view of whatever presented it, so opening and
+        // closing it keep the catalog selection untouched.
+        is AutomationUiEvent.OpenEditor -> copy(
+            route = AutomationRoute.EDITOR,
+            editor = AutomationEditorState(event.draft),
+            deleteConfirmId = null,
+        )
+
+        is AutomationUiEvent.EditDraft -> copy(editor = editor?.copy(draft = event.draft))
+
+        AutomationUiEvent.SubmitDraft -> copy(editor = editor?.copy(submitted = true))
+
+        AutomationUiEvent.CancelEditor -> copy(
+            route = AutomationRoute.CATALOG,
+            editor = null,
+            deleteConfirmId = null,
         )
 
         AutomationUiEvent.Back -> when (route) {
+            // 取消 and the system back are the same act on the form: the draft is
+            // dropped and nothing is submitted (`:281`).
+            AutomationRoute.EDITOR -> copy(
+                route = AutomationRoute.CATALOG,
+                editor = null,
+                deleteConfirmId = null,
+            )
+
             AutomationRoute.HISTORY -> if (selectedScheduleId != null) {
-                copy(route = AutomationRoute.DETAIL)
+                copy(route = AutomationRoute.DETAIL, deleteConfirmId = null)
             } else {
-                copy(route = AutomationRoute.CATALOG, selectedScheduleId = null)
+                copy(
+                    route = AutomationRoute.CATALOG,
+                    selectedScheduleId = null,
+                    deleteConfirmId = null,
+                )
             }
 
-            AutomationRoute.DETAIL -> copy(route = AutomationRoute.CATALOG, selectedScheduleId = null)
-            AutomationRoute.CATALOG -> this
+            AutomationRoute.DETAIL -> copy(
+                route = AutomationRoute.CATALOG,
+                selectedScheduleId = null,
+                deleteConfirmId = null,
+            )
+            AutomationRoute.CATALOG -> copy(deleteConfirmId = null)
         }
     }
 }
@@ -471,6 +915,10 @@ public data class AutomationLocalState(
 /**
  * The scheduled-automation page.
  *
+ * The three routes share one chrome ([AutomationFrame]): the catalog draws the
+ * 34 pt large title, the two child views draw the inline bar title iOS gives them
+ * (定时任务 / 投递记录, `NativeAutomationPage.swift:152,205`).
+ *
  * @param state the pure screen state (`AutomationScreenState.from`).
  * @param onBack close the page (the catalog is the page root).
  * @param onOpenDetail open one schedule's detail; the host applies
@@ -479,15 +927,23 @@ public data class AutomationLocalState(
  *   `AutomationUiEvent.OpenHistory`.
  * @param onBackToCatalog leave a child view; the host applies
  *   `AutomationUiEvent.Back`.
- * @param onRefresh re-read the snapshot; `null` hides the header action.
- * @param onNewSchedule open the host's editor for a new schedule; `null` hides
- *   the empty-state action and the header action.
- * @param onEditSchedule open the host's editor for an existing schedule; `null`
- *   hides the detail row.
+ * @param onRefresh re-read the snapshot; `null` hides the leading 刷新 control.
+ *   This is also the page's recovery after a failed read — iOS has no in-content
+ *   retry, the toolbar's arrow.clockwise (and pull-to-refresh) is the retry.
+ * @param onNewSchedule present the page's own editor for a new schedule (`:30`,
+ *   `:83`); `null` hides the trailing 新建 control and the empty-state CTA. The
+ *   host applies `AutomationUiEvent.OpenEditor`.
+ * @param onEditSchedule present the page's own editor for an existing schedule
+ *   (`:63`, `:157`); `null` hides the detail row.
  * @param onLoadMoreHistory ask the host for older delivery rows; `null` hides
  *   the action even when the host says more exist.
- * @param onRetry retry a failed read; `null` renders no retry row.
- * @param onDismissFailure dismiss the failure line; `null` renders no dismiss row.
+ * @param onDraftChange one field of the editor's form changed; the host applies
+ *   `AutomationUiEvent.EditDraft`.
+ * @param onSubmitDraft 保存 (`:283`); the host applies
+ *   `AutomationUiEvent.SubmitDraft` and then hands the validated draft to the
+ *   host's schedule store.
+ * @param onCancelEditor 取消 (`:281`); the host applies
+ *   `AutomationUiEvent.CancelEditor`. `null` hides the control.
  */
 @Composable
 public fun NativeAutomationPage(
@@ -501,66 +957,245 @@ public fun NativeAutomationPage(
     onNewSchedule: (() -> Unit)? = null,
     onEditSchedule: ((String) -> Unit)? = null,
     onLoadMoreHistory: (() -> Unit)? = null,
-    onRetry: (() -> Unit)? = null,
-    onDismissFailure: (() -> Unit)? = null,
+    onRequestDelete: ((String) -> Unit)? = null,
+    onConfirmDelete: ((String) -> Unit)? = null,
+    onCancelDelete: (() -> Unit)? = null,
+    onDraftChange: ((AutomationScheduleDraft) -> Unit)? = null,
+    onSubmitDraft: (() -> Unit)? = null,
+    onCancelEditor: (() -> Unit)? = null,
 ) {
-    val title = when (state.route) {
-        AutomationRoute.CATALOG -> UiStrings.AUTOMATION_TITLE
-        AutomationRoute.DETAIL -> UiStrings.AUTOMATION_DETAIL_TITLE
-        AutomationRoute.HISTORY -> UiStrings.AUTOMATION_HISTORY_TITLE
+    // `.confirmationDialog("删除此自动化任务？", …)` (:102–:109): a modal on the
+    // baseline, so it is the standard Material dialog, not an inline panel.
+    val confirmDeleteId = state.confirmDeleteId
+    if (confirmDeleteId != null) {
+        AutomationDeleteDialog(
+            onConfirm = { onConfirmDelete?.invoke(confirmDeleteId) },
+            onCancel = { onCancelDelete?.invoke() },
+        )
     }
-    PageFrame(
-        title = title,
-        onBack = {
-            if (state.route == AutomationRoute.CATALOG) onBack() else onBackToCatalog()
-        },
-        modifier = modifier,
-        rootTag = UiPageTags.AUTOMATION_ROOT,
-        actions = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (onNewSchedule != null && state.route == AutomationRoute.CATALOG) {
-                    SessionTextAction(
-                        label = UiStrings.AUTOMATION_NEW,
+    when (state.route) {
+        AutomationRoute.CATALOG -> AutomationFrame(
+            largeTitle = UiStrings.AUTOMATION_TITLE,
+            // iOS `.topBarLeading` holds 刷新 beside the sheet's ✕; the bar slot
+            // takes both, in that order (`NativeAutomationPage.swift:78-81`).
+            leading = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(LocalUiTokens.current.spacing.iconText),
+                ) {
+                    SettingsNavAction(
+                        text = SETTINGS_CLOSE_GLYPH,
+                        onClick = onBack,
+                        tag = UiPageTags.AUTOMATION_BACK,
+                        description = UiStrings.BACK,
+                    )
+                    if (onRefresh != null) {
+                        SettingsNavAction(
+                            text = UiStrings.AUTOMATION_REFRESH,
+                            onClick = onRefresh,
+                            tag = UiPageTags.AUTOMATION_REFRESH,
+                        )
+                    }
+                }
+            },
+            trailing = if (onNewSchedule == null) {
+                null
+            } else {
+                {
+                    AutomationBarAction(
+                        label = UiStrings.AUTOMATION_NEW_SHORT,
                         onClick = onNewSchedule,
-                        tone = SessionActionTone.ACCENT,
+                        tag = UiPageTags.AUTOMATION_NEW,
                     )
                 }
-                if (onRefresh != null) {
-                    SessionTextAction(
-                        label = UiStrings.AUTOMATION_REFRESH,
-                        onClick = onRefresh,
-                        tone = SessionActionTone.SECONDARY,
+            },
+            rootTag = UiPageTags.AUTOMATION_ROOT,
+            modifier = modifier,
+        ) {
+            AutomationCatalogContent(
+                state = state,
+                onOpenDetail = onOpenDetail,
+                onNewSchedule = onNewSchedule,
+            )
+        }
+
+        AutomationRoute.DETAIL -> AutomationFrame(
+            // iOS shows the same 定时任务 inline title on the child page (:152).
+            title = UiStrings.AUTOMATION_TITLE,
+            onBack = onBackToCatalog,
+            backTag = UiPageTags.AUTOMATION_BACK,
+            rootTag = UiPageTags.AUTOMATION_ROOT,
+            modifier = modifier,
+        ) {
+            AutomationDetailContent(
+                state = state,
+                onOpenHistory = onOpenHistory,
+                onEditSchedule = onEditSchedule,
+                onRequestDelete = onRequestDelete,
+            )
+        }
+
+        AutomationRoute.HISTORY -> AutomationFrame(
+            title = UiStrings.AUTOMATION_HISTORY_TITLE,
+            onBack = onBackToCatalog,
+            backTag = UiPageTags.AUTOMATION_BACK,
+            rootTag = UiPageTags.AUTOMATION_ROOT,
+            modifier = modifier,
+        ) {
+            AutomationHistoryContent(state = state, onLoadMore = onLoadMoreHistory)
+        }
+
+        // The baseline's `.sheet` (`:92`, `:99`): its own inline title, 取消 in the
+        // cancellation slot (`:281`) and 保存 in the confirmation slot (`:283`).
+        AutomationRoute.EDITOR -> ScheduleEditorPage(
+            state = state,
+            onCancel = { onCancelEditor?.invoke() },
+            onSubmit = { onSubmitDraft?.invoke() },
+            onDraftChange = onDraftChange,
+            modifier = modifier,
+        )
+    }
+}
+
+/**
+ * The 44 pt bar / 34 pt large title shell.
+ *
+ * This is `SettingsSubPageFrame`'s shell (`ui/surface/SettingsChrome.kt`) with the
+ * one difference this page needs: iOS puts two controls in `.topBarLeading`
+ * (the sheet's ✕ and 刷新), and the shared frame exposes a single leading slot.
+ * Rather than widen a surface another lane is editing, the twelve lines are
+ * spelled here and every element inside them (`SettingsNavBar`,
+ * `SettingsLargeTitle`, `SettingsSectionLabel`, `settingsLargeTitleStyle`) is the
+ * shared one, so the bar height, the title inset, the title role and the
+ * system-bar insets still have exactly one owner.
+ *
+ * @param title the inline (centred) bar title; the child routes use it.
+ * @param largeTitle the 34 pt heading drawn in the content; the catalog uses it.
+ * @param leading the leading slot; the catalog puts ✕ and 刷新 in it.
+ * @param trailing the trailing slot; the catalog puts 新建 in it.
+ */
+@Composable
+private fun AutomationFrame(
+    modifier: Modifier = Modifier,
+    title: String? = null,
+    largeTitle: String? = null,
+    onBack: (() -> Unit)? = null,
+    backTag: String? = null,
+    leading: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+    rootTag: String? = null,
+    content: @Composable () -> Unit,
+) {
+    val tokens = LocalUiTokens.current
+    // `colors.background` is tier: unmeasured, so an unspecified value leaves the
+    // platform surface in place instead of an invented sRGB fill (same rule as
+    // `SettingsSubPageFrame` / `PageFrame`).
+    val background = if (tokens.colors.background.isSpecified) {
+        Modifier.background(tokens.colors.background)
+    } else {
+        Modifier
+    }
+    Column(
+        modifier = (if (rootTag != null) modifier.testTag(rootTag) else modifier)
+            .fillMaxSize()
+            .then(background)
+            // Edge-to-edge: the horizontal system bars are page-wide; the vertical
+            // ones are consumed by the bar and by the content box below.
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+    ) {
+        SettingsNavBar(
+            title = title,
+            onBack = onBack,
+            backTag = backTag,
+            leading = leading,
+            trailing = trailing,
+        )
+        if (largeTitle != null) {
+            SettingsLargeTitle(largeTitle)
+        }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .navigationBarsPadding(),
+        ) {
+            content()
+        }
+    }
+}
+
+/**
+ * The catalog: one list. The empty block, the rows and the 需要处理 section are
+ * rows of the same scroll container, exactly as iOS nests them in one `List`.
+ */
+@Composable
+private fun AutomationCatalogContent(
+    state: AutomationScreenState,
+    onOpenDetail: (String) -> Unit,
+    onNewSchedule: (() -> Unit)?,
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag(UiPageTags.AUTOMATION_LIST),
+        verticalArrangement = Arrangement.spacedBy(pageListGap),
+    ) {
+        when (state.status) {
+            AutomationStatus.EMPTY -> item(key = "automation.empty") {
+                AutomationEmptyBlock(onNewSchedule = onNewSchedule)
+            }
+
+            AutomationStatus.UNKNOWN -> {
+                item(key = "automation.unknown") {
+                    InfoRow(
+                        title = UiStrings.AUTOMATION_UNKNOWN_STATE,
+                        value = null,
+                        subtitle = UiStrings.AUTOMATION_UNKNOWN_HINT,
+                        modifier = Modifier.testTag(UiPageTags.AUTOMATION_UNKNOWN),
+                    )
+                }
+                item(key = "automation.unknown.detail") {
+                    InfoRow(
+                        title = UiStrings.UNKNOWN,
+                        value = null,
+                        subtitle = UiStrings.AUTOMATION_UNKNOWN_DETAIL,
+                        tone = PageTone.UNKNOWN,
+                        modifier = Modifier.testTag(UiPageTags.AUTOMATION_UNKNOWN_DETAIL),
                     )
                 }
             }
-        },
-    ) {
-        when (state.status) {
-            AutomationStatus.FAILED -> AutomationFailureBlock(
-                failure = state.failure,
-                onRetry = onRetry,
-                onDismissFailure = onDismissFailure,
-            )
 
-            AutomationStatus.UNKNOWN -> AutomationUnknownList()
-
-            AutomationStatus.EMPTY -> AutomationEmptyBlock(onNewSchedule = onNewSchedule)
-
-            AutomationStatus.READY -> when (state.route) {
-                AutomationRoute.CATALOG -> AutomationCatalogList(
-                    state = state,
-                    onOpenDetail = onOpenDetail,
-                )
-
-                AutomationRoute.DETAIL -> AutomationDetailList(
-                    state = state,
-                    onOpenHistory = onOpenHistory,
-                    onEditSchedule = onEditSchedule,
-                )
-
-                AutomationRoute.HISTORY -> AutomationHistoryList(
-                    state = state,
-                    onLoadMore = onLoadMoreHistory,
+            AutomationStatus.READY -> {
+                if (state.hasUnmeasuredValues) {
+                    item(key = "automation.unmeasured") {
+                        InfoRow(
+                            title = UiStrings.UNKNOWN,
+                            value = null,
+                            subtitle = UiStrings.AUTOMATION_UNMEASURED_HINT,
+                            tone = PageTone.UNKNOWN,
+                            modifier = Modifier.testTag(UiPageTags.AUTOMATION_UNMEASURED),
+                        )
+                    }
+                }
+                items(count = state.schedules.size, key = { index -> state.schedules[index].id }) { index ->
+                    val schedule = state.schedules[index]
+                    AutomationScheduleRow(
+                        schedule = schedule,
+                        onClick = { onOpenDetail(schedule.id) },
+                    )
+                }
+            }
+        }
+        state.failure?.let { failure ->
+            item(key = "automation.failure") {
+                AutomationFailureSection(
+                    failure = failure,
+                    header = {
+                        SettingsSectionLabel(
+                            title = UiStrings.AUTOMATION_ATTENTION,
+                            tag = UiPageTags.AUTOMATION_ATTENTION,
+                        )
+                    },
                 )
             }
         }
@@ -568,100 +1203,73 @@ public fun NativeAutomationPage(
 }
 
 /**
- * The unknown catalog: a scrollable pair of lines so the negative assertion in
- * the test runs against a composed node, not against a window that never held it.
+ * The reported empty catalog: the sentence pair and the one write action the
+ * host owns.
+ *
+ * iOS: `VStack(spacing: 8)` with a 17/600 line, a 13 pt secondary line, and the
+ * CTA 8 pt below them; the block itself carries 24 pt above and below
+ * (`NativeAutomationPage.swift:19-41`). The CTA is full width inside the page
+ * margin *plus* its own 16 pt inset (measured x 32.0..369.7 pt on a 402 pt page),
+ * 50 pt tall and radius 12.
  */
 @Composable
-private fun AutomationUnknownList() {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .testTag(UiPageTags.AUTOMATION_LIST),
-        verticalArrangement = Arrangement.spacedBy(pageListGap),
-    ) {
-        item(key = "automation.unknown") {
-            InfoRow(
-                title = UiStrings.AUTOMATION_UNKNOWN_STATE,
-                value = null,
-                subtitle = UiStrings.AUTOMATION_UNKNOWN_HINT,
-                modifier = Modifier.testTag(UiPageTags.AUTOMATION_UNKNOWN),
-            )
-        }
-        item(key = "automation.unknown.detail") {
-            InfoRow(
-                title = UiStrings.UNKNOWN,
-                value = null,
-                subtitle = UiStrings.AUTOMATION_UNKNOWN_DETAIL,
-                tone = PageTone.UNKNOWN,
-                modifier = Modifier.testTag(UiPageTags.AUTOMATION_UNKNOWN_DETAIL),
-            )
-        }
-    }
-}
-
-/** The reported empty catalog, with the one write action the host owns. */
-@Composable
 private fun AutomationEmptyBlock(onNewSchedule: (() -> Unit)?) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        EmptyHint(
-            title = UiStrings.AUTOMATION_EMPTY,
-            hint = UiStrings.AUTOMATION_EMPTY_HINT,
-            tag = UiPageTags.AUTOMATION_EMPTY,
-            modifier = Modifier.weight(1f),
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(UiPageTags.AUTOMATION_EMPTY)
+            .padding(vertical = ShellFilesMetrics.EMPTY_STATE_PADDING_V_PT.dp)
+            .semantics(mergeDescendants = true) {},
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(ShellFilesMetrics.EMPTY_STATE_GAP_PT.dp),
+    ) {
+        BasicText(
+            text = UiStrings.AUTOMATION_EMPTY,
+            style = type.headline.copy(color = tokens.colors.primary, textAlign = TextAlign.Center),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        BasicText(
+            text = UiStrings.AUTOMATION_EMPTY_HINT,
+            style = type.secondary.copy(color = tokens.colors.secondary, textAlign = TextAlign.Center),
+            modifier = Modifier.fillMaxWidth(),
         )
         if (onNewSchedule != null) {
             Box(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // Two 16 pt insets, not one: iOS' `.listRowInsets` clear this
+                    // row's *inner* margin, so the list's own 16 pt page margin
+                    // stays, and the button adds `.padding(.horizontal, 16)` on top
+                    // of it. Measured: the box starts at 32.0 pt on a 402 pt page.
+                    .padding(horizontal = tokens.geometry.pageOuterMarginH * 2)
+                    // iOS `.padding(.top, 8)` on the button, on top of the stack's 8.
+                    .padding(top = ShellFilesMetrics.EMPTY_STATE_GAP_PT.dp)
+                    .testTag(UiPageTags.AUTOMATION_CTA)
+                    .clip(RoundedCornerShape(tokens.radius.card))
+                    .background(tokens.colors.ctaOverride)
+                    .defaultMinSize(minHeight = SessionsMetrics.ctaHeight)
+                    .clickable(role = Role.Button, onClick = onNewSchedule)
+                    .padding(
+                        // The button's own inset: 16 (row) + 16 (button) = the
+                        // measured 32.0 pt on both sides.
+                        horizontal = tokens.geometry.pageOuterMarginH,
+                        vertical = tokens.spacing.badgeInsetV,
+                    )
+                    .semantics { contentDescription = UiStrings.AUTOMATION_NEW },
                 contentAlignment = Alignment.Center,
             ) {
-                SessionTextAction(
-                    label = UiStrings.AUTOMATION_NEW,
-                    onClick = onNewSchedule,
-                    tone = SessionActionTone.ACCENT,
-                    modifier = Modifier.testTag(UiPageTags.AUTOMATION_NEW),
+                BasicText(
+                    text = UiStrings.AUTOMATION_NEW,
+                    style = type.headline.copy(color = tokens.colors.onAccent, textAlign = TextAlign.Center),
                 )
             }
         }
     }
 }
 
-/** The measured catalog: one row per schedule, in host order. */
-@Composable
-private fun AutomationCatalogList(
-    state: AutomationScreenState,
-    onOpenDetail: (String) -> Unit,
-) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .testTag(UiPageTags.AUTOMATION_LIST),
-        verticalArrangement = Arrangement.spacedBy(pageListGap),
-    ) {
-        if (state.hasUnmeasuredValues) {
-            item(key = "automation.unmeasured") {
-                InfoRow(
-                    title = UiStrings.UNKNOWN,
-                    value = null,
-                    subtitle = UiStrings.AUTOMATION_UNMEASURED_HINT,
-                    tone = PageTone.UNKNOWN,
-                    modifier = Modifier.testTag(UiPageTags.AUTOMATION_UNMEASURED),
-                )
-            }
-        }
-        items(count = state.schedules.size, key = { index -> state.schedules[index].id }) { index ->
-            val schedule = state.schedules[index]
-            AutomationScheduleRow(
-                schedule = schedule,
-                onClick = { onOpenDetail(schedule.id) },
-            )
-        }
-        item(key = "automation.read-only") {
-            AutomationNoteRow(text = UiStrings.AUTOMATION_READ_ONLY)
-        }
-    }
-}
-
-/** One schedule row: name and status, prompt, then session and next run. */
+/** One schedule row: name and status, prompt, then session, rule and next run. */
 @Composable
 private fun AutomationScheduleRow(
     schedule: AutomationScheduleView,
@@ -701,15 +1309,17 @@ private fun AutomationScheduleRow(
                 maxLines = 1,
             )
         }
+        // iOS `.font(.subheadline)` (15 pt) for the prompt, two lines.
         BasicText(
             text = schedule.prompt,
-            style = type.secondary.copy(color = tokens.colors.secondary),
+            style = type.subheadline.copy(color = tokens.colors.secondary),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
+        // iOS `.font(.caption)` in secondary ink: "会话 · 规则 · 下次计划".
         BasicText(
             text = scheduleMeta(schedule),
-            style = type.caption.copy(color = tokens.colors.tertiary),
+            style = type.caption.copy(color = tokens.colors.secondary),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -718,10 +1328,11 @@ private fun AutomationScheduleRow(
 
 /** One schedule's detail, including the route into its delivery history. */
 @Composable
-private fun AutomationDetailList(
+private fun AutomationDetailContent(
     state: AutomationScreenState,
     onOpenHistory: (String) -> Unit,
     onEditSchedule: ((String) -> Unit)?,
+    onRequestDelete: ((String) -> Unit)?,
 ) {
     val detail = state.detail
     LazyColumn(
@@ -738,6 +1349,21 @@ private fun AutomationDetailList(
                     subtitle = UiStrings.AUTOMATION_NOT_FOUND_HINT,
                     tone = PageTone.DEGRADED,
                 )
+            }
+            state.failure?.let { failure ->
+                item(key = "automation.detail.failure") {
+                    // iOS wraps this page's error in its own 错误 section (:150).
+                    AutomationFailureSection(
+                        failure = failure,
+                        tag = UiPageTags.AUTOMATION_FAILURE,
+                        header = {
+                            SettingsSectionLabel(
+                                title = UiStrings.AUTOMATION_ERROR,
+                                tag = UiPageTags.AUTOMATION_FAILURE,
+                            )
+                        },
+                    )
+                }
             }
             return@LazyColumn
         }
@@ -807,10 +1433,22 @@ private fun AutomationDetailList(
         if (onEditSchedule != null) {
             item(key = "automation.detail.edit") {
                 InfoRow(
-                    title = UiStrings.AUTOMATION_EDIT,
+                    title = UiStrings.AUTOMATION_EDIT_SHORT,
                     value = null,
                     onClick = { onEditSchedule(detail.id) },
                     modifier = Modifier.testTag(UiPageTags.AUTOMATION_EDIT),
+                )
+            }
+        }
+        // The row's other swipe verb (`:64`). The store belongs to the host, so the
+        // row is drawn only when the host can delete; the confirmation is the page's.
+        if (onRequestDelete != null) {
+            item(key = "automation.detail.delete") {
+                InfoRow(
+                    title = UiStrings.AUTOMATION_DELETE,
+                    value = null,
+                    onClick = { onRequestDelete(detail.id) },
+                    modifier = Modifier.testTag(UiPageTags.AUTOMATION_DELETE),
                 )
             }
         }
@@ -825,15 +1463,31 @@ private fun AutomationDetailList(
                 )
             }
         }
+        // Android-only explanatory row (iOS has no equivalent): the page does not
+        // own the schedule store, so an editor is a host handoff.
         item(key = "automation.detail.read-only") {
             AutomationNoteRow(text = UiStrings.AUTOMATION_READ_ONLY)
+        }
+        state.failure?.let { failure ->
+            item(key = "automation.detail.failure") {
+                AutomationFailureSection(
+                    failure = failure,
+                    tag = UiPageTags.AUTOMATION_FAILURE,
+                    header = {
+                        SettingsSectionLabel(
+                            title = UiStrings.AUTOMATION_ERROR,
+                            tag = UiPageTags.AUTOMATION_FAILURE,
+                        )
+                    },
+                )
+            }
         }
     }
 }
 
 /** One schedule's delivery history, with the empty/unknown/failed split. */
 @Composable
-private fun AutomationHistoryList(
+private fun AutomationHistoryContent(
     state: AutomationScreenState,
     onLoadMore: (() -> Unit)?,
 ) {
@@ -921,6 +1575,21 @@ private fun AutomationHistoryList(
                 }
             }
         }
+        state.failure?.let { failure ->
+            item(key = "automation.history.failure.section") {
+                // iOS wraps this page's error in its own 错误 section (:203).
+                AutomationFailureSection(
+                    failure = failure,
+                    tag = UiPageTags.AUTOMATION_FAILURE,
+                    header = {
+                        SettingsSectionLabel(
+                            title = UiStrings.AUTOMATION_ERROR,
+                            tag = UiPageTags.AUTOMATION_FAILURE,
+                        )
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -959,37 +1628,619 @@ private fun AutomationDeliveryRow(delivery: AutomationDeliveryView) {
     }
 }
 
-/** The catalog failure line with the shared retry/dismiss vocabulary. */
+/**
+ * The host's failure, under the section header iOS uses.
+ *
+ * `Section("需要处理") { Text(error).font(.footnote).foregroundStyle(.red) }`
+ * (`NativeAutomationPage.swift:70`): a secondary-ink group header, then the
+ * host's own sentence in 13 pt red, both starting at the measured 32.7 pt — the
+ * same `SettingsSectionLabelIndent` the settings sub-pages measured. There is no
+ * retry or dismiss control here on either platform: the 刷新 control in the bar
+ * is the retry, and a successful read is what clears the section.
+ *
+ * @param header the section header; 需要处理 on the catalog, 错误 on the children.
+ *   It is a slot because the header's words belong to the route that draws them.
+ * @param failure the host's sentence, verbatim: the page never translates a host
+ *   error into its own words.
+ * @param tag the stable test tag of the failure sentence.
+ */
 @Composable
-private fun AutomationFailureBlock(
-    failure: String?,
-    onRetry: (() -> Unit)?,
-    onDismissFailure: (() -> Unit)?,
+private fun AutomationFailureSection(
+    header: @Composable () -> Unit,
+    failure: String,
+    tag: String = UiPageTags.AUTOMATION_FAILURE,
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        InfoRow(
-            title = UiStrings.AUTOMATION_LOAD_FAILED,
-            value = null,
-            subtitle = failure,
-            modifier = Modifier.testTag(UiPageTags.AUTOMATION_FAILURE),
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            // The list's section gap above the header. The empty block already ends
+            // its 24 pt tail below the CTA and the header adds its own 12 pt; this
+            // 8 pt is what reproduces the measured 54.6 pt CTA -> header gap
+            // (`spec/ui/v1/tokens.json` has no section-gap token, so the page uses
+            // the 8 pt spacing token it already reads).
+            .padding(top = tokens.spacing.codeToolbar),
+    ) {
+        header()
+        BasicText(
+            text = failure,
+            style = type.secondary.copy(color = tokens.colors.danger),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(tag)
+                .padding(
+                    start = SettingsSectionLabelIndent,
+                    end = SettingsSectionLabelIndent,
+                    top = tokens.geometry.pageOuterMarginH,
+                    bottom = tokens.spacing.iconText,
+                ),
         )
-        if (onRetry != null) {
-            InfoRow(
-                title = UiStrings.RETRY,
-                value = null,
-                onClick = onRetry,
-                modifier = Modifier.testTag(UiPageTags.AUTOMATION_RETRY),
+    }
+}
+
+/**
+ * A bar text control whose label the page writes.
+ *
+ * `SettingsNavAction` takes the same copy as `text`, which leaves the label only
+ * in the caller's argument. Drawing the `BasicText` here keeps the measured
+ * settings bar style (`settingsLabelStyle`, accent ink, icon-text padding) and
+ * keeps the page's own words next to the page.
+ *
+ * @param label the visible verb.
+ * @param onClick the control's action.
+ * @param tag the stable test tag.
+ */
+@Composable
+private fun AutomationBarAction(label: String, onClick: () -> Unit, tag: String) {
+    val tokens = LocalUiTokens.current
+    BasicText(
+        text = label,
+        style = settingsLabelStyle().copy(color = tokens.colors.accent),
+        modifier = Modifier
+            .testTag(tag)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(vertical = tokens.spacing.iconText, horizontal = tokens.spacing.iconText),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// ScheduleEditorPage: the embedded form
+// ---------------------------------------------------------------------------
+
+/**
+ * The editor the catalog presents (`NativeAutomationPage.swift:212`–`:420`).
+ *
+ * iOS puts this form in a `.sheet` (`:92` new, `:99` edit) under its own
+ * `NavigationStack`, with an inline title (`:278`), 取消 in the cancellation slot
+ * (`:281`) and 保存 in the confirmation slot (`:283`). The port keeps that shape
+ * inside the page's own frame: the same two slots, the same three groups, the
+ * same field order.
+ *
+ * What it does **not** do is dismiss itself on 保存. The baseline dismisses only
+ * when `updateSchedule`/`createSchedule` reported success (`:346`); this host has
+ * no schedule store, so the page would be claiming an outcome it did not observe.
+ * The form therefore keeps its values, reports the rule's sentence when the draft
+ * does not validate, and the host's answer to the handoff is what the person
+ * reads above the page.
+ *
+ * @param state the page state; [AutomationScreenState.editor] carries the draft.
+ * @param onCancel 取消 (`:281`).
+ * @param onSubmit 保存 (`:283`).
+ * @param onDraftChange one field changed. `null` renders a read-only form, which
+ *   is what a host that cannot edit at all passes.
+ */
+@Composable
+private fun ScheduleEditorPage(
+    state: AutomationScreenState,
+    onCancel: () -> Unit,
+    onSubmit: () -> Unit,
+    onDraftChange: ((AutomationScheduleDraft) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val editor = state.editor ?: return
+    val draft = editor.draft
+    val tokens = LocalUiTokens.current
+    val update: (AutomationScheduleDraft) -> Unit = { next -> onDraftChange?.invoke(next) }
+    // The 规则 chooser is pure local UI state (no ScreenState node): it closes on
+    // choose or dismiss and changes nothing on its own.
+    var choosingRule by remember { mutableStateOf(false) }
+
+    AutomationFrame(
+        // `navigationTitle(schedule == nil ? "新建自动化" : "编辑自动化")` (`:278`).
+        title = if (draft.isNew) {
+            UiStrings.AUTOMATION_EDITOR_NEW_TITLE
+        } else {
+            UiStrings.AUTOMATION_EDITOR_EDIT_TITLE
+        },
+        leading = {
+            SessionTextAction(
+                label = UiStrings.CANCEL,
+                onClick = onCancel,
+                tone = SessionActionTone.SECONDARY,
+                modifier = Modifier.testTag(UiPageTags.AUTOMATION_EDITOR_CANCEL),
             )
-        }
-        if (onDismissFailure != null) {
-            InfoRow(
-                title = UiStrings.DISMISS,
-                value = null,
-                onClick = onDismissFailure,
-                modifier = Modifier.testTag(UiPageTags.AUTOMATION_DISMISS),
+        },
+        trailing = {
+            SessionTextAction(
+                label = UiStrings.AUTOMATION_EDITOR_SAVE,
+                onClick = onSubmit,
+                tone = SessionActionTone.ACCENT,
+                enabled = editor.canSubmit,
+                modifier = Modifier.testTag(UiPageTags.AUTOMATION_EDITOR_SAVE),
             )
+        },
+        rootTag = UiPageTags.AUTOMATION_EDITOR_ROOT,
+        modifier = modifier,
+    ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag(UiPageTags.AUTOMATION_EDITOR_LIST),
+            verticalArrangement = Arrangement.spacedBy(pageListGap),
+        ) {
+            // 任务内容 (`:252`).
+            item(key = "editor.content.label") {
+                SessionSectionLabel(
+                    text = UiStrings.AUTOMATION_EDITOR_CONTENT_SECTION,
+                    modifier = Modifier.testTag(UiPageTags.AUTOMATION_EDITOR_CONTENT_SECTION),
+                )
+            }
+            item(key = "editor.name") {
+                AutomationField(
+                    label = UiStrings.AUTOMATION_EDITOR_NAME_FIELD,
+                    value = draft.title,
+                    onValueChange = { value -> update(draft.copy(title = value)) },
+                    tag = UiPageTags.AUTOMATION_EDITOR_NAME,
+                )
+            }
+            item(key = "editor.prompt") {
+                AutomationField(
+                    label = UiStrings.AUTOMATION_PROMPT,
+                    value = draft.prompt,
+                    onValueChange = { value -> update(draft.copy(prompt = value)) },
+                    tag = UiPageTags.AUTOMATION_EDITOR_PROMPT,
+                    minLines = PROMPT_FIELD_LINES,
+                )
+            }
+            // 计划时间 (`:258`).
+            item(key = "editor.timing.label") {
+                SessionSectionLabel(
+                    text = UiStrings.AUTOMATION_EDITOR_TIMING_SECTION,
+                    modifier = Modifier.testTag(UiPageTags.AUTOMATION_EDITOR_TIMING_SECTION),
+                )
+            }
+            if (!draft.isNew) {
+                // `Toggle("修改计划时间", isOn: $changeTiming)` (`:260`): only an
+                // existing schedule offers the choice, and the row is the target.
+                item(key = "editor.change-timing") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag(UiPageTags.AUTOMATION_EDITOR_CHANGE_TIMING)
+                            .heightIn(min = tokens.geometry.pageRowMinHeight)
+                            .clickable(role = Role.Switch) { update(draft.copy(changeTiming = !draft.changeTiming)) }
+                            .semantics(mergeDescendants = true) { role = Role.Switch }
+                            .padding(
+                                horizontal = tokens.geometry.pageOuterMarginH,
+                                vertical = tokens.spacing.badgeInsetV,
+                            ),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        BasicText(
+                            text = UiStrings.AUTOMATION_EDITOR_CHANGE_TIMING,
+                            style = LocalUiType.current.body.copy(color = tokens.colors.primary),
+                        )
+                        BasicText(
+                            text = if (draft.changeTiming) {
+                                UiStrings.AUTOMATION_EDITOR_TOGGLE_ON
+                            } else {
+                                UiStrings.AUTOMATION_EDITOR_TOGGLE_OFF
+                            },
+                            style = LocalUiType.current.caption.copy(
+                                color = if (draft.changeTiming) {
+                                    tokens.colors.success
+                                } else {
+                                    tokens.colors.tertiary
+                                },
+                            ),
+                        )
+                    }
+                }
+            }
+            if (draft.editsTiming) {
+                // `Picker("规则", selection: $rule)` (`:263`): one row that opens the
+                // six options.
+                item(key = "editor.rule") {
+                    InfoRow(
+                        title = UiStrings.AUTOMATION_RULE,
+                        value = draft.rule.optionLabel,
+                        onClick = { choosingRule = true },
+                        modifier = Modifier.testTag(UiPageTags.AUTOMATION_EDITOR_RULE),
+                    )
+                }
+                item(key = "editor.rule.fields") {
+                    AutomationRuleFields(draft = draft, onDraftChange = update)
+                }
+            } else {
+                // `LabeledContent("当前规则", value: schedule.scheduledAt)` (`:274`):
+                // the value is the host's own time string, or 未知.
+                item(key = "editor.current-rule") {
+                    InfoRow(
+                        title = UiStrings.AUTOMATION_EDITOR_CURRENT_RULE,
+                        value = state.detail?.nextRunText ?: UiStrings.UNKNOWN,
+                        modifier = Modifier.testTag(UiPageTags.AUTOMATION_EDITOR_CURRENT_RULE),
+                    )
+                }
+            }
+            // `Section("错误")` (`:276`): the rule's sentence, and only after 保存.
+            editor.error?.let { message ->
+                item(key = "editor.error.label") {
+                    SessionSectionLabel(text = UiStrings.AUTOMATION_ERROR)
+                }
+                item(key = "editor.error") {
+                    BasicText(
+                        text = message,
+                        style = LocalUiType.current.caption.copy(color = tokens.colors.danger),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag(UiPageTags.AUTOMATION_EDITOR_ERROR)
+                            .padding(
+                                start = SettingsSectionLabelIndent,
+                                end = SettingsSectionLabelIndent,
+                                top = tokens.spacing.iconText,
+                                bottom = tokens.spacing.iconText,
+                            ),
+                    )
+                }
+            }
+            state.failure?.let { failure ->
+                item(key = "editor.failure") {
+                    // The host's own read failure, in the same 错误 group.
+                    AutomationFailureSection(
+                        failure = failure,
+                        header = { SessionSectionLabel(text = UiStrings.AUTOMATION_ERROR) },
+                    )
+                }
+            }
+            if (state.writable == FactState.NO) {
+                item(key = "editor.handoff") {
+                    SettingsSubPageFootnote(
+                        text = UiStrings.AUTOMATION_EDITOR_HANDOFF_HINT,
+                        modifier = Modifier.testTag(UiPageTags.AUTOMATION_EDITOR_HANDOFF),
+                    )
+                }
+            }
         }
     }
+    if (choosingRule) {
+        AutomationRuleDialog(
+            selected = draft.rule,
+            onSelect = { rule ->
+                choosingRule = false
+                update(draft.copy(rule = rule))
+            },
+            onDismiss = { choosingRule = false },
+        )
+    }
+}
+
+/**
+ * The rule's own fields (`NativeAutomationPage.swift:290`–`:314`).
+ *
+ * One field set per rule, in the baseline's order: 延迟秒数 / ISO-8601 日期时间 /
+ * 间隔秒数 / 本地时间 + IANA 时区 (+ 星期, + 五段 Cron). The `指定时间` field is
+ * preceded by the baseline's own hint (`:296`) because this page cannot fill it
+ * with `now + 1h` — it never reads a clock.
+ */
+@Composable
+private fun AutomationRuleFields(
+    draft: AutomationScheduleDraft,
+    onDraftChange: (AutomationScheduleDraft) -> Unit,
+) {
+    val tokens = LocalUiTokens.current
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+    ) {
+        when (draft.rule) {
+            AutomationRule.AFTER -> AutomationField(
+                // `schedule == nil ? "延迟秒数" : "延迟到期秒数"` (`:294`).
+                label = if (draft.isNew) {
+                    UiStrings.AUTOMATION_EDITOR_DELAY_FIELD
+                } else {
+                    UiStrings.AUTOMATION_EDITOR_DELAY_EDIT_FIELD
+                },
+                value = draft.afterSeconds,
+                onValueChange = { value -> onDraftChange(draft.copy(afterSeconds = value)) },
+                tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + AutomationRule.AFTER.wire,
+                keyboardType = KeyboardType.Number,
+            )
+
+            AutomationRule.AT -> {
+                BasicText(
+                    text = UiStrings.AUTOMATION_EDITOR_AT_HINT,
+                    style = LocalUiType.current.caption.copy(color = tokens.colors.tertiary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = tokens.geometry.pageOuterMarginH),
+                )
+                AutomationField(
+                    label = UiStrings.AUTOMATION_EDITOR_AT_FIELD,
+                    value = draft.at,
+                    onValueChange = { value -> onDraftChange(draft.copy(at = value)) },
+                    tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + AutomationRule.AT.wire,
+                )
+            }
+
+            AutomationRule.EVERY -> AutomationField(
+                label = UiStrings.AUTOMATION_EDITOR_EVERY_FIELD,
+                value = draft.everySeconds,
+                onValueChange = { value -> onDraftChange(draft.copy(everySeconds = value)) },
+                tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + AutomationRule.EVERY.wire,
+                keyboardType = KeyboardType.Number,
+            )
+
+            AutomationRule.DAILY -> {
+                AutomationField(
+                    label = UiStrings.AUTOMATION_EDITOR_TIME_FIELD,
+                    value = draft.localTime,
+                    onValueChange = { value -> onDraftChange(draft.copy(localTime = value)) },
+                    tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + TIME_FIELD_SUFFIX,
+                )
+                AutomationField(
+                    label = UiStrings.AUTOMATION_EDITOR_TIME_ZONE_FIELD,
+                    value = draft.timeZone,
+                    onValueChange = { value -> onDraftChange(draft.copy(timeZone = value)) },
+                    tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + ZONE_FIELD_SUFFIX,
+                )
+            }
+
+            AutomationRule.WEEKLY -> {
+                AutomationField(
+                    label = UiStrings.AUTOMATION_EDITOR_TIME_FIELD,
+                    value = draft.localTime,
+                    onValueChange = { value -> onDraftChange(draft.copy(localTime = value)) },
+                    tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + TIME_FIELD_SUFFIX,
+                )
+                AutomationField(
+                    label = UiStrings.AUTOMATION_EDITOR_TIME_ZONE_FIELD,
+                    value = draft.timeZone,
+                    onValueChange = { value -> onDraftChange(draft.copy(timeZone = value)) },
+                    tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + ZONE_FIELD_SUFFIX,
+                )
+                AutomationField(
+                    label = UiStrings.AUTOMATION_EDITOR_WEEKDAYS_FIELD,
+                    value = draft.weekdays,
+                    onValueChange = { value -> onDraftChange(draft.copy(weekdays = value)) },
+                    tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + WEEKDAYS_FIELD_SUFFIX,
+                    keyboardType = KeyboardType.Number,
+                )
+            }
+
+            AutomationRule.CRON -> {
+                AutomationField(
+                    label = UiStrings.AUTOMATION_EDITOR_CRON_FIELD,
+                    value = draft.cron,
+                    onValueChange = { value -> onDraftChange(draft.copy(cron = value)) },
+                    tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + CRON_FIELD_SUFFIX,
+                )
+                AutomationField(
+                    label = UiStrings.AUTOMATION_EDITOR_TIME_ZONE_FIELD,
+                    value = draft.timeZone,
+                    onValueChange = { value -> onDraftChange(draft.copy(timeZone = value)) },
+                    tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + ZONE_FIELD_SUFFIX,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One labelled form field.
+ *
+ * The label is visible text and the field is one `BasicTextField`, exactly like the
+ * MCP editor's field block: same ink roles, same row floor, same placeholder idiom.
+ *
+ * @param label the field's own visible name.
+ * @param value the current text.
+ * @param onValueChange one edit.
+ * @param tag the stable test tag.
+ * @param minLines the field's floor; 提醒内容 uses the baseline's 3…6 lines (`:255`).
+ * @param keyboardType the keyboard the field asks for.
+ */
+@Composable
+private fun AutomationField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    tag: String,
+    minLines: Int = 1,
+    keyboardType: KeyboardType = KeyboardType.Text,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = tokens.geometry.pageOuterMarginH,
+                vertical = tokens.spacing.badgeInsetV,
+            ),
+        verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
+    ) {
+        BasicText(
+            text = label,
+            style = type.caption.copy(color = tokens.colors.tertiary),
+        )
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            textStyle = type.body.copy(color = tokens.colors.primary),
+            cursorBrush = SolidColor(tokens.colors.accent),
+            minLines = minLines,
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = ImeAction.Done),
+            modifier = Modifier
+                .fillMaxWidth()
+                // Page-level geometry: an editor field is a page row.
+                .heightIn(min = tokens.geometry.pageRowMinHeight)
+                .testTag(tag)
+                .semantics { contentDescription = label },
+        )
+    }
+}
+
+/**
+ * The 规则 chooser (`Picker("规则", selection: $rule)`, `:263`–`:270`).
+ *
+ * Six explicit option rows, not a loop over [AutomationRule]'s values: an option
+ * the user can tap is visible copy, and the page-source gate only resolves a label
+ * where the source names it. The current selection is printed above them
+ * (`当前规则`), so the dialog says what is selected without a second glyph.
+ *
+ * @param selected the rule the draft currently uses.
+ * @param onSelect the chosen rule.
+ * @param onDismiss close without choosing.
+ */
+@Composable
+private fun AutomationRuleDialog(
+    selected: AutomationRule,
+    onSelect: (AutomationRule) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(UiPageTags.AUTOMATION_EDITOR_RULE_DIALOG),
+        title = {
+            BasicText(
+                text = UiStrings.AUTOMATION_RULE,
+                style = type.headline.copy(color = tokens.colors.primary),
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV)) {
+                InfoRow(
+                    title = UiStrings.AUTOMATION_EDITOR_CURRENT_RULE,
+                    value = selected.optionLabel,
+                )
+                SessionTextAction(
+                    label = UiStrings.AUTOMATION_EDITOR_RULE_AFTER,
+                    onClick = { onSelect(AutomationRule.AFTER) },
+                    tone = SessionActionTone.ACCENT,
+                    modifier = Modifier.testTag(
+                        UiPageTags.AUTOMATION_EDITOR_RULE_OPTION_PREFIX + AutomationRule.AFTER.wire,
+                    ),
+                )
+                SessionTextAction(
+                    label = UiStrings.AUTOMATION_EDITOR_RULE_AT,
+                    onClick = { onSelect(AutomationRule.AT) },
+                    tone = SessionActionTone.ACCENT,
+                    modifier = Modifier.testTag(
+                        UiPageTags.AUTOMATION_EDITOR_RULE_OPTION_PREFIX + AutomationRule.AT.wire,
+                    ),
+                )
+                SessionTextAction(
+                    label = UiStrings.AUTOMATION_EDITOR_RULE_EVERY,
+                    onClick = { onSelect(AutomationRule.EVERY) },
+                    tone = SessionActionTone.ACCENT,
+                    modifier = Modifier.testTag(
+                        UiPageTags.AUTOMATION_EDITOR_RULE_OPTION_PREFIX + AutomationRule.EVERY.wire,
+                    ),
+                )
+                SessionTextAction(
+                    label = UiStrings.AUTOMATION_EDITOR_RULE_DAILY,
+                    onClick = { onSelect(AutomationRule.DAILY) },
+                    tone = SessionActionTone.ACCENT,
+                    modifier = Modifier.testTag(
+                        UiPageTags.AUTOMATION_EDITOR_RULE_OPTION_PREFIX + AutomationRule.DAILY.wire,
+                    ),
+                )
+                SessionTextAction(
+                    label = UiStrings.AUTOMATION_EDITOR_RULE_WEEKLY,
+                    onClick = { onSelect(AutomationRule.WEEKLY) },
+                    tone = SessionActionTone.ACCENT,
+                    modifier = Modifier.testTag(
+                        UiPageTags.AUTOMATION_EDITOR_RULE_OPTION_PREFIX + AutomationRule.WEEKLY.wire,
+                    ),
+                )
+                SessionTextAction(
+                    label = UiStrings.AUTOMATION_EDITOR_RULE_CRON,
+                    onClick = { onSelect(AutomationRule.CRON) },
+                    tone = SessionActionTone.ACCENT,
+                    modifier = Modifier.testTag(
+                        UiPageTags.AUTOMATION_EDITOR_RULE_OPTION_PREFIX + AutomationRule.CRON.wire,
+                    ),
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            SessionTextAction(
+                label = UiStrings.CANCEL,
+                onClick = onDismiss,
+                tone = SessionActionTone.SECONDARY,
+            )
+        },
+        shape = RoundedCornerShape(tokens.radius.card),
+        containerColor = tokens.colors.input,
+        titleContentColor = tokens.colors.primary,
+        textContentColor = tokens.colors.secondary,
+    )
+}
+
+/**
+ * `删除此自动化任务？` with 删除任务 and 取消.
+ *
+ * `NativeAutomationPage.swift:102`–`:109`: the destructive verb and a cancel, with
+ * the sentence about the saved history as the message. The caller checks that the
+ * host can perform the delete before it opens.
+ *
+ * @param onConfirm delete the schedule.
+ * @param onCancel close without deleting.
+ */
+@Composable
+private fun AutomationDeleteDialog(onConfirm: () -> Unit, onCancel: () -> Unit) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    AlertDialog(
+        onDismissRequest = onCancel,
+        modifier = Modifier.testTag(UiPageTags.AUTOMATION_DELETE_DIALOG),
+        title = {
+            BasicText(
+                text = UiStrings.AUTOMATION_CONFIRM_DELETE,
+                style = type.headline.copy(color = tokens.colors.primary),
+            )
+        },
+        text = {
+            BasicText(
+                text = UiStrings.AUTOMATION_CONFIRM_DELETE_MESSAGE,
+                style = type.secondary.copy(color = tokens.colors.secondary),
+            )
+        },
+        confirmButton = {
+            SessionTextAction(
+                label = UiStrings.AUTOMATION_DELETE_TASK,
+                onClick = onConfirm,
+                tone = SessionActionTone.DANGER,
+                modifier = Modifier.testTag(UiPageTags.AUTOMATION_DELETE_CONFIRM),
+            )
+        },
+        dismissButton = {
+            SessionTextAction(
+                label = UiStrings.CANCEL,
+                onClick = onCancel,
+                tone = SessionActionTone.SECONDARY,
+                modifier = Modifier.testTag(UiPageTags.AUTOMATION_DELETE_CANCEL),
+            )
+        },
+        shape = RoundedCornerShape(tokens.radius.card),
+        containerColor = tokens.colors.input,
+        titleContentColor = tokens.colors.primary,
+        textContentColor = tokens.colors.secondary,
+    )
 }
 
 /** One explanatory line; the ink is a token, never a second colour source. */
@@ -1009,22 +2260,84 @@ private fun AutomationNoteRow(text: String) {
     )
 }
 
-/** The one-line catalog subtitle: the session, then the next run or detail. */
+/**
+ * The catalog row's one-line meta.
+ *
+ * iOS renders `"\(sessionTitle) · \(schedule.detail)"` where `detail` is itself
+ * `"\(kind) · \(scheduledAt)"` (`DSHManagementModel.swift:69`), so the visible
+ * line is 会话 · 规则 · 下次计划 in that order.
+ */
 private fun scheduleMeta(schedule: AutomationScheduleView): String =
-    UiStrings.AUTOMATION_META_FORMAT.format(schedule.sessionText, schedule.nextRunText)
+    UiStrings.AUTOMATION_META_FORMAT.format(
+        schedule.sessionText,
+        UiStrings.AUTOMATION_META_FORMAT.format(schedule.ruleText, schedule.nextRunText),
+    )
 
 /** Every token this file reads; kept equal to the source by `PageTokenReferenceTest`. */
 internal object NativeAutomationPageTokens {
     val refs: List<String> = listOf(
+        "colors.accent",
+        "colors.background",
+        "colors.ctaOverride",
+        "colors.danger",
+        "colors.input",
+        "colors.onAccent",
         "colors.primary",
         "colors.secondary",
+        "colors.success",
         "colors.tertiary",
         "geometry.pageListRowMinHeight",
         "geometry.pageOuterMarginH",
+        "geometry.pageRowMinHeight",
+        "radius.card",
         "spacing.badgeInsetV",
+        "spacing.codeToolbar",
         "spacing.iconText",
-        "typography.body",
         "typography.caption",
+        "typography.headline",
         "typography.secondary",
+        "typography.subheadline",
+        "typography.body",
     )
 }
+
+// ---------------------------------------------------------------------------
+// Editor constants
+// ---------------------------------------------------------------------------
+
+/**
+ * The five rule defaults the baseline's `init` declares (`:221`–`:227`).
+ *
+ * Every one is the string the baseline's own `@State` starts with, so a new form
+ * opens on the same rule, the same 3600-second delay and the same weekday set.
+ */
+private const val DEFAULT_AFTER_SECONDS: String = "3600"
+private const val DEFAULT_EVERY_SECONDS: String = "3600"
+private const val DEFAULT_LOCAL_TIME: String = "09:00:00"
+private const val DEFAULT_WEEKDAYS: String = "1,2,3,4,5"
+private const val DEFAULT_CRON: String = "0 9 * * 1-5"
+
+/** `guard let seconds = Int(intervalSeconds), seconds >= 60` (`:361`). */
+private const val MINIMUM_INTERVAL_SECONDS: Int = 60
+
+/** A Vixie cron expression has exactly five fields (`:377`). */
+private const val CRON_FIELD_COUNT: Int = 5
+
+/** ISO-8601 weekday numbers (`:370`). */
+private const val ISO_MIN_WEEKDAY: Int = 1
+private const val ISO_MAX_WEEKDAY: Int = 7
+
+/** The 提醒内容 field's floor: the baseline's `lineLimit(3...6)` (`:255`). */
+private const val PROMPT_FIELD_LINES: Int = 3
+
+/** The rule fields that more than one rule shares, as tag suffixes. */
+private const val TIME_FIELD_SUFFIX: String = "time"
+private const val ZONE_FIELD_SUFFIX: String = "time-zone"
+private const val WEEKDAYS_FIELD_SUFFIX: String = "weekdays"
+private const val CRON_FIELD_SUFFIX: String = "cron"
+
+private val WHITESPACE: Regex = Regex("\\s+")
+
+/** The baseline's local-time grammar, verbatim (`:387`). */
+private val LOCAL_TIME_PATTERN: Regex =
+    Regex("""^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?$""")

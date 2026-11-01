@@ -131,6 +131,12 @@ public data class UiGeometry(
     public val toolCardInset: Dp,
     public val terminalCardMaxHeight: Dp,
     public val bubblePadding: Dp,
+    /** User-bubble horizontal text inset (PR13's 16 h). */
+    public val bubblePaddingH: Dp,
+    /** User-bubble vertical text inset (PR13's 10 v). */
+    public val bubblePaddingV: Dp,
+    /** Gap between the bubble and its queue label (`ChatPage.swift:891`, 6). */
+    public val bubbleBadgeGap: Dp,
     public val bubbleLineSpacing: Dp,
     public val bubbleMaxWidth: Dp,
     public val cardPadding: Dp,
@@ -142,7 +148,15 @@ public data class UiGeometry(
     public val cardAreaMaxHeightRatio: Float,
     public val composerMinHeight: Dp,
     public val composerMaxHeight: Dp,
+    /** Input port top inset (`ChatPage.swift:1852`), its own token — same 8 as the row bottom, different meaning. */
+    public val composerPortTop: Dp,
     public val composerControlSize: Dp,
+    /** Fixed tool-row height (`ChatPage.swift:1867`, `.frame(height: 32)`), not the control edge. */
+    public val composerControlRowHeight: Dp,
+    /** Tool-row top inset (`ChatPage.swift:1868`). */
+    public val composerControlTop: Dp,
+    /** Tool-row bottom inset (`ChatPage.swift:1869`, tightened to 8 by `86a39aac`). */
+    public val composerControlBottom: Dp,
     public val sendButtonDiameter: Dp,
     public val inlineStopDiameter: Dp,
     public val composerTrailingReserve: Dp,
@@ -239,6 +253,9 @@ public data class UiTokens(
                 toolCardInset = UiTokenData.geometryToolCardInset.dp(),
                 terminalCardMaxHeight = UiTokenData.geometryTerminalCardMaxHeight.dp(),
                 bubblePadding = UiTokenData.geometryBubblePadding.dp(),
+                bubblePaddingH = UiTokenData.geometryBubblePaddingH.dp(),
+                bubblePaddingV = UiTokenData.geometryBubblePaddingV.dp(),
+                bubbleBadgeGap = UiTokenData.geometryBubbleBadgeGap.dp(),
                 bubbleLineSpacing = UiTokenData.geometryBubbleLineSpacing.dp(),
                 bubbleMaxWidth = UiTokenData.geometryBubbleMaxWidth.dp(),
                 cardPadding = UiTokenData.geometryCardPadding.dp(),
@@ -249,7 +266,11 @@ public data class UiTokens(
                 cardAreaMaxHeightRatio = UiTokenData.geometryCardAreaMaxHeightRatio.ratio(),
                 composerMinHeight = UiTokenData.geometryComposerMinHeight.dp(),
                 composerMaxHeight = UiTokenData.geometryComposerMaxHeight.dp(),
+                composerPortTop = UiTokenData.geometryComposerPortTop.dp(),
                 composerControlSize = UiTokenData.geometryComposerControlSize.dp(),
+                composerControlRowHeight = UiTokenData.geometryComposerControlRowHeight.dp(),
+                composerControlTop = UiTokenData.geometryComposerControlTop.dp(),
+                composerControlBottom = UiTokenData.geometryComposerControlBottom.dp(),
                 sendButtonDiameter = UiTokenData.geometrySendButtonDiameter.dp(),
                 inlineStopDiameter = UiTokenData.geometryInlineStopDiameter.dp(),
                 composerTrailingReserve = UiTokenData.geometryComposerTrailingReserve.dp(),

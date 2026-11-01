@@ -299,7 +299,7 @@
   "evidence_level": "emulator-probe",
   "baseline": "examples/probe-app/PhoneDSHProbe/NativeShell.swift"
  },
-{
+ {
   "id": "platform.workspace-text-extensions",
   "capability": "ui.file-preview-text-extensions",
   "ios": "FilesPage.swift:284–288 的文本预览扩展名表按 Apple 工作区列举（txt/md/json/yaml/xml/…/swift/py/js/ts/sh/c/h/go/rs），kt/kts/java/gradle 不在表内，落 Quick Look",
@@ -310,5 +310,16 @@
   "android_mechanism": "FileKind.TEXT_EXTENSIONS allow-list",
   "evidence_level": "spec-only",
   "baseline": "examples/probe-app/PhoneDSHProbe/FilesPage.swift"
+ },
+ {
+  "id": "platform.phone-worker-copy",
+  "capability": "ui.platform-copy",
+  "ios": "The plugin surfaces say `This iPhone Worker …` / `iPhone Worker 限制`: on iOS the device really is an iPhone, so the sentence is true.",
+  "android": "The same surfaces say `手机 Worker 限制` / `此手机 Worker …`: the device is an Android phone, so copying the baseline's noun would state something false about the product on screen.",
+  "divergence_class": "copy-forced",
+  "rationale": "The two screens describe the same limit (no pnpm / execa / subprocess install environment). Only the noun differs, and it differs because the noun is a fact about the hardware. There is no API behind this difference, so `os-forced` would force an `android_mechanism` that does not exist; the honest class is that the copy is forced apart by the platform. Writing `iPhone` on an Android screen to satisfy the structure gate is the failure mode this entry exists to prevent.",
+  "spec_ref": "spec/ui/v1/README.md §1",
+  "evidence_level": "emulator-probe",
+  "baseline": "examples/probe-app/PhoneDSHProbe/NativePluginInventoryPage.swift"
  }
 ]

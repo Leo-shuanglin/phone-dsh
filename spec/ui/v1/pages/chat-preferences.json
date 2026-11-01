@@ -1,0 +1,311 @@
+{
+  "schema": "pdsh.ui.page-structure/1",
+  "page": "ChatPreferencesPage",
+  "pageId": "chat-preferences",
+  "structure": "swiftui-view",
+  "sectionModel": "section",
+  "sectionNote": null,
+  "title": {
+    "text": "聊天外观",
+    "provenance": "ChatPreferencesPage.swift:76",
+    "anchor": ".navigationTitle(\"聊天外观\")"
+  },
+  "source": {
+    "file": "ChatPreferencesPage.swift",
+    "path": "examples/probe-app/PhoneDSHProbe/ChatPreferencesPage.swift",
+    "lines": 84,
+    "structLine": 7,
+    "renderedFrom": [
+      "body"
+    ],
+    "sectionOrder": "declaration order inside the page struct"
+  },
+  "android": {
+    "screen": "ChatPreferencesPage",
+    "file": "android/lib/src/main/kotlin/com/phonedsh/ui/page/ChatPreferencesPage.kt",
+    "match": "composable"
+  },
+  "sections": [
+    {
+      "id": "外观",
+      "title": "外观",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "header",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "外观",
+          "label": "外观",
+          "labelExpr": null,
+          "kind": "control",
+          "value": "外观 | 跟随系统 | 浅色 | 深色",
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "ChatPreferencesPage.swift:14",
+          "anchor": "Picker(\"外观\", selection: Binding(",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "ChatPreferencesPage.swift:23",
+      "anchor": "Text(\"外观\")",
+      "extraction": "syntax",
+      "hasHeader": true,
+      "footer": {
+        "text": "深色仍在适配中；默认浅色与官方 402pt 基线一致。",
+        "labelExpr": null,
+        "provenance": "ChatPreferencesPage.swift:25",
+        "anchor": "Text(\"深色仍在适配中；默认浅色与官方 402pt 基线一致。\")"
+      }
+    },
+    {
+      "id": "字号",
+      "title": "字号",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "header",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "custom-29",
+          "label": null,
+          "labelExpr": "Stepper",
+          "kind": "custom",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "ChatPreferencesPage.swift:29",
+          "anchor": "Stepper(value: Binding(",
+          "extraction": "manual",
+          "template": "Stepper"
+        },
+        {
+          "id": "custom-35",
+          "label": null,
+          "labelExpr": "Stepper",
+          "kind": "custom",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "ChatPreferencesPage.swift:35",
+          "anchor": "Stepper(value: Binding(",
+          "extraction": "manual",
+          "template": "Stepper"
+        }
+      ],
+      "provenance": "ChatPreferencesPage.swift:42",
+      "anchor": "Text(\"字号\")",
+      "extraction": "syntax",
+      "hasHeader": true,
+      "footer": {
+        "text": "正文字号作用于消息正文；代码字号作用于代码块与工具详情。",
+        "labelExpr": null,
+        "provenance": "ChatPreferencesPage.swift:44",
+        "anchor": "Text(\"正文字号作用于消息正文；代码字号作用于代码块与工具详情。\")"
+      }
+    },
+    {
+      "id": "过程折叠",
+      "title": "过程折叠",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "header",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "折叠时机",
+          "label": "折叠时机",
+          "labelExpr": null,
+          "kind": "control",
+          "value": "折叠时机 | 完成时 | 下一条消息",
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "ChatPreferencesPage.swift:48",
+          "anchor": "Picker(\"折叠时机\", selection: Binding(",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "ChatPreferencesPage.swift:56",
+      "anchor": "Text(\"过程折叠\")",
+      "extraction": "syntax",
+      "hasHeader": true,
+      "footer": {
+        "text": "与页头 more 菜单中的选择同步。",
+        "labelExpr": null,
+        "provenance": "ChatPreferencesPage.swift:58",
+        "anchor": "Text(\"与页头 more 菜单中的选择同步。\")"
+      }
+    },
+    {
+      "id": "转录",
+      "title": "转录",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "header",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "转录密度",
+          "label": "转录密度",
+          "labelExpr": null,
+          "kind": "control",
+          "value": "转录密度 | 紧凑 | 标准 | 详细 | 完整",
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "ChatPreferencesPage.swift:62",
+          "anchor": "Picker(\"转录密度\", selection: Binding(",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "ChatPreferencesPage.swift:72",
+      "anchor": "Text(\"转录\")",
+      "extraction": "syntax",
+      "hasHeader": true
+    }
+  ],
+  "actions": [
+    {
+      "id": "外观",
+      "label": "外观",
+      "labelExpr": null,
+      "kind": "picker",
+      "trigger": "tap",
+      "semantic": null,
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "ChatPreferencesPage.swift:14",
+      "anchor": "Picker(\"外观\", selection: Binding(",
+      "extraction": "syntax",
+      "items": [
+        "外观",
+        "跟随系统",
+        "浅色",
+        "深色"
+      ],
+      "style": "default"
+    },
+    {
+      "id": "折叠时机",
+      "label": "折叠时机",
+      "labelExpr": null,
+      "kind": "picker",
+      "trigger": "tap",
+      "semantic": null,
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "ChatPreferencesPage.swift:48",
+      "anchor": "Picker(\"折叠时机\", selection: Binding(",
+      "extraction": "syntax",
+      "items": [
+        "折叠时机",
+        "完成时",
+        "下一条消息"
+      ],
+      "style": "default"
+    },
+    {
+      "id": "转录密度",
+      "label": "转录密度",
+      "labelExpr": null,
+      "kind": "picker",
+      "trigger": "tap",
+      "semantic": null,
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "ChatPreferencesPage.swift:62",
+      "anchor": "Picker(\"转录密度\", selection: Binding(",
+      "extraction": "syntax",
+      "items": [
+        "转录密度",
+        "紧凑",
+        "标准",
+        "详细",
+        "完整"
+      ],
+      "style": "default"
+    },
+    {
+      "id": "完成",
+      "label": "完成",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "toolbar",
+      "semantic": "{ dismiss()",
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "ChatPreferencesPage.swift:80",
+      "anchor": "Button(\"完成\") { dismiss() }.leadingBarText()",
+      "extraction": "syntax"
+    }
+  ],
+  "presentations": [],
+  "states": {
+    "advisory": true,
+    "note": "advisory only: marker-based; row placeholders (未配置/未设置/—) are not page states, so the checker never compares this object",
+    "sites": {
+      "empty": [],
+      "data": [
+        {
+          "renders": "外观 | 字号 | 过程折叠 | 转录",
+          "when": null,
+          "provenance": "ChatPreferencesPage.swift:7",
+          "anchor": "struct ChatPreferencesPage: View {",
+          "note": "structural default: the sections above, when no condition overrides them"
+        }
+      ],
+      "failure": [],
+      "unknown": [],
+      "loading": []
+    },
+    "absent": [
+      "empty",
+      "failure",
+      "unknown",
+      "loading"
+    ],
+    "coverage": {
+      "empty": 0,
+      "data": 1,
+      "failure": 0,
+      "unknown": 0,
+      "loading": 0
+    }
+  },
+  "subpages": [],
+  "unreachable": [],
+  "extraction": {
+    "tool": "extract_ios_pages.py",
+    "mode": "syntax",
+    "sectionKeywordsInPage": 4,
+    "regionsExtracted": 0,
+    "sectionsExtracted": 4,
+    "warnings": []
+  }
+}

@@ -124,6 +124,12 @@ class NativeConfigurationPageTest {
         onOpenWebSearch: (() -> Unit)? = null,
         onRetry: (() -> Unit)? = null,
         onDismissFailure: (() -> Unit)? = null,
+        onSaveGroup: ((String) -> Unit)? = null,
+        onDiscardGroup: ((String) -> Unit)? = null,
+        onResetField: ((String, String) -> Unit)? = null,
+        onPickDefaultPermission: (() -> Unit)? = null,
+        onSaveDefaultPermission: (() -> Unit)? = null,
+        onDiscardDefaultPermission: (() -> Unit)? = null,
     ) {
         compose.setContent {
             PdshTheme {
@@ -134,6 +140,12 @@ class NativeConfigurationPageTest {
                     onOpenWebSearch = onOpenWebSearch,
                     onRetry = onRetry,
                     onDismissFailure = onDismissFailure,
+                    onSaveGroup = onSaveGroup,
+                    onDiscardGroup = onDiscardGroup,
+                    onResetField = onResetField,
+                    onPickDefaultPermission = onPickDefaultPermission,
+                    onSaveDefaultPermission = onSaveDefaultPermission,
+                    onDiscardDefaultPermission = onDiscardDefaultPermission,
                 )
             }
         }
@@ -189,13 +201,15 @@ class NativeConfigurationPageTest {
                 ConfigurationScreenState.groupSectionId("agent-loop"),
                 ConfigurationScreenState.groupSectionId("bash-sandbox"),
                 ConfigurationScreenState.groupSectionId("subagent"),
-                ConfigurationScreenState.PERMISSION_SECTION_ID,
-                ConfigurationScreenState.INFO_SECTION_ID,
                 ConfigurationScreenState.EXPERIMENTAL_SECTION_ID,
                 ConfigurationScreenState.INSTALLED_SECTION_ID,
             ),
             state.sections.map { it.id },
         )
+        assertEquals("标准", state.permission.selected?.name)
+        assertTrue(state.permission.isUnknown.not())
+        assertTrue(state.builtInExpanded)
+        assertFalse(state.aboutExpanded)
         assertFalse(state.hasUnmeasuredValues)
         var done = 0
         var webSearch = 0
@@ -328,15 +342,157 @@ class NativeConfigurationPageTest {
     }
 
     @Test
+    fun `插件说明 opens the two sections the baseline keeps in its sheet`() {
+        showLive(fullFacts())
+
+        // The about area is closed initially: the baseline hides it behind a sheet.
+        compose.onNodeWithText(UiStrings.CONFIGURATION_SCOPE_SECTION).assertDoesNotExist()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_PLUGIN_INFO_ACTION).performClick()
+
+        val scopeTag = UiPageTags.CONFIGURATION_SECTION_PREFIX +
+            ConfigurationScreenState.SCOPE_SECTION_ID
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_LIST)
+            .performScrollToNode(hasTestTag(scopeTag))
+        compose.onNodeWithText(UiStrings.CONFIGURATION_SCOPE_SECTION).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CONFIGURATION_SCOPE_TEXT).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_LIST)
+            .performScrollToNode(
+                hasTestTag(
+                    UiPageTags.CONFIGURATION_SECTION_PREFIX +
+                        ConfigurationScreenState.LIMITS_SECTION_ID,
+                ),
+            )
+        compose.onNodeWithText(UiStrings.CONFIGURATION_LIMITS_SECTION).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_LIST)
+            .performScrollToNode(hasText(UiStrings.CONFIGURATION_ONLY_LOADED_TEXT))
+        compose.onNodeWithText(UiStrings.CONFIGURATION_ONLY_LOADED_TEXT).assertIsDisplayed()
+    }
+
+    @Test
+    fun `folding 内置插件设置 hides the host groups, not the plugin inventory`() {
+        showLive(fullFacts())
+        val agentHeader = UiPageTags.CONFIGURATION_SECTION_PREFIX +
+            ConfigurationScreenState.groupSectionId("agent-loop")
+        compose.onNodeWithTag(agentHeader).assertIsDisplayed()
+
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_BUILT_IN).performClick()
+        compose.onNodeWithTag(agentHeader).assertDoesNotExist()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_PERMISSION).assertDoesNotExist()
+        compose.onNodeWithTag(
+            UiPageTags.CONFIGURATION_SECTION_PREFIX +
+                ConfigurationScreenState.EXPERIMENTAL_SECTION_ID,
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun `the add-plugin menu prints why installing cannot run here`() {
+        showLive(fullFacts())
+
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_ADD_PLUGIN).performClick()
+        compose.onNodeWithText(UiStrings.CONFIGURATION_INSTALL_THIRD_PARTY).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CONFIGURATION_CREATE_WITH_AGENT).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CONFIGURATION_INSTALL_THIRD_PARTY).performClick()
+        compose.onNodeWithText(UiStrings.CONFIGURATION_ADD_DISABLED_HINT).assertIsDisplayed()
+    }
+
+    @Test
+    fun `an unread permission catalog says unknown and shows no save pair`() {
+        val facts = fullFacts()
+        val snapshot = requireNotNull(facts.snapshot).copy(
+            permissionModes = null,
+            defaultPermissionModeId = null,
+        )
+        val state = ConfigurationScreenState.from(facts.copy(snapshot = snapshot))
+        assertTrue(state.permission.isUnknown)
+        assertTrue(state.hasUnmeasuredValues)
+        show(state)
+
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.CONFIGURATION_PERMISSION))
+        compose.onNodeWithText(UiStrings.CONFIGURATION_PERMISSION_UNKNOWN).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_PERMISSION_SAVE).assertDoesNotExist()
+    }
+
+    @Test
+    fun `the permission row and its save pair arm only with a host write`() {
+        var picked = 0
+        var saved = 0
+        var discarded = 0
+        show(
+            ConfigurationScreenState.from(fullFacts()),
+            onPickDefaultPermission = { picked += 1 },
+            onSaveDefaultPermission = { saved += 1 },
+            onDiscardDefaultPermission = { discarded += 1 },
+        )
+
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.CONFIGURATION_PERMISSION_ROW))
+        compose.onNodeWithText(UiStrings.CONFIGURATION_DEFAULT_PERMISSION_ROW)
+            .assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_PERMISSION_ROW).performClick()
+        assertEquals(1, picked)
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_PERMISSION_SAVE).performClick()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_PERMISSION_DISCARD).performClick()
+        assertEquals(1, saved)
+        assertEquals(1, discarded)
+    }
+
+    @Test
+    fun `a writable group arms its save pair and an overridden field resets`() {
+        val facts = fullFacts()
+        val snapshot = requireNotNull(facts.snapshot)
+        val groups = snapshot.groups.orEmpty().map { group ->
+            if (group.namespace != "agent-loop") {
+                group
+            } else {
+                group.copy(
+                    fields = group.fields.orEmpty().mapIndexed { index, field ->
+                        if (index == 0) field.copy(overridden = true) else field
+                    },
+                )
+            }
+        }
+        val state = ConfigurationScreenState.from(
+            facts.copy(snapshot = snapshot.copy(groups = groups)),
+        )
+        val groupId = ConfigurationScreenState.groupSectionId("agent-loop")
+        var savedGroup: String? = null
+        var discardedGroup: String? = null
+        var reset: Pair<String, String>? = null
+        show(
+            state,
+            onSaveGroup = { savedGroup = it },
+            onDiscardGroup = { discardedGroup = it },
+            onResetField = { namespace, field -> reset = namespace to field },
+        )
+
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_LIST)
+            .performScrollToNode(
+                hasTestTag(UiPageTags.CONFIGURATION_GROUP_SAVE_PREFIX + groupId),
+            )
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_GROUP_SAVE_PREFIX + groupId).performClick()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_GROUP_DISCARD_PREFIX + groupId).performClick()
+        assertEquals("agent-loop", savedGroup)
+        assertEquals("agent-loop", discardedGroup)
+
+        val resetTag = UiPageTags.CONFIGURATION_ROW_RESET_PREFIX + "$groupId.maxTurns"
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_LIST)
+            .performScrollToNode(hasTestTag(resetTag))
+        compose.onNodeWithTag(resetTag).performClick()
+        assertEquals("agent-loop" to "maxTurns", reset)
+    }
+
+    @Test
     fun `the fold sequence is a pure function of the script`() {
         val facts = fullFacts()
+        val agentLoop = ConfigurationScreenState.groupSectionId("agent-loop")
         val script = listOf(
             ConfigurationUiEvent.ToggleSection(ConfigurationScreenState.INSTALLED_SECTION_ID),
             ConfigurationUiEvent.ToggleSection(ConfigurationScreenState.INSTALLED_SECTION_ID),
-            ConfigurationUiEvent.ToggleSection(ConfigurationScreenState.PERMISSION_SECTION_ID),
-            ConfigurationUiEvent.ToggleSection(
-                ConfigurationScreenState.groupSectionId("agent-loop"),
-            ),
+            ConfigurationUiEvent.ToggleSection(ConfigurationScreenState.BUILT_IN_SECTION_ID),
+            ConfigurationUiEvent.ToggleSection(agentLoop),
+            ConfigurationUiEvent.ToggleSection(ConfigurationScreenState.BUILT_IN_SECTION_ID),
+            ConfigurationUiEvent.ToggleSection(ConfigurationScreenState.INFO_SECTION_ID),
             ConfigurationUiEvent.ToggleSection(ConfigurationScreenState.INFO_SECTION_ID),
         )
 
@@ -352,24 +508,46 @@ class NativeConfigurationPageTest {
         }
 
         val states = run()
-        fun expanded(id: String): List<Boolean> =
-            states.map { state -> state.sections.first { it.id == id }.expanded }
+        fun expanded(id: String): List<Boolean?> =
+            states.map { state -> state.sections.firstOrNull { it.id == id }?.expanded }
 
         assertEquals(
-            listOf(false, true, false, false, false, false),
+            listOf(true, true, true, false, false, true, true, true),
+            states.map { it.builtInExpanded },
+        )
+        assertEquals(
+            listOf(false, false, false, false, false, false, true, false),
+            states.map { it.aboutExpanded },
+        )
+        assertEquals(
+            listOf(false, true, false, false, false, false, false, false),
             expanded(ConfigurationScreenState.INSTALLED_SECTION_ID),
         )
+        // A folded master section hides the groups; the group keeps its own fold.
         assertEquals(
-            listOf(true, true, true, false, false, false),
-            expanded(ConfigurationScreenState.PERMISSION_SECTION_ID),
+            listOf(true, true, true, null, null, false, false, false),
+            expanded(agentLoop),
         )
         assertEquals(
-            listOf(true, true, true, true, false, false),
-            expanded(ConfigurationScreenState.groupSectionId("agent-loop")),
-        )
-        assertEquals(
-            listOf(true, true, true, true, true, false),
-            expanded(ConfigurationScreenState.INFO_SECTION_ID),
+            listOf(
+                emptyList(),
+                emptyList(),
+                emptyList(),
+                emptyList(),
+                emptyList(),
+                emptyList(),
+                listOf(
+                    ConfigurationScreenState.SCOPE_SECTION_ID,
+                    ConfigurationScreenState.LIMITS_SECTION_ID,
+                ),
+                emptyList(),
+            ),
+            states.map { state ->
+                state.sections.map { it.id }.filter { id ->
+                    id == ConfigurationScreenState.SCOPE_SECTION_ID ||
+                        id == ConfigurationScreenState.LIMITS_SECTION_ID
+                }
+            },
         )
         // Replaying the same script yields exactly the same sequence (purity).
         assertEquals(states.map { it.signature() }, run().map { it.signature() })

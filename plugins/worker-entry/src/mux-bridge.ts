@@ -402,16 +402,21 @@ function muxWireFrame(frame: WorkerEntryMuxServerFrame): Record<string, unknown>
   }
 }
 
+/**
+ * The frame's wire shape, with no numeric rewriting.
+ *
+ * Rounding lives in `projectMuxServerFrame` and nowhere else. This function used
+ * to round `llm/retry`'s `delayMs` on its own, which silently pre-empted the
+ * projection: the value was already an integer by the time the projection looked
+ * at it, so the projection reported nothing and the "every rounding is logged"
+ * invariant was dead code. One owner — the projection, which reports.
+ */
 function muxWireValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(muxWireValue)
   if (!isRecord(value)) return value
-  const projected = Object.fromEntries(
+  return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [key, muxWireValue(item)]),
   )
-  if (projected['type'] !== 'llm/retry' || !isRecord(projected['data'])) return projected
-  const delayMs = projected['data']['delayMs']
-  if (typeof delayMs !== 'number' || !Number.isFinite(delayMs) || Number.isInteger(delayMs)) return projected
-  return { ...projected, data: { ...projected['data'], delayMs: Math.round(delayMs) } }
 }
 
 function writeMuxFrame(sink: WorkerEntryResponseSink, frame: WorkerEntryMuxServerFrame): void {

@@ -179,25 +179,36 @@ public fun FoldedPendingRow(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
+    // The baseline draws this line as flat page chrome, not as a card: 16 pt page
+    // margin, one grey sentence and a trailing `chevron.down`, no fill and no
+    // radius (ios-chat-default.png: the row above the permission card, y 103–140 pt).
+    // The fill + radius it used to draw turned a one-line fold into a second card.
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .clickable(role = Role.Button, onClick = onExpand)
             .padding(
                 horizontal = tokens.geometry.cardOuterMarginH,
                 vertical = tokens.geometry.cardOuterMarginV,
             )
-            .background(color = tokens.colors.selector, shape = RoundedCornerShape(tokens.radius.card))
-            .clickable(role = Role.Button, onClick = onExpand)
-            .padding(tokens.geometry.cardPadding)
             .semantics(mergeDescendants = true) {},
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
         BasicText(
             text = label,
             style = type.subheadline.copy(color = tokens.colors.secondary),
+            modifier = Modifier.weight(1f),
+        )
+        BasicText(
+            text = FOLD_CHEVRON,
+            style = type.subheadline.copy(color = tokens.colors.secondary),
         )
     }
 }
+
+/** The fold line's trailing `chevron.down` (an SF Symbol; drawn as text here). */
+private const val FOLD_CHEVRON: String = "⌄"
 
 /** The standard pair of labels for a permission card. */
 public object ApprovalLabels {

@@ -31,6 +31,12 @@
 // `unverified geometry` at the use site (banner/card/composer geometry, the
 // primary-button height reused as the tail padding and the 88 pt empty-state
 // offset, the bubble max width reused as the empty-state column width).
+//
+// The 402 pt parity yardstick (official header 50 / composer 370x98 / content
+// column 338 / tool row 24 / flow gaps 6-12) is owned by
+// `com.phonedsh.ui.UiMetrics`, not by this page: it describes what the official UI
+// shows, while this page draws the iOS app's lengths. Read it when measuring a
+// capture, not when changing a layout.
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
@@ -101,6 +107,8 @@ import com.phonedsh.agentcore.JsonArray
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
 import com.phonedsh.agentcore.JsonValue
+import com.phonedsh.ui.ChatMetrics
+import com.phonedsh.ui.UiMetrics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.projection.CanonicalJson
@@ -147,14 +155,18 @@ import kotlinx.coroutines.launch
  *   `ChatLocalState.imeVisible`; the page never stores it (spec §3.1 rule 3).
  * @param onExpandPendingSlot the user tapped the folded slot while the keyboard is
  *   up; the host records `pendingSlotExpanded = true`.
- * @param onCollapsePendingSlot the user tapped the "还有 1 个待确认" line while the
- *   second card was open; the host records `pendingSlotExpanded = false`.
  * @param onRenameSession the title was edited; the dialog passes the trimmed name
  *   and an empty string means "cancelled edit" (iOS keeps the old title).
  * @param onExportTranscript the page-head menu's 导出对话记录 (a share-sheet
  *   action, spec §5 `share-sheet`; the host owns the platform panel).
+ * @param onOpenArtifacts the page-head menu's 产物 (`ChatPage.swift:256`); `null`
+ *   hides the row, because the artifacts sheet is scoped to one session and this
+ *   page never learns a session id from its state.
+ * @param onOpenWorkbench the page-head menu's 右侧边栏 (`ChatPage.swift:260`, the
+ *   baseline's `showWorkbench`); `null` hides the row for the same reason.
+ * @param onOpenRunStatus the run-status dot and the menu's 运行状态 were tapped
+ *   (iOS `RuntimeDetailsPage`, `ChatPage.swift:270`).
  * @param onOpenSessionSettings the page-head menu's 本会话设置.
- * @param onOpenRunStatus the run-status dot was tapped (iOS `RuntimeDetailsPage`).
  * @param onStartEngine the empty state's 启动本地引擎.
  * @param onConfigureProvider the empty state's 去配置模型服务.
  * @param onLoadEarlier the transcript's 加载更早消息.
@@ -173,6 +185,13 @@ import kotlinx.coroutines.launch
  * @param onOpenFile a workspace-relative path a row wants to open (the tool row's
  *   file chip and an attachment's file chip). The page never navigates itself: the
  *   host routes it (workbench preview, file list) exactly like `onPickCommand`.
+ * @param jobs the session's background jobs, or `null` when the host made no read.
+ *   The page-head menu's 后台任务（N） row (`ChatPage.swift:247`) exists only while
+ *   this list has rows, so a facts-only host renders no row instead of a sheet that
+ *   could only say 读取不到.
+ * @param schedules the session's scheduled tasks, same contract (`:252`).
+ * @param onOpenJobs opens the 后台任务 sheet (its route); `null` hides the row.
+ * @param onOpenSchedules opens the 定时任务 sheet; `null` hides the row.
  */
 @Composable
 public fun ChatPage(
@@ -194,11 +213,12 @@ public fun ChatPage(
     onOpenGoalDetail: (() -> Unit)? = null,
     onImeVisibleChange: ((Boolean) -> Unit)? = null,
     onExpandPendingSlot: () -> Unit = {},
-    onCollapsePendingSlot: () -> Unit = {},
     onRenameSession: (String) -> Unit = {},
     onExportTranscript: () -> Unit = {},
-    onOpenSessionSettings: () -> Unit = {},
+    onOpenArtifacts: (() -> Unit)? = null,
+    onOpenWorkbench: (() -> Unit)? = null,
     onOpenRunStatus: () -> Unit = {},
+    onOpenSessionSettings: () -> Unit = {},
     onStartEngine: () -> Unit = {},
     onConfigureProvider: () -> Unit = {},
     onLoadEarlier: () -> Unit = {},
@@ -214,6 +234,10 @@ public fun ChatPage(
     onRetryAccessModes: () -> Unit = {},
     onReloadCommands: () -> Unit = {},
     onOpenFile: (String) -> Unit = {},
+    jobs: List<ChatJobRow>? = null,
+    schedules: List<ChatScheduleRow>? = null,
+    onOpenJobs: (() -> Unit)? = null,
+    onOpenSchedules: (() -> Unit)? = null,
 ) {
     val tokens = LocalUiTokens.current
     // `colors.background` is tier: unmeasured (a dynamic system colour), so an
@@ -253,7 +277,13 @@ public fun ChatPage(
             onStartRename = { renaming = true },
             onOpenRunStatus = onOpenRunStatus,
             onExportTranscript = onExportTranscript,
+            onOpenArtifacts = onOpenArtifacts,
+            onOpenWorkbench = onOpenWorkbench,
             onOpenSessionSettings = onOpenSessionSettings,
+            jobs = jobs,
+            schedules = schedules,
+            onOpenJobs = onOpenJobs,
+            onOpenSchedules = onOpenSchedules,
         )
         // A failure that belongs to one row is rendered under it; every other
         // failure owns the top banner (iOS body: `failedItemID == nil` first).
@@ -288,17 +318,22 @@ public fun ChatPage(
         // unverified geometry: the approval card's own `cardAreaMaxHeightRatio`
         // borrowed by the page to clamp the region that holds it.
         val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-        PendingCardsRegion(
-            slot = state.pending,
-            fold = state.pendingFold,
-            expanded = state.pendingExpanded,
-            onExpand = onExpandPendingSlot,
-            onCollapse = onCollapsePendingSlot,
-            onApprove = onApprove,
-            onDeny = onDeny,
-            onSubmitAnswer = onSubmitAnswer,
-            maxHeight = screenHeight * tokens.geometry.cardAreaMaxHeightRatio,
-        )
+        // Where the cards sit depends on the transcript, exactly as in the baseline:
+        // with rows on screen the strip and the card are page chrome under the head
+        // (ios-chat-default.png), and with an empty transcript they hug the dock
+        // (ios-chat-permission.png: cards at y 225–677, i.e. just above the composer).
+        val cardsAtDock = state.rows.isEmpty() && !state.pending.isEmpty
+        if (!cardsAtDock) {
+            PendingCardsRegion(
+                slot = state.pending,
+                fold = state.pendingFold,
+                onExpand = onExpandPendingSlot,
+                onApprove = onApprove,
+                onDeny = onDeny,
+                onSubmitAnswer = onSubmitAnswer,
+                maxHeight = screenHeight * tokens.geometry.cardAreaMaxHeightRatio,
+            )
+        }
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             ChatTranscript(
                 state = state,
@@ -308,6 +343,17 @@ public fun ChatPage(
                 onConfigureProvider = onConfigureProvider,
                 onRetry = onRetry,
                 onOpenFile = onOpenFile,
+            )
+        }
+        if (cardsAtDock) {
+            PendingCardsRegion(
+                slot = state.pending,
+                fold = state.pendingFold,
+                onExpand = onExpandPendingSlot,
+                onApprove = onApprove,
+                onDeny = onDeny,
+                onSubmitAnswer = onSubmitAnswer,
+                maxHeight = screenHeight * tokens.geometry.cardAreaMaxHeightRatio,
             )
         }
         Box(
@@ -459,11 +505,20 @@ private fun ChatHeader(
     onOpenRunStatus: () -> Unit,
     onExportTranscript: () -> Unit,
     onOpenSessionSettings: () -> Unit,
+    onOpenArtifacts: (() -> Unit)? = null,
+    onOpenWorkbench: (() -> Unit)? = null,
+    jobs: List<ChatJobRow>? = null,
+    schedules: List<ChatScheduleRow>? = null,
+    onOpenJobs: (() -> Unit)? = null,
+    onOpenSchedules: (() -> Unit)? = null,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     var menuOpen by remember { mutableStateOf(false) }
 
+    // The baseline centres a 17 pt semibold title between the two control groups
+    // and paints the `⋯` in the accent (`#2F5BFF`); the grey mark this header used
+    // to draw was the only blue-less part of the row.
     // iOS centres the title in a ZStack and reserves 104 pt on each side so the
     // buttons cannot push it off centre. Those 104 pt are the *result* of the two
     // button groups' widths on the baseline device, not a design value, so the
@@ -513,19 +568,82 @@ private fun ChatHeader(
             onClick = onOpenRunStatus,
             modifier = Modifier.testTag(UiPageTags.CHAT_HEADER_RUN_STATUS),
         )
+        // The menu's rows are the baseline's (`ChatPage.swift:240-286`), in its
+        // order: 产物, 右侧边栏, 导出对话记录, 运行状态, 本会话设置. The three
+        // conditional rows are session-scoped destinations; `null` keeps them off
+        // the menu instead of drawing a row that cannot go anywhere.
+        val artifacts = onOpenArtifacts
+        val workbench = onOpenWorkbench
         Box {
             HeaderMenuAction(
-                label = UiStrings.HEADER_MORE,
                 glyph = MORE_GLYPH,
                 onClick = { menuOpen = true },
-                modifier = Modifier.testTag(UiPageTags.CHAT_HEADER_MENU),
+                modifier = Modifier
+                    .testTag(UiPageTags.CHAT_HEADER_MENU)
+                    // `ChatPage.swift:296`: the `⋯` carries an `.accessibilityLabel`
+                    // and draws a mark; the baseline's menu has no visible word. The
+                    // name stays a content description (a screen reader must still
+                    // announce the control) and is declared here, at the call site,
+                    // because it is not a visible action label.
+                    .semantics { contentDescription = UiStrings.HEADER_MORE },
             )
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                // iOS `ChatPage.swift:247` / `:252`: the two session-activity rows
+                // exist only while their list has rows, and the label carries the
+                // count (`后台任务（2）`). A host that reported nothing renders no
+                // row at all — the sheets are then unreachable from this menu, and
+                // their own 读取不到 body is the honest answer if something else
+                // opens them. The count makes the label data, not a fixed name.
+                val jobRows = jobs
+                if (jobRows != null && jobRows.isNotEmpty() && onOpenJobs != null) {
+                    DropdownMenuItem(
+                        text = { Text("${UiStrings.CHAT_JOBS_TITLE}（${jobRows.size}）") },
+                        onClick = {
+                            menuOpen = false
+                            onOpenJobs()
+                        },
+                    )
+                }
+                val scheduleRows = schedules
+                if (scheduleRows != null && scheduleRows.isNotEmpty() && onOpenSchedules != null) {
+                    DropdownMenuItem(
+                        text = { Text("${UiStrings.CHAT_SCHEDULES_TITLE}（${scheduleRows.size}）") },
+                        onClick = {
+                            menuOpen = false
+                            onOpenSchedules()
+                        },
+                    )
+                }
+                if (artifacts != null) {
+                    DropdownMenuItem(
+                        text = { Text(UiStrings.HEADER_ARTIFACTS) },
+                        onClick = {
+                            menuOpen = false
+                            artifacts()
+                        },
+                    )
+                }
+                if (workbench != null) {
+                    DropdownMenuItem(
+                        text = { Text(UiStrings.HEADER_WORKBENCH) },
+                        onClick = {
+                            menuOpen = false
+                            workbench()
+                        },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text(UiStrings.HEADER_EXPORT) },
                     onClick = {
                         menuOpen = false
                         onExportTranscript()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(UiStrings.HEADER_RUN_STATUS) },
+                    onClick = {
+                        menuOpen = false
+                        onOpenRunStatus()
                     },
                 )
                 DropdownMenuItem(
@@ -544,9 +662,7 @@ private fun ChatHeader(
  * One header control: its glyph, a 44 pt floor and its accessibility label.
  *
  * The drawer has no word on the baseline page (`accessibilityLabel` only), so the
- * control's name lives in `description`. The `⋯` menu *is* a named action on the
- * baseline (`.accessibilityLabel("更多操作")`), so it uses [HeaderMenuAction],
- * whose first parameter is that word.
+ * control's name lives in `description`.
  */
 @Composable
 private fun HeaderAction(
@@ -573,18 +689,21 @@ private fun HeaderAction(
 }
 
 /**
- * The page-head menu trigger.
+ * The page-head menu trigger: the `⋯` mark, in the accent ink.
  *
- * @param label the control's accessible name; iOS puts exactly this word on the
- *   menu (`.accessibilityLabel("更多操作")`), and the header draws a mark, so the
- *   name and the mark are two different strings.
+ * It draws a mark and nothing else, so it takes no label: the baseline's `Menu`
+ * carries an `.accessibilityLabel` but no visible word (`ChatPage.swift:296`), and
+ * the header's accessible name is therefore applied by the caller as a content
+ * description rather than passed as this helper's first parameter. That is also
+ * what the page-structure contract records — the entry is `menu-240` with
+ * `label: null` — so a screen-reader string must not pose as a visible action.
+ *
  * @param glyph what is drawn.
  * @param onClick opens the menu.
- * @param modifier the caller's tag and placement.
+ * @param modifier the caller's tag, accessible name and placement.
  */
 @Composable
 private fun HeaderMenuAction(
-    label: String,
     glyph: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -595,13 +714,13 @@ private fun HeaderMenuAction(
         modifier = modifier
             .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
             .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = label }
             .padding(horizontal = tokens.spacing.iconText),
         contentAlignment = Alignment.Center,
     ) {
         BasicText(
             text = glyph,
-            style = type.secondary.copy(color = tokens.colors.secondary),
+            // iOS paints the `⋯` in the accent; the drawer mark stays grey.
+            style = type.secondary.copy(color = tokens.colors.accent),
         )
     }
 }
@@ -748,19 +867,23 @@ private fun NoticeBanner(
 /**
  * The pending-answer region.
  *
- * Three states, exactly as iOS: the keyboard up folds the whole region into one
- * "N 项需要处理" line; otherwise a permission card and a question card share the
- * region, with the second one folded into "还有 1 个待确认" until the user opens
- * it. The region never takes more than 40% of the screen and scrolls inside
- * itself when it has more.
+ * Two states, exactly as iOS at this HEAD: the keyboard up folds the whole region
+ * into one "N 项需要处理" line (`ChatPage.swift:846-865`); otherwise every pending
+ * ask is drawn as its own card. The region never takes more than 40% of the screen
+ * and scrolls inside itself when it has more.
+ *
+ * The older "还有 1 个待确认" fold line is gone on purpose: the baseline's
+ * `cardsRegion` now holds the cards themselves (`pendingCardCount` counts the one
+ * permission ask, `ChatPage.swift:840-842`), so a line standing in for a card has
+ * no counterpart to mirror — and the contract stopped listing it as an action.
+ * The second ask is drawn instead of folded, so nothing is hidden behind a row the
+ * baseline no longer has.
  */
 @Composable
 private fun PendingCardsRegion(
     slot: PendingSlot,
     fold: PendingFold,
-    expanded: Boolean,
     onExpand: () -> Unit,
-    onCollapse: () -> Unit,
     onApprove: (PendingAnswer) -> Unit,
     onDeny: (PendingAnswer) -> Unit,
     onSubmitAnswer: (PendingAnswer, String) -> Unit,
@@ -780,25 +903,11 @@ private fun PendingCardsRegion(
                 modifier = Modifier.testTag(UiPageTags.CHAT_PENDING_FOLD),
             )
         } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = maxHeight)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                // One card at a time: the permission card wins, and the other one
-                // folds into a line above it.
-                if (slot.bothKinds) {
-                    FoldedPendingRow(
-                        // The slot shows at most two cards, so exactly one is folded
-                        // and the line is the singular wording iOS types at
-                        // ChatPage.swift:517.
-                        label = UiStrings.MORE_PENDING,
-                        // iOS toggles `cardsExpanded` from this line.
-                        onExpand = if (expanded) onCollapse else onExpand,
-                        modifier = Modifier.testTag(UiPageTags.CHAT_PENDING_MORE),
-                    )
-                }
+            // No region-level clamp: iOS lets the slot grow to the two cards' own
+            // heights (ios-chat-permission.png shows both whole, 452 pt) and each card
+            // scrolls inside `maxHeight` by itself. Clamping the region too cut the
+            // second card in half.
+            Column(modifier = Modifier.fillMaxWidth()) {
                 if (primary != null) {
                     if (primary.kind == QUESTION) {
                         QuestionCard(
@@ -818,9 +927,9 @@ private fun PendingCardsRegion(
                         )
                     }
                 }
-                // The second ask is a card only while the user opened it; until then
-                // the line above is its whole representation (iOS `cardsExpanded`).
-                slot.folded.filter { expanded }.forEach { ask ->
+                // Every remaining ask is a card: the baseline no longer folds one
+                // ask into a one-line summary, so neither does this page.
+                slot.folded.forEach { ask ->
                     if (ask.kind == QUESTION) {
                         QuestionCard(
                             question = ask,
@@ -1061,11 +1170,15 @@ private fun ChatTranscript(
         if (state.rows.isEmpty()) {
             Column(modifier = Modifier.fillMaxSize()) {
                 TranscriptChrome(state = state, onLoadEarlier = onLoadEarlier)
-                EmptyTimeline(
-                    state = state,
-                    onStartEngine = onStartEngine,
-                    onConfigureProvider = onConfigureProvider,
-                )
+                // A pending ask replaces the empty state: ios-chat-permission.png has
+                // two cards over a blank transcript, not the product mark.
+                if (state.pending.isEmpty) {
+                    EmptyTimeline(
+                        state = state,
+                        onStartEngine = onStartEngine,
+                        onConfigureProvider = onConfigureProvider,
+                    )
+                }
             }
         } else {
             LazyColumn(
@@ -1081,6 +1194,11 @@ private fun ChatTranscript(
                     top = tokens.geometry.pageListRowMinHeight,
                     bottom = tokens.geometry.primaryButtonHeight,
                 ),
+                // ios-chat-assistant.png / -failed.png / -queued.png: a short
+                // conversation sits at the *bottom* of the transcript, against the
+                // dock, leaving the space under the header empty. A top-anchored list
+                // put the first row directly under the header.
+                verticalArrangement = Arrangement.Bottom,
             ) {
                 item(key = CHROME_ITEM) { TranscriptChrome(state = state, onLoadEarlier = onLoadEarlier) }
                 itemsIndexed(items = state.rows, key = { _, row -> row.id }) { index, row ->
@@ -1113,12 +1231,14 @@ private fun ChatTranscript(
                         .align(Alignment.BottomCenter)
                         .padding(bottom = tokens.spacing.cardInset)
                         .testTag(UiPageTags.CHAT_BACK_TO_LATEST)
-                        .clip(RoundedCornerShape(tokens.radius.card))
+                        // iOS draws this pill as a capsule (94 x 30 pt, radius =
+                        // height / 2), not as a card corner.
+                        .clip(CircleShape)
                         .background(tokens.colors.selector)
                         .border(
                             width = tokens.stroke.hairline,
                             color = tokens.colors.border,
-                            shape = RoundedCornerShape(tokens.radius.card),
+                            shape = CircleShape,
                         )
                         .clickable(role = Role.Button) {
                             scrolledAway = false
@@ -1135,7 +1255,9 @@ private fun ChatTranscript(
                 ) {
                     BasicText(
                         text = UiStrings.BACK_TO_LATEST,
-                        style = LocalUiType.current.caption.copy(color = tokens.colors.accent),
+                        // iOS label is 17 pt in the accent; the nearest declared
+                        // regular role is `subheadline`.
+                        style = LocalUiType.current.subheadline.copy(color = tokens.colors.accent),
                     )
                 }
             }
@@ -1302,7 +1424,10 @@ private fun EmptyTimeline(
     }
 }
 
-/** A: the engine is not started yet — a 338 pt column, text left-aligned. */
+/**
+ * A: the engine is not started yet — the official 338 pt column
+ * ([com.phonedsh.ui.UiMetrics.CONTENT_COLUMN_WIDTH_PT]), text left-aligned.
+ */
 @Composable
 private fun EngineNotStartedState(
     busy: Boolean,
@@ -1312,13 +1437,18 @@ private fun EngineNotStartedState(
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     Column(
-        // iOS pins the column to 338 pt on the baseline device, which is simply
-        // "screen width minus both page margins". That is a device result, not a
-        // design value, so the column fills the width and takes the page margin;
-        // it stays correct at every width.
+        // iOS pins the column to the official 338 pt
+        // (com.phonedsh.ui.UiMetrics.CONTENT_COLUMN_WIDTH_PT) on the baseline
+        // device, which is simply "screen width minus both page margins". That is
+        // a device result, not a design value, so the column fills the width and
+        // takes the page margin; it stays correct at every width.
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = tokens.geometry.pageOuterMarginH)
+            // ios-chat-draft.png: the title ink starts at x 33 and the CTA spans
+            // x 32–370 — the shared 338 pt content column (`UiMetrics`), not the
+            // transcript's 16 pt page margin. Read from the metric owner, not
+            // re-typed.
+            .padding(horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp)
             .testTag(UiPageTags.CHAT_EMPTY_ENGINE),
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
     ) {
@@ -1519,6 +1649,15 @@ private fun ComposerDock(
             }
         }
         Composer(
+                // The dock is floored at the iOS-measured collapsed composer height
+                // (94 pt since commit `86a39aac`; `ChatMetrics.COMPOSER_HEIGHT_PT`
+                // carries the commit reference, not a guess). The card's own padding
+                // stack already draws more than this, so the floor pins the page's
+                // number against a collapse rather than adding space today. The outer
+                // *bottom* margin the same commit took from 8 to 0 is applied by the
+                // Composer surface itself (`geometry.composerOuterMarginBottom`), not
+                // by this page, so it stays a separate follow-up.
+                modifier = Modifier.heightIn(min = ChatMetrics.composerHeight),
                 text = composer.draft,
                 onTextChange = onDraftChange,
                 placeholder = composer.placeholder,
@@ -2000,16 +2139,28 @@ private fun AccessModeMenuButton(
     var confirmation by remember { mutableStateOf<AccessModeOption?>(null) }
     var open by remember { mutableStateOf(false) }
     Box {
-        BasicText(
-            text = SHIELD_GLYPH,
-            style = type.secondary.copy(color = tokens.colors.secondary),
+        Row(
             modifier = Modifier
                 .defaultMinSize(minHeight = tokens.geometry.composerControlSize)
                 .clickable(enabled = menu.enabled, role = Role.Button) { open = true }
                 .semantics { contentDescription = UiStrings.ACCESS_MODE_LABEL.format(menu.label) }
                 .testTag(UiPageTags.COMPOSER_ACCESS_MODE)
                 .padding(tokens.spacing.iconText),
-        )
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+        ) {
+            // iOS draws `lock.shield` + `chevron.down` as bare glyphs (no capsule). The
+            // mark has to be a monochrome dingbat: an emoji rasterises in colour and
+            // breaks the grey control row.
+            BasicText(
+                text = SHIELD_GLYPH,
+                style = type.secondary.copy(color = tokens.colors.secondary),
+            )
+            BasicText(
+                text = CHEVRON,
+                style = type.caption.copy(color = tokens.colors.secondary),
+            )
+        }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             val error = menu.error
             if (error != null) {
@@ -2286,12 +2437,17 @@ internal object ChatPageTokens {
         UiTokenNames.RADIUS_CARD,
         UiTokenNames.RADIUS_CODE_BLOCK,
         UiTokenNames.SPACING_BADGE_INSET_H,
+        UiTokenNames.SPACING_BADGE_INSET_V,
         UiTokenNames.SPACING_CARD_INSET,
         UiTokenNames.SPACING_CODE_TOOLBAR,
         UiTokenNames.SPACING_COPY_GAP,
         UiTokenNames.SPACING_ICON_TEXT,
         UiTokenNames.STROKE_HAIRLINE,
+        // L24: the three embedded subpages' type roles — the iOS `.callout`-sized
+        // row label and the `.monospaced` command line.
+        UiTokenNames.TYPOGRAPHY_BODY,
         UiTokenNames.TYPOGRAPHY_CAPTION,
+        UiTokenNames.TYPOGRAPHY_CODE,
         UiTokenNames.TYPOGRAPHY_HEADLINE,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
         UiTokenNames.TYPOGRAPHY_SUBHEADLINE,
@@ -2308,7 +2464,7 @@ private const val MENU_GLYPH: String = "☰"
 private const val MORE_GLYPH: String = "⋯"
 private const val LOCK_GLYPH: String = "⛨"
 private const val COMMAND_GLYPH: String = "⌘"
-private const val SHIELD_GLYPH: String = "🛡"
+private const val SHIELD_GLYPH: String = "⛨"
 private const val PLUS_GLYPH: String = "+"
 private const val CHEVRON: String = "▾"
 private const val IMAGE_GLYPH: String = "▣"
@@ -2347,3 +2503,526 @@ private fun onPickSlashTrigger(onDraftChange: (String) -> Unit) {
 private fun onPickReferenceTrigger(onDraftChange: (String) -> Unit) {
     onDraftChange("@")
 }
+
+// ---------------------------------------------------------------------------
+// 内嵌子页 — the three surfaces the iOS page keeps beside itself
+// ---------------------------------------------------------------------------
+//
+// README §1 line 86: 内嵌子页随父页实现、不单独排期 — CommandExecutionResultPage,
+// SessionQueuePage, … are implemented with their parent page, not scheduled as
+// pages of their own. The three surfaces below are the chat page's:
+//
+//   * `ChatPage.swift:3504` `NativeScheduleListSheet` (presented at `:445`),
+//   * `ChatPage.swift:3554` `NativeJobListSheet` (presented at `:437`),
+//   * `ChatPage.swift:4243` `CommandExecutionResultPage` (presented at `:407`).
+//
+// They live in this file because the baseline keeps them in `ChatPage.swift` as
+// private structs of the same page; `PdshNavHost` additionally gives each a route
+// so a screenshot test (and a host that owns the read) can open it directly.
+//
+// Data honesty, the rule the whole page follows:
+//   * `jobs` / `schedules` are `null` when the host made no read. The baseline's
+//     model arrays always exist, so it renders `没有后台任务` for an empty one; an
+//     unread list must not wear that sentence, and renders the Android-only
+//     `读取不到…` line instead (the same rule as `SessionActivityPage`'s 未知 rows).
+//   * `刷新` is the host's read, not a local relabel: both baseline sheets call
+//     the one `management.refreshActivity(sessionID:)` (`:441`, `:449`), so both
+//     `刷新` actions hand off the same `PdshHostAction`. A `null` callback draws the
+//     verb greyed-but-visible — an affordance the user has seen on the sheet is
+//     never silently removed.
+
+/**
+ * One executed `/command` and its settlement (iOS `NativeCommandExecution`,
+ * `ChatModel.swift:71`–`:77`).
+ *
+ * @param kind the host's own word; `success` is what makes the baseline open the
+ *   result sheet (`ChatPage.swift:2516`). Kept raw so an unknown kind prints as
+ *   itself instead of being coerced to a failure.
+ * @param text the settlement body; `null` and `""` are the same branch (the
+ *   baseline's `if let text, !text.isEmpty`).
+ */
+public data class ChatCommandExecution(
+    public val id: String,
+    public val name: String,
+    public val line: String,
+    public val kind: String,
+    public val text: String? = null,
+) {
+    /** iOS `execution.kind == "success"` (`ChatPage.swift:4251`). */
+    public val succeeded: Boolean get() = kind == KIND_SUCCESS
+}
+
+/** One background-job row (iOS `ActivityRow` as `NativeJobListSheet` draws it, `ChatPage.swift:3572`–`:3585`). */
+public data class ChatJobRow(
+    public val id: String,
+    public val title: String,
+    public val detail: String,
+    /** The host's status word, or `null` at which the baseline draws nothing. */
+    public val status: String? = null,
+)
+
+/** One scheduled-task row (iOS `ManagedSchedule` as `NativeScheduleListSheet` draws it, `ChatPage.swift:3521`–`:3540`). */
+public data class ChatScheduleRow(
+    public val id: String,
+    public val title: String,
+    public val detail: String,
+    public val status: String? = null,
+    /** The user's prompt; the baseline gives it two lines and only draws it when present. */
+    public val prompt: String? = null,
+)
+
+/**
+ * The three subpages' read-only input.
+ *
+ * A `null` list is "this host made no read" and a `null` execution is "no `/command`
+ * ran on this host"; neither is ever `emptyList()`/a placeholder row. The host that
+ * owns the read fills the field, and the sheet stops saying 读取不到 by itself —
+ * nothing else changes.
+ *
+ * @param commandExecution the settlement the result page shows, if any ran.
+ * @param jobs `management.jobs` (`ChatPage.swift:437`).
+ * @param schedules `management.scheduleRecords` (`ChatPage.swift:445`).
+ */
+public data class ChatSubpageFacts(
+    public val commandExecution: ChatCommandExecution? = null,
+    public val jobs: List<ChatJobRow>? = null,
+    public val schedules: List<ChatScheduleRow>? = null,
+)
+
+/** Which body a list sheet draws; [UNREAD] is the Android-only "the host did not read" case. */
+public enum class ChatSubpageBody {
+    /** The host reported no read; the sheet says 读取不到 rather than "none". */
+    UNREAD,
+
+    /** The host read the list and it is empty (`ContentUnavailableView` in the baseline). */
+    EMPTY,
+
+    /** The host read the list and it has rows. */
+    ROWS,
+}
+
+/** 后台任务 sheet's body (`ChatPage.swift:3554`-`:3601`). */
+public data class ChatJobsSheetState(
+    public val body: ChatSubpageBody,
+    public val rows: List<ChatJobRow> = emptyList(),
+) {
+    public companion object {
+        /** The baseline has no unread branch; the Android page does, and says so. */
+        public fun from(jobs: List<ChatJobRow>?): ChatJobsSheetState = when {
+            jobs == null -> ChatJobsSheetState(ChatSubpageBody.UNREAD)
+            jobs.isEmpty() -> ChatJobsSheetState(ChatSubpageBody.EMPTY)
+            else -> ChatJobsSheetState(ChatSubpageBody.ROWS, jobs)
+        }
+    }
+}
+
+/** 定时任务 sheet's body (`ChatPage.swift:3504`-`:3552`). */
+public data class ChatSchedulesSheetState(
+    public val body: ChatSubpageBody,
+    public val rows: List<ChatScheduleRow> = emptyList(),
+) {
+    public companion object {
+        public fun from(schedules: List<ChatScheduleRow>?): ChatSchedulesSheetState = when {
+            schedules == null -> ChatSchedulesSheetState(ChatSubpageBody.UNREAD)
+            schedules.isEmpty() -> ChatSchedulesSheetState(ChatSubpageBody.EMPTY)
+            else -> ChatSchedulesSheetState(ChatSubpageBody.ROWS, schedules)
+        }
+    }
+}
+
+/** 命令结果 page's body (`ChatPage.swift:4243`-`:4299`); a `null` execution is the unread case. */
+public data class ChatCommandResultState(
+    public val execution: ChatCommandExecution? = null,
+) {
+    /** The output body, or `null` for the baseline's 这次没有更多输出。 branch. */
+    public val output: String? get() = execution?.text?.takeIf { it.isNotEmpty() }
+
+    /** Whether the settlement says success; only read when [execution] is present. */
+    public val succeeded: Boolean get() = execution?.succeeded == true
+}
+
+/**
+ * 命令结果: one `/command` execution's settlement.
+ *
+ * `完成` is the baseline's `dismiss()` (`.topBarTrailing`, `ChatPage.swift:4276`), so
+ * it only closes this surface; nothing here writes to the host.
+ *
+ * @param state what the host reported (`UNREAD` by default: this host owns no
+ *   `commands/execute`, so no execution reaches it).
+ * @param onDone close the sheet (the shell pops the route).
+ * @param modifier the caller's placement.
+ */
+@Composable
+public fun CommandExecutionResultPage(
+    state: ChatCommandResultState,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val execution = state.execution
+    ChatSubpageFrame(
+        title = UiStrings.CHAT_COMMAND_RESULT_TITLE,
+        rootTag = UiPageTags.CHAT_COMMAND_RESULT_ROOT,
+        onClose = null,
+        modifier = modifier,
+        trailing = {
+            SessionTextAction(
+                label = UiStrings.CHAT_SUBPAGE_DONE,
+                onClick = onDone,
+                tone = SessionActionTone.ACCENT,
+            )
+        },
+    ) {
+        if (execution == null) {
+            EmptyHint(
+                title = UiStrings.CHAT_COMMAND_RESULT_UNREAD,
+                hint = null,
+                tag = UiPageTags.CHAT_COMMAND_RESULT_UNREAD,
+            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    // Page-level margin; the baseline padds this page by 18 pt.
+                    .padding(tokens.geometry.pageOuterMarginH)
+                    .testTag(UiPageTags.CHAT_COMMAND_RESULT_BODY),
+                verticalArrangement = Arrangement.spacedBy(tokens.spacing.cardInset),
+            ) {
+                BasicText(
+                    text = if (state.succeeded) {
+                        UiStrings.CHAT_COMMAND_RESULT_SUCCESS
+                    } else {
+                        UiStrings.CHAT_COMMAND_RESULT_FAILED
+                    },
+                    style = type.headline.copy(
+                        color = if (state.succeeded) tokens.colors.primary else tokens.colors.danger,
+                    ),
+                    modifier = Modifier
+                        .testTag(UiPageTags.CHAT_COMMAND_RESULT_STATUS)
+                        .semantics { heading() },
+                )
+                // The command line in its own box: iOS
+                // `.system(.callout, design: .monospaced)` on
+                // `secondarySystemBackground` with a 12 pt radius.
+                BasicText(
+                    text = execution.line,
+                    style = type.code.copy(color = tokens.colors.primary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(UiPageTags.CHAT_COMMAND_RESULT_LINE)
+                        .clip(RoundedCornerShape(tokens.radius.codeBlock))
+                        .background(tokens.colors.code)
+                        .padding(tokens.spacing.cardInset),
+                )
+                val output = state.output
+                if (output != null) {
+                    BasicText(
+                        text = output,
+                        style = type.body.copy(color = tokens.colors.primary),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag(UiPageTags.CHAT_COMMAND_RESULT_OUTPUT),
+                    )
+                } else {
+                    BasicText(
+                        text = UiStrings.CHAT_COMMAND_RESULT_EMPTY,
+                        style = type.secondary.copy(color = tokens.colors.secondary),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag(UiPageTags.CHAT_COMMAND_RESULT_OUTPUT),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 后台任务: this session's background jobs (`ChatPage.swift:3554`-`:3601`).
+ *
+ * @param state the host's read, or `UNREAD`.
+ * @param onRefresh re-read the session activity; `null` draws 刷新 greyed but
+ *   visible (the sheet can never hide a verb it renders on the baseline).
+ * @param onClose `关闭` (`.cancellationAction`, `:3596`).
+ * @param modifier the caller's placement.
+ */
+@Composable
+public fun NativeJobListSheet(
+    state: ChatJobsSheetState,
+    onRefresh: (() -> Unit)?,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = LocalUiTokens.current
+    ChatSubpageFrame(
+        title = UiStrings.CHAT_JOBS_TITLE,
+        rootTag = UiPageTags.CHAT_JOBS_SHEET_ROOT,
+        onClose = onClose,
+        modifier = modifier,
+        trailing = {
+            SessionTextAction(
+                label = UiStrings.CHAT_SUBPAGE_REFRESH,
+                onClick = { onRefresh?.invoke() },
+                tone = SessionActionTone.ACCENT,
+                enabled = onRefresh != null,
+            )
+        },
+    ) {
+        when (state.body) {
+            ChatSubpageBody.UNREAD -> EmptyHint(
+                title = UiStrings.CHAT_JOBS_UNREAD,
+                hint = null,
+                tag = UiPageTags.CHAT_JOBS_SHEET_UNREAD,
+            )
+
+            ChatSubpageBody.EMPTY -> EmptyHint(
+                title = UiStrings.CHAT_JOBS_EMPTY_TITLE,
+                hint = UiStrings.CHAT_JOBS_EMPTY_DETAIL,
+                tag = UiPageTags.CHAT_JOBS_SHEET_EMPTY,
+            )
+
+            ChatSubpageBody.ROWS -> LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag(UiPageTags.CHAT_JOBS_SHEET_LIST),
+                contentPadding = PaddingValues(vertical = tokens.geometry.cardOuterMarginV),
+            ) {
+                itemsIndexed(items = state.rows, key = { _, row -> row.id }) { index, row ->
+                    if (index > 0) SessionHairline()
+                    ChatJobRowView(row)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 定时任务: this session's scheduled tasks (`ChatPage.swift:3504`-`:3552`).
+ *
+ * @param state the host's read, or `UNREAD`.
+ * @param onRefresh re-read the session activity (the baseline's `onRefresh`, `:3549`).
+ * @param onClose `关闭` (`.cancellationAction`, `:3547`).
+ * @param modifier the caller's placement.
+ */
+@Composable
+public fun NativeScheduleListSheet(
+    state: ChatSchedulesSheetState,
+    onRefresh: (() -> Unit)?,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = LocalUiTokens.current
+    ChatSubpageFrame(
+        title = UiStrings.CHAT_SCHEDULES_TITLE,
+        rootTag = UiPageTags.CHAT_SCHEDULES_SHEET_ROOT,
+        onClose = onClose,
+        modifier = modifier,
+        trailing = {
+            SessionTextAction(
+                label = UiStrings.CHAT_SUBPAGE_REFRESH,
+                onClick = { onRefresh?.invoke() },
+                tone = SessionActionTone.ACCENT,
+                enabled = onRefresh != null,
+            )
+        },
+    ) {
+        when (state.body) {
+            ChatSubpageBody.UNREAD -> EmptyHint(
+                title = UiStrings.CHAT_SCHEDULES_UNREAD,
+                hint = null,
+                tag = UiPageTags.CHAT_SCHEDULES_SHEET_UNREAD,
+            )
+
+            ChatSubpageBody.EMPTY -> EmptyHint(
+                title = UiStrings.CHAT_SCHEDULES_EMPTY_TITLE,
+                hint = UiStrings.CHAT_SCHEDULES_EMPTY_DETAIL,
+                tag = UiPageTags.CHAT_SCHEDULES_SHEET_EMPTY,
+            )
+
+            ChatSubpageBody.ROWS -> LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag(UiPageTags.CHAT_SCHEDULES_SHEET_LIST),
+                contentPadding = PaddingValues(vertical = tokens.geometry.cardOuterMarginV),
+            ) {
+                itemsIndexed(items = state.rows, key = { _, row -> row.id }) { index, row ->
+                    if (index > 0) SessionHairline()
+                    ChatScheduleRowView(row)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The subpage frame: the baseline's inline navigation bar (title centred between
+ * `关闭` and the sheet's one trailing verb) over a full-height body.
+ *
+ * The title is data-free — every caller passes a `UiStrings` constant — so this
+ * helper never assembles a label at runtime.
+ */
+@Composable
+private fun ChatSubpageFrame(
+    title: String,
+    rootTag: String,
+    onClose: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    // `colors.background` is tier: unmeasured, so an unspecified value leaves the
+    // platform surface in place instead of an invented sRGB fill.
+    val surface = if (tokens.colors.background.isSpecified) {
+        Modifier.background(tokens.colors.background)
+    } else {
+        Modifier
+    }
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .then(surface)
+            .testTag(rootTag)
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
+                .padding(horizontal = tokens.geometry.pageOuterMarginH),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Equal weights keep the title centred whatever the two verbs measure,
+            // the same reason the page header derives its 104 pt reserve.
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (onClose != null) {
+                    SessionTextAction(
+                        label = UiStrings.DISMISS,
+                        onClick = onClose,
+                        tone = SessionActionTone.SECONDARY,
+                    )
+                }
+            }
+            BasicText(
+                text = title,
+                style = type.headline.copy(color = tokens.colors.primary),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.semantics { heading() },
+            )
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                trailing?.invoke()
+            }
+        }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .navigationBarsPadding(),
+        ) {
+            content()
+        }
+    }
+}
+
+/** One job row: title, one-line detail, and the status on the right when reported. */
+@Composable
+private fun ChatJobRowView(row: ChatJobRow) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = tokens.geometry.pageOuterMarginH,
+                vertical = tokens.geometry.bannerInsetV,
+            )
+            .testTag(UiPageTags.CHAT_JOBS_SHEET_ROW_PREFIX + row.id),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetH),
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
+        ) {
+            BasicText(
+                text = row.title,
+                style = type.body.copy(color = tokens.colors.primary),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            BasicText(
+                text = row.detail,
+                style = type.caption.copy(color = tokens.colors.tertiary),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (row.status != null) {
+            BasicText(
+                text = row.status,
+                style = type.caption.copy(color = tokens.colors.secondary),
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/** One schedule row: title + status, its detail line, then the prompt (two lines). */
+@Composable
+private fun ChatScheduleRowView(row: ChatScheduleRow) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = tokens.geometry.pageOuterMarginH,
+                vertical = tokens.geometry.bannerInsetV,
+            )
+            .testTag(UiPageTags.CHAT_SCHEDULES_SHEET_ROW_PREFIX + row.id),
+        verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetH),
+        ) {
+            BasicText(
+                text = row.title,
+                style = type.body.copy(color = tokens.colors.primary),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (row.status != null) {
+                BasicText(
+                    text = row.status,
+                    style = type.caption.copy(color = tokens.colors.secondary),
+                    maxLines = 1,
+                )
+            }
+        }
+        BasicText(
+            text = row.detail,
+            style = type.caption.copy(color = tokens.colors.tertiary),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (row.prompt != null) {
+            BasicText(
+                text = row.prompt,
+                style = type.secondary.copy(color = tokens.colors.secondary),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** The kind word that means "the command ran" (`ChatPage.swift:2516`). */
+private const val KIND_SUCCESS: String = "success"

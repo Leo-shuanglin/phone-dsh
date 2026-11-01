@@ -7,14 +7,14 @@
   "sectionNote": null,
   "title": {
     "text": "网络访问",
-    "provenance": "NativeShell.swift:540",
+    "provenance": "NativeShell.swift:541",
     "anchor": ".navigationTitle(\"网络访问\")"
   },
   "source": {
     "file": "NativeShell.swift",
     "path": "examples/probe-app/PhoneDSHProbe/NativeShell.swift",
-    "lines": 996,
-    "structLine": 443,
+    "lines": 1037,
+    "structLine": 444,
     "renderedFrom": [
       "body",
       "addDialog"
@@ -28,7 +28,7 @@
   },
   "sections": [
     {
-      "id": "section-465",
+      "id": "section-466",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
@@ -48,23 +48,23 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "NativeShell.swift:466",
+          "provenance": "NativeShell.swift:467",
           "anchor": "Toggle(\"允许连任何网站\", isOn: allowAllBinding)",
           "extraction": "syntax"
         }
       ],
-      "provenance": "NativeShell.swift:465",
+      "provenance": "NativeShell.swift:466",
       "anchor": "Section {",
       "extraction": "syntax",
       "criterion": {
         "kind": "first-clickable-row",
         "label": "允许连任何网站",
-        "provenance": "NativeShell.swift:466"
+        "provenance": "NativeShell.swift:467"
       },
       "footer": {
         "text": "打开之后,下面这些地址就不起作用了。",
         "labelExpr": null,
-        "provenance": "NativeShell.swift:470",
+        "provenance": "NativeShell.swift:471",
         "anchor": "Text(\"打开之后,下面这些地址就不起作用了。\")"
       }
     },
@@ -89,7 +89,7 @@
           "destination": null,
           "writes": false,
           "condition": "hosts.isEmpty",
-          "provenance": "NativeShell.swift:475",
+          "provenance": "NativeShell.swift:476",
           "anchor": "Text(allowAll ? \"现在全部能连。\" : \"还没有地址,现在连不出去。\")",
           "extraction": "syntax"
         },
@@ -104,12 +104,12 @@
           "destination": null,
           "writes": false,
           "condition": "hosts.isEmpty",
-          "provenance": "NativeShell.swift:482",
+          "provenance": "NativeShell.swift:483",
           "anchor": "Text(\"恢复成默认的\")",
           "extraction": "syntax"
         },
         {
-          "id": "text-489",
+          "id": "text-490",
           "label": null,
           "labelExpr": "host",
           "kind": "text",
@@ -119,7 +119,7 @@
           "destination": null,
           "writes": false,
           "condition": "!(hosts.isEmpty)",
-          "provenance": "NativeShell.swift:489",
+          "provenance": "NativeShell.swift:490",
           "anchor": "Text(host)",
           "extraction": "manual",
           "collection": "hosts, id: \\.self"
@@ -135,12 +135,12 @@
           "destination": null,
           "writes": true,
           "condition": "!allowAll",
-          "provenance": "NativeShell.swift:512",
+          "provenance": "NativeShell.swift:513",
           "anchor": "Text(\"添加地址\")",
           "extraction": "syntax"
         }
       ],
-      "provenance": "NativeShell.swift:521",
+      "provenance": "NativeShell.swift:522",
       "anchor": "Text(\"地址\")",
       "extraction": "syntax",
       "hasHeader": true
@@ -178,7 +178,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeShell.swift:466",
+      "provenance": "NativeShell.swift:467",
       "anchor": "Toggle(\"允许连任何网站\", isOn: allowAllBinding)",
       "extraction": "syntax"
     },
@@ -192,7 +192,7 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "NativeShell.swift:482",
+      "provenance": "NativeShell.swift:483",
       "anchor": "Text(\"恢复成默认的\")",
       "extraction": "syntax",
       "labelAlternatives": []
@@ -207,13 +207,13 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeShell.swift:512",
+      "provenance": "NativeShell.swift:513",
       "anchor": "Text(\"添加地址\")",
       "extraction": "syntax",
       "labelAlternatives": []
     },
     {
-      "id": "gesture-651",
+      "id": "gesture-652",
       "label": null,
       "labelExpr": null,
       "kind": "gesture",
@@ -222,7 +222,7 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "NativeShell.swift:651",
+      "provenance": "NativeShell.swift:652",
       "anchor": ".onTapGesture { adding = false }",
       "extraction": "syntax"
     },
@@ -236,7 +236,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeShell.swift:496",
+      "provenance": "NativeShell.swift:497",
       "anchor": "Button(\"删除这个地址\", role: .destructive) {",
       "extraction": "syntax"
     },
@@ -250,7 +250,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeShell.swift:667",
+      "provenance": "NativeShell.swift:668",
       "anchor": "Button(\"取消\") { adding = false }",
       "extraction": "syntax"
     },
@@ -264,51 +264,9 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "NativeShell.swift:670",
+      "provenance": "NativeShell.swift:671",
       "anchor": "Button(\"添加\") { submitDraft() }",
       "extraction": "syntax"
-    },
-    {
-      "id": "重试",
-      "label": "重试",
-      "labelExpr": null,
-      "kind": "action",
-      "trigger": "tap",
-      "semantic": null,
-      "writes": false,
-      "destination": null,
-      "condition": null,
-      "extraction": "manual",
-      "androidOnly": {
-        "reason": {
-          "baselineLacks": "iOS reads its egress rules synchronously from local UserDefaults, so the read cannot fail and needs no retry",
-          "androidNeeds": "Android reads a host snapshot across a process boundary, so the read can fail and the page must offer recovery without leaving and re-entering",
-          "withoutIt": "a failed read leaves the allow list blank with no way back except killing the app, and a blank list silently means deny-all"
-        },
-        "owner": "android-ui",
-        "reviewBy": "2027-01-31"
-      }
-    },
-    {
-      "id": "关闭",
-      "label": "关闭",
-      "labelExpr": null,
-      "kind": "action",
-      "trigger": "tap",
-      "semantic": null,
-      "writes": false,
-      "destination": null,
-      "condition": null,
-      "extraction": "manual",
-      "androidOnly": {
-        "reason": {
-          "baselineLacks": "the iOS page has no failure line at all, so it has nothing to dismiss",
-          "androidNeeds": "the Android failure line is dismissible so the user can clear a stale error and keep reading the rules",
-          "withoutIt": "the error occupies the page after it stops being true, and the user cannot tell it apart from a current failure"
-        },
-        "owner": "android-ui",
-        "reviewBy": "2027-01-31"
-      }
     }
   ],
   "presentations": [],
@@ -320,15 +278,15 @@
         {
           "renders": "还没有地址,现在连不出去。",
           "when": "hosts.isEmpty",
-          "provenance": "NativeShell.swift:475",
+          "provenance": "NativeShell.swift:476",
           "anchor": "Text(allowAll ? \"现在全部能连。\" : \"还没有地址,现在连不出去。\")"
         }
       ],
       "data": [
         {
-          "renders": "untitled section at 465 | 地址",
+          "renders": "untitled section at 466 | 地址",
           "when": null,
-          "provenance": "NativeShell.swift:443",
+          "provenance": "NativeShell.swift:444",
           "anchor": "struct EgressAllowListPage: View {",
           "note": "structural default: the sections above, when no condition overrides them"
         }
@@ -353,17 +311,17 @@
   "subpages": [
     {
       "name": "WorkspaceFoldersPage",
-      "line": 318,
+      "line": 319,
       "private": false,
       "sections": [],
-      "provenance": "NativeShell.swift:318"
+      "provenance": "NativeShell.swift:319"
     },
     {
       "name": "SettingsAboutPage",
-      "line": 861,
+      "line": 897,
       "private": false,
       "sections": [],
-      "provenance": "NativeShell.swift:861"
+      "provenance": "NativeShell.swift:897"
     }
   ],
   "unreachable": [],

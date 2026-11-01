@@ -47,6 +47,10 @@ import androidx.compose.ui.semantics.semantics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
+import com.phonedsh.ui.surface.SettingsSubPageFrame
+import com.phonedsh.ui.surface.SettingsFormRow
+import com.phonedsh.ui.surface.SettingsSectionHeader
+import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
 
 // ---------------------------------------------------------------------------
 // Facts
@@ -342,7 +346,7 @@ public data class RuntimeDetailsScreenState(
             val engineRows = listOf(
                 RuntimeRowView(
                     id = "runtime.engine.status",
-                    title = UiStrings.RUNTIME_STATUS,
+        title = UiStrings.RUNTIME_STATUS,
                     value = engineText(engine),
                     tone = engineTone(engine),
                     subtitle = if (engine == FactState.UNKNOWN) {
@@ -707,8 +711,9 @@ public fun RuntimeDetailsPage(
     onRetry: (() -> Unit)? = null,
     onDismissFailure: (() -> Unit)? = null,
 ) {
-    PageFrame(
-        title = UiStrings.RUNTIME_TITLE,
+    SettingsSubPageFrame(
+        backGlyph = SETTINGS_CLOSE_GLYPH,
+        largeTitle = UiStrings.RUNTIME_TITLE,
         onBack = onBack,
         modifier = modifier,
         rootTag = UiPageTags.RUNTIME_ROOT,
@@ -758,7 +763,7 @@ private fun RuntimeContent(
         modifier = Modifier
             .fillMaxSize()
             .testTag(UiPageTags.RUNTIME_LIST),
-        verticalArrangement = Arrangement.spacedBy(pageListGap),
+        verticalArrangement = Arrangement.Top,
     ) {
         if (state.hasUnmeasuredValues) {
             item(key = "runtime.unmeasured") {
@@ -771,7 +776,7 @@ private fun RuntimeContent(
         }
         state.sections.forEach { section ->
             item(key = "header-${section.id}") {
-                SectionHeader(
+                SettingsSectionHeader(
                     title = section.title,
                     expanded = section.expanded,
                     onToggle = { onToggleSection(section.id) },
@@ -782,7 +787,7 @@ private fun RuntimeContent(
             if (section.expanded) {
                 items(count = section.rows.size, key = { index -> section.rows[index].id }) { index ->
                     val row = section.rows[index]
-                    InfoRow(
+                    SettingsFormRow(
                         title = row.title,
                         value = row.value,
                         tone = row.tone,
@@ -949,14 +954,14 @@ private fun RuntimeFailureBlock(
     onDismissFailure: (() -> Unit)?,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        InfoRow(
+        SettingsFormRow(
             title = UiStrings.RUNTIME_FAILED,
             value = null,
             subtitle = failure,
             modifier = Modifier.testTag(UiPageTags.RUNTIME_FAILURE),
         )
         if (onRetry != null) {
-            InfoRow(
+            SettingsFormRow(
                 title = UiStrings.RETRY,
                 value = null,
                 onClick = onRetry,
@@ -964,7 +969,7 @@ private fun RuntimeFailureBlock(
             )
         }
         if (onDismissFailure != null) {
-            InfoRow(
+            SettingsFormRow(
                 title = UiStrings.DISMISS,
                 value = null,
                 onClick = onDismissFailure,

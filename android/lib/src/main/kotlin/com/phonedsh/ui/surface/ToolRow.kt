@@ -8,7 +8,6 @@
 package com.phonedsh.ui.surface
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -33,10 +32,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -118,14 +115,15 @@ public fun ToolRow(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    val chevronRotation by animateFloatAsState(
-        targetValue = if (expanded) 90f else 0f,
-        animationSpec = tween(tokens.motion.disclosureMs, easing = tokens.motion.disclosureEasing),
-        label = "tool-row-chevron",
-    )
     val canExpand = detail != null
     val summaryColor = if (state == ToolRowState.RUNNING) tokens.colors.tertiary else tokens.colors.secondary
 
+    // The baseline's collapsed line is `✦ 工具调用 · <name> · <argument>`: one 13 pt
+    // grey line, no disclosure chevron, ink starting at the page margin. The
+    // prefix, the two separators and the three values are separate text nodes so
+    // each stays addressable (a merged string would hide the tool name from
+    // accessibility and from the structure gate).
+    //
     // The tag sits on the merged, clickable row: a semantics assertion on
     // `TOOL_ROW` must see the title, the summary, the state and the click action.
     Column(modifier = modifier) {
@@ -144,33 +142,46 @@ public fun ToolRow(
                     stateDescription = state.label
                     contentDescription = "$title · ${state.label}"
                 }
-                .testTag(UiTags.TOOL_ROW)
-                .padding(horizontal = tokens.geometry.disclosureIconGap),
+                .testTag(UiTags.TOOL_ROW),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(tokens.geometry.disclosureIconGap),
         ) {
             BasicText(
+                text = TOOL_GLYPH,
+                style = type.secondary.copy(color = tokens.colors.secondary),
+                maxLines = 1,
+            )
+            BasicText(
+                text = UiStrings.ACTIVITY_TOOLS,
+                style = type.secondary.copy(color = tokens.colors.secondary),
+                maxLines = 1,
+            )
+            BasicText(
+                text = UiStrings.DOT_SEPARATOR,
+                style = type.secondary.copy(color = tokens.colors.secondary),
+                maxLines = 1,
+            )
+            BasicText(
                 text = title,
-                style = type.codeLabel.copy(color = tokens.colors.secondary),
+                style = type.secondary.copy(color = tokens.colors.secondary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
-            BasicText(
-                text = summary,
-                style = type.secondary.copy(color = summaryColor),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            BasicText(
-                text = CHEVRON,
-                style = type.codeLabel.copy(color = tokens.colors.tertiary),
-                modifier = Modifier
-                    .rotate(chevronRotation)
-                    // Decorative: the row's own semantics carry the state.
-                    .clearAndSetSemantics {},
-            )
+            if (summary.isNotEmpty()) {
+                BasicText(
+                    text = UiStrings.DOT_SEPARATOR,
+                    style = type.secondary.copy(color = tokens.colors.secondary),
+                    maxLines = 1,
+                )
+                BasicText(
+                    text = summary,
+                    style = type.secondary.copy(color = summaryColor),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
 
         AnimatedVisibility(
@@ -248,4 +259,5 @@ public fun ToolDetailCard(
     }
 }
 
-private const val CHEVRON: String = "›"
+/** The 工具调用 prefix's mark (iOS `sparkles`, drawn as text because the icon set is an asset catalog). */
+private const val TOOL_GLYPH: String = "✦"

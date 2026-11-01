@@ -14,8 +14,9 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { countRedactions, redactText, redactionReport } from './redactions.mjs'
 
 // Boot failure strings that must never be mistaken for a rendered UI.
 const BOOT_FAILURE_MARKERS = [
@@ -864,7 +865,11 @@ async function main() {
     writeFileSync(outPath, buffer)
     const size = pngSize(buffer)
     report.screenshot = {
-      path: outPath,
+      // Repo-relative to the manifest out-dir, never the absolute path: the
+      // report is committed next to the PNG it describes, and the absolute
+      // form would carry the capture machine's home directory into the tree.
+      // `write-manifest.mjs` resolves this against `--out-dir`.
+      path: basename(outPath),
       width: size?.width ?? null,
       height: size?.height ?? null,
       bytes: buffer.length,
@@ -880,11 +885,17 @@ async function main() {
       appMounted: state.appMounted,
       skeletonPresent: state.skeletonPresent,
     }
+    // The body-text head reaches above the captured scroll position, so it can
+    // carry text that no pixel shows. Redact it here as well as in the manifest
+    // so the raw report is publishable too, and record what was removed.
+    const bodyTextHead = truncate(state.bodyText, args.bodyTextMax)
+    const bodyTextRedactions = redactionReport(countRedactions(bodyTextHead))
     report.boot = {
       ok: true,
       reason: null,
       sentinel: '[data-dsh-boot]',
-      bodyTextHead: truncate(state.bodyText, args.bodyTextMax),
+      bodyTextHead: redactText(bodyTextHead),
+      ...(bodyTextRedactions.length === 0 ? {} : { bodyTextRedactions }),
     }
     report.console = {
       errors: report.console.errors,

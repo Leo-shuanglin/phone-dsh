@@ -62,6 +62,14 @@ class PageTokenReferenceTest {
         // N4 lane: the mirrored settings index and the memory probe.
         "SettingsPage.kt" to SettingsPageTokens.refs,
         "MemoryPage.kt" to MemoryPageTokens.refs,
+        // L14 lane: the three B-group pages the iOS HEAD regeneration introduced.
+        "PhonePermissionsPage.kt" to PhonePermissionsPageTokens.refs,
+        "NativeAgentPresetsPage.kt" to NativeAgentPresetsPageTokens.refs,
+        "NativePluginInventoryPage.kt" to NativePluginInventoryPageTokens.refs,
+        // L13 lane: the three iOS pages Android did not carry.
+        "ChatPreferencesPage.kt" to ChatPreferencesPageTokens.refs,
+        "NativeSettingsDocumentPage.kt" to NativeSettingsDocumentPageTokens.refs,
+        "NativeShortcutsPage.kt" to NativeShortcutsPageTokens.refs,
     )
 
     @Test

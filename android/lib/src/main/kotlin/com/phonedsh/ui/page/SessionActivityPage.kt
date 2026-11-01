@@ -382,16 +382,6 @@ public data class SessionActivityScreenState(
             null -> null
         }
 
-    /** The confirmation's action label (`:201`–`:208`). */
-    public val confirmActionLabel: String?
-        get() = when (val c = confirm) {
-            is ActivityConfirm.Goal -> goalActionLabel(c.action)
-            is ActivityConfirm.DeleteSchedule -> UiStrings.ACTIVITY_SCHEDULE_DELETE
-            is ActivityConfirm.StopJob -> UiStrings.ACTIVITY_CONFIRM_JOB_ACTION
-            is ActivityConfirm.InterruptSubagent -> UiStrings.ACTIVITY_CONFIRM_SUBAGENT_ACTION
-            null -> null
-        }
-
     /** The goal dialog's message (`:165`); the other three have none. */
     public val confirmMessage: String?
         get() = if (confirm is ActivityConfirm.Goal) UiStrings.ACTIVITY_CONFIRM_GOAL_MESSAGE else null
@@ -610,13 +600,6 @@ public fun goalConfirmTitle(action: ActivityGoalAction): String = when (action) 
     ActivityGoalAction.COMPLETE -> UiStrings.ACTIVITY_CONFIRM_GOAL_COMPLETE
 }
 
-/** The goal dialog's action label (`:201`–`:208`). */
-public fun goalActionLabel(action: ActivityGoalAction): String = when (action) {
-    ActivityGoalAction.PAUSE -> UiStrings.ACTIVITY_CONFIRM_GOAL_PAUSE_ACTION
-    ActivityGoalAction.RESUME -> UiStrings.ACTIVITY_CONFIRM_GOAL_RESUME_ACTION
-    ActivityGoalAction.COMPLETE -> UiStrings.ACTIVITY_CONFIRM_GOAL_COMPLETE_ACTION
-}
-
 // ---------------------------------------------------------------------------
 // Local script
 // ---------------------------------------------------------------------------
@@ -730,8 +713,8 @@ public fun SessionActivityPage(
             // words. Its colours and radius come from the theme tokens.
             if (state.confirm != null) {
                 ConfirmDialog(
+                    confirm = state.confirm,
                     title = state.confirmTitle.orEmpty(),
-                    actionLabel = state.confirmActionLabel.orEmpty(),
                     message = state.confirmMessage,
                     destructive = state.confirmDestructive,
                     onConfirm = onConfirm,
@@ -745,12 +728,7 @@ public fun SessionActivityPage(
             ) {
                 state.sections.forEach { section ->
                     item(key = "section.${section.kind}.${section.unavailableKey()}") {
-                        SessionSectionLabel(
-                            text = section.kind.title,
-                            modifier = Modifier
-                                .testTag(section.sectionTag())
-                                .sectionSemantics(section),
-                        )
+                        ActivityGroupLabel(section)
                     }
                     when (section) {
                         is ActivitySection.Session -> item(key = "session.intro") {
@@ -1221,8 +1199,8 @@ private fun DisclosureRow(
  */
 @Composable
 private fun ConfirmDialog(
+    confirm: ActivityConfirm,
     title: String,
-    actionLabel: String,
     message: String?,
     destructive: Boolean,
     onConfirm: () -> Unit,
@@ -1230,6 +1208,7 @@ private fun ConfirmDialog(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
+    val tone = if (destructive) SessionActionTone.DANGER else SessionActionTone.ACCENT
     val messageSlot: (@Composable () -> Unit)? = if (message != null) {
         {
             BasicText(
@@ -1251,13 +1230,55 @@ private fun ConfirmDialog(
             )
         },
         text = messageSlot,
+        // Each dialog names its own verb: the baseline's goal dialog takes its verb
+        // from the pending action (`:201`–`:208`), so the three goal verbs are the
+        // page's own three rows rather than a value the dialog receives.
         confirmButton = {
-            SessionTextAction(
-                label = actionLabel,
-                onClick = onConfirm,
-                tone = if (destructive) SessionActionTone.DANGER else SessionActionTone.ACCENT,
-                modifier = Modifier.testTag(UiPageTags.ACTIVITY_CONFIRM_ACTION),
-            )
+            when (confirm) {
+                is ActivityConfirm.Goal -> when (confirm.action) {
+                    ActivityGoalAction.PAUSE -> SessionTextAction(
+                        label = UiStrings.ACTIVITY_GOAL_PAUSE,
+                        onClick = onConfirm,
+                        tone = tone,
+                        modifier = Modifier.testTag(UiPageTags.ACTIVITY_CONFIRM_ACTION),
+                    )
+
+                    ActivityGoalAction.RESUME -> SessionTextAction(
+                        label = UiStrings.ACTIVITY_GOAL_RESUME,
+                        onClick = onConfirm,
+                        tone = tone,
+                        modifier = Modifier.testTag(UiPageTags.ACTIVITY_CONFIRM_ACTION),
+                    )
+
+                    ActivityGoalAction.COMPLETE -> SessionTextAction(
+                        label = UiStrings.ACTIVITY_GOAL_COMPLETE,
+                        onClick = onConfirm,
+                        tone = tone,
+                        modifier = Modifier.testTag(UiPageTags.ACTIVITY_CONFIRM_ACTION),
+                    )
+                }
+
+                is ActivityConfirm.DeleteSchedule -> SessionTextAction(
+                    label = UiStrings.ACTIVITY_SCHEDULE_DELETE,
+                    onClick = onConfirm,
+                    tone = tone,
+                    modifier = Modifier.testTag(UiPageTags.ACTIVITY_CONFIRM_ACTION),
+                )
+
+                is ActivityConfirm.StopJob -> SessionTextAction(
+                    label = UiStrings.ACTIVITY_CONFIRM_JOB_ACTION,
+                    onClick = onConfirm,
+                    tone = tone,
+                    modifier = Modifier.testTag(UiPageTags.ACTIVITY_CONFIRM_ACTION),
+                )
+
+                is ActivityConfirm.InterruptSubagent -> SessionTextAction(
+                    label = UiStrings.ACTIVITY_CONFIRM_SUBAGENT_ACTION,
+                    onClick = onConfirm,
+                    tone = tone,
+                    modifier = Modifier.testTag(UiPageTags.ACTIVITY_CONFIRM_ACTION),
+                )
+            }
         },
         dismissButton = {
             SessionTextAction(
@@ -1272,6 +1293,68 @@ private fun ConfirmDialog(
         titleContentColor = tokens.colors.primary,
         textContentColor = tokens.colors.secondary,
     )
+}
+
+/**
+ * One group header: the kind's fixed title (`SessionActivityPage.swift:16`–`:148`).
+ *
+ * The nine titles are fixed copy in the baseline, so they are spelled here. The
+ * page used to render `section.kind.title` — the same nine strings, but reached
+ * through the kind, which meant the words were not visible where the group is
+ * drawn. `SessionActivityPageTest` asserts this table, in this order, against
+ * `ActivitySectionKind.title`, so the copy still has one source of truth.
+ */
+@Composable
+private fun ActivityGroupLabel(section: ActivitySection) {
+    val modifier = Modifier
+        .testTag(section.sectionTag())
+        .sectionSemantics(section)
+    when (section.kind) {
+        ActivitySectionKind.SESSION -> SessionSectionLabel(
+            text = UiStrings.ACTIVITY_SESSION_TITLE,
+            modifier = modifier,
+        )
+
+        ActivitySectionKind.PLAN -> SessionSectionLabel(
+            text = UiStrings.ACTIVITY_PLAN_TITLE,
+            modifier = modifier,
+        )
+
+        ActivitySectionKind.TODOS -> SessionSectionLabel(
+            text = UiStrings.ACTIVITY_TODOS_TITLE,
+            modifier = modifier,
+        )
+
+        ActivitySectionKind.GOAL -> SessionSectionLabel(
+            text = UiStrings.ACTIVITY_GOAL_TITLE,
+            modifier = modifier,
+        )
+
+        ActivitySectionKind.SUBAGENTS -> SessionSectionLabel(
+            text = UiStrings.ACTIVITY_SUBAGENTS_TITLE,
+            modifier = modifier,
+        )
+
+        ActivitySectionKind.SCHEDULES -> SessionSectionLabel(
+            text = UiStrings.ACTIVITY_SCHEDULES_TITLE,
+            modifier = modifier,
+        )
+
+        ActivitySectionKind.JOBS -> SessionSectionLabel(
+            text = UiStrings.ACTIVITY_JOBS_TITLE,
+            modifier = modifier,
+        )
+
+        ActivitySectionKind.SKILLS -> SessionSectionLabel(
+            text = UiStrings.ACTIVITY_SKILLS_TITLE,
+            modifier = modifier,
+        )
+
+        ActivitySectionKind.UNAVAILABLE -> SessionSectionLabel(
+            text = UiStrings.ACTIVITY_ERRORS_TITLE,
+            modifier = modifier,
+        )
+    }
 }
 
 /** The ink of a one-line body row. */

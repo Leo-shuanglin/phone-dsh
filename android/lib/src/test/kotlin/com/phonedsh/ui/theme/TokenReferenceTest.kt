@@ -179,7 +179,14 @@ class TokenReferenceTest {
         assertEquals(Color(0xFF679EFE), dark.colors.accent)
         assertEquals(Color(0xFF2F5BFF), light.colors.ctaOverride)
         assertEquals(Color(0xFF2F5BFF), dark.colors.ctaOverride)
-        assertEquals(22f, light.radius.bubble.value, 0f)
+        // The values the resolved theme must carry are the *current* spec's, not the
+        // ones this test was written against: L9 re-based the two radii and the bubble
+        // cap on the iOS implementation (`NativeParityTokens.swift:115-116` radiusXL =
+        // 20 / radiusPanel = 28, `:98` userBubbleMaxWidth = 277). The hardcoded 22 was
+        // the old truth here, not an implementation error.
+        assertEquals(20f, light.radius.bubble.value, 0f)
+        assertEquals(28f, light.radius.composer.value, 0f)
+        assertEquals(277f, light.geometry.bubbleMaxWidth.value, 0f)
         assertEquals(0.4f, light.geometry.cardAreaMaxHeightRatio, 0f)
         // `colors.background` cannot be measured (a dynamic system colour): it must
         // stay unspecified rather than become an invented fill.

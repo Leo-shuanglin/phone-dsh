@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check the Android pages against the iOS page-structure contract.
 
 Purpose: `spec/ui/v1/pages/<page-id>.json` is the machine-readable structure of an
@@ -225,6 +226,27 @@ def mask_kotlin(text: str) -> str:
         elif text.startswith('"""', i):
             j = text.find('"""', i + 3)
             j = n if j < 0 else j + 3
+            for k in range(i, min(j, n)):
+                if text[k] != "\n":
+                    out[k] = " "
+            i = j
+        elif text[i] == "'":
+            # Kotlin char literal. Without this, the `"` inside `'"'` opens a
+            # phantom string and the rest of the file is masked away — which is
+            # how a page that does declare `fun SessionArtifactsPage(` was
+            # reported as missing it. Bail at a newline so a stray apostrophe
+            # cannot eat the file either.
+            j = i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                elif text[j] == "'":
+                    j += 1
+                    break
+                elif text[j] == "\n":
+                    break
+                else:
+                    j += 1
             for k in range(i, min(j, n)):
                 if text[k] != "\n":
                     out[k] = " "
@@ -751,7 +773,10 @@ def android_sections(text: str, masked: str, strings: dict, consts: dict,
             if span is None and callee.endswith("SectionHeader") and positional:
                 span = positional[0]
         else:
-            span = named.get("text") or (positional[0] if positional else None)
+            # `text` is the usual name; `SettingsSectionLabel` names it `title`.
+            # Reading only `text` made every `SettingsSectionLabel(title = …)`
+            # header invisible to the gate even though it renders on screen.
+            span = named.get("text") or named.get("title") or (positional[0] if positional else None)
         if span is None:
             continue
         if is_declaration(masked, m.start()):
@@ -1021,6 +1046,11 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
         elif callee == "SessionFailureLine":
             span = named.get("retryLabel")
         else:  # InfoRow: only an interactive row is an action
+            # `SettingsFormRow` is deliberately absent: even with `onClick` it is the
+            # Settings family's generic row, used for dialogs and chrome, and reading
+            # it as a contract action invents 10 labels that the contract never had.
+            # A page that needs an action row here uses `SessionTextAction`, which is
+            # what the component is for.
             if "onClick" not in named or "title" not in named:
                 continue
             span = named["title"]
@@ -1031,6 +1061,13 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             unresolved.append(strip_kotlin_comments(collapse(text[span[0]:span[1]]))[:DYN_EXPR_MAX])
         elif value and value.strip():
             labels.append(value)
+            if positions is not None:
+                # The untitled-group criterion check locates a contract row by its
+                # position in the page. Without this, a row drawn by one of these
+                # three shared components read as "the label exists somewhere" and
+                # then failed `find_row` anyway, which surfaced as a phantom
+                # missing-section on a page that renders the row.
+                positions.append((value, m.start()))
     # ChatPage has no action component: its affordances are a `BasicText` whose
     # own modifier chain carries `.clickable(...)`. Only that shape counts (a
     # clickable row around a label is not the label's own action).
@@ -1177,7 +1214,14 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             value, dynamic = text_label_in(text, masked, closure[0], closure[1], strings, consts, skip)
             if callee == "DropdownMenuItem" and value is None and dynamic:
                 continue  # a data row: DropdownMenuItem(text = { Text(expr) }) is not a named action
-            if value is None and dynamic is None and callee in CHIP_CONTROLS:
+            # A segmented control often renders only its value; the caption in the
+            # same Row/Column is its label (`Text("方向"); SegmentedButton { … }`).
+            # `dynamic` does not disqualify that: the dynamic text is the *value*
+            # (the selected segment), while the caption beside it is the label and
+            # is written literally in the source. Requiring `dynamic is None` made
+            # every captioned segmented control read as an unlabelled action —
+            # which is a false finding against a correct page.
+            if value is None and callee in CHIP_CONTROLS:
                 # A segmented control often renders only its value; the caption in the
                 # same Row/Column is its label (`Text("方向"); SegmentedButton { … }`).
                 container = enclosing_container(text, masked, m.start())
@@ -1482,7 +1526,13 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
                     if a.get("presentedBy") in dead_presentation_ids
                     or a.get("deadPresentation") in dead_presentation_ids]
     live_actions = [a for a in contract_actions if a not in dead_actions]
-    labelled = [a for a in live_actions if a.get("label") and not a.get("dynamicLabel")]
+    # Symmetric with the Android side above: a format template is rendered data on
+    # BOTH sides. The Android reader already drops `%d 项需要处理`-shaped labels, but
+    # the contract side kept `删除 %@` as a literal, so an action the page renders
+    # correctly (the confirm key reads `删除 DeepSeek`) could never satisfy it.
+    labelled = [a for a in live_actions
+                if a.get("label") and not a.get("dynamicLabel")
+                and not is_template_label(a["label"])]
     android_only_actions = [a for a in labelled if a.get("androidOnly")]
     labelled = [a for a in labelled if not a.get("androidOnly")]
     summary["actions"]["contract"] = len(contract_actions)
@@ -1504,9 +1554,11 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
 
     consts = {**shared_consts, **local_constants(text)}
     section_positions, action_positions = [], []
+    consts = {**shared_consts, **local_constants(text)}
+    section_positions, action_positions = [], []
+    fold_labels = frozenset(normalize(a["label"]) for a in labelled if a.get("label"))
     android_titles, unresolved_titles = android_sections(text, masked, strings, consts,
                                                         positions=section_positions)
-    fold_labels = frozenset(normalize(a["label"]) for a in labelled if a.get("label"))
     android_labels, unresolved_labels = android_actions(text, masked, strings, consts,
                                                         wrappers=wrappers, positions=action_positions,
                                                         fold_labels=fold_labels)
@@ -1609,12 +1661,28 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
                        f"(owner {section['androidOnly']['owner']}); restore it or delete the entry")
     android_only_label_keys = {normalize(a["label"]) for a in android_only_actions}
     dead_action_keys = {normalize(a["label"]) for a in dead_actions if a.get("label")}
+    # A `picker` is a control, not a page action: `.pickerStyle(.segmented)` never
+    # renders the Picker's own label (only its segments appear), and the segments
+    # are the picker's `items` — choices, not actions. Comparing either one against
+    # the page's action set reports a control as a missing button and its options
+    # as invented buttons, which is a finding against a correct page. The contract
+    # already carries `kind: picker` + `items`, so this needs no new field.
+    picker_option_keys = set()
+    picker_label_keys = set()
+    for action in contract_actions:
+        if action.get("kind") == "picker":
+            if action.get("label"):
+                picker_label_keys.add(normalize(action["label"]))
+            for item in action.get("items") or []:
+                picker_option_keys.add(normalize(item))
     for key, label in expected_labels.items():
+        if key in picker_label_keys or key in picker_option_keys:
+            continue
         if key not in actual_labels:
             report.add(page_id, "missing-action", label, "contract action label absent from the Android page")
     for key, label in actual_labels.items():
         if key not in expected_labels and key not in android_only_label_keys \
-                and key not in dead_action_keys:
+                and key not in dead_action_keys and key not in picker_option_keys:
             report.add(page_id, "extra-action", label, "Android action label absent from the contract")
     for expr in sorted(set(unresolved_labels)):
         report.add(page_id, "unresolved-action", expr,
@@ -1719,6 +1787,10 @@ def run(root: Path, strict: bool, baseline_path: Path | None, write_baseline: Pa
           f"{len({s['android'] for s in summaries if s['android']})} Android screen(s), "
           f"{len(report.whitelisted)} whitelisted divergence(s)")
     for summary in summaries:
+        # Bind the contract for THIS page: the loop used to reuse whatever
+        # `contract` the previous iteration left, so every single-region page
+        # printed the same (last) page's `sectionNote`.
+        contract = contracts.get(summary["page"], {})
         findings = [f for f in report.findings if f[0] == summary["page"]]
         page_new = [f for f in new_findings if f[0] == summary["page"]]
         print(f"PAGE {summary['page']}  {summary['screen']} → {Path(summary['android']).name}"

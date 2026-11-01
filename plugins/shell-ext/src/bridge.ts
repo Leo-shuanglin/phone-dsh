@@ -88,6 +88,33 @@ export function advertisedAccelerators(hello: Pick<Hello, 'capabilities'>): stri
   return [...new Set(names.filter((name): name is string => typeof name === 'string' && name !== ''))]
 }
 
+
+
+/**
+ * The host `exec_id` for one accelerator dispatch: `<identity>-a<sequence>`.
+ *
+ * `spec/v1/exec.md:78-79` pins the shape. D6 bounds the wire id to 64
+ * characters, so only the prefix is shortened — the `-aN` sequence suffix always
+ * survives, because the host uses it to tell two dispatches of the same tool
+ * call apart. This is the one place that builds it.
+ *
+ * The prefix is the call identity, which is **not** necessarily a digest: the
+ * session/turn/step fallback is a plain composite like `session-a-1-1`, and a
+ * caller with no identity uses `xl`. Only the length is bounded.
+ *
+ * @param prefix - the call identity.
+ * @param sequence - the dispatch sequence within this identity.
+ * @returns the bounded wire id.
+ */
+export function acceleratorExecID(prefix: string, sequence: number): string {
+  if (!Number.isSafeInteger(sequence) || sequence < 0) {
+    throw new Error(`accelerator exec_id sequence must be a non-negative safe integer (got ${String(sequence)})`)
+  }
+  const suffix = `-a${String(sequence)}`
+  const head = prefix.length + suffix.length <= 64 ? prefix : prefix.slice(0, 64 - suffix.length)
+  return `${head}${suffix}`
+}
+
 /**
  * Build the exec-bridge dispatcher shared by every accelerator command.
  * @param options - client, hello caps, revision source and identity source.
@@ -127,9 +154,11 @@ export function createExecBridgeAccelerators(options: ExecBridgeAcceleratorOptio
       }
       // D6 bounds the host wire id to 64 characters. Keep the `-aN` sequence
       // suffix intact and shorten only the prefix when the identity is long.
-      const prefix = identity.key !== undefined && identity.key !== '' ? identity.key : 'xl'
-      const suffix = `-a${String(sequence++)}`
-      const execId = `${prefix.length + suffix.length <= 64 ? prefix : prefix.slice(0, 64 - suffix.length)}${suffix}`
+      // The prefix is the derived `idem_key`, not the raw tool-call identity: the
+      // derivation is what makes two calls of the same tool distinguishable and
+      // what bounds the key to a fixed 64-character digest. The host matches the
+      // two fields (see `spec/v1/exec.md:78-79`), so they must share one source.
+      const execId = acceleratorExecID(idemKey, sequence++)
       const execRequest: ExecRequest = {
         exec_id: execId,
         argv: [...request.argv],

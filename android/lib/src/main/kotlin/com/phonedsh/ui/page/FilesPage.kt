@@ -1,41 +1,44 @@
-// Files: the workspace browser and the file preview, mirrored from the baseline.
+// Files: the workspace browser, mirrored from the baseline's `FilesPage` listing.
 // SPDX-License-Identifier: MIT
 //
 // Mirror source: `examples/probe-app/PhoneDSHProbe/FilesPage.swift` (read line by
 // line; every section, row, control and string below names the lines it copies).
-// The page is the baseline's `FilesPage` + `FilePreviewPage`: the listing is one
-// `Section(fileGroupTitle)` whose rows are the sub-folders followed by the files
-// (`FilesPage.swift:115`–`:136`), and the preview is the sheet the file row opens
-// (`:59`–`:64`, body `:290`–`:353`).
+// The page is the baseline's listing: one `Section(fileGroupTitle)` whose rows are
+// the sub-folders followed by the files (`FilesPage.swift:115`–`:136`), the search
+// field, and the optional 「3D 示例」 toolbar entry.
+//
+// PR #15 (`8dd17496`) deleted `FilePreviewPage` and moved the preview into the
+// standalone `PreviewSurface`; a file row now pushes `PdshRoute.Preview` and one
+// back returns to this listing (`FilesPage.swift:59`; `PdshNavHost.kt:632` hands
+// the row to the route). The in-page preview that mirrored `FilePreviewPage` is
+// gone with it: this route never supplied the preview read, so every preview branch
+// was unreachable, and the one preview face's contract is
+// `spec/ui/v1/pages/preview-surface.json`.
 //
 // What the baseline calls "empty" and what it calls "unreadable" are kept apart,
 // because the baseline keeps them apart:
 //   * an empty workspace (`model.files.isEmpty`, `:102`) is the two-line card
 //     「还没有文件」/「智能体做的文件会出现在这里。」;
 //   * an empty *sub-directory* is the section title with no rows — the baseline has
-//     no "this folder is empty" sentence, so neither does this page;
-//   * a file whose bytes cannot be read is the 「这个文件已经不在了。」 card, whose
-//     description is the host's reason or 「请使用分享功能打开此文件。」 (`:316`).
+//     no "this folder is empty" sentence, so neither does this page.
 // A host that has not reported the listing at all is *not* an empty workspace:
 // [FilesScreenState.waiting] renders the waiting copy instead of claiming 0 files
 // (the baseline's `model.files` is always a materialized array, so it has no such
 // state; this is the Android host-snapshot gap, not a baseline behaviour).
 //
 // ScreenState: `FilesScreenState.from(source, local)` is a pure function of the
-// host's read-only snapshot (`files`, the preview read) and the local navigation
-// script (directory, query, previewed file). §3.1 rule 3 makes that snapshot the
-// UiState-side input on a page with no harness event anchor, so the listing and
-// the preview sequence are asserted on the JVM.
+// host's read-only snapshot (`files`) and the local navigation script (directory,
+// query). §3.1 rule 3 makes that snapshot the UiState-side input on a page with no
+// harness event anchor, so the listing and the folder sequence are asserted on the JVM.
 //
 // Geometry: the page margin and the row floors are page-level tokens
-// (`geometry.pageOuterMarginH`, `geometry.pageRowMinHeight`); the vertical inset of
-// the preview's bottom bar has no page token, so it reuses `spacing.badgeInsetH`
-// and says so at the call site. Nothing here invents a colour or a length.
+// (`geometry.pageOuterMarginH`, `geometry.pageRowMinHeight`); nothing here invents a
+// colour or a length.
 package com.phonedsh.ui.page
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,17 +47,22 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -63,6 +71,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import com.phonedsh.ui.ShellFilesMetrics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.theme.LocalUiTokens
@@ -94,13 +103,15 @@ public data class WorkspaceFile(
 )
 
 /**
- * Which of the baseline's preview bodies a path takes.
+ * Which of the preview surface's bodies a path takes.
  *
  * The baseline decides by extension, in this order (`FilesPage.swift:284`–`:288`,
- * `:361`–`:362`): HTML pages render in a page surface, Markdown in a Markdown
- * body, the listed text extensions through a text read, and everything else
- * through Quick Look. The order matters: `html` is also in the text-extension
- * list, but the HTML branch wins.
+ * `:361`–`:362` of the pre-PR15 file; `PreviewSurface.swift:66` keeps the same
+ * order): HTML pages render in a page surface, Markdown in a Markdown body, the
+ * listed text extensions through a text read, and everything else through Quick
+ * Look. The order matters: `html` is also in the text-extension list, but the HTML
+ * branch wins. `PreviewPathResolver`/`PreviewKind` reuse this classifier, so it
+ * stays in the page layer instead of being copied into the preview surface.
  */
 public enum class FileKind {
     /** `html` / `htm`: a page surface, rooted at the owning workspace. */
@@ -129,8 +140,7 @@ private val MARKDOWN_EXTENSIONS: Set<String> = setOf("md", "markdown")
  * its main source files (`Main.kt`, `build.gradle`) as a binary card. The
  * addition is registered as `platform.workspace-text-extensions` in
  * `spec/platform/whitelist.json`; it changes which files take the text body and
- * nothing else — the preview caps, the path check and the share fallback stay
- * identical.
+ * nothing else.
  */
 private val TEXT_EXTENSIONS: Set<String> = setOf(
     "txt", "md", "markdown", "json", "yaml", "yml", "xml", "html", "htm", "csv", "tsv", "log",
@@ -181,97 +191,20 @@ public sealed interface FileContentView {
 }
 
 /**
- * One preview read, with the facts the baseline's `loadPreview` turns into copy.
- *
- * Every flag below names the baseline line that raises it; the page composes the
- * sentence itself so the copy stays in [UiStrings] instead of arriving as an
- * already-formatted host string.
- *
- * @param error the host's failure reason; `null` when the read succeeded.
- * @param content the decoded text (`FileKind.TEXT` / [FileKind.MARKDOWN]).
- * @param byteCount the measured size of a non-text file.
- * @param directTextTruncated `FilesPage.swift:379`: the 8 MiB direct read stopped.
- * @param textTruncated `:409`: the 256 KiB Worker read stopped.
- * @param linesTruncated `:412`: the Worker returned `eof = false` (200 lines).
- * @param materializedCopy `:420`–`:422`: the Worker read failed and the page fell
- *   back to the on-disk copy, which the bottom bar must say.
- * @param pageAvailable `FilesPage.swift:298`: `pageEntry` and `pageResolver` both
- *   resolved, i.e. the page has a real workspace origin.
- * @param sessionMissing `FilesPage.swift:356`–`:359`: there is no current session,
- *   so the baseline cannot read the session workspace at all.
- * @param unsafe `FilesPage.swift:366`–`:367` / `:391`: the file is outside the safe,
- *   materialized workspace snapshot, so the baseline refuses to open it.
- * @param shareable `FilesPage.swift:327` / `:343`: `safeFileURL != nil`. `null`
- *   means the host did not say, and the page then neither offers 分享 nor claims
- *   the file is gone.
- */
-@Immutable
-public data class FilePreviewRead(
-    public val error: String? = null,
-    public val content: String? = null,
-    public val byteCount: Long? = null,
-    public val directTextTruncated: Boolean = false,
-    public val textTruncated: Boolean = false,
-    public val linesTruncated: Boolean = false,
-    public val materializedCopy: Boolean = false,
-    public val pageAvailable: Boolean = false,
-    public val sessionMissing: Boolean = false,
-    public val unsafe: Boolean = false,
-    public val shareable: Boolean? = null,
-)
-
-/**
  * The page's read-only input.
  *
  * @param files every file of the workspace (`ChatModel.files`); `null` means the
  *   host has not reported the listing, which is the waiting state, not an empty
  *   workspace.
- * @param preview the read of [FilesLocalState.previewPath]; `null` while the read
- *   is in flight.
  */
 @Immutable
 public data class FilesSource(
     public val files: List<WorkspaceFile>? = null,
-    public val preview: FilePreviewRead? = null,
 )
 
 // ---------------------------------------------------------------------------
 // ScreenState
 // ---------------------------------------------------------------------------
-
-/** What the preview body shows; one case per baseline `if` (`FilesPage.swift:290`). */
-public sealed interface FilePreview {
-    /** No preview: the listing is on screen. */
-    public data object Hidden : FilePreview
-
-    /** A text/markdown body: the monospaced, selectable text (`:307`–`:314`). */
-    public data class Text(public val name: String, public val content: String) : FilePreview
-
-    /**
-     * An HTML page.
-     *
-     * @param available `:298`: the file belongs to a workspace, so the page can be
-     *   rendered against a real origin; `false` is the baseline's
-     *   「这个页面不在任何工作区里」 card (`:303`).
-     */
-    public data class Page(public val name: String, public val available: Boolean) : FilePreview
-
-    /** A non-text file: Quick Look on iOS (`:297`), the degradation card here. */
-    public data class External(public val name: String, public val byteCount: Long?) : FilePreview
-
-    /** The read failed (`:316`); [reason] is the host's reason or `null`. */
-    public data class Unavailable(public val name: String, public val reason: String?) : FilePreview
-}
-
-/** The previewed file's display name. */
-public val FilePreview.name: String
-    get() = when (this) {
-        FilePreview.Hidden -> ""
-        is FilePreview.Text -> name
-        is FilePreview.Page -> name
-        is FilePreview.External -> name
-        is FilePreview.Unavailable -> name
-    }
 
 /**
  * The complete files screen state.
@@ -286,10 +219,6 @@ public val FilePreview.name: String
  * @param waiting the host has not reported the listing (Android host gap).
  * @param workspaceEmpty the host reported a workspace with no files at all
  *   (`:102`); the two-line card replaces the section.
- * @param preview the body on top of the listing.
- * @param previewNotice the bottom bar's sentence (`:335`), already combined in
- *   the baseline's order.
- * @param shareable `FilesPage.swift:327`: whether 分享 is offered; `null` unknown.
  */
 @Immutable
 public data class FilesScreenState(
@@ -300,13 +229,7 @@ public data class FilesScreenState(
     public val files: List<WorkspaceFile> = emptyList(),
     public val waiting: Boolean = true,
     public val workspaceEmpty: Boolean = false,
-    public val preview: FilePreview = FilePreview.Hidden,
-    public val previewNotice: String? = null,
-    public val shareable: Boolean? = null,
 ) {
-    /** True while the preview sub-page is on top of the listing. */
-    public val isPreviewing: Boolean get() = preview != FilePreview.Hidden
-
     /** True when the current directory is below the workspace root. */
     public val canNavigateUp: Boolean get() = directory.isNotEmpty()
 
@@ -330,8 +253,6 @@ public data class FilesScreenState(
             val all = source.files
             val directory = local.directory
             val query = local.query
-            val previewPath = local.previewPath
-            val read = source.preview
 
             // `FilesPage.swift:31`: children of the current directory, filtered by
             // the search text only when there is one.
@@ -358,50 +279,6 @@ public data class FilesScreenState(
                     .sorted()
             }
 
-            val kind = previewPath?.let(::classifyFileKind)
-            val name = previewPath?.substringAfterLast('/').orEmpty()
-            val preview = when {
-                previewPath == null -> FilePreview.Hidden
-                // `:290`–`:319`: the baseline's Group falls through to the
-                // 「这个文件已经不在了。」 card until `loadPreview` answers, for every
-                // kind; there is no separate loading body.
-                read == null -> FilePreview.Unavailable(name, null)
-                // `:356`–`:359`: without a current session there is no workspace to
-                // read, and the baseline's sentence names that, not the file.
-                read.sessionMissing -> FilePreview.Unavailable(name, UiStrings.FILES_PREVIEW_NO_SESSION)
-                // `:366`–`:367` / `:391`: outside the safe snapshot, the baseline
-                // refuses the file and says why.
-                read.unsafe -> FilePreview.Unavailable(name, UiStrings.FILES_PREVIEW_UNSAFE)
-                // `:298`–`:304`: an HTML file is either a page or "not in any workspace".
-                kind == FileKind.HTML -> FilePreview.Page(name, read.pageAvailable)
-                // `:389`–`:398`: Quick Look, which the host owns on Android too.
-                kind == FileKind.EXTERNAL && read.error == null ->
-                    FilePreview.External(name, read.byteCount)
-                // `:420`–`:422`: the Worker read failed and the on-disk copy is shown.
-                read.materializedCopy -> FilePreview.Text(name, read.content.orEmpty())
-                // `:385` / `:424`: `读取文件失败：<host reason>`.
-                read.error != null ->
-                    FilePreview.Unavailable(name, UiStrings.FILES_PREVIEW_READ_FAILED.format(read.error))
-                else -> FilePreview.Text(name, read.content.orEmpty())
-            }
-            // The bottom bar's sentence is composed here so the copy stays in
-            // `UiStrings`; an unanswered read raises none (the baseline sets these
-            // inside `loadPreview`).
-            val notices = if (read == null) {
-                emptyList()
-            } else {
-                buildList {
-                    // `:364`: an HTML page always says where it runs.
-                    if (kind == FileKind.HTML) add(UiStrings.FILES_PREVIEW_NOTICE_HTML)
-                    if (read.directTextTruncated) add(UiStrings.FILES_PREVIEW_NOTICE_8MIB)
-                    if (read.textTruncated) add(UiStrings.FILES_PREVIEW_NOTICE_256KIB)
-                    if (read.linesTruncated) {
-                        add(UiStrings.FILES_PREVIEW_NOTICE_LINES.format(INLINE_TEXT_PREVIEW_LINES))
-                    }
-                    if (read.materializedCopy) add(UiStrings.FILES_PREVIEW_NOTICE_COPY)
-                }
-            }
-
             return FilesScreenState(
                 groupTitle = groupTitle(directory),
                 directory = directory,
@@ -410,9 +287,6 @@ public data class FilesScreenState(
                 files = files,
                 waiting = all == null,
                 workspaceEmpty = all != null && all.isEmpty(),
-                preview = preview,
-                previewNotice = notices.takeIf { it.isNotEmpty() }?.joinToString(" "),
-                shareable = read?.shareable,
             )
         }
 
@@ -428,9 +302,6 @@ public data class FilesScreenState(
         }
     }
 }
-
-/** The baseline's inline text cap, restated so the notice sentence stays true. */
-private const val INLINE_TEXT_PREVIEW_LINES: Int = 200
 
 /** Decimal units for [formatFileSize], matching `ByteCountFormatter`'s `.file` style. */
 private const val DECIMAL_UNIT: Long = 1000
@@ -532,12 +403,6 @@ public sealed interface FilesUiEvent {
     /** Pop one directory (`FilesPage.swift:117`–`:122` pushes; the stack pops). */
     public data object NavigateUp : FilesUiEvent
 
-    /** Open a file: the baseline always shows the preview (`:125`–`:134`). */
-    public data class OpenFile(public val relativePath: String) : FilesUiEvent
-
-    /** Leave the preview (`完成`, `:324`). */
-    public data object ClosePreview : FilesUiEvent
-
     /** The search field changed (`:56`). */
     public data class SetQuery(public val query: String) : FilesUiEvent
 }
@@ -547,26 +412,21 @@ public sealed interface FilesUiEvent {
  *
  * @param directory the current directory (the baseline's `@State directory`).
  * @param query the search text.
- * @param previewPath the file whose preview is on top; `null` for the listing.
  */
 @Immutable
 public data class FilesLocalState(
     public val directory: String = "",
     public val query: String = "",
-    public val previewPath: String? = null,
 ) {
     /** Applies one local event. */
     public fun apply(event: FilesUiEvent): FilesLocalState = when (event) {
         is FilesUiEvent.OpenFolder ->
-            // A pushed FilesPage starts with an empty query (`:25`) and no preview.
+            // A pushed FilesPage starts with an empty query (`:25`).
             copy(
                 directory = directory + event.name.trim('/') + "/",
                 query = "",
-                previewPath = null,
             )
-        FilesUiEvent.NavigateUp -> copy(directory = parentOf(directory), previewPath = null)
-        is FilesUiEvent.OpenFile -> copy(previewPath = event.relativePath)
-        FilesUiEvent.ClosePreview -> copy(previewPath = null)
+        FilesUiEvent.NavigateUp -> copy(directory = parentOf(directory))
         is FilesUiEvent.SetQuery -> copy(query = event.query)
     }
 
@@ -586,16 +446,12 @@ public data class FilesLocalState(
  *
  * @param state the pure screen state ([FilesScreenState.from]).
  * @param onOpenFolder enter a sub-folder (`:117`).
- * @param onOpenFile open a file's preview (`:125`).
+ * @param onOpenFile open a file: the files route hands the row to `PdshRoute.Preview`
+ *   and one back returns here (`:125`–`:134`, PR #15's push).
  * @param onQueryChange the search text changed (`:56`).
  * @param onNavigateUp go to the parent directory (the baseline's back button).
- * @param onClosePreview close the preview (`完成`, `:324`).
  * @param onBack leave the page.
- * @param onShare share the previewed file (`:328`, the `share-sheet` row of
- *   `spec/ui/v1/README.md` §5).
  * @param onOpenDemo the toolbar's 「3D 示例」 (`:79`–`:86`); `null` hides it.
- * @param pageSurface the host's WebView for an HTML preview (`:301`); the surface
- *   is host-owned exactly like `WebSurfacePage`'s.
  */
 @Composable
 public fun FilesPage(
@@ -604,44 +460,22 @@ public fun FilesPage(
     onOpenFile: (WorkspaceFile) -> Unit,
     onQueryChange: (String) -> Unit,
     onNavigateUp: () -> Unit,
-    onClosePreview: () -> Unit,
     onBack: () -> Unit,
-    onShare: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenDemo: (() -> Unit)? = null,
-    pageSurface: (@Composable () -> Unit)? = null,
 ) {
-    val previewing = state.isPreviewing
-    // back-gesture (§5): the preview is one level deeper than the listing and a
-    // sub-directory one level below its parent, so the header's back walks the same
-    // stack the baseline's NavigationStack walks.
-    val onHeaderBack = when {
-        previewing -> onClosePreview
-        state.canNavigateUp -> onNavigateUp
-        else -> onBack
-    }
+    // back-gesture (§5): a sub-directory is one level below its parent, so the
+    // header's back walks the same stack the baseline's NavigationStack walks.
+    val onHeaderBack = if (state.canNavigateUp) onNavigateUp else onBack
 
     PageFrame(
-        title = if (previewing) state.preview.name else state.groupTitle,
+        title = state.groupTitle,
         onBack = onHeaderBack,
         rootTag = UiPageTags.FILES_ROOT,
         modifier = modifier,
         actions = {
-            if (previewing) {
-                if (state.shareable == true) {
-                    PreviewAction(
-                        label = UiStrings.FILES_PREVIEW_SHARE,
-                        tag = UiPageTags.FILES_PREVIEW_SHARE,
-                        onClick = onShare,
-                    )
-                }
-                PreviewAction(
-                    label = UiStrings.FILES_PREVIEW_DONE,
-                    tag = UiPageTags.FILES_PREVIEW_DONE,
-                    onClick = onClosePreview,
-                )
-            } else if (onOpenDemo != null) {
-                PreviewAction(
+            if (onOpenDemo != null) {
+                HeaderAction(
                     label = UiStrings.FILES_DEMO,
                     tag = UiPageTags.FILES_DEMO,
                     onClick = onOpenDemo,
@@ -650,19 +484,12 @@ public fun FilesPage(
             }
         },
     ) {
-        if (previewing) {
-            PreviewBody(
-                state = state,
-                pageSurface = pageSurface,
-            )
-        } else {
-            ListingBody(
-                state = state,
-                onOpenFolder = onOpenFolder,
-                onOpenFile = onOpenFile,
-                onQueryChange = onQueryChange,
-            )
-        }
+        ListingBody(
+            state = state,
+            onOpenFolder = onOpenFolder,
+            onOpenFile = onOpenFile,
+            onQueryChange = onQueryChange,
+        )
     }
 }
 
@@ -715,7 +542,15 @@ private fun ListingBody(
     }
 }
 
-/** 「搜索文件」 (`FilesPage.swift:56`): a plain field, so no new control is invented. */
+/**
+ * 「搜索文件」 (`FilesPage.swift:56`), drawn as the baseline's grey capsule.
+ *
+ * `ios-files.png` measures the field as a 40 pt capsule at x 16–385.7, fill
+ * `#EFEFF0`, with a 20 pt magnifier before the placeholder. The token table has no
+ * search-field token, so the capsule takes `colors.selector` (the closest surface
+ * fill), the page row's 44 pt floor and the page margin; the shape is a capsule
+ * (height/2), not a new length.
+ */
 @Composable
 private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
     val tokens = LocalUiTokens.current
@@ -733,18 +568,30 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
                 horizontal = tokens.geometry.pageOuterMarginH,
                 vertical = tokens.spacing.badgeInsetV,
             )
-            // Page-level geometry: the search row is a page row and uses its floor.
-            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+            // Shared metric: the baseline's 44 pt capsule (`ShellFilesMetrics`).
+            .clip(RoundedCornerShape(ShellFilesMetrics.searchRadius))
+            .background(tokens.colors.selector)
+            .padding(horizontal = tokens.spacing.cardInset)
+            .defaultMinSize(minHeight = ShellFilesMetrics.searchHeight)
             .testTag(UiPageTags.FILES_SEARCH)
             .semantics { contentDescription = UiStrings.FILES_SEARCH },
         decorationBox = { inner ->
-            if (query.isEmpty()) {
-                BasicText(
-                    text = UiStrings.FILES_SEARCH,
-                    style = type.body.copy(color = tokens.colors.tertiary),
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+            ) {
+                SearchGlyph()
+                Box(modifier = Modifier.weight(1f)) {
+                    if (query.isEmpty()) {
+                        BasicText(
+                            text = UiStrings.FILES_SEARCH,
+                            style = type.body.copy(color = tokens.colors.tertiary),
+                        )
+                    }
+                    inner()
+                }
             }
-            inner()
         },
     )
 }
@@ -760,7 +607,8 @@ private fun NoFilesCard() {
             .testTag(UiPageTags.FILES_NONE)
             .padding(
                 horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.cardInset,
+                // `ios-files.png`: the two-line card sits 24 pt under the search field.
+                vertical = tokens.spacing.cardInset * 2,
             )
             .semantics(mergeDescendants = true) {},
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -800,6 +648,7 @@ private fun FolderRow(folder: String, onOpenFolder: (String) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
+        FolderGlyph()
         BasicText(
             text = folder,
             style = type.body.copy(color = tokens.colors.primary),
@@ -836,6 +685,16 @@ private fun FileRow(file: WorkspaceFile, onOpenFile: (WorkspaceFile) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
+        // Shared metric: `FilesPage.swift:189` reserves a 34 x 38 pt glyph slot.
+        Box(
+            modifier = Modifier.size(
+                width = ShellFilesMetrics.fileRowGlyphSlotWidth,
+                height = ShellFilesMetrics.fileRowGlyphSlotHeight,
+            ),
+            contentAlignment = Alignment.Center,
+        ) {
+            FileGlyph()
+        }
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
@@ -865,168 +724,9 @@ private fun FileRow(file: WorkspaceFile, onOpenFile: (WorkspaceFile) -> Unit) {
     }
 }
 
-/**
- * The preview body (`FilesPage.swift:290`–`:320`), plus the bottom bar (`:335`).
- *
- * The baseline's first frame — before `loadPreview` answers — is its
- * `ContentUnavailableView` 「这个文件已经不在了。」, so an unanswered read renders the
- * same card; there is no separate loading sentence in the baseline and none is
- * invented here.
- */
-@Composable
-private fun PreviewBody(
-    state: FilesScreenState,
-    pageSurface: (@Composable () -> Unit)?,
-) {
-    val preview = state.preview
-    Column(modifier = Modifier.fillMaxSize().testTag(UiTags.FILES_PREVIEW)) {
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when (preview) {
-                FilePreview.Hidden -> Unit
-
-                // `:307`–`:314`: monospaced, selectable, both axes scroll.
-                is FilePreview.Text -> TextPreview(content = preview.content)
-
-                is FilePreview.Page -> {
-                    if (preview.available) {
-                        // `:301`: the page runs against a real workspace origin; the
-                        // WebView itself is the host's (same split as WebSurfacePage).
-                        Box(modifier = Modifier.fillMaxSize().testTag(UiPageTags.FILES_PREVIEW_SURFACE)) {
-                            pageSurface?.invoke()
-                        }
-                    } else {
-                        // `:303`–`:304`: an HTML file that belongs to no workspace.
-                        UnavailableCard(
-                            title = UiStrings.FILES_PREVIEW_OUTSIDE,
-                            description = UiStrings.FILES_PREVIEW_OUTSIDE_HINT,
-                            tag = UiPageTags.FILES_PREVIEW_CARD,
-                        )
-                    }
-                }
-
-                // `:292`–`:297`: Quick Look opens images/PDF/Office; the host owns
-                // that on Android, and the page states the measured facts only.
-                is FilePreview.External -> UnavailableCard(
-                    title = UiStrings.FILES_PREVIEW_BINARY,
-                    description = UiStrings.FILES_PREVIEW_BINARY_HINT,
-                    detail = preview.byteCount?.let { formatFileSize(it) } ?: UiStrings.UNKNOWN,
-                    tag = UiPageTags.FILES_PREVIEW_CARD,
-                )
-
-                // `:316`–`:317`: the failure, with the host's reason or the baseline's
-                // sentence.
-                is FilePreview.Unavailable -> UnavailableCard(
-                    title = UiStrings.FILES_PREVIEW_GONE,
-                    description = preview.reason ?: UiStrings.FILES_PREVIEW_GONE_HINT,
-                    tag = UiPageTags.FILES_PREVIEW_CARD,
-                )
-            }
-        }
-        // `:335`–`:350`: the notice wins; otherwise an un-shareable file says so.
-        val notice = state.previewNotice
-        when {
-            notice != null -> PreviewBottomBar(
-                text = notice,
-                tag = UiPageTags.FILES_PREVIEW_NOTICE,
-            )
-            state.shareable == false -> PreviewBottomBar(
-                text = UiStrings.FILES_PREVIEW_MISSING,
-                tag = UiPageTags.FILES_PREVIEW_MISSING,
-            )
-        }
-    }
-}
-
-/** The text body: the baseline's `ScrollView([.vertical, .horizontal])` (`:308`). */
-@Composable
-private fun TextPreview(content: String) {
-    val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .horizontalScroll(rememberScrollState())
-            .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.badgeInsetV,
-            ),
-    ) {
-        BasicText(
-            text = content,
-            style = type.code.copy(color = tokens.colors.primary),
-            modifier = Modifier.testTag(UiPageTags.FILES_PREVIEW_TEXT),
-        )
-    }
-}
-
-/** A `ContentUnavailableView` (`:303`, `:316`): a title, a description, an optional fact. */
-@Composable
-private fun UnavailableCard(
-    title: String,
-    description: String,
-    tag: String,
-    detail: String? = null,
-) {
-    val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .testTag(tag)
-            .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.cardInset,
-            )
-            .semantics(mergeDescendants = true) {},
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
-    ) {
-        BasicText(
-            text = title,
-            style = type.headline.copy(
-                color = tokens.colors.primary,
-                textAlign = TextAlign.Center,
-            ),
-        )
-        BasicText(
-            text = description,
-            style = type.secondary.copy(
-                color = tokens.colors.secondary,
-                textAlign = TextAlign.Center,
-            ),
-        )
-        if (detail != null) {
-            BasicText(
-                text = detail,
-                style = type.caption.copy(color = tokens.colors.tertiary),
-            )
-        }
-    }
-}
-
-/** The bottom bar (`:335`–`:350`): a footnote line on the chrome's own fill. */
-@Composable
-private fun PreviewBottomBar(text: String, tag: String) {
-    val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
-    BasicText(
-        text = text,
-        style = type.caption.copy(color = tokens.colors.secondary),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag(tag)
-            // unverified geometry: the spec declares no page-level token for the
-            // bottom bar's inset; the badge's horizontal inset (10) is reused.
-            .padding(vertical = tokens.spacing.badgeInsetH)
-            .background(tokens.colors.selector)
-            .padding(horizontal = tokens.geometry.pageOuterMarginH),
-    )
-}
-
 /** A header text action; the page never draws a bar button it cannot label. */
 @Composable
-private fun PreviewAction(
+private fun HeaderAction(
     label: String,
     tag: String,
     onClick: () -> Unit,
@@ -1046,6 +746,87 @@ private fun PreviewAction(
     )
 }
 
+/**
+ * The folder glyph (`FileTypeGlyph.folder(size: 20)` on iOS).
+ *
+ * `:lib` ships no image assets and no icon token, so the shape is drawn at the
+ * icon-to-text gap times four (24 dp, the baseline's 20–24 pt icon) from the
+ * theme's accent ink. It is the baseline's blue folder, not a platform icon font.
+ */
+@Composable
+private fun FolderGlyph() {
+    val tokens = LocalUiTokens.current
+    val ink = tokens.colors.accent
+    Canvas(modifier = Modifier.size(tokens.spacing.iconText * 4)) {
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            moveTo(0f, h * FOLDER_BOTTOM_RATIO)
+            lineTo(0f, h * FOLDER_TAB_TOP_RATIO)
+            lineTo(w * FOLDER_TAB_WIDTH_RATIO, h * FOLDER_TAB_TOP_RATIO)
+            lineTo(w * FOLDER_TAB_SLANT_RATIO, h * FOLDER_TAB_BOTTOM_RATIO)
+            lineTo(w, h * FOLDER_TAB_BOTTOM_RATIO)
+            lineTo(w, h * FOLDER_BOTTOM_RATIO)
+            close()
+        }
+        drawPath(path = path, color = ink)
+    }
+}
+
+/**
+ * The file glyph (`FileTypeGlyph.icon(for:size: 24)` on iOS).
+ *
+ * The baseline picks a different bundled asset per extension (DSHCodeKotlin,
+ * DSHFilePDF, …). Those assets do not exist in `:lib`, so this is the generic
+ * document outline: a page with a folded corner, in tertiary ink.
+ */
+@Composable
+private fun FileGlyph() {
+    val tokens = LocalUiTokens.current
+    val ink = tokens.colors.tertiary
+    Canvas(modifier = Modifier.size(tokens.spacing.iconText * 4)) {
+        val w = size.width
+        val h = size.height
+        val stroke = tokens.stroke.hairline.toPx() * 3
+        val fold = w * FILE_FOLD_RATIO
+        val path = Path().apply {
+            moveTo(w * FILE_LEFT_RATIO, h * FILE_TOP_RATIO)
+            lineTo(w * FILE_FOLD_START_RATIO, h * FILE_TOP_RATIO)
+            lineTo(w - fold * FILE_FOLD_START_RATIO, h * FILE_FOLD_RATIO)
+            lineTo(w - fold * FILE_FOLD_START_RATIO, h * FILE_BOTTOM_RATIO)
+            lineTo(w * FILE_LEFT_RATIO, h * FILE_BOTTOM_RATIO)
+            close()
+        }
+        drawPath(path = path, color = ink, style = Stroke(width = stroke))
+        drawLine(
+            color = ink,
+            start = Offset(w * FILE_FOLD_START_RATIO, h * FILE_TOP_RATIO),
+            end = Offset(w * FILE_FOLD_START_RATIO, h * FILE_FOLD_RATIO),
+            strokeWidth = stroke,
+        )
+        drawLine(
+            color = ink,
+            start = Offset(w * FILE_FOLD_START_RATIO, h * FILE_FOLD_RATIO),
+            end = Offset(w - fold * FILE_FOLD_START_RATIO, h * FILE_FOLD_RATIO),
+            strokeWidth = stroke,
+        )
+    }
+}
+
+/** Folder-shape ratios: a tab on the left and a body below it. */
+private const val FOLDER_TAB_TOP_RATIO: Float = 0.24f
+private const val FOLDER_TAB_BOTTOM_RATIO: Float = 0.36f
+private const val FOLDER_TAB_WIDTH_RATIO: Float = 0.42f
+private const val FOLDER_TAB_SLANT_RATIO: Float = 0.5f
+private const val FOLDER_BOTTOM_RATIO: Float = 0.82f
+
+/** Document-shape ratios. */
+private const val FILE_LEFT_RATIO: Float = 0.22f
+private const val FILE_TOP_RATIO: Float = 0.12f
+private const val FILE_FOLD_START_RATIO: Float = 0.62f
+private const val FILE_FOLD_RATIO: Float = 0.26f
+private const val FILE_BOTTOM_RATIO: Float = 0.88f
+
 /** The last path segment (`URL.lastPathComponent`). */
 private fun fileName(relativePath: String): String =
     relativePath.substringAfterLast('/').ifEmpty { relativePath }
@@ -1063,6 +844,42 @@ private fun folderName(relativePath: String): String? {
 /** The disclosure glyph the listing's rows end with (the baseline's chevron). */
 private const val CHEVRON: String = "›"
 
+/**
+ * The magnifier inside the search capsule.
+ *
+ * `ios-files.png` measures a 20 pt SF Symbol; there is no icon asset in `:lib` and
+ * no icon-sized token, so the glyph is drawn from two primitives at half the page
+ * row floor (22 dp) with the declared hairline as its stroke. Colours are the
+ * theme's tertiary ink, never literals.
+ */
+@Composable
+private fun SearchGlyph() {
+    val tokens = LocalUiTokens.current
+    val ink = tokens.colors.tertiary
+    Canvas(modifier = Modifier.size(tokens.geometry.pageRowMinHeight / 2)) {
+        val stroke = tokens.stroke.hairline.toPx() * 4
+        val radius = size.minDimension * MAGNIFIER_RADIUS_RATIO
+        val center = Offset(
+            size.width * MAGNIFIER_CENTER_RATIO,
+            size.height * MAGNIFIER_CENTER_RATIO,
+        )
+        drawCircle(color = ink, radius = radius, center = center, style = Stroke(width = stroke))
+        drawLine(
+            color = ink,
+            start = Offset(center.x + radius * 0.72f, center.y + radius * 0.72f),
+            end = Offset(size.width * 0.92f, size.height * 0.92f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+/** Half the glyph box; the lens sits in the upper-left quadrant. */
+private const val MAGNIFIER_RADIUS_RATIO: Float = 0.34f
+
+/** The lens centre inside the square glyph box. */
+private const val MAGNIFIER_CENTER_RATIO: Float = 0.42f
+
 private val NUL: Byte = 0.toByte()
 
 /**
@@ -1079,12 +896,11 @@ internal object FilesPageTokens {
         UiTokenNames.TYPOGRAPHY_BODY,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
         UiTokenNames.TYPOGRAPHY_CAPTION,
-        UiTokenNames.TYPOGRAPHY_CODE,
         UiTokenNames.TYPOGRAPHY_HEADLINE,
         UiTokenNames.SPACING_ICON_TEXT,
-        UiTokenNames.SPACING_BADGE_INSET_H,
         UiTokenNames.SPACING_BADGE_INSET_V,
         UiTokenNames.SPACING_CARD_INSET,
+        UiTokenNames.STROKE_HAIRLINE,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
     )

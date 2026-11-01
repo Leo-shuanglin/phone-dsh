@@ -50,19 +50,29 @@ package com.phonedsh.ui.page
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -85,11 +95,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.phonedsh.ui.SessionsMetrics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
@@ -555,6 +573,13 @@ public data class SessionsScreenState(
 /**
  * The sessions page (the drawer's body).
  *
+ * Layout follows `ios-sessions-{default,empty,error,many,nothing,ungrouped}.png`
+ * top to bottom: an empty 44-high bar, the white search capsule, the 会话 section
+ * label, the 新建会话 row with its hairline, the blocked reason, the failure line,
+ * the ungrouped rows, the big empty block, one section per folder, 添加工作文件夹
+ * and 已归档. Row rhythm is the baseline's: 44 for the action / folder / header
+ * rows, 56 for a session row, 0.5 hairline inset by the page margin.
+ *
  * @param state the pure screen state ([SessionsScreenState.from]).
  * @param onSelect switch to a session (the drawer closes upstream).
  * @param onQueryChange the search field changed.
@@ -569,7 +594,9 @@ public data class SessionsScreenState(
  * @param onNewSession create a session in the current folder (or ungrouped).
  * @param onRetry retry a failed list read.
  * @param onDismissFailure dismiss the failure line.
- * @param onBack leave the page (absent on a root drawer body).
+ * @param onBack leave the page; the baseline's bar is empty, Android needs the
+ *   control, so the bar carries the back glyph (the baseline's only occupant is
+ *   the capture harness's ✕).
  * @param onToggleWorkspace expand or collapse one folder section.
  * @param onWorkspaceMenuToggle open or close one folder's overflow menu.
  * @param onNewSessionInWorkspace create a session inside that folder.
@@ -629,15 +656,21 @@ public fun SessionsPage(
     /** Pull-to-refresh (`null` leaves the gesture a no-op). */
     onRefresh: (() -> Unit)? = null,
 ) {
-    PageFrame(
-        title = UiStrings.SESSIONS,
-        onBack = onBack,
-        rootTag = UiPageTags.SESSIONS_ROOT,
-        modifier = modifier,
-    ) {
-        // The search field is a text input: the IME must lift the list, not cover
-        // it (spec §5 row `ime`).
-        Column(modifier = Modifier.fillMaxSize().imePadding()) {
+    val tokens = LocalUiTokens.current
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                // `colors.background` is tier unmeasured; the page surface is the one
+                // token whose light value is #FFFFFF, which is what the baseline paints.
+                .background(tokens.colors.input)
+                .testTag(UiPageTags.SESSIONS_ROOT)
+                .statusBarsPadding()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+        ) {
+            if (onBack != null) {
+                SessionsNavBar(onBack = onBack)
+            }
             if (state.waiting) {
                 EmptyHint(
                     title = UiStrings.WAITING_ENGINE,
@@ -646,79 +679,179 @@ public fun SessionsPage(
                 )
                 return@Column
             }
-            SearchField(query = state.query, onQueryChange = onQueryChange)
-            PullToRefreshBox(
-                isRefreshing = state.refreshInFlight,
-                onRefresh = onRefresh ?: {},
-                modifier = Modifier.fillMaxSize().testTag(UiPageTags.SESSIONS_REFRESH),
-            ) {
-                SessionsList(
-                    state = state,
-                    onSelect = onSelect,
-                    onNewSession = onNewSession,
-                    onRenameStart = onRenameStart,
-                    onRetry = onRetry,
-                    onDismissFailure = onDismissFailure,
-                    onToggleWorkspace = onToggleWorkspace,
-                    onWorkspaceMenuToggle = onWorkspaceMenuToggle,
-                    onNewSessionInWorkspace = onNewSessionInWorkspace,
-                    onRenameWorkspaceStart = onRenameWorkspaceStart,
-                    onDeleteWorkspaceRequest = onDeleteWorkspaceRequest,
-                    onAddWorkspace = onAddWorkspace,
-                    onToggleArchived = onToggleArchived,
-                    onRestoreArchived = onRestoreArchived,
-                    onSessionMenuToggle = onSessionMenuToggle,
-                    onArchiveSession = onArchiveSession,
-                )
-            }
-            // The baseline's alerts are real modal dialogs; using the standard
-            // control keeps the interaction one design across pages.
-            state.rename?.let { editor ->
-                val row = state.rows.firstOrNull { it.id == editor.sessionID }
-                    ?: state.workspaces.asSequence()
-                        .flatMap { it.sessions.asSequence() }
-                        .firstOrNull { it.id == editor.sessionID }
-                if (row != null) {
-                    RenameSessionDialog(
-                        editor = editor,
-                        onDraftChange = onRenameDraftChange,
-                        onSave = { onRenameCommit(row) },
-                        onCancel = onRenameCancel,
+            // The baseline's `.searchable(navigationBarDrawer)`: a white capsule
+            // pinned under the bar, above the scrolling list.
+            SessionsSearchField(query = state.query, onQueryChange = onQueryChange)
+            // The baseline's list is the drawer body: a 320 pt column whose rows
+            // inset 16 on both sides, so every hairline runs 16 -> 304. The search
+            // bar above it belongs to the window, not to this column, which is why
+            // it stays 402 - 32 wide (`SessionsPage.swift:594`, `NativeShell.swift:97`).
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                PullToRefreshBox(
+                    isRefreshing = state.refreshInFlight,
+                    onRefresh = onRefresh ?: {},
+                    modifier = Modifier
+                        .width(SessionsMetrics.drawerWidth)
+                        .fillMaxHeight()
+                        .navigationBarsPadding()
+                        .testTag(UiPageTags.SESSIONS_REFRESH),
+                ) {
+                    SessionsList(
+                        state = state,
+                        onSelect = onSelect,
+                        onNewSession = onNewSession,
+                        onRenameStart = onRenameStart,
+                        onRetry = onRetry,
+                        onDismissFailure = onDismissFailure,
+                        onToggleWorkspace = onToggleWorkspace,
+                        onWorkspaceMenuToggle = onWorkspaceMenuToggle,
+                        onNewSessionInWorkspace = onNewSessionInWorkspace,
+                        onRenameWorkspaceStart = onRenameWorkspaceStart,
+                        onDeleteWorkspaceRequest = onDeleteWorkspaceRequest,
+                        onAddWorkspace = onAddWorkspace,
+                        onToggleArchived = onToggleArchived,
+                        onRestoreArchived = onRestoreArchived,
+                        onSessionMenuToggle = onSessionMenuToggle,
+                        onArchiveSession = onArchiveSession,
                     )
                 }
             }
-            state.renameWorkspace?.let { editor ->
-                val workspace = state.workspaces.firstOrNull { it.id == editor.workspaceID }
-                if (workspace != null) {
-                    RenameWorkspaceDialog(
-                        editor = editor,
-                        onDraftChange = onRenameWorkspaceDraftChange,
-                        onSave = { onRenameWorkspaceCommit(workspace) },
-                        onCancel = onRenameWorkspaceCancel,
-                    )
-                }
-            }
-            if (state.creatingWorkspace) {
-                NewWorkspaceDialog(
-                    draft = state.newWorkspaceDraft,
-                    onDraftChange = onWorkspaceDraftChange,
-                    onCreate = onCreateWorkspace,
-                    onCancel = onCancelCreateWorkspace,
+        }
+        // The baseline's alerts are real modal dialogs; using the standard
+        // control keeps the interaction one design across pages.
+        state.rename?.let { editor ->
+            val row = state.rows.firstOrNull { it.id == editor.sessionID }
+                ?: state.workspaces.asSequence()
+                    .flatMap { it.sessions.asSequence() }
+                    .firstOrNull { it.id == editor.sessionID }
+            if (row != null) {
+                RenameSessionDialog(
+                    editor = editor,
+                    onDraftChange = onRenameDraftChange,
+                    onSave = { onRenameCommit(row) },
+                    onCancel = onRenameCancel,
                 )
             }
-            state.workspaces.firstOrNull { it.id == state.deleteWorkspaceTargetID }?.let { workspace ->
-                DeleteWorkspaceDialog(
-                    workspaceTitle = workspace.title,
-                    onDelete = { onDeleteWorkspaceConfirm(workspace) },
-                    onCancel = onDeleteWorkspaceCancel,
+        }
+        state.renameWorkspace?.let { editor ->
+            val workspace = state.workspaces.firstOrNull { it.id == editor.workspaceID }
+            if (workspace != null) {
+                RenameWorkspaceDialog(
+                    editor = editor,
+                    onDraftChange = onRenameWorkspaceDraftChange,
+                    onSave = { onRenameWorkspaceCommit(workspace) },
+                    onCancel = onRenameWorkspaceCancel,
                 )
             }
+        }
+        if (state.creatingWorkspace) {
+            NewWorkspaceDialog(
+                draft = state.newWorkspaceDraft,
+                onDraftChange = onWorkspaceDraftChange,
+                onCreate = onCreateWorkspace,
+                onCancel = onCancelCreateWorkspace,
+            )
+        }
+        state.workspaces.firstOrNull { it.id == state.deleteWorkspaceTargetID }?.let { workspace ->
+            DeleteWorkspaceDialog(
+                workspaceTitle = workspace.title,
+                onDelete = { onDeleteWorkspaceConfirm(workspace) },
+                onCancel = onDeleteWorkspaceCancel,
+            )
         }
     }
 }
 
+/**
+ * The bar above the search field.
+ *
+ * The baseline's bar is empty (the drawer body owns the content), so this one
+ * carries only the back control: the page is reached as a route here, and a
+ * route needs a way back that is not the system gesture alone.
+ */
+@Composable
+private fun SessionsNavBar(onBack: () -> Unit) {
+    val tokens = LocalUiTokens.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
+            .padding(horizontal = tokens.geometry.pageOuterMarginH),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BasicText(
+            text = PAGE_BACK_GLYPH,
+            style = LocalUiType.current.secondary.copy(color = tokens.colors.secondary),
+            modifier = Modifier
+                .clickable(role = Role.Button, onClick = onBack)
+                .semantics { contentDescription = UiStrings.BACK }
+                .padding(tokens.spacing.iconText),
+        )
+    }
+}
 
-/** The drawer's scrollable body: Sections 1-5, in the baseline's order. */
+/**
+ * The search capsule: white fill, a hairline edge and the capsule radius.
+ *
+ * The baseline's field is 369.7 x 40 with a `magnifyingglass` at x 33.3 and the
+ * placeholder at x 56.7. Android has no icon set and the spec declares no
+ * magnifier, so the field carries the placeholder only, starting at the capsule's
+ * own inset; the geometry of the capsule itself (full page width minus the page
+ * margin, capsule radius, 17 pt placeholder) is the baseline's.
+ */
+@Composable
+private fun SessionsSearchField(query: String, onQueryChange: (String) -> Unit) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    // Capsule: L6 fitted the baseline's top corner to r = 22 pt = height / 2.
+    val shape = RoundedCornerShape(SessionsMetrics.searchRadius)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = tokens.geometry.pageOuterMarginH,
+                vertical = tokens.geometry.cardOuterMarginV,
+            )
+            .defaultMinSize(minHeight = SessionsMetrics.searchHeight)
+            .clip(shape)
+            .background(tokens.colors.input)
+            // The baseline draws a soft shadow instead of a border; the lightest
+            // declared stroke is the only border the token table can express.
+            .border(tokens.stroke.hairline, tokens.colors.borderLight, shape)
+            .padding(horizontal = tokens.spacing.cardInset)
+            .testTag(UiPageTags.SESSIONS_SEARCH),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            singleLine = true,
+            textStyle = type.headline.copy(
+                fontWeight = FontWeight.Normal,
+                color = tokens.colors.primary,
+            ),
+            cursorBrush = SolidColor(tokens.colors.accent),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            modifier = Modifier.fillMaxWidth().semantics {
+                contentDescription = UiStrings.SESSION_SEARCH
+            },
+            decorationBox = { inner ->
+                if (query.isEmpty()) {
+                    BasicText(
+                        text = UiStrings.SESSION_SEARCH,
+                        style = type.headline.copy(
+                            fontWeight = FontWeight.Normal,
+                            color = tokens.colors.secondary,
+                        ),
+                    )
+                }
+                inner()
+            },
+        )
+    }
+}
+
+/** The drawer's scrollable body, in the baseline's order. */
 @Composable
 private fun SessionsList(
     state: SessionsScreenState,
@@ -738,9 +871,17 @@ private fun SessionsList(
     onSessionMenuToggle: (SessionRowView) -> Unit,
     onArchiveSession: (SessionRowView) -> Unit,
 ) {
+    val tokens = LocalUiTokens.current
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag(UiPageTags.SESSIONS_LIST),
     ) {
+        // The baseline's plain list starts with the 新建会话 row and gives it a
+        // row of air above; the group at `SessionsPage.swift:139` is untitled, so
+        // the air stays and no header is invented for it.
+        item(key = "section-air") {
+            Box(modifier = Modifier.fillMaxWidth().heightIn(min = tokens.geometry.pageListRowMinHeight))
+        }
+
         // Section 1: new session, its blocked reason, the failure line and
         // the sessions that belong to no folder.
         item(key = "new-session") {
@@ -749,27 +890,30 @@ private fun SessionsList(
                     block = state.newSessionBlock,
                     onNewSession = onNewSession,
                 )
-                SessionHairline()
+                InsetHairline()
                 if (state.newSessionBlock != null) {
                     BasicText(
                         text = state.newSessionBlock.reason,
-                        style = LocalUiType.current.caption.copy(
+                        style = LocalUiType.current.secondary.copy(
                             color = LocalUiTokens.current.colors.secondary,
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag(UiPageTags.SESSIONS_NEW_SESSION_BLOCKED)
                             .padding(
-                                horizontal = LocalUiTokens.current.geometry.pageOuterMarginH,
-                                vertical = LocalUiTokens.current.spacing.badgeInsetV,
+                                start = LocalUiTokens.current.geometry.pageOuterMarginH,
+                                // unverified geometry: the baseline leaves ~26 pt
+                                // between the hairline and this sentence; the
+                                // section gap token is the closest published inset.
+                                top = LocalUiTokens.current.spacing.cardInset,
+                                end = LocalUiTokens.current.geometry.pageOuterMarginH,
+                                bottom = LocalUiTokens.current.spacing.badgeInsetV,
                             ),
                     )
                 }
                 if (state.failure != null) {
-                    SessionFailureLine(
+                    SessionsFailureLine(
                         message = state.failure,
-                        tag = UiPageTags.SESSIONS_FAILURE,
-                        retryLabel = UiStrings.RETRY,
                         onRetry = onRetry,
                         onDismiss = onDismissFailure,
                     )
@@ -819,7 +963,10 @@ private fun SessionsList(
             if (workspace.expanded) {
                 if (workspace.empty) {
                     item(key = "workspace-empty-${workspace.id}") {
-                        WorkspaceSessionsEmpty()
+                        Column {
+                            WorkspaceSessionsEmpty()
+                            InsetHairline()
+                        }
                     }
                 } else {
                     items(
@@ -881,46 +1028,13 @@ private fun SessionsList(
 // Drawer pieces
 // ---------------------------------------------------------------------------
 
-/**
- * The search box; the query lives in the caller's state.
- *
- * iOS renders this as `.searchable` inside the navigation bar; Android pins it
- * above the list. The presentation differs, the query and the title filter do not.
- */
+/** A hairline inset by the page margin: the baseline's 16 → panel-width rule. */
 @Composable
-private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
+private fun InsetHairline() {
     val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
-    BasicTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        singleLine = true,
-        textStyle = type.body.copy(color = tokens.colors.primary),
-        cursorBrush = SolidColor(tokens.colors.accent),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        modifier = Modifier
-            .fillMaxWidth()
-            // Page-level geometry: the field aligns to the page margin.
-            .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.badgeInsetV,
-            )
-            // unverified geometry: the composer's minimum height reused as the
-            // search field's floor; only this page has a search field, so the spec
-            // declares no page-level token for it.
-            .heightIn(min = tokens.geometry.composerMinHeight)
-            .testTag(UiPageTags.SESSIONS_SEARCH)
-            .semantics { contentDescription = UiStrings.SESSION_SEARCH },
-        decorationBox = { inner ->
-            if (query.isEmpty()) {
-                BasicText(
-                    text = UiStrings.SESSION_SEARCH,
-                    style = type.body.copy(color = tokens.colors.tertiary),
-                )
-            }
-            inner()
-        },
-    )
+    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = tokens.geometry.pageOuterMarginH)) {
+        SessionHairline()
+    }
 }
 
 /** The 新建会话 row: accent when enabled, the disabled ink plus a reason when not. */
@@ -936,23 +1050,90 @@ private fun NewSessionRow(block: NewSessionBlock?, onNewSession: () -> Unit) {
             .clickable(enabled = block == null, role = Role.Button, onClick = onNewSession)
             // Page-level geometry: this is the page's first action row.
             .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-            .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.badgeInsetV,
-            ),
+            .padding(horizontal = tokens.geometry.pageOuterMarginH),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetH),
     ) {
-        BasicText(text = PLUS_GLYPH, style = type.headline.copy(color = ink))
+        BasicText(
+            text = PLUS_GLYPH,
+            style = type.headline.copy(fontWeight = FontWeight.Normal, color = ink),
+        )
         BasicText(
             text = UiStrings.SESSION_NEW,
-            style = type.body.copy(color = ink),
+            style = type.headline.copy(fontWeight = FontWeight.Normal, color = ink),
             modifier = Modifier.weight(1f),
         )
     }
 }
 
-/** One session row, its long-press `DropdownMenu` and the current check mark. */
+/**
+ * The fail-loud line of a failed list read: the host's own message in the
+ * danger ink, with 重试 at the trailing edge (the baseline's 44 pt row).
+ */
+@Composable
+private fun SessionsFailureLine(
+    message: String,
+    onRetry: (() -> Unit)?,
+    onDismiss: (() -> Unit)?,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(UiPageTags.SESSIONS_FAILURE)
+            // Fail-loud is audible too: an assertive live region interrupts.
+            .semantics { liveRegion = LiveRegionMode.Assertive }
+            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+            .padding(
+                horizontal = tokens.geometry.pageOuterMarginH,
+                vertical = tokens.spacing.badgeInsetV,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.cardInset),
+    ) {
+        BasicText(
+            text = message,
+            style = type.secondary.copy(color = tokens.colors.danger),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (onRetry != null) {
+            BasicText(
+                text = UiStrings.RETRY,
+                style = type.headline.copy(
+                    fontWeight = FontWeight.Normal,
+                    color = tokens.colors.accent,
+                ),
+                modifier = Modifier
+                    .clickable(role = Role.Button, onClick = onRetry)
+                    .padding(tokens.spacing.iconText),
+            )
+        }
+        if (onDismiss != null) {
+            BasicText(
+                text = DISMISS_GLYPH,
+                style = type.headline.copy(
+                    fontWeight = FontWeight.Normal,
+                    color = tokens.colors.tertiary,
+                ),
+                modifier = Modifier
+                    .clickable(role = Role.Button, onClick = onDismiss)
+                    .semantics { contentDescription = UiStrings.DISMISS }
+                    .padding(tokens.spacing.iconText),
+            )
+        }
+    }
+}
+
+/**
+ * One session row, its long-press `DropdownMenu` and the current check mark.
+ *
+ * The baseline's row: `bubble.left` in a 17 pt box, the title on 17 pt, the
+ * relative time and the run dot on 12 pt, a 56 pt floor and a hairline inset by
+ * the page margin.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SessionItem(
@@ -975,33 +1156,48 @@ private fun SessionItem(
                         onClick = { onSelect(row) },
                         onLongClick = { onSessionMenuToggle(row) },
                     )
-                    // Page-level geometry: a session row is a compact list row.
-                    .defaultMinSize(minHeight = tokens.geometry.pageListRowMinHeight)
-                    .padding(
-                        horizontal = tokens.geometry.pageOuterMarginH,
-                        vertical = tokens.spacing.iconText,
-                    ),
+                    // The baseline's row: 56 pt floor, a 16 pt inset plus an 8 pt
+                    // inner pad (so the glyph lands on 24 and the title on 51), a
+                    // 17 pt glyph box and a 10 pt glyph-to-text gap.
+                    .heightIn(min = SessionsMetrics.sessionRowHeight)
+                    .padding(horizontal = SessionsMetrics.rowInset)
+                    .padding(horizontal = SessionsMetrics.SESSION_ROW_INNER_INSET_PT.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+                horizontalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_GLYPH_GAP_PT.dp),
             ) {
+                BasicText(
+                    text = MESSAGE_GLYPH,
+                    style = type.headline.copy(
+                        fontWeight = FontWeight.Normal,
+                        color = tokens.colors.secondary,
+                    ),
+                    modifier = Modifier.width(SessionsMetrics.SESSION_GLYPH_BOX_PT.dp),
+                )
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
+                    verticalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_TEXT_GAP_PT.dp),
                 ) {
                     BasicText(
                         text = row.title,
-                        style = type.body.copy(color = tokens.colors.primary),
+                        style = type.headline.copy(
+                            fontWeight = FontWeight.Normal,
+                            color = tokens.colors.primary,
+                            platformStyle = PlatformTextStyle(includeFontPadding = false),
+                        ),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+                        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (row.timeLabel != null) {
                             BasicText(
                                 text = row.timeLabel,
-                                style = type.caption.copy(color = tokens.colors.secondary),
+                                style = type.caption.copy(
+                                    color = tokens.colors.secondary,
+                                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                                ),
                             )
                         }
                         // The baseline shows one run indicator only: a grey dot and
@@ -1014,8 +1210,7 @@ private fun SessionItem(
                             )
                             Box(
                                 modifier = Modifier
-                                    // Page-level geometry: the run-status dot.
-                                    .size(tokens.geometry.statusDotDiameter)
+                                    .size(SessionsMetrics.SESSION_RUNNING_DOT_PT.dp)
                                     .clip(CircleShape)
                                     .background(tokens.colors.secondary),
                             )
@@ -1029,7 +1224,10 @@ private fun SessionItem(
                 if (row.selected) {
                     BasicText(
                         text = CHECK_GLYPH,
-                        style = type.headline.copy(color = tokens.colors.primary),
+                        style = type.headline.copy(
+                            fontWeight = FontWeight.Normal,
+                            color = tokens.colors.primary,
+                        ),
                         modifier = Modifier
                             .testTag(UiPageTags.SESSIONS_SESSION_CURRENT)
                             .semantics { contentDescription = UiStrings.SESSIONS_CURRENT },
@@ -1068,7 +1266,7 @@ private fun SessionItem(
                 )
             }
         }
-        SessionHairline()
+        InsetHairline()
     }
 }
 
@@ -1083,11 +1281,11 @@ private fun CompletelyEmptyBlock(onCreateWorkspace: () -> Unit) {
             .testTag(UiPageTags.SESSIONS_SECTION_EMPTY)
             .padding(
                 horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.iconText,
+                vertical = tokens.spacing.cardInset,
             )
             .semantics(mergeDescendants = true) {},
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+        verticalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
     ) {
         BasicText(
             text = UiStrings.WORKSPACE_EMPTY,
@@ -1100,11 +1298,12 @@ private fun CompletelyEmptyBlock(onCreateWorkspace: () -> Unit) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = tokens.spacing.iconText)
-                .clip(RoundedCornerShape(tokens.radius.card))
-                .background(tokens.colors.accent)
-                // Page-level geometry: the CTA is a page row, not a surface button.
-                .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+                .padding(top = SessionsMetrics.EMPTY_STATE_CTA_TOP_PT.dp)
+                .clip(RoundedCornerShape(SessionsMetrics.ctaRadius))
+                // The baseline's CTA fill is the page-layer override, not the
+                // theme accent (the same inconsistency the approval card mirrors).
+                .background(tokens.colors.ctaOverride)
+                .defaultMinSize(minHeight = SessionsMetrics.ctaHeight)
                 .clickable(role = Role.Button, onClick = onCreateWorkspace)
                 .padding(
                     horizontal = tokens.spacing.iconText,
@@ -1116,7 +1315,7 @@ private fun CompletelyEmptyBlock(onCreateWorkspace: () -> Unit) {
         ) {
             BasicText(
                 text = UiStrings.SESSIONS_NEW_WORKSPACE,
-                style = type.body.copy(color = tokens.colors.onAccent),
+                style = type.headline.copy(color = tokens.colors.onAccent),
             )
         }
     }
@@ -1137,12 +1336,8 @@ private fun WorkspaceRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            // Page-level geometry: a folder row is a 44-high list row.
-            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-            .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.badgeInsetV,
-            ),
+            .defaultMinSize(minHeight = SessionsMetrics.workspaceRowHeight)
+            .padding(horizontal = tokens.geometry.pageOuterMarginH),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
@@ -1158,39 +1353,46 @@ private fun WorkspaceRow(
                     },
                     onClick = { onToggle(workspace) },
                 )
-                .padding(vertical = tokens.spacing.badgeInsetV)
                 .semantics {
                     contentDescription = UiStrings.SESSIONS_WORKSPACE_A11Y
                         .format(workspace.title, workspace.sessionCount)
                 },
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+            horizontalArrangement = Arrangement.Start,
         ) {
             BasicText(
                 text = CHEVRON_GLYPH,
                 style = type.caption.copy(color = tokens.colors.secondary),
-                modifier = Modifier.rotate(if (workspace.expanded) EXPANDED_ROTATION else 0f),
+                modifier = Modifier
+                    .width(SessionsMetrics.WORKSPACE_CHEVRON_SLOT_PT.dp)
+                    .rotate(if (workspace.expanded) EXPANDED_ROTATION else 0f),
             )
             BasicText(
                 text = workspace.title,
                 style = type.headline.copy(color = tokens.colors.primary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = SessionsMetrics.WORKSPACE_TITLE_GAP_PT.dp),
             )
             if (workspace.sessionCount > 0) {
                 BasicText(
                     text = UiStrings.SESSIONS_WORKSPACE_COUNT.format(workspace.sessionCount),
-                    style = type.caption.copy(color = tokens.colors.secondary),
+                    style = type.secondary.copy(color = tokens.colors.secondary),
+                    modifier = Modifier.padding(start = SessionsMetrics.WORKSPACE_COUNT_GAP_PT.dp),
                 )
             }
         }
         Box {
             BasicText(
                 text = MORE_GLYPH,
-                style = type.headline.copy(color = tokens.colors.secondary),
+                style = type.headline.copy(
+                    fontWeight = FontWeight.Normal,
+                    color = tokens.colors.secondary,
+                ),
                 modifier = Modifier
                     .testTag(UiPageTags.SESSIONS_WORKSPACE_MENU)
                     .clickable(role = Role.Button, onClick = { onMenuToggle(workspace) })
+                    .width(SessionsMetrics.WORKSPACE_MENU_WIDTH_PT.dp)
                     .padding(tokens.spacing.iconText)
                     .semantics {
                         contentDescription =
@@ -1251,11 +1453,15 @@ private fun WorkspaceSessionsEmpty() {
             .fillMaxWidth()
             .testTag(UiPageTags.SESSIONS_WORKSPACE_SESSIONS_EMPTY)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.iconText,
+                // unverified geometry: the baseline's 24 pt lead-in is the spec's
+                // compact-list row floor; no gap token publishes 24.
+                start = tokens.geometry.pageOuterMarginH,
+                top = tokens.geometry.pageListRowMinHeight,
+                end = tokens.geometry.pageOuterMarginH,
+                bottom = tokens.geometry.cardOuterMarginV,
             )
             .semantics(mergeDescendants = true) {},
-        verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
+        verticalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
     ) {
         BasicText(
             text = UiStrings.SESSIONS_WORKSPACE_SESSIONS_EMPTY,
@@ -1280,28 +1486,35 @@ private fun AddWorkspaceRow(onAddWorkspace: () -> Unit) {
             .clickable(role = Role.Button, onClick = onAddWorkspace)
             // Page-level geometry: a list action row.
             .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-            .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.badgeInsetV,
-            ),
+            .padding(horizontal = tokens.geometry.pageOuterMarginH),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetH),
     ) {
         BasicText(
             text = PLUS_GLYPH,
-            style = type.body.copy(color = tokens.colors.accent),
+            style = type.headline.copy(
+                fontWeight = FontWeight.Normal,
+                color = tokens.colors.accent,
+            ),
         )
         BasicText(
             text = UiStrings.SESSIONS_ADD_WORKSPACE,
-            style = type.body.copy(color = tokens.colors.accent),
+            style = type.headline.copy(
+                fontWeight = FontWeight.Normal,
+                color = tokens.colors.accent,
+            ),
             modifier = Modifier.weight(1f),
         )
     }
 }
 
-/** The 已归档 header: a fold with the host's count (未知 when unreported). */
+/** The 已归档 header: the baseline's fold header with the host's count. */
 @Composable
 private fun ArchivedHeader(state: SessionsScreenState, onToggle: () -> Unit) {
+    // `SessionsPage.swift:303`–`:317` is a `Section` whose header is a Button: the
+    // chevron, the fixed 已归档 title and the count. The shared collapsible header
+    // is that shape, and it keeps the title literal so the page contract can read
+    // it (`SectionHeader(title = …)` also counts as the header's tap action).
     SectionHeader(
         title = UiStrings.SESSIONS_ARCHIVED,
         expanded = state.archivedExpanded,
@@ -1322,18 +1535,21 @@ private fun ArchivedEmptyBlock() {
             .testTag(UiPageTags.SESSIONS_ARCHIVED_EMPTY)
             .padding(
                 horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.iconText,
+                vertical = tokens.spacing.cardInset,
             )
             .semantics(mergeDescendants = true) {},
-        verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
+        verticalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
     ) {
         BasicText(
             text = UiStrings.SESSIONS_ARCHIVED_EMPTY,
-            style = type.body.copy(color = tokens.colors.primary),
+            style = type.headline.copy(
+                fontWeight = FontWeight.Normal,
+                color = tokens.colors.primary,
+            ),
         )
         BasicText(
             text = UiStrings.SESSIONS_ARCHIVED_EMPTY_HINT,
-            style = type.caption.copy(color = tokens.colors.secondary),
+            style = type.secondary.copy(color = tokens.colors.secondary),
         )
     }
 }
@@ -1420,7 +1636,10 @@ private fun ArchivedRow(row: ArchivedRowView, onRestore: (ArchivedRowView) -> Un
         ) {
             BasicText(
                 text = row.title,
-                style = type.body.copy(color = tokens.colors.primary),
+                style = type.headline.copy(
+                    fontWeight = FontWeight.Normal,
+                    color = tokens.colors.primary,
+                ),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -2030,24 +2249,31 @@ private fun EditQueueDialog(
  */
 internal object SessionsPageTokens {
     val refs: List<String> = listOf(
+        UiTokenNames.COLORS_ACCENT,
+        UiTokenNames.COLORS_BORDER_LIGHT,
+        UiTokenNames.COLORS_CTA_OVERRIDE,
+        UiTokenNames.COLORS_DANGER,
+        UiTokenNames.COLORS_INPUT,
+        UiTokenNames.COLORS_ON_ACCENT,
         UiTokenNames.COLORS_PRIMARY,
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_TERTIARY,
-        UiTokenNames.COLORS_ACCENT,
-        UiTokenNames.COLORS_ON_ACCENT,
-        UiTokenNames.COLORS_DANGER,
+        UiTokenNames.GEOMETRY_CARD_OUTER_MARGIN_V,
+        UiTokenNames.GEOMETRY_PAGE_HEADER_MIN_HEIGHT,
+        UiTokenNames.GEOMETRY_PAGE_LIST_ROW_MIN_HEIGHT,
+        UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
+        UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
+        UiTokenNames.SPACING_BADGE_INSET_H,
+        UiTokenNames.SPACING_BADGE_INSET_V,
+        UiTokenNames.SPACING_CARD_INSET,
+        UiTokenNames.SPACING_CODE_TOOLBAR,
+        UiTokenNames.SPACING_COPY_GAP,
+        UiTokenNames.SPACING_ICON_TEXT,
+        UiTokenNames.STROKE_HAIRLINE,
         UiTokenNames.TYPOGRAPHY_BODY,
-        UiTokenNames.TYPOGRAPHY_SECONDARY,
         UiTokenNames.TYPOGRAPHY_CAPTION,
         UiTokenNames.TYPOGRAPHY_HEADLINE,
-        UiTokenNames.SPACING_ICON_TEXT,
-        UiTokenNames.SPACING_BADGE_INSET_V,
-        UiTokenNames.RADIUS_CARD,
-        UiTokenNames.GEOMETRY_PAGE_LIST_ROW_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_STATUS_DOT_DIAMETER,
-        UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
-        UiTokenNames.GEOMETRY_COMPOSER_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
+        UiTokenNames.TYPOGRAPHY_SECONDARY,
     )
 }
 
@@ -2191,4 +2417,7 @@ private const val MORE_GLYPH: String = "…"
 private const val CHEVRON_GLYPH: String = "›"
 private const val CHECK_GLYPH: String = "✓"
 private const val SEPARATOR_GLYPH: String = "·"
+
+/** The row glyph standing in for the baseline's `bubble.left` icon. */
+private const val MESSAGE_GLYPH: String = "▢"
 private const val ELLIPSIS: String = "…"

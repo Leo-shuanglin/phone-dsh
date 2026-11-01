@@ -312,6 +312,13 @@ dependencies {
         api(project(":dsh"))
     }
     api(project(":platform"))
+    // The device-connector pages read the `:domain` connector seam (`DeviceConnector`,
+    // `ConnectorStateMachine`'s state, the read-only session transport and the paging
+    // window). `api` rather than `implementation`: the page layer's public
+    // `DeviceConnectionScreenState` / `DeviceSessionScreenState` factories take the
+    // domain snapshots, so a consumer that embeds a page compiles against the same
+    // types instead of a private copy.
+    api(project(":domain"))
     implementation(libs.androidx.core.ktx)
 
     // Compose: the AAR's public surface is composable, so the runtime and the

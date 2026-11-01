@@ -8,12 +8,12 @@
   "title": {
     "text": "插件",
     "provenance": "NativeConfigurationPage.swift:28",
-    "anchor": ".navigationTitle(\"插件\")"
+    "anchor": ".navigationTitle(NativeText(\"插件\", \"Plugins\"))"
   },
   "source": {
     "file": "NativeConfigurationPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/NativeConfigurationPage.swift",
-    "lines": 358,
+    "lines": 425,
     "structLine": 6,
     "renderedFrom": [
       "body",
@@ -50,7 +50,7 @@
         {
           "id": "text-17",
           "label": null,
-          "labelExpr": "error",
+          "labelExpr": "nativeConfigurationError(error)",
           "kind": "text",
           "value": null,
           "valueExpr": null,
@@ -59,7 +59,7 @@
           "writes": false,
           "condition": null,
           "provenance": "NativeConfigurationPage.swift:17",
-          "anchor": "Label(error, systemImage: \"exclamationmark.triangle.fill\")",
+          "anchor": "Label(nativeConfigurationError(error), systemImage: \"exclamationmark.triangle.fi",
           "extraction": "manual"
         }
       ],
@@ -68,7 +68,7 @@
       "extraction": "syntax",
       "criterion": {
         "kind": "first-row-expression",
-        "labelExpr": "error",
+        "labelExpr": "nativeConfigurationError(error)",
         "provenance": "NativeConfigurationPage.swift:17"
       }
     },
@@ -94,12 +94,12 @@
           "writes": false,
           "condition": null,
           "provenance": "NativeConfigurationPage.swift:39",
-          "anchor": "Text(\"这一页显示引擎里真正装着的插件。保存后马上生效。\")",
+          "anchor": "Text(NativeText(\"这一页显示引擎里真正装着的插件。保存后马上生效。\", \"This page shows the plugins actuall",
           "extraction": "syntax"
         }
       ],
       "provenance": "NativeConfigurationPage.swift:38",
-      "anchor": "Section(\"本机管理范围\") {",
+      "anchor": "Section(NativeText(\"本机管理范围\", \"Local management scope\")) {",
       "extraction": "syntax"
     },
     {
@@ -113,9 +113,9 @@
       "collection": null,
       "rows": [
         {
-          "id": "text-42",
-          "label": null,
-          "labelExpr": "model.pluginManagementMessage",
+          "id": "this-iphone-worker-has-no-pnpm-execa-or-subprocess-installation-environment-plugins-and-bundles-can-be-viewed-here-install-enable-and-disable-them-in-desktop-dsh",
+          "label": "This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH.",
+          "labelExpr": null,
           "kind": "text",
           "value": null,
           "valueExpr": null,
@@ -124,8 +124,8 @@
           "writes": false,
           "condition": null,
           "provenance": "NativeConfigurationPage.swift:42",
-          "anchor": "Text(model.pluginManagementMessage)",
-          "extraction": "manual"
+          "anchor": "Text(nativePluginManagementMessage(\"This iPhone Worker has no pnpm, execa or sub",
+          "extraction": "syntax"
         },
         {
           "id": "只有真正加载起来的插件才会显示为已启用-没装的-这里不会假装它在跑",
@@ -139,12 +139,12 @@
           "writes": false,
           "condition": null,
           "provenance": "NativeConfigurationPage.swift:43",
-          "anchor": "Text(\"只有真正加载起来的插件才会显示为已启用。没装的,这里不会假装它在跑。\")",
+          "anchor": "Text(NativeText(\"只有真正加载起来的插件才会显示为已启用。没装的,这里不会假装它在跑。\", \"Only plugins that are act",
           "extraction": "syntax"
         }
       ],
       "provenance": "NativeConfigurationPage.swift:41",
-      "anchor": "Section(\"iPhone Worker 限制\") {",
+      "anchor": "Section(NativeText(\"iPhone Worker 限制\", \"iPhone Worker limitations\")) {",
       "extraction": "syntax"
     },
     {
@@ -169,7 +169,7 @@
           "writes": false,
           "condition": null,
           "provenance": "NativeConfigurationPage.swift:64",
-          "anchor": "Text(\"安装、启用和配置插件\")",
+          "anchor": "Text(NativeText(\"安装、启用和配置插件\", \"Install, enable and configure plugins\"))",
           "extraction": "syntax"
         },
         {
@@ -184,7 +184,7 @@
           "writes": true,
           "condition": null,
           "provenance": "NativeConfigurationPage.swift:71",
-          "anchor": "Label(\"插件说明\", systemImage: \"info.circle\")",
+          "anchor": "Label(NativeText(\"插件说明\", \"About Plugins\"), systemImage: \"info.circle\")",
           "extraction": "syntax"
         },
         {
@@ -199,7 +199,7 @@
           "writes": true,
           "condition": null,
           "provenance": "NativeConfigurationPage.swift:79",
-          "anchor": "Label(\"刷新\", systemImage: model.isLoading ? \"arrow.trianglehead.2.clockwise.rotat",
+          "anchor": "Label(NativeText(\"刷新\", \"Refresh\"), systemImage: model.isLoading ? \"arrow.triangl",
           "extraction": "syntax"
         },
         {
@@ -214,7 +214,7 @@
           "writes": false,
           "condition": null,
           "provenance": "NativeConfigurationPage.swift:90",
-          "anchor": "Label(\"添加插件\", systemImage: \"plus\")",
+          "anchor": "Label(NativeText(\"添加插件\", \"Add Plugin\"), systemImage: \"plus\")",
           "extraction": "syntax"
         },
         {
@@ -229,7 +229,7 @@
           "writes": false,
           "condition": "model.isLoading && model.pluginEntries.isEmpty && model.settingsGroups.isEmpty",
           "provenance": "NativeConfigurationPage.swift:97",
-          "anchor": "ProgressView(\"读取 DSH 插件与设置…\")",
+          "anchor": "ProgressView(NativeText(\"读取 DSH 插件与设置…\", \"Loading DSH plugins and settings…\"))",
           "extraction": "syntax"
         }
       ],
@@ -276,13 +276,13 @@
           "labelExpr": null,
           "kind": "info",
           "value": null,
-          "valueExpr": "detail: model.settingsError ?? \"这台主机不支持调整子代理。\"",
+          "valueExpr": "detail: model.settingsError ?? NativeText(\"这台主机不支持调整子代理。\", \"This host does not support changing subagent settings.\")",
           "clickable": false,
           "destination": null,
           "writes": false,
           "condition": "!(let group = model.group(\"subagent\"))",
           "provenance": "NativeConfigurationPage.swift:110",
-          "anchor": "unavailableRow(\"子 Agent\", detail: model.settingsError ?? \"这台主机不支持调整子代理。\")",
+          "anchor": "unavailableRow(NativeText(\"子 Agent\", \"Subagents\"), detail: model.settingsError ?",
           "extraction": "syntax",
           "template": "unavailableRow"
         },
@@ -302,10 +302,11 @@
           "extraction": "manual",
           "templateLabels": [
             "只影响之后新开的子任务,已经在跑的不变。",
+            "Only new subtasks are affected; running subtasks are unchanged.",
             "暂时读不到模型列表。",
+            "The model list is temporarily unavailable.",
             "没有可给子任务用的模型。",
-            "{route.modelName} · 当前不可用",
-            "{route.providerName} · {route.model}"
+            "No models are available for subtasks."
           ]
         },
         {
@@ -314,13 +315,13 @@
           "labelExpr": null,
           "kind": "info",
           "value": null,
-          "valueExpr": "detail: model.settingsError ?? \"这台主机不支持为子代理指定模型。\"",
+          "valueExpr": "detail: model.settingsError ?? NativeText(\"这台主机不支持为子代理指定模型。\", \"This host does not support selecting models for subagents.\")",
           "clickable": false,
           "destination": null,
           "writes": false,
           "condition": "!(let group = model.group(\"subagent-model-selection-settings\"))",
           "provenance": "NativeConfigurationPage.swift:116",
-          "anchor": "unavailableRow(\"子 Agent 模型\", detail: model.settingsError ?? \"这台主机不支持为子代理指定模型。\")",
+          "anchor": "unavailableRow(NativeText(\"子 Agent 模型\", \"Subagent Models\"), detail: model.settin",
           "extraction": "syntax",
           "template": "unavailableRow"
         },
@@ -348,13 +349,13 @@
           "labelExpr": null,
           "kind": "info",
           "value": null,
-          "valueExpr": "detail: model.settingsError ?? \"这台主机不支持调整自动执行的轮次。\"",
+          "valueExpr": "detail: model.settingsError ?? NativeText(\"这台主机不支持调整自动执行的轮次。\", \"This host does not support changing automatic execution limits.\")",
           "clickable": false,
           "destination": null,
           "writes": false,
           "condition": "!(let group = model.group(\"agent-loop\"))",
           "provenance": "NativeConfigurationPage.swift:122",
-          "anchor": "unavailableRow(\"自动执行轮次\", detail: model.settingsError ?? \"这台主机不支持调整自动执行的轮次。\")",
+          "anchor": "unavailableRow(NativeText(\"自动执行轮次\", \"Automatic Execution\"), detail: model.settin",
           "extraction": "syntax",
           "template": "unavailableRow"
         },
@@ -382,13 +383,13 @@
           "labelExpr": null,
           "kind": "info",
           "value": null,
-          "valueExpr": "detail: model.settingsError ?? \"这台主机不支持调整终端设置。\"",
+          "valueExpr": "detail: model.settingsError ?? NativeText(\"这台主机不支持调整终端设置。\", \"This host does not support changing terminal settings.\")",
           "clickable": false,
           "destination": null,
           "writes": false,
           "condition": "!(let group = model.group(\"bash-sandbox\"))",
           "provenance": "NativeConfigurationPage.swift:128",
-          "anchor": "unavailableRow(\"终端\", detail: model.settingsError ?? \"这台主机不支持调整终端设置。\")",
+          "anchor": "unavailableRow(NativeText(\"终端\", \"Terminal\"), detail: model.settingsError ?? Nati",
           "extraction": "syntax",
           "template": "unavailableRow"
         },
@@ -404,7 +405,7 @@
           "writes": false,
           "condition": null,
           "provenance": "NativeConfigurationPage.swift:134",
-          "anchor": "Label(\"网页搜索与抓取\", systemImage: \"globe\")",
+          "anchor": "Label(NativeText(\"网页搜索与抓取\", \"Web Search and Fetch\"), systemImage: \"globe\")",
           "extraction": "syntax"
         },
         {
@@ -419,7 +420,7 @@
           "writes": false,
           "condition": null,
           "provenance": "NativeConfigurationPage.swift:250",
-          "anchor": "Text(\"新会话默认权限\").font(.headline)",
+          "anchor": "Text(NativeText(\"新会话默认权限\", \"Default Permission for New Sessions\")).font(.headlin",
           "extraction": "syntax"
         },
         {
@@ -434,7 +435,7 @@
           "writes": false,
           "condition": null,
           "provenance": "NativeConfigurationPage.swift:251",
-          "anchor": "Text(\"只影响之后新开的会话。正在聊的这个,权限在输入框上方那个菜单里改。\")",
+          "anchor": "Text(NativeText(\"只影响之后新开的会话。正在聊的这个,权限在输入框上方那个菜单里改。\", \"Only new sessions are affe",
           "extraction": "syntax"
         },
         {
@@ -447,9 +448,9 @@
           "clickable": false,
           "destination": null,
           "writes": false,
-          "condition": "let error = model.permissionCatalogError",
+          "condition": "model.permissionCatalogError != nil",
           "provenance": "NativeConfigurationPage.swift:255",
-          "anchor": "Text(\"没能读到权限列表。\")",
+          "anchor": "Text(NativeText(\"没能读到权限列表。\", \"The permission list could not be loaded.\"))",
           "extraction": "syntax"
         },
         {
@@ -464,7 +465,7 @@
           "writes": false,
           "condition": "model.defaultPermissionModes.isEmpty",
           "provenance": "NativeConfigurationPage.swift:259",
-          "anchor": "Text(\"没有可选的权限预设。\")",
+          "anchor": "Text(NativeText(\"没有可选的权限预设。\", \"No permission presets are available.\"))",
           "extraction": "syntax"
         },
         {
@@ -472,14 +473,14 @@
           "label": "默认权限",
           "labelExpr": null,
           "kind": "control",
-          "value": "默认权限",
+          "value": "默认权限 | Default permission",
           "valueExpr": null,
           "clickable": true,
           "destination": null,
           "writes": true,
           "condition": "!(model.defaultPermissionModes.isEmpty)",
           "provenance": "NativeConfigurationPage.swift:263",
-          "anchor": "Picker(\"默认权限\", selection: Binding(",
+          "anchor": "Picker(NativeText(\"默认权限\", \"Default permission\"), selection: Binding(",
           "extraction": "syntax"
         },
         {
@@ -509,7 +510,7 @@
           "writes": true,
           "condition": "!(model.defaultPermissionModes.isEmpty)",
           "provenance": "NativeConfigurationPage.swift:277",
-          "anchor": "Button(\"保存默认\") { Task { _ = await model.saveDefaultPermissionMode() } }",
+          "anchor": "Button(NativeText(\"保存默认\", \"Save Default\")) { Task { _ = await model.saveDefaultP",
           "extraction": "syntax"
         },
         {
@@ -524,13 +525,13 @@
           "writes": false,
           "condition": "!(model.defaultPermissionModes.isEmpty)",
           "provenance": "NativeConfigurationPage.swift:280",
-          "anchor": "Button(\"撤销\") { model.discardDefaultPermissionMode() }",
+          "anchor": "Button(NativeText(\"撤销\", \"Discard\")) { model.discardDefaultPermissionMode() }",
           "extraction": "syntax"
         },
         {
           "id": "text-283",
           "label": null,
-          "labelExpr": "error",
+          "labelExpr": "nativeConfigurationError(error)",
           "kind": "text",
           "value": null,
           "valueExpr": null,
@@ -539,12 +540,12 @@
           "writes": false,
           "condition": "let error = model.namespaceErrors[\"permission\"]",
           "provenance": "NativeConfigurationPage.swift:283",
-          "anchor": "Text(error).font(.caption).foregroundStyle(.red)",
+          "anchor": "Text(nativeConfigurationError(error)).font(.caption).foregroundStyle(.red)",
           "extraction": "manual"
         }
       ],
       "provenance": "NativeConfigurationPage.swift:106",
-      "anchor": "Section(\"内置插件设置\") {",
+      "anchor": "Section(NativeText(\"内置插件设置\", \"Built-in Plugin Settings\")) {",
       "extraction": "syntax"
     },
     {
@@ -558,9 +559,9 @@
       "collection": null,
       "rows": [
         {
-          "id": "text-298",
+          "id": "text-300",
           "label": null,
-          "labelExpr": "plugin.title",
+          "labelExpr": "title",
           "kind": "text",
           "value": null,
           "valueExpr": null,
@@ -568,15 +569,15 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeConfigurationPage.swift:298",
-          "anchor": "Text(plugin.title)",
+          "provenance": "NativeConfigurationPage.swift:300",
+          "anchor": "Text(title)",
           "extraction": "manual",
           "collection": "model.experimentalPlugins"
         },
         {
-          "id": "text-299",
+          "id": "text-301",
           "label": null,
-          "labelExpr": "plugin.status",
+          "labelExpr": "status",
           "kind": "text",
           "value": null,
           "valueExpr": null,
@@ -584,13 +585,13 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeConfigurationPage.swift:299",
-          "anchor": "Text(plugin.status)",
+          "provenance": "NativeConfigurationPage.swift:301",
+          "anchor": "Text(status)",
           "extraction": "manual",
           "collection": "model.experimentalPlugins"
         },
         {
-          "id": "control-304",
+          "id": "control-306",
           "label": null,
           "labelExpr": null,
           "kind": "control",
@@ -600,15 +601,15 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "NativeConfigurationPage.swift:304",
-          "anchor": "Toggle(plugin.title, isOn: .constant(plugin.loaded))",
+          "provenance": "NativeConfigurationPage.swift:306",
+          "anchor": "Toggle(title, isOn: .constant(plugin.loaded))",
           "extraction": "manual",
           "collection": "model.experimentalPlugins"
         },
         {
-          "id": "text-311",
-          "label": null,
-          "labelExpr": "model.pluginManagementMessage",
+          "id": "this-iphone-worker-has-no-pnpm-execa-or-subprocess-installation-environment-plugins-and-bundles-can-be-viewed-here-install-enable-and-disable-them-in-desktop-dsh",
+          "label": "This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH.",
+          "labelExpr": null,
           "kind": "text",
           "value": null,
           "valueExpr": null,
@@ -616,20 +617,20 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeConfigurationPage.swift:311",
-          "anchor": "Text(model.pluginManagementMessage)",
-          "extraction": "manual"
+          "provenance": "NativeConfigurationPage.swift:313",
+          "anchor": "Text(nativePluginManagementMessage(\"This iPhone Worker has no pnpm, execa or sub",
+          "extraction": "syntax"
         }
       ],
-      "provenance": "NativeConfigurationPage.swift:315",
-      "anchor": "Text(\"实验插件\")",
+      "provenance": "NativeConfigurationPage.swift:317",
+      "anchor": "Text(NativeText(\"实验插件\", \"Experimental Plugins\"))",
       "extraction": "syntax",
       "hasHeader": true,
       "footer": {
         "text": "这里的开关显示的是引擎里的真实状态,手机上不会另外记一份。",
         "labelExpr": null,
-        "provenance": "NativeConfigurationPage.swift:317",
-        "anchor": "Text(\"这里的开关显示的是引擎里的真实状态,手机上不会另外记一份。\")"
+        "provenance": "NativeConfigurationPage.swift:319",
+        "anchor": "Text(NativeText(\"这里的开关显示的是引擎里的真实状态,手机上不会另外记一份。\", \"These switches show the engine"
       }
     },
     {
@@ -653,8 +654,8 @@
           "destination": null,
           "writes": false,
           "condition": "model.inventoryError != nil",
-          "provenance": "NativeConfigurationPage.swift:324",
-          "anchor": "Text(\"暂时读不到插件状态。\")",
+          "provenance": "NativeConfigurationPage.swift:326",
+          "anchor": "Text(NativeText(\"暂时读不到插件状态。\", \"Plugin status is temporarily unavailable.\"))",
           "extraction": "syntax"
         },
         {
@@ -668,13 +669,13 @@
           "destination": null,
           "writes": false,
           "condition": "model.pluginEntries.isEmpty",
-          "provenance": "NativeConfigurationPage.swift:328",
-          "anchor": "Text(\"引擎还没给出插件列表。\")",
+          "provenance": "NativeConfigurationPage.swift:330",
+          "anchor": "Text(NativeText(\"引擎还没给出插件列表。\", \"The engine has not provided a plugin list yet.\")",
           "extraction": "syntax"
         },
         {
-          "id": "查看-model-pluginentries-count-个-dsh-loader-条目",
-          "label": "查看 {model.pluginEntries.count} 个 DSH Loader 条目",
+          "id": "查看-d-个-dsh-loader-条目",
+          "label": "查看 %d 个 DSH Loader 条目",
           "labelExpr": null,
           "kind": "custom",
           "value": null,
@@ -683,15 +684,14 @@
           "destination": null,
           "writes": false,
           "condition": "!(model.pluginEntries.isEmpty)",
-          "provenance": "NativeConfigurationPage.swift:332",
-          "anchor": "DisclosureGroup(\"查看 \\(model.pluginEntries.count) 个 DSH Loader 条目\") {",
-          "extraction": "manual",
-          "template": "DisclosureGroup",
-          "dynamicLabel": true
+          "provenance": "NativeConfigurationPage.swift:334",
+          "anchor": "DisclosureGroup(String(format: NativeText(\"查看 %d 个 DSH Loader 条目\", \"View %d DSH ",
+          "extraction": "syntax",
+          "template": "DisclosureGroup"
         }
       ],
-      "provenance": "NativeConfigurationPage.swift:322",
-      "anchor": "Section(\"已加载插件\") {",
+      "provenance": "NativeConfigurationPage.swift:324",
+      "anchor": "Section(NativeText(\"已加载插件\", \"Loaded Plugins\")) {",
       "extraction": "syntax"
     }
   ],
@@ -707,7 +707,7 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:71",
-      "anchor": "Label(\"插件说明\", systemImage: \"info.circle\")",
+      "anchor": "Label(NativeText(\"插件说明\", \"About Plugins\"), systemImage: \"info.circle\")",
       "extraction": "syntax",
       "labelAlternatives": [],
       "presents": "sheet-35"
@@ -723,7 +723,7 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:79",
-      "anchor": "Label(\"刷新\", systemImage: model.isLoading ? \"arrow.trianglehead.2.clockwise.rotat",
+      "anchor": "Label(NativeText(\"刷新\", \"Refresh\"), systemImage: model.isLoading ? \"arrow.triangl",
       "extraction": "syntax",
       "labelAlternatives": []
     },
@@ -738,7 +738,7 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:90",
-      "anchor": "Label(\"添加插件\", systemImage: \"plus\")",
+      "anchor": "Label(NativeText(\"添加插件\", \"Add Plugin\"), systemImage: \"plus\")",
       "extraction": "syntax"
     },
     {
@@ -752,7 +752,7 @@
       "destination": "WebSearchSettingsPage",
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:134",
-      "anchor": "Label(\"网页搜索与抓取\", systemImage: \"globe\")",
+      "anchor": "Label(NativeText(\"网页搜索与抓取\", \"Web Search and Fetch\"), systemImage: \"globe\")",
       "extraction": "syntax"
     },
     {
@@ -766,10 +766,11 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:263",
-      "anchor": "Picker(\"默认权限\", selection: Binding(",
+      "anchor": "Picker(NativeText(\"默认权限\", \"Default permission\"), selection: Binding(",
       "extraction": "syntax",
       "items": [
-        "默认权限"
+        "默认权限",
+        "Default permission"
       ],
       "style": "default"
     },
@@ -784,7 +785,7 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:277",
-      "anchor": "Button(\"保存默认\") { Task { _ = await model.saveDefaultPermissionMode() } }",
+      "anchor": "Button(NativeText(\"保存默认\", \"Save Default\")) { Task { _ = await model.saveDefaultP",
       "extraction": "syntax",
       "labelAlternatives": []
     },
@@ -799,12 +800,12 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:280",
-      "anchor": "Button(\"撤销\") { model.discardDefaultPermissionMode() }",
+      "anchor": "Button(NativeText(\"撤销\", \"Discard\")) { model.discardDefaultPermissionMode() }",
       "extraction": "syntax",
       "labelAlternatives": []
     },
     {
-      "id": "toggle-304",
+      "id": "toggle-306",
       "label": null,
       "labelExpr": null,
       "kind": "toggle",
@@ -813,8 +814,8 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeConfigurationPage.swift:304",
-      "anchor": "Toggle(plugin.title, isOn: .constant(plugin.loaded))",
+      "provenance": "NativeConfigurationPage.swift:306",
+      "anchor": "Toggle(title, isOn: .constant(plugin.loaded))",
       "extraction": "manual"
     },
     {
@@ -828,7 +829,7 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:32",
-      "anchor": "Button(\"完成\") { dismiss() }.trailingBarText()",
+      "anchor": "Button(NativeText(\"完成\", \"Done\")) { dismiss() }.trailingBarText()",
       "extraction": "syntax"
     },
     {
@@ -842,7 +843,7 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:50",
-      "anchor": "Button(\"完成\") { showInformation = false }.trailingBarText()",
+      "anchor": "Button(NativeText(\"完成\", \"Done\")) { showInformation = false }.trailingBarText()",
       "extraction": "syntax"
     },
     {
@@ -856,7 +857,7 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:85",
-      "anchor": "Button(\"安装第三方插件\") {}",
+      "anchor": "Button(NativeText(\"安装第三方插件\", \"Install Third-party Plugin\")) {}",
       "extraction": "syntax"
     },
     {
@@ -870,7 +871,7 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:87",
-      "anchor": "Button(\"让 Agent 创建插件\") {}",
+      "anchor": "Button(NativeText(\"让 Agent 创建插件\", \"Create a Plugin with Agent\")) {}",
       "extraction": "syntax"
     },
     {
@@ -884,7 +885,7 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:219",
-      "anchor": "Button(\"恢复默认\") { Task { _ = await model.reset(field, in: namespace) } }",
+      "anchor": "Button(NativeText(\"恢复默认\", \"Reset\")) { Task { _ = await model.reset(field, in: na",
       "extraction": "syntax"
     },
     {
@@ -898,7 +899,7 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:237",
-      "anchor": "Button(\"保存\") { Task { _ = await model.save(namespace) } }",
+      "anchor": "Button(NativeText(\"保存\", \"Save\")) { Task { _ = await model.save(namespace) } }",
       "extraction": "syntax"
     },
     {
@@ -912,7 +913,7 @@
       "destination": null,
       "condition": null,
       "provenance": "NativeConfigurationPage.swift:240",
-      "anchor": "Button(\"撤销\") { model.discard(namespace) }",
+      "anchor": "Button(NativeText(\"撤销\", \"Discard\")) { model.discard(namespace) }",
       "extraction": "syntax"
     }
   ],
@@ -943,13 +944,13 @@
           "renders": "没有可给子任务用的模型。",
           "when": "model.modelRoutes.isEmpty",
           "provenance": "NativeConfigurationPage.swift:166",
-          "anchor": "Text(\"没有可给子任务用的模型。\")"
+          "anchor": "Text(NativeText(\"没有可给子任务用的模型。\", \"No models are available for subtasks.\"))"
         },
         {
           "renders": "没有可选的权限预设。",
           "when": "model.defaultPermissionModes.isEmpty",
           "provenance": "NativeConfigurationPage.swift:259",
-          "anchor": "Text(\"没有可选的权限预设。\")"
+          "anchor": "Text(NativeText(\"没有可选的权限预设。\", \"No permission presets are available.\"))"
         }
       ],
       "data": [
@@ -966,13 +967,13 @@
           "renders": "暂时读不到模型列表。",
           "when": "model.modelCatalogError != nil",
           "provenance": "NativeConfigurationPage.swift:162",
-          "anchor": "Text(\"暂时读不到模型列表。\")"
+          "anchor": "Text(NativeText(\"暂时读不到模型列表。\", \"The model list is temporarily unavailable.\"))"
         },
         {
           "renders": "暂时读不到插件状态。",
           "when": "model.inventoryError != nil",
-          "provenance": "NativeConfigurationPage.swift:324",
-          "anchor": "Text(\"暂时读不到插件状态。\")"
+          "provenance": "NativeConfigurationPage.swift:326",
+          "anchor": "Text(NativeText(\"暂时读不到插件状态。\", \"Plugin status is temporarily unavailable.\"))"
         }
       ],
       "unknown": [],
@@ -981,13 +982,13 @@
           "renders": "只影响之后新开的会话。正在聊的这个,权限在输入框上方那个菜单里改。",
           "when": null,
           "provenance": "NativeConfigurationPage.swift:251",
-          "anchor": "Text(\"只影响之后新开的会话。正在聊的这个,权限在输入框上方那个菜单里改。\")"
+          "anchor": "Text(NativeText(\"只影响之后新开的会话。正在聊的这个,权限在输入框上方那个菜单里改。\", \"Only new sessions are affe"
         },
         {
           "renders": "ProgressView",
           "when": "model.isLoading && model.pluginEntries.isEmpty && model.settingsGroups.isEmpty",
           "provenance": "NativeConfigurationPage.swift:97",
-          "anchor": "ProgressView(\"读取 DSH 插件与设置…\")"
+          "anchor": "ProgressView(NativeText(\"读取 DSH 插件与设置…\", \"Loading DSH plugins and settings…\"))"
         }
       ]
     },

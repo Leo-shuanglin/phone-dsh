@@ -16,6 +16,7 @@ import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -96,6 +97,43 @@ class ChatPageTest {
         compose.onNodeWithTag(UiPageTags.CHAT_HEADER_MENU).performClick()
         compose.onNodeWithText(UiStrings.HEADER_SESSION_SETTINGS).performClick()
         assertEquals(1, settings)
+    }
+
+    @Test
+    fun `the head menu offers 产物 the right sidebar and the run status`() {
+        // ChatPage.swift:240-286: the session-scoped rows of the ⋯ menu.
+        var artifacts = 0
+        var workbench = 0
+        var runStatus = 0
+        show(
+            state(case = "chat-basic"),
+            title = "会话甲",
+            onOpenArtifacts = { artifacts += 1 },
+            onOpenWorkbench = { workbench += 1 },
+            onOpenRunStatus = { runStatus += 1 },
+        )
+        compose.onNodeWithTag(UiPageTags.CHAT_HEADER_MENU).performClick()
+        compose.onNodeWithText(UiStrings.HEADER_ARTIFACTS).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.HEADER_WORKBENCH).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.HEADER_RUN_STATUS).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.HEADER_ARTIFACTS).performClick()
+        assertEquals(1, artifacts)
+        compose.onNodeWithTag(UiPageTags.CHAT_HEADER_MENU).performClick()
+        compose.onNodeWithText(UiStrings.HEADER_WORKBENCH).performClick()
+        assertEquals(1, workbench)
+        compose.onNodeWithTag(UiPageTags.CHAT_HEADER_MENU).performClick()
+        compose.onNodeWithText(UiStrings.HEADER_RUN_STATUS).performClick()
+        assertEquals(1, runStatus)
+    }
+
+    @Test
+    fun `a session-scoped menu row is absent when the host cannot route it`() {
+        // `null` keeps the row off the menu: nothing that would tap into nowhere.
+        show(state(case = "chat-basic"))
+        compose.onNodeWithTag(UiPageTags.CHAT_HEADER_MENU).performClick()
+        compose.onNodeWithText(UiStrings.HEADER_ARTIFACTS).assertDoesNotExist()
+        compose.onNodeWithText(UiStrings.HEADER_WORKBENCH).assertDoesNotExist()
+        compose.onNodeWithText(UiStrings.HEADER_RUN_STATUS).assertIsDisplayed()
     }
 
     @Test
@@ -210,15 +248,19 @@ class ChatPageTest {
     }
 
     @Test
-    fun `two asks fold the second into 还有 1 个待确认`() {
-        // ChatPage.swift `cardsRegion`: permission wins, the question folds.
+    fun `two asks are both drawn as cards`() {
+        // ChatPage.swift `cardsRegion` at this HEAD (`:844-880`): the region holds
+        // the pending cards themselves; the older 「还有 1 个待确认」 fold line is
+        // gone from the baseline, so neither it nor its replacement row is drawn.
         val nodes = SpecFixtures.projectCase("permission-flow") + listOf(
             questionNode("q-1"),
         )
         show(ChatScreenState.from(nodes))
-        compose.onNodeWithTag(UiPageTags.CHAT_PENDING_MORE).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.MORE_PENDING).assertIsDisplayed()
-        compose.onNodeWithTag(UiTags.APPROVAL_CARD).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.CHAT_PENDING_MORE).assertDoesNotExist()
+        compose.onNodeWithText(UiStrings.MORE_PENDING).assertDoesNotExist()
+        // Both asks are drawn as their own card (the card surface shares one tag).
+        compose.onAllNodesWithTag(UiTags.APPROVAL_CARD).assertCountEquals(2)
+        compose.onNodeWithTag(UiPageTags.CHAT_QUESTION_SUBMIT).assertExists()
     }
 
     @Test
@@ -605,6 +647,9 @@ class ChatPageTest {
         onRetry: () -> Unit = {},
         onRenameSession: (String) -> Unit = {},
         onExportTranscript: () -> Unit = {},
+        onOpenArtifacts: (() -> Unit)? = null,
+        onOpenWorkbench: (() -> Unit)? = null,
+        onOpenRunStatus: () -> Unit = {},
         onOpenSessionSettings: () -> Unit = {},
         onStartEngine: () -> Unit = {},
         onConfigureProvider: () -> Unit = {},
@@ -641,6 +686,9 @@ class ChatPageTest {
                     onExpandPendingSlot = onExpandPendingSlot,
                     onRenameSession = onRenameSession,
                     onExportTranscript = onExportTranscript,
+                    onOpenArtifacts = onOpenArtifacts,
+                    onOpenWorkbench = onOpenWorkbench,
+                    onOpenRunStatus = onOpenRunStatus,
                     onOpenSessionSettings = onOpenSessionSettings,
                     onStartEngine = onStartEngine,
                     onConfigureProvider = onConfigureProvider,

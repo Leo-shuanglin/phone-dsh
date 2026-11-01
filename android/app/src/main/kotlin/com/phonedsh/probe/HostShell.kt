@@ -34,12 +34,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -47,9 +43,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -73,6 +67,9 @@ import com.phonedsh.engine.HandshakeSummary
 import com.phonedsh.engine.KernelVerdict
 import com.phonedsh.platform.EngineHostState
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.nav.PdshDrawer
+import com.phonedsh.ui.nav.PdshDrawerEntry
+import com.phonedsh.ui.nav.PdshDrawerIcon
 import com.phonedsh.ui.nav.PdshHostAction
 import com.phonedsh.ui.nav.SettingsWrite
 import com.phonedsh.ui.nav.PdshNavFacts
@@ -118,11 +115,6 @@ internal fun HostShell(
     }
     var nav by remember { mutableStateOf(PdshNavState()) }
     var drawerOpen by remember { mutableStateOf(false) }
-    // The sessions page is the drawer's body in the baseline. It is not one of
-    // the routed pages (`:lib`'s routes do not name it yet), so this host keeps
-    // it as a full-screen layer over the native face instead of inventing a
-    // route the router cannot resolve.
-    var sessionsOpen by remember { mutableStateOf(false) }
     var webFaceOpened by remember { mutableStateOf(false) }
     val webFaceOnLaunch = remember { engine.webFaceOnLaunch() }
 
@@ -151,10 +143,8 @@ internal fun HostShell(
                 nav = nav.push(PdshRoute.WebSurface)
             }
         }
-        BackHandler(enabled = drawerOpen || nav.canGoBack || sessionsOpen) {
-            if (sessionsOpen) {
-                sessionsOpen = false
-            } else if (drawerOpen) {
+        BackHandler(enabled = drawerOpen || nav.canGoBack) {
+            if (drawerOpen) {
                 drawerOpen = false
             } else {
                 nav = nav.pop()
@@ -221,44 +211,25 @@ internal fun HostShell(
                             )
                         },
                         webSurface = { EngineWebSurface(engine, state) },
+                        // 会话 is a route now, and this host is the one that owns
+                        // the session read, so the route renders the real list
+                        // instead of `:lib`'s facts-only empty page.
+                        sessions = {
+                            HostSessionsScreen(
+                                engine = engine,
+                                state = state,
+                                turn = turn,
+                                onBack = { nav = nav.pop() },
+                                onHostNotice = { notice = it },
+                            )
+                        },
                     )
-                }
-            }
-            if (sessionsOpen) {
-                // Opaque on purpose: the native face stays composed under this
-                // layer, so the page's own (possibly unspecified) background
-                // must not let it show through. The note bar sits inside this
-                // layer and follows the routed pages' rule: when it shows, the
-                // column has consumed the status-bar inset, so the page's own
-                // statusBarsPadding sees zero instead of doubling it.
-                Box(Modifier.fillMaxSize().background(tokens.colors.selector)) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .then(
-                                if (note != null) {
-                                    Modifier.windowInsetsPadding(WindowInsets.statusBars)
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                    ) {
-                        if (note != null) HostNoteBar(text = note)
-                        HostSessionsScreen(
-                            engine = engine,
-                            state = state,
-                            turn = turn,
-                            onBack = { sessionsOpen = false },
-                            onHostNotice = { notice = it },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
                 }
             }
             if (note != null && statusBarTop > 0.dp) {
                 // The consumed status-bar strip: the same ink as the note bar, so
                 // the note reads as one band from the system bar down. Drawn after
-                // the sessions layer so it paints over the page, not under it.
+                // the routed page so it paints over the page, not under it.
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -267,18 +238,16 @@ internal fun HostShell(
                 )
             }
             if (drawerOpen) {
-                HostDrawer(
-                    onDismiss = { drawerOpen = false },
-                    onNavigate = { route ->
+                PdshDrawer(
+                    entries = DRAWER_ENTRIES,
+                    footerEntries = DRAWER_FOOTER_ENTRIES,
+                    onSelect = { route ->
+                        // A line from a routed page is not about the next one.
+                        notice = null
                         drawerOpen = false
                         nav = nav.push(route)
                     },
-                    onOpenSessions = {
-                        // A line from a routed page is not about this page.
-                        notice = null
-                        drawerOpen = false
-                        sessionsOpen = true
-                    },
+                    onDismiss = { drawerOpen = false },
                 )
             }
         }
@@ -353,6 +322,9 @@ private fun actionLabel(action: PdshHostAction): String = when (action) {
     PdshHostAction.RefreshEgress -> "重新读取出网白名单"
     is PdshHostAction.OpenWorkbenchFile -> "读取文件预览"
     PdshHostAction.RetryWebSurface -> "重试本地引擎"
+    // L24: the chat sheets' one read (both `ChatPage.swift:441`/`:449` call
+    // `refreshActivity`, which fills jobs and schedules together).
+    PdshHostAction.RefreshSessionActivity -> "重新读取本会话的定时任务与后台任务"
 }
 
 /**
@@ -363,8 +335,11 @@ private fun actionLabel(action: PdshHostAction): String = when (action) {
  * own wording and stays unmodified.
  */
 private fun hostRouteNote(route: PdshRoute): String? = when (route) {
+    // Files are read: the row's file list opens the materialized workspace (the
+    // `is PdshRoute.Files` note below is null because the page reports its own
+    // read). Only the folder writes are missing, so the note names just those.
     PdshRoute.WorkspaceFolders ->
-        "只读：本宿主未实现文件夹的新建、切换、删除与文件读取"
+        "只读：本宿主未实现文件夹的新建、切换、删除"
 
     // Another lane now reads a real local provider profile into these facts; what
     // this route cannot do is edit or save one, so the note says only that.
@@ -402,6 +377,62 @@ private fun hostRouteNote(route: PdshRoute): String? = when (route) {
 
     PdshRoute.Export ->
         "本宿主没有导出诊断的命令，页面只显示它读到的状态"
+
+    // §1's files page is read-only here: the page itself reports what it could and
+    // could not read, so a route note would only repeat its own line.
+    is PdshRoute.Files -> null
+
+    // 文件预览 (L29) reads the materialized workspace through the same seam the
+    // files page does, and prints its own four honest states (正在读取… / 无法预览 +
+    // 原因 + 重试 / 暂时不能预览 + 原因 + 分享 / the body). A host-wide line would be a
+    // second, weaker version of the page's own disclosure.
+    is PdshRoute.Preview -> null
+
+    // 对话 is the one session surface whose data this host still cannot read
+    // (`PdshNavFacts` carries no transcript), so the page renders its own empty
+    // session and the note says why instead of looking broken.
+    PdshRoute.Chat ->
+        "只读：本宿主未接入会话记录的读取"
+
+    // 会话 has a real host read (`HostSessionsScreen`), handed to the route through
+    // `PdshNavHost(sessions = …)`: no disclosure is needed, and a read-only line
+    // here would now be false.
+    PdshRoute.Sessions -> null
+
+    // The three device routes read the `:domain` connector's in-memory double: a
+    // page full of data that is not a real pairing must say so, or the demo reads
+    // as a working transport.
+    PdshRoute.DeviceConnection ->
+        "演示数据：客厅网关来自内存连接器，本宿主没有真实设备通道"
+
+    is PdshRoute.DeviceSession ->
+        "演示数据：记录来自内存传输，不是真实设备会话"
+
+    is PdshRoute.SessionArtifacts ->
+        "演示数据：产物来自内存存储，不是真实设备文件"
+
+    // The settings family's reference sheets render their own state: the route
+    // hands each page the host's facts (聊天外观) or an empty snapshot that the
+    // page prints as 未知/读取不到 (配置文件, 快捷键), and the permission and
+    // plugin pages are local matrices. A host-wide line here would be a second,
+    // weaker version of the page's own disclosure. None of them is a drawer row;
+    // they are opened from the settings index.
+    PdshRoute.AgentPresets,
+    PdshRoute.PluginInventory,
+    PdshRoute.PhonePermissions,
+    PdshRoute.ChatPreferences,
+    PdshRoute.SettingsDocument,
+    PdshRoute.Shortcuts,
+    -> null
+
+    // L24: the chat family's three 内嵌子页 each print their own 读取不到 line when
+    // this host made no read (`ChatSubpageFacts` stays at its "not reported"
+    // default), so a route-wide note would be a second, weaker version of the
+    // page's own disclosure — the same reason the settings sheets above have none.
+    PdshRoute.CommandResult,
+    PdshRoute.SessionJobs,
+    PdshRoute.SessionSchedules,
+    -> null
 
     PdshRoute.Home, PdshRoute.Settings, PdshRoute.Runtime, PdshRoute.WebSurface -> null
 }
@@ -508,94 +539,49 @@ private fun EngineUnavailableNotice(title: String, reason: String?, detail: Stri
 }
 
 /**
- * The drawer §1's entry column names.
+ * The drawer's app map, in the order a user scans it: conversation, sessions,
+ * folders, files, commands, devices, the Web face — then the two furniture rows the
+ * iOS drawer pins to its bottom (定时任务, 设置).
  *
- * The baseline's drawer body is the session list; this host has no session store
- * of its own, so the drawer opens the sessions page as its own layer (会话) and
- * carries the four routes this lane can push. 设置 is the sheet §1 names; the Web
- * surface row is the full-screen face.
- *
- * @param onOpenSessions open the sessions page layer (the baseline's drawer body).
+ * The iOS baseline reaches 对话 as the shell's root face and 会话 as the drawer
+ * body; this host has neither (its root face is the engine probe, and its drawer
+ * body is this list), so each destination needs a row of its own. Without them
+ * the pages are routing-reachable but not touch-reachable — the L1/L2/L5 report.
  */
-@Composable
-private fun HostDrawer(
-    onDismiss: () -> Unit,
-    onNavigate: (PdshRoute) -> Unit,
-    onOpenSessions: () -> Unit,
-) {
-    val tokens = PdshThemeValues.tokens
-    val type = PdshThemeValues.type
-    Row(Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(DRAWER_WIDTH_FRACTION)
-                .background(tokens.colors.input)
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-                .verticalScroll(rememberScrollState())
-                .padding(vertical = tokens.geometry.cardOuterMarginV),
-        ) {
-            BasicText(
-                text = "导航",
-                style = type.caption.copy(color = tokens.colors.tertiary),
-                modifier = Modifier.padding(horizontal = tokens.geometry.pageOuterMarginH),
-            )
-            Spacer(Modifier.height(tokens.geometry.cardOuterMarginV))
-            // The baseline's drawer body row (NativeShell.swift:275); UiStrings
-            // names the page 会话列表, while the drawer's own word is 会话.
-            DrawerRow(label = SESSIONS_DRAWER_LABEL, onClick = onOpenSessions)
-            DrawerRow(label = UiStrings.WORKSPACE_FOLDERS, onClick = { onNavigate(PdshRoute.WorkspaceFolders) })
-            DrawerRow(label = UiStrings.AUTOMATION_TITLE, onClick = { onNavigate(PdshRoute.Automation) })
-            DrawerRow(label = UiStrings.SETTINGS, onClick = { onNavigate(PdshRoute.Settings) })
-            DrawerRow(label = UiStrings.WEB_SURFACE_TITLE, onClick = { onNavigate(PdshRoute.WebSurface) })
-        }
-        // The right strip is the dismiss target; it dims the page below so the
-        // drawer reads as a modal. The panel itself takes no scrim, so a tap on
-        // its background does not close it.
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .background(tokens.colors.primary.copy(alpha = DRAWER_SCRIM_ALPHA))
-                // unverified token: no scrim opacity token exists; the page ink at
-                // a fixed opacity is the only non-invented dimming available.
-                .clickable(role = Role.Button, onClick = onDismiss)
-                .semantics { contentDescription = "关闭抽屉" },
-        )
-    }
-}
+private val DRAWER_ENTRIES: List<PdshDrawerEntry> = listOf(
+    // No UiStrings constant for the baseline's tab title 对话.
+    PdshDrawerEntry("对话", PdshDrawerIcon.CHAT, PdshRoute.Chat),
+    // UiStrings.SESSIONS is 会话列表 (the page name); the drawer's word is 会话.
+    PdshDrawerEntry("会话", PdshDrawerIcon.SESSIONS, PdshRoute.Sessions),
+    PdshDrawerEntry(UiStrings.WORKSPACE_FOLDERS, PdshDrawerIcon.FOLDER, PdshRoute.WorkspaceFolders),
+    // 文件: the files page (its own title is 手机工作区). §1's entry for that page is
+    // a folder row or the chat's workbench, and this host has the folder row; but
+    // the folder page's row is drawn disabled while that page is read-only (a page
+    // decision this shell cannot override), so the listing keeps one entry that
+    // depends on no other page's writable flag. It opens the same single workspace
+    // the folder row names; the route's `folderId` stays null because a drawer row
+    // has no folder to name, and the page reads the host's one materialized tree.
+    // No UiStrings constant names this entry: WORKBENCH_FILES is the workbench
+    // segment's label, a different surface whose wording can move independently.
+    PdshDrawerEntry("文件", PdshDrawerIcon.FOLDER, PdshRoute.Files()),
+    PdshDrawerEntry(UiStrings.TOOLS, PdshDrawerIcon.TERMINAL, PdshRoute.Tools),
+    // The device family's page title is 设备连接; UiStrings has no constant for
+    // the drawer's short name (its DEVICE_TITLE is the page's "Device" string).
+    PdshDrawerEntry(DEVICE_CONNECTION_LABEL, PdshDrawerIcon.DEVICE, PdshRoute.DeviceConnection),
+    PdshDrawerEntry(UiStrings.WEB_SURFACE_TITLE, PdshDrawerIcon.WEB, PdshRoute.WebSurface),
+)
 
-/** One drawer row; the label is the visible text and the accessibility name. */
-@Composable
-private fun DrawerRow(label: String, onClick: () -> Unit) {
-    val tokens = PdshThemeValues.tokens
-    val type = PdshThemeValues.type
-    BasicText(
-        text = label,
-        style = type.body.copy(color = tokens.colors.primary),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = label }
-            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-            .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.geometry.cardOuterMarginV,
-            ),
-    )
-}
+/** The two rows the iOS drawer pins below its session list (`NativeShell.swift:296`). */
+private val DRAWER_FOOTER_ENTRIES: List<PdshDrawerEntry> = listOf(
+    PdshDrawerEntry(UiStrings.AUTOMATION_TITLE, PdshDrawerIcon.CLOCK, PdshRoute.Automation),
+    PdshDrawerEntry(UiStrings.SETTINGS, PdshDrawerIcon.SETTINGS, PdshRoute.Settings),
+)
 
 /** The host's navigation log tag; only stable action labels are written to it. */
 private const val TAG_NAV = "PDSHNav"
 
-/** The drawer's word for the sessions page (the baseline's NativeShell.swift:275). */
-private const val SESSIONS_DRAWER_LABEL: String = "会话"
-
-/** unverified geometry: no drawer-width token exists; 0.82 keeps the page visible. */
-private const val DRAWER_WIDTH_FRACTION = 0.82f
-
-/** unverified token: no scrim-opacity token exists for the dimmed page strip. */
-private const val DRAWER_SCRIM_ALPHA = 0.32f
+/** The drawer's short name for the device family; the page title is 设备连接. */
+private const val DEVICE_CONNECTION_LABEL: String = "设备连接"
 
 /** How long a gesture's outcome line stays on screen (four seconds). */
 private const val NOTICE_MILLIS: Long = 4_000L

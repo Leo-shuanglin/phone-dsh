@@ -210,7 +210,13 @@ stage_phone_plugins() {
     [ -d "$ROOT/plugins" ] || { skip "plugins not present"; return; }
     [ -d "$ROOT/plugins/node_modules" ] || { skip "plugins/node_modules not installed"; return; }
     command -v npm >/dev/null 2>&1 || { echo "npm not found"; return 1; }
-    ( cd "$ROOT/plugins" && npm run typecheck && npm test )
+    # Two suites need the pinned DSH checkout (the mux/timer tests read the real
+    # runtime, and the shell corpus resolves its sources there). Resolve it the
+    # same way the image stage and the repo do, so a correct tree is not reported
+    # as broken just because the shell that ran the gate had not exported it.
+    checkout="${PDSH_DSH_CHECKOUT:-}"
+    if [ -z "$checkout" ] && [ -f "$HOME/.config/phone-dsh/dsh-checkout" ]; then checkout=$(head -n1 "$HOME/.config/phone-dsh/dsh-checkout"); fi
+    ( cd "$ROOT/plugins" && PDSH_DSH_CHECKOUT="$checkout" npm run typecheck && PDSH_DSH_CHECKOUT="$checkout" npm test )
 }
 
 stage_phone_bundle_fresh() {

@@ -140,6 +140,20 @@ class SessionPagesTest {
     }
 
     @Test
+    fun `the 已归档 header is the baseline's fold header, and the drawer has no invented title`() {
+        val state = drawer(sessions = listOf(SessionListing("s1", "项目讨论")))
+        compose.setContent { PdshTheme { Drawer(state = state) } }
+        compose.onNodeWithTag(UiPageTags.SESSIONS_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.SESSIONS_ARCHIVED_SECTION))
+        // `SessionsPage.swift:303`–`:317`: a Button in the Section header, so the
+        // title is the fold's own label and the count sits at its trailing edge.
+        compose.onNodeWithText(UiStrings.SESSIONS_ARCHIVED).assertIsDisplayed()
+        // The baseline's group at `:139` is untitled; only the page's name (会话列表)
+        // says otherwise, and the drawer must not draw it.
+        compose.onNodeWithText(UiStrings.SESSIONS).assertDoesNotExist()
+    }
+
+    @Test
     fun `pull to refresh reports the gesture`() {
         val state = drawer(sessions = listOf(SessionListing("s1", "项目讨论")))
         var refreshed = 0

@@ -21,9 +21,9 @@
     "sectionOrder": "declaration order inside the page struct"
   },
   "android": {
-    "screen": null,
-    "file": "android/lib/src/main/kotlin/com/phonedsh/ui/page/ToolsPage.kt",
-    "match": "kdoc-mention"
+    "screen": "PDSHShellPage",
+    "file": "android/lib/src/main/kotlin/com/phonedsh/ui/page/PDSHShellPage.kt",
+    "match": "composable"
   },
   "sections": [
     {

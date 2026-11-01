@@ -114,6 +114,11 @@ public object UiPageTags {
     public const val WEB_SEARCH_UNKNOWN: String = "pdsh.websearch.unknown"
     public const val WEB_SEARCH_FAILURE: String = "pdsh.websearch.failure"
 
+    // L15 lane: the contract refresh (86a39aac) gave the web-search page its own
+    // address and key fields, so the page needs a handle on each. Appended only.
+    public const val WEB_SEARCH_ADDRESS_FIELD: String = "pdsh.websearch.address"
+    public const val WEB_SEARCH_KEY_FIELD: String = "pdsh.websearch.key"
+
     public const val MCP_ROOT: String = "pdsh.mcp.root"
     public const val MCP_LIST: String = "pdsh.mcp.list"
     public const val MCP_ADD: String = "pdsh.mcp.add"
@@ -188,6 +193,9 @@ public object UiPageTags {
     public const val AUTOMATION_UNKNOWN: String = "pdsh.automation.unknown"
     public const val AUTOMATION_UNKNOWN_DETAIL: String = "pdsh.automation.unknown.detail"
     public const val AUTOMATION_FAILURE: String = "pdsh.automation.failure"
+    // Retired by L11: the iOS page has no in-content retry or dismiss (its 刷新
+    // control is the retry), so the aligned page renders neither. Kept rather than
+    // deleted because this block is appended-only across lanes.
     public const val AUTOMATION_RETRY: String = "pdsh.automation.retry"
     public const val AUTOMATION_DISMISS: String = "pdsh.automation.dismiss"
     public const val AUTOMATION_NEW: String = "pdsh.automation.new"
@@ -204,6 +212,24 @@ public object UiPageTags {
     public const val AUTOMATION_HISTORY_FAILURE: String = "pdsh.automation.history.failure"
     public const val AUTOMATION_HISTORY_MORE: String = "pdsh.automation.history.more"
     public const val AUTOMATION_HISTORY_ROW: String = "pdsh.automation.history.row"
+
+    // L11 lane: the three controls the iOS baseline draws that this page did not
+    // have before it was aligned to `NativeAutomationPage.swift`. Appended only.
+    /** The 44 pt bar's ✕ / back control. */
+    public const val AUTOMATION_BACK: String = "pdsh.automation.back"
+    /** The empty block's 50 pt full-width 新建任务 CTA (`NativeAutomationPage.swift:27-38`). */
+    public const val AUTOMATION_CTA: String = "pdsh.automation.cta"
+    /** The 需要处理 / 错误 section header (`NativeAutomationPage.swift:70,150,203`). */
+    public const val AUTOMATION_ATTENTION: String = "pdsh.automation.attention"
+
+    // L17 lane: the row's 删除 verb and its confirmation
+    // (`NativeAutomationPage.swift:64`, `:102`–`:109`). Appended only.
+    /** The detail page's 删除 row. */
+    public const val AUTOMATION_DELETE: String = "pdsh.automation.delete"
+    /** `删除此自动化任务？` and its two buttons. */
+    public const val AUTOMATION_DELETE_DIALOG: String = "pdsh.automation.delete.dialog"
+    public const val AUTOMATION_DELETE_CONFIRM: String = "pdsh.automation.delete.confirm"
+    public const val AUTOMATION_DELETE_CANCEL: String = "pdsh.automation.delete.cancel"
 
     public const val CONFIGURATION_ROOT: String = "pdsh.configuration.root"
     public const val CONFIGURATION_LIST: String = "pdsh.configuration.list"
@@ -627,4 +653,237 @@ public object UiPageTags {
 
     // Workspace folders (`NativeShell.swift:356`).
     public const val WORKSPACE_ADD_FOLDER: String = "pdsh.workspace.add-folder"
+
+    // -----------------------------------------------------------------------
+    // Appended by the L5 lane: the three device-connector pages. One tag per node
+    // the device evidence and the JVM tests address, named exactly like the rows
+    // of the iOS pages they mirror.
+    // -----------------------------------------------------------------------
+
+    // 设备连接 (`NativeDeviceConnectionPage.swift:25-172`).
+    public const val DEVICE_ROOT: String = "pdsh.device.root"
+    public const val DEVICE_SOURCE: String = "pdsh.device.source"
+    public const val DEVICE_FAILURE: String = "pdsh.device.failure"
+    public const val DEVICE_FORGET: String = "pdsh.device.forget"
+    public const val DEVICE_UNAVAILABLE: String = "pdsh.device.unavailable"
+    public const val DEVICE_LIST: String = "pdsh.device.list"
+    public const val DEVICE_EMPTY: String = "pdsh.device.empty"
+    public const val DEVICE_ROW: String = "pdsh.device.row"
+    public const val DEVICE_SECTION_TRANSPORT: String = "pdsh.device.transport"
+    public const val DEVICE_TRANSPORT_ROW: String = "pdsh.device.transport.row"
+    public const val DEVICE_TRANSPORT_FOOTER: String = "pdsh.device.transport.footer"
+    public const val DEVICE_DONE: String = "pdsh.device.done"
+
+    // 设备会话 (`NativeDeviceSessionPage.swift:362-441`).
+    public const val DEVICE_SESSION_ROOT: String = "pdsh.device.session.root"
+    public const val DEVICE_SESSION_STRIP: String = "pdsh.device.session.strip"
+    public const val DEVICE_SESSION_FAILURE: String = "pdsh.device.session.failure"
+    public const val DEVICE_SESSION_LIST: String = "pdsh.device.session.list"
+    public const val DEVICE_SESSION_EMPTY: String = "pdsh.device.session.empty"
+    public const val DEVICE_SESSION_READ_EARLIER: String = "pdsh.device.session.read-earlier"
+    public const val DEVICE_SESSION_ROW: String = "pdsh.device.session.row"
+    public const val DEVICE_SESSION_READ_ONLY: String = "pdsh.device.session.read-only"
+
+    // 本 session 产物 (`SessionArtifactsPage.swift:31-188`).
+    public const val ARTIFACTS_ROOT: String = "pdsh.artifacts.root"
+    public const val ARTIFACTS_LIST: String = "pdsh.artifacts.list"
+    public const val ARTIFACTS_EMPTY: String = "pdsh.artifacts.empty"
+    public const val ARTIFACTS_LOADING: String = "pdsh.artifacts.loading"
+    public const val ARTIFACTS_FAILURE: String = "pdsh.artifacts.failure"
+    public const val ARTIFACTS_SESSION_SECTION: String = "pdsh.artifacts.session"
+    public const val ARTIFACTS_UNASSIGNED_SECTION: String = "pdsh.artifacts.unassigned"
+    // The 无法打开产物 alert (`SessionArtifactsPage.swift:104`–`:111`).
+    public const val ARTIFACTS_OPEN_ALERT: String = "pdsh.artifacts.open.alert"
+    public const val ARTIFACTS_OPEN_ALERT_ACTION: String = "pdsh.artifacts.open.alert.action"
+    public const val ARTIFACTS_ROW: String = "pdsh.artifacts.row"
+    public const val ARTIFACTS_UNASSIGNED_FOOTER: String = "pdsh.artifacts.unassigned.footer"
+    // -----------------------------------------------------------------------
+    // L14 lane: the three B-group pages (appended, never reordered).
+    // -----------------------------------------------------------------------
+
+    // Agent 预设.
+    public const val AGENT_PRESETS_LIST: String = "pdsh.agent.presets.list"
+    public const val AGENT_PRESETS_CREATOR: String = "pdsh.agent.presets.creator"
+    public const val AGENT_PRESETS_LOADING: String = "pdsh.agent.presets.loading"
+    public const val AGENT_PRESETS_UNREAD: String = "pdsh.agent.presets.unread"
+    public const val AGENT_PRESETS_ERROR: String = "pdsh.agent.presets.error"
+    public const val AGENT_PRESETS_DOCUMENT: String = "pdsh.agent.presets.document"
+    public const val AGENT_PRESETS_ROW_PREFIX: String = "pdsh.agent.presets.row."
+
+    // 内置插件.
+    public const val PLUGIN_INVENTORY_LIST: String = "pdsh.plugin.inventory.list"
+    public const val PLUGIN_INVENTORY_READ_ONLY: String = "pdsh.plugin.inventory.read-only"
+    public const val PLUGIN_INVENTORY_SEARCH: String = "pdsh.plugin.inventory.search"
+    public const val PLUGIN_INVENTORY_LOADING: String = "pdsh.plugin.inventory.loading"
+    public const val PLUGIN_INVENTORY_EMPTY: String = "pdsh.plugin.inventory.empty"
+    public const val PLUGIN_INVENTORY_UNREAD: String = "pdsh.plugin.inventory.unread"
+    public const val PLUGIN_INVENTORY_FAILURE: String = "pdsh.plugin.inventory.failure"
+    public const val PLUGIN_INVENTORY_NOTICE: String = "pdsh.plugin.inventory.notice"
+    public const val PLUGIN_INVENTORY_ROW_PREFIX: String = "pdsh.plugin.inventory.row."
+    public const val PLUGIN_INVENTORY_ROW_HEADER: String = "pdsh.plugin.inventory.header."
+
+    // 手机权限.
+    public const val PHONE_PERMISSIONS_LIST: String = "pdsh.phone.permissions.list"
+    public const val PHONE_PERMISSIONS_AUDIT: String = "pdsh.phone.permissions.audit"
+    public const val PHONE_PERMISSIONS_AUDIT_EMPTY: String = "pdsh.phone.permissions.audit.empty"
+    public const val PHONE_PERMISSIONS_ROW_PREFIX: String = "pdsh.phone.permissions.row."
+    public const val PHONE_PERMISSIONS_TOGGLE_PREFIX: String = "pdsh.phone.permissions.toggle."
+    public const val PHONE_PERMISSIONS_CONFIRM_CONTINUE: String = "pdsh.phone.permissions.confirm"
+    public const val PHONE_PERMISSIONS_CONFIRM_CANCEL: String = "pdsh.phone.permissions.cancel"
+    public const val PHONE_PERMISSIONS_DISABLE_ACK: String = "pdsh.phone.permissions.disable.ack"
+    public const val PHONE_PERMISSIONS_DISABLE_SETTINGS: String = "pdsh.phone.permissions.disable.settings"
+
+    // -----------------------------------------------------------------------
+    // Appended by the L13 lane: the three pages this lane added. One tag per
+    // node the device evidence and the JVM tests address.
+    // -----------------------------------------------------------------------
+
+    // 聊天外观 (`ChatPreferencesPage.swift`).
+    public const val CHAT_PREFERENCES_ROOT: String = "pdsh.chat-preferences.root"
+    public const val CHAT_PREFERENCES_LIST: String = "pdsh.chat-preferences.list"
+    public const val CHAT_PREFERENCES_DONE: String = "pdsh.chat-preferences.done"
+    public const val CHAT_PREFERENCES_SECTION_PREFIX: String = "pdsh.chat-preferences.section."
+    public const val CHAT_PREFERENCES_ROW_PREFIX: String = "pdsh.chat-preferences.row."
+    public const val CHAT_PREFERENCES_OPTION_PREFIX: String = "pdsh.chat-preferences.option."
+    public const val CHAT_PREFERENCES_STEPPER_PREFIX: String = "pdsh.chat-preferences.stepper."
+
+    // 配置文件 (`NativeSettingsDocumentPage.swift`).
+    public const val SETTINGS_DOCUMENT_ROOT: String = "pdsh.settings-document.root"
+    public const val SETTINGS_DOCUMENT_NOTE: String = "pdsh.settings-document.note"
+    public const val SETTINGS_DOCUMENT_STATUS: String = "pdsh.settings-document.status"
+    public const val SETTINGS_DOCUMENT_BODY: String = "pdsh.settings-document.body"
+    public const val SETTINGS_DOCUMENT_READ_ONLY: String = "pdsh.settings-document.read-only"
+    public const val SETTINGS_DOCUMENT_SHARE: String = "pdsh.settings-document.share"
+    public const val SETTINGS_DOCUMENT_DONE: String = "pdsh.settings-document.done"
+
+    // 快捷键 (`NativeShortcutsPage.swift`).
+    public const val SHORTCUTS_ROOT: String = "pdsh.shortcuts.root"
+    public const val SHORTCUTS_LIST: String = "pdsh.shortcuts.list"
+    public const val SHORTCUTS_BACK: String = "pdsh.shortcuts.back"
+    public const val SHORTCUTS_COMMAND_PREFIX: String = "pdsh.shortcuts.command."
+    public const val SHORTCUTS_FIXED_PREFIX: String = "pdsh.shortcuts.fixed."
+    public const val SHORTCUTS_RESET: String = "pdsh.shortcuts.reset"
+    public const val SHORTCUTS_HINT: String = "pdsh.shortcuts.hint"
+
+    // L18 lane: the two MCP pages' contract groups and verbs
+    // (`spec/ui/v1/pages/mcp-settings.json`, `mcp-editor.json`). Appended only;
+    // the settings-family tags above belong to the Q3 lane.
+    public const val MCP_ACTIONS_SECTION: String = "pdsh.mcp.actions"
+    public const val MCP_ACTION_REFRESH: String = "pdsh.mcp.action.refresh"
+    public const val MCP_ACTION_ADD_SERVER: String = "pdsh.mcp.action.add-server"
+    public const val MCP_EDITOR_SERVER_SECTION: String = "pdsh.mcp.editor.server-section"
+    public const val MCP_EDITOR_AUTH_SECTION: String = "pdsh.mcp.editor.auth-section"
+    public const val MCP_EDITOR_TIMEOUT: String = "pdsh.mcp.editor.timeout"
+    public const val MCP_EDITOR_ADD_HEADER: String = "pdsh.mcp.editor.add-header"
+    public const val MCP_EDITOR_DELETE: String = "pdsh.mcp.editor.delete"
+    public const val MCP_EDITOR_HEADER_PREFIX: String = "pdsh.mcp.editor.header."
+    public const val MCP_EDITOR_HEADER_NAME_SUFFIX: String = ".name"
+    public const val MCP_EDITOR_HEADER_ENV_SUFFIX: String = ".env"
+    public const val MCP_EDITOR_HEADER_VALUE_SUFFIX: String = ".value"
+    public const val MCP_EDITOR_HEADER_REMOVE_SUFFIX: String = ".remove"
+
+    // L16 lane: `NativeConfigurationPage`'s contract controls. Appended only.
+    /** The 内置插件设置 master fold above the host's built-in setting groups. */
+    public const val CONFIGURATION_BUILT_IN: String = "pdsh.configuration.built-in"
+    /** The 插件说明 verb that opens the about area (the baseline's sheet). */
+    public const val CONFIGURATION_PLUGIN_INFO_ACTION: String = "pdsh.configuration.action.plugin-info"
+    /** The 添加插件 verb that opens its two-item menu. */
+    public const val CONFIGURATION_ADD_PLUGIN: String = "pdsh.configuration.action.add-plugin"
+    /** The measured sentence the two add-plugin items print (they cannot run here). */
+    public const val CONFIGURATION_ADD_NOTICE: String = "pdsh.configuration.add.notice"
+    /** The permission block that replaced the old 新会话默认权限 section. */
+    public const val CONFIGURATION_PERMISSION: String = "pdsh.configuration.permission"
+    public const val CONFIGURATION_PERMISSION_ROW: String = "pdsh.configuration.permission.row"
+    public const val CONFIGURATION_PERMISSION_SAVE: String = "pdsh.configuration.permission.save"
+    public const val CONFIGURATION_PERMISSION_DISCARD: String = "pdsh.configuration.permission.discard"
+    public const val CONFIGURATION_GROUP_SAVE_PREFIX: String = "pdsh.configuration.group.save."
+    public const val CONFIGURATION_GROUP_DISCARD_PREFIX: String = "pdsh.configuration.group.discard."
+    public const val CONFIGURATION_ROW_RESET_PREFIX: String = "pdsh.configuration.reset."
+
+    // L25 lane: the two embedded subpages (README §1 「内嵌子页随父页实现」).
+    // Appended only: the tags above belong to other lanes and are never rewritten.
+
+    // ScheduleEditorPage: the form's sections, its fields and its two verbs.
+    public const val AUTOMATION_EDITOR_ROOT: String = "pdsh.automation.editor.root"
+    public const val AUTOMATION_EDITOR_LIST: String = "pdsh.automation.editor.list"
+    public const val AUTOMATION_EDITOR_CONTENT_SECTION: String = "pdsh.automation.editor.content"
+    public const val AUTOMATION_EDITOR_TIMING_SECTION: String = "pdsh.automation.editor.timing"
+    public const val AUTOMATION_EDITOR_NAME: String = "pdsh.automation.editor.name"
+    public const val AUTOMATION_EDITOR_PROMPT: String = "pdsh.automation.editor.prompt"
+    public const val AUTOMATION_EDITOR_CHANGE_TIMING: String = "pdsh.automation.editor.change-timing"
+    public const val AUTOMATION_EDITOR_CURRENT_RULE: String = "pdsh.automation.editor.current-rule"
+    public const val AUTOMATION_EDITOR_RULE: String = "pdsh.automation.editor.rule"
+    public const val AUTOMATION_EDITOR_RULE_DIALOG: String = "pdsh.automation.editor.rule.dialog"
+    /** The rule chooser's option tag; the rule's `wire` word is appended. */
+    public const val AUTOMATION_EDITOR_RULE_OPTION_PREFIX: String = "pdsh.automation.editor.rule.option."
+    /** The rule-field tag; the field's own suffix is appended. */
+    public const val AUTOMATION_EDITOR_FIELD_PREFIX: String = "pdsh.automation.editor.field."
+    public const val AUTOMATION_EDITOR_ERROR: String = "pdsh.automation.editor.error"
+    public const val AUTOMATION_EDITOR_SAVE: String = "pdsh.automation.editor.save"
+    public const val AUTOMATION_EDITOR_CANCEL: String = "pdsh.automation.editor.cancel"
+    public const val AUTOMATION_EDITOR_HANDOFF: String = "pdsh.automation.editor.handoff"
+
+    // SessionArtifactPreviewPage: the preview body and its one verb.
+    public const val ARTIFACTS_PREVIEW_ROOT: String = "pdsh.artifacts.preview.root"
+    public const val ARTIFACTS_PREVIEW_NAME: String = "pdsh.artifacts.preview.name"
+    public const val ARTIFACTS_PREVIEW_FALLBACK: String = "pdsh.artifacts.preview.fallback"
+    public const val ARTIFACTS_PREVIEW_SHARE: String = "pdsh.artifacts.preview.share"
+
+    // L24 lane: the chat family's three embedded subpages (`ChatPage.swift:3504`,
+    // `:3554`, `:4243`). Appended only; the `pdsh.chat.*` tags above belong to the
+    // parent page, these three name the surfaces the page presents on top of it.
+    // The empty and unread hints merge their descendants into one spoken node, so
+    // each gets its own tag: a test asserts which of the two states rendered, not
+    // the words, exactly as `SESSIONS_WORKSPACE_UNKNOWN` does.
+    public const val CHAT_COMMAND_RESULT_ROOT: String = "pdsh.chat.command-result.root"
+    public const val CHAT_COMMAND_RESULT_STATUS: String = "pdsh.chat.command-result.status"
+    public const val CHAT_COMMAND_RESULT_LINE: String = "pdsh.chat.command-result.line"
+    public const val CHAT_COMMAND_RESULT_OUTPUT: String = "pdsh.chat.command-result.output"
+    public const val CHAT_COMMAND_RESULT_BODY: String = "pdsh.chat.command-result.body"
+    public const val CHAT_COMMAND_RESULT_UNREAD: String = "pdsh.chat.command-result.unread"
+
+    public const val CHAT_JOBS_SHEET_ROOT: String = "pdsh.chat.jobs.root"
+    public const val CHAT_JOBS_SHEET_LIST: String = "pdsh.chat.jobs.list"
+    public const val CHAT_JOBS_SHEET_EMPTY: String = "pdsh.chat.jobs.empty"
+    public const val CHAT_JOBS_SHEET_UNREAD: String = "pdsh.chat.jobs.unread"
+    public const val CHAT_JOBS_SHEET_ROW_PREFIX: String = "pdsh.chat.jobs.row."
+
+    public const val CHAT_SCHEDULES_SHEET_ROOT: String = "pdsh.chat.schedules.root"
+    public const val CHAT_SCHEDULES_SHEET_LIST: String = "pdsh.chat.schedules.list"
+    public const val CHAT_SCHEDULES_SHEET_EMPTY: String = "pdsh.chat.schedules.empty"
+    public const val CHAT_SCHEDULES_SHEET_UNREAD: String = "pdsh.chat.schedules.unread"
+    public const val CHAT_SCHEDULES_SHEET_ROW_PREFIX: String = "pdsh.chat.schedules.row."
+
+    // L29 lane: the one preview face (`PreviewSurface.swift` of the iOS PR #15).
+    // Appended only; the `pdsh.files.preview.*` tags above belong to the files
+    // page's in-page preview body, these name the surface a pushed route renders.
+    // A test asserts *which* honest state rendered, never the words, so the four
+    // states get four tags rather than one card tag with a text lookup.
+    public const val PREVIEW_ROOT: String = "pdsh.preview.root"
+    public const val PREVIEW_TITLE: String = "pdsh.preview.title"
+    public const val PREVIEW_LOADING: String = "pdsh.preview.loading"
+    public const val PREVIEW_FAILED: String = "pdsh.preview.failed"
+    public const val PREVIEW_RETRY: String = "pdsh.preview.retry"
+    public const val PREVIEW_UNSUPPORTED: String = "pdsh.preview.unsupported"
+    public const val PREVIEW_SHARE: String = "pdsh.preview.share"
+    public const val PREVIEW_SHARE_FILE: String = "pdsh.preview.share.file"
+    public const val PREVIEW_TEXT: String = "pdsh.preview.text"
+    public const val PREVIEW_MARKDOWN: String = "pdsh.preview.markdown"
+    public const val PREVIEW_IMAGE: String = "pdsh.preview.image"
+    public const val PREVIEW_PDF: String = "pdsh.preview.pdf"
+    public const val PREVIEW_LOAD_MORE: String = "pdsh.preview.load.more"
+    public const val PREVIEW_LOADING_MORE: String = "pdsh.preview.loading.more"
+    public const val PREVIEW_NOTICE: String = "pdsh.preview.notice"
+    public const val PREVIEW_PROGRESS: String = "pdsh.preview.progress"
+
+    // Appended by the L32 lane: the two media bodies and the transport they share.
+    // `pdsh.preview.video` marks the video body (and its `TextureView` surface),
+    // `pdsh.preview.audio` the card; the three transport tags are deliberately
+    // body-agnostic, because 播放 / 暂停 / the clock mean the same thing in both.
+    public const val PREVIEW_VIDEO: String = "pdsh.preview.video"
+    public const val PREVIEW_AUDIO: String = "pdsh.preview.audio"
+    public const val PREVIEW_MEDIA_NAME: String = "pdsh.preview.media.name"
+    public const val PREVIEW_MEDIA_DURATION: String = "pdsh.preview.media.duration"
+    public const val PREVIEW_MEDIA_TIME: String = "pdsh.preview.media.time"
+    public const val PREVIEW_PLAY: String = "pdsh.preview.play"
 }

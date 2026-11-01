@@ -1,0 +1,151 @@
+{
+  "schema": "pdsh.ui.page-structure/1",
+  "page": "NativeSettingsDocumentPage",
+  "pageId": "native-settings-document",
+  "structure": "swiftui-view",
+  "sectionModel": "unmodeled",
+  "sectionNote": null,
+  "title": {
+    "text": "配置文件",
+    "provenance": "NativeSettingsDocumentPage.swift:22",
+    "anchor": ".navigationTitle(NativeText(\"配置文件\", \"Configuration\"))"
+  },
+  "source": {
+    "file": "NativeSettingsDocumentPage.swift",
+    "path": "examples/probe-app/PhoneDSHProbe/NativeSettingsDocumentPage.swift",
+    "lines": 39,
+    "structLine": 5,
+    "renderedFrom": [
+      "body"
+    ],
+    "sectionOrder": "declaration order inside the page struct"
+  },
+  "android": {
+    "screen": "NativeSettingsDocumentPage",
+    "file": "android/lib/src/main/kotlin/com/phonedsh/ui/page/NativeSettingsDocumentPage.kt",
+    "match": "composable"
+  },
+  "sections": [
+    {
+      "id": "region-5",
+      "kind": "implicit",
+      "title": null,
+      "titleTemplate": null,
+      "titleSource": "absent",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "仅显示-dsh-已脱敏的设置描述与-revision-密钥和本机路径不会出现在这里",
+          "label": "仅显示 DSH 已脱敏的设置描述与 revision；密钥和本机路径不会出现在这里。",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeSettingsDocumentPage.swift:12",
+          "anchor": "Text(NativeText(\"仅显示 DSH 已脱敏的设置描述与 revision；密钥和本机路径不会出现在这里。\", \"Redacted DSH sett",
+          "extraction": "syntax"
+        },
+        {
+          "id": "input-16",
+          "label": null,
+          "labelExpr": null,
+          "kind": "input",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "NativeSettingsDocumentPage.swift:16",
+          "anchor": "TextEditor(text: .constant(document))",
+          "extraction": "manual"
+        }
+      ],
+      "provenance": "NativeSettingsDocumentPage.swift:5",
+      "anchor": "struct NativeSettingsDocumentPage: View {",
+      "extraction": "manual",
+      "criterion": {
+        "kind": "implicit"
+      },
+      "note": "no Section/PageSection/GroupBox/header Text found: the whole body is one region, so a human must say what the group is (or the page has none)"
+    }
+  ],
+  "actions": [
+    {
+      "id": "完成",
+      "label": "完成",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "toolbar",
+      "semantic": "{ dismiss()",
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativeSettingsDocumentPage.swift:31",
+      "anchor": "Button(NativeText(\"完成\", \"Done\")) { dismiss() }",
+      "extraction": "syntax"
+    },
+    {
+      "id": "share-26",
+      "label": null,
+      "labelExpr": null,
+      "kind": "share",
+      "trigger": "tap",
+      "semantic": null,
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativeSettingsDocumentPage.swift:26",
+      "anchor": "ShareLink(item: document) { Image(systemName: \"square.and.arrow.up\") }",
+      "extraction": "manual"
+    }
+  ],
+  "presentations": [],
+  "states": {
+    "advisory": true,
+    "note": "advisory only: marker-based; row placeholders (未配置/未设置/—) are not page states, so the checker never compares this object",
+    "sites": {
+      "empty": [],
+      "data": [
+        {
+          "renders": "untitled section at 5",
+          "when": null,
+          "provenance": "NativeSettingsDocumentPage.swift:5",
+          "anchor": "struct NativeSettingsDocumentPage: View {",
+          "note": "structural default: the sections above, when no condition overrides them"
+        }
+      ],
+      "failure": [],
+      "unknown": [],
+      "loading": []
+    },
+    "absent": [
+      "empty",
+      "failure",
+      "unknown",
+      "loading"
+    ],
+    "coverage": {
+      "empty": 0,
+      "data": 1,
+      "failure": 0,
+      "unknown": 0,
+      "loading": 0
+    }
+  },
+  "subpages": [],
+  "unreachable": [],
+  "extraction": {
+    "tool": "extract_ios_pages.py",
+    "mode": "syntax",
+    "sectionKeywordsInPage": 0,
+    "regionsExtracted": 0,
+    "sectionsExtracted": 1,
+    "warnings": []
+  }
+}

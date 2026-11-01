@@ -220,4 +220,18 @@ public sealed interface PdshHostAction {
     public data object RetryWebSurface : PdshHostAction {
         override val wire: String = "websurface.retry"
     }
+
+    /**
+     * Re-read this session's activity: its background jobs and its schedules.
+     *
+     * One action, not two, because the baseline reads both with one call: both
+     * chat sheets pass `management.refreshActivity(sessionID:)`
+     * (`ChatPage.swift:441` and `:449`), which fills `jobs` and `scheduleRecords`
+     * together. A host that owns that read fills `ChatSubpageFacts.jobs`/
+     * `.schedules` after performing it; a host that does not reports the handoff
+     * back as one honest line instead of moving the facts.
+     */
+    public data object RefreshSessionActivity : PdshHostAction {
+        override val wire: String = "activity.refresh"
+    }
 }

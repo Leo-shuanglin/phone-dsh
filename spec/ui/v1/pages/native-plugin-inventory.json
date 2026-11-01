@@ -1,0 +1,317 @@
+{
+  "schema": "pdsh.ui.page-structure/1",
+  "page": "NativePluginInventoryPage",
+  "pageId": "native-plugin-inventory",
+  "structure": "swiftui-view",
+  "sectionModel": "section",
+  "sectionNote": null,
+  "title": {
+    "text": "内置插件",
+    "provenance": "NativePluginInventoryPage.swift:60",
+    "anchor": ".navigationTitle(NativeText(\"内置插件\", \"Built-in Plugins\"))"
+  },
+  "source": {
+    "file": "NativePluginInventoryPage.swift",
+    "path": "examples/probe-app/PhoneDSHProbe/NativePluginInventoryPage.swift",
+    "lines": 66,
+    "structLine": 5,
+    "renderedFrom": [
+      "body"
+    ],
+    "sectionOrder": "declaration order inside the page struct"
+  },
+  "android": {
+    "screen": "NativePluginInventoryPage",
+    "file": "android/lib/src/main/kotlin/com/phonedsh/ui/page/NativePluginInventoryPage.kt",
+    "match": "composable"
+  },
+  "sections": [
+    {
+      "id": "section-18",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "插件配置",
+          "label": "插件配置",
+          "labelExpr": null,
+          "kind": "navigation",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": "NativeConfigurationPage",
+          "writes": false,
+          "condition": null,
+          "provenance": "NativePluginInventoryPage.swift:20",
+          "anchor": "Label(NativeText(\"插件配置\", \"Plugin configuration\"), systemImage: \"slider.horizonta",
+          "extraction": "syntax"
+        },
+        {
+          "id": "清单只读-修改官方插件-网页搜索和执行器配置请进入插件配置",
+          "label": "清单只读；修改官方插件、网页搜索和执行器配置请进入插件配置。",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativePluginInventoryPage.swift:22",
+          "anchor": "Text(NativeText(\"清单只读；修改官方插件、网页搜索和执行器配置请进入插件配置。\", \"The inventory is read-only. E",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "NativePluginInventoryPage.swift:18",
+      "anchor": "Section {",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-clickable-row",
+        "label": "插件配置",
+        "provenance": "NativePluginInventoryPage.swift:20"
+      }
+    },
+    {
+      "id": "插件列表",
+      "title": "插件列表",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "literal",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "正在读取插件",
+          "label": "正在读取插件…",
+          "labelExpr": null,
+          "kind": "loading",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "model.isLoading && model.pluginEntries.isEmpty",
+          "provenance": "NativePluginInventoryPage.swift:27",
+          "anchor": "ProgressView(NativeText(\"正在读取插件…\", \"Loading plugins…\"))",
+          "extraction": "syntax"
+        },
+        {
+          "id": "没有匹配的插件",
+          "label": "没有匹配的插件。",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "filtered.isEmpty",
+          "provenance": "NativePluginInventoryPage.swift:29",
+          "anchor": "Text(NativeText(\"没有匹配的插件。\", \"No matching plugins.\"))",
+          "extraction": "syntax"
+        },
+        {
+          "id": "active",
+          "label": "active",
+          "labelExpr": null,
+          "kind": "custom",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "!(filtered.isEmpty)",
+          "provenance": "NativePluginInventoryPage.swift:43",
+          "anchor": ".fill(plugin.enabled && plugin.phase == \"active\" ? Color.green : Color.secondary",
+          "extraction": "syntax",
+          "template": "DisclosureGroup",
+          "collection": "filtered"
+        }
+      ],
+      "provenance": "NativePluginInventoryPage.swift:25",
+      "anchor": "Section(NativeText(\"插件列表\", \"Inventory\")) {",
+      "extraction": "syntax"
+    },
+    {
+      "id": "section-53",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": "let error = model.inventoryError ?? model.error",
+      "collection": null,
+      "rows": [
+        {
+          "id": "text-53",
+          "label": null,
+          "labelExpr": "nativeConfigurationError(error)",
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativePluginInventoryPage.swift:53",
+          "anchor": "Section { Text(nativeConfigurationError(error)).foregroundStyle(.red) }",
+          "extraction": "manual"
+        }
+      ],
+      "provenance": "NativePluginInventoryPage.swift:53",
+      "anchor": "Section { Text(nativeConfigurationError(error)).foregroundStyle(.red) }",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-row-expression",
+        "labelExpr": "nativeConfigurationError(error)",
+        "provenance": "NativePluginInventoryPage.swift:53"
+      }
+    },
+    {
+      "id": "section-55",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "this-iphone-worker-has-no-pnpm-execa-or-subprocess-installation-environment-plugins-and-bundles-can-be-viewed-here-install-enable-and-disable-them-in-desktop-dsh",
+          "label": "This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH.",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativePluginInventoryPage.swift:56",
+          "anchor": "Text(nativePluginManagementMessage(\"This iPhone Worker has no pnpm, execa or sub",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "NativePluginInventoryPage.swift:55",
+      "anchor": "Section {",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-row",
+        "label": "This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH.",
+        "provenance": "NativePluginInventoryPage.swift:56"
+      }
+    }
+  ],
+  "actions": [
+    {
+      "id": "插件配置",
+      "label": "插件配置",
+      "labelExpr": null,
+      "kind": "navigation",
+      "trigger": "tap",
+      "semantic": "navigate:NativeConfigurationPage",
+      "writes": false,
+      "destination": "NativeConfigurationPage",
+      "condition": null,
+      "provenance": "NativePluginInventoryPage.swift:20",
+      "anchor": "Label(NativeText(\"插件配置\", \"Plugin configuration\"), systemImage: \"slider.horizonta",
+      "extraction": "syntax"
+    },
+    {
+      "id": "搜索插件",
+      "label": "搜索插件",
+      "labelExpr": null,
+      "kind": "search",
+      "trigger": "search",
+      "semantic": null,
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativePluginInventoryPage.swift:62",
+      "anchor": ".searchable(text: $query, prompt: NativeText(\"搜索插件\", \"Search plugins\"))",
+      "extraction": "syntax"
+    },
+    {
+      "id": "gesture-63",
+      "label": null,
+      "labelExpr": null,
+      "kind": "gesture",
+      "trigger": "pull-to-refresh",
+      "semantic": "refresh",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativePluginInventoryPage.swift:63",
+      "anchor": ".refreshable { await model.refresh() }",
+      "extraction": "syntax"
+    }
+  ],
+  "presentations": [],
+  "states": {
+    "advisory": true,
+    "note": "advisory only: marker-based; row placeholders (未配置/未设置/—) are not page states, so the checker never compares this object",
+    "sites": {
+      "empty": [
+        {
+          "renders": "没有匹配的插件。",
+          "when": "filtered.isEmpty",
+          "provenance": "NativePluginInventoryPage.swift:29",
+          "anchor": "Text(NativeText(\"没有匹配的插件。\", \"No matching plugins.\"))"
+        }
+      ],
+      "data": [
+        {
+          "renders": "untitled section at 18 | 插件列表 | untitled section at 53 | untitled section at 55",
+          "when": null,
+          "provenance": "NativePluginInventoryPage.swift:5",
+          "anchor": "struct NativePluginInventoryPage: View {",
+          "note": "structural default: the sections above, when no condition overrides them"
+        }
+      ],
+      "failure": [],
+      "unknown": [],
+      "loading": [
+        {
+          "renders": "正在读取插件…",
+          "when": "model.isLoading && model.pluginEntries.isEmpty",
+          "provenance": "NativePluginInventoryPage.swift:27",
+          "anchor": "ProgressView(NativeText(\"正在读取插件…\", \"Loading plugins…\"))"
+        },
+        {
+          "renders": "ProgressView",
+          "when": "model.isLoading && model.pluginEntries.isEmpty",
+          "provenance": "NativePluginInventoryPage.swift:27",
+          "anchor": "ProgressView(NativeText(\"正在读取插件…\", \"Loading plugins…\"))"
+        }
+      ]
+    },
+    "absent": [
+      "failure",
+      "unknown"
+    ],
+    "coverage": {
+      "empty": 1,
+      "data": 1,
+      "failure": 0,
+      "unknown": 0,
+      "loading": 2
+    }
+  },
+  "subpages": [],
+  "unreachable": [],
+  "extraction": {
+    "tool": "extract_ios_pages.py",
+    "mode": "syntax",
+    "sectionKeywordsInPage": 4,
+    "regionsExtracted": 0,
+    "sectionsExtracted": 4,
+    "warnings": []
+  }
+}

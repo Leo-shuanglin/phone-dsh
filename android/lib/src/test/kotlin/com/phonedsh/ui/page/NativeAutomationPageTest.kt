@@ -1,5 +1,11 @@
-// NativeAutomationPage: four states, the lazy-list unknown rule and the route sequence.
+// NativeAutomationPage: three content states, the failure section beside them and the route sequence.
 // SPDX-License-Identifier: MIT
+//
+// The page is aligned to `NativeAutomationPage.swift`, so the tests assert the
+// iOS structure rather than the pre-alignment one: a failed read ADDS the 需要处理
+// section and must not subtract the empty block, the CTA or a reported row (the
+// iOS model keeps `scheduleRecords` and sets `error` in the same read). The
+// `AUTOMATION_*` tags of this test are the same ones the pixel capture uses.
 //
 // The unknown-value tests locate their region with `performScrollToNode` before
 // asserting that an empty/zero value is absent: the catalog and history are lazy
@@ -14,7 +20,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -36,6 +45,9 @@ import org.robolectric.annotation.Config
 class NativeAutomationPageTest {
     @get:Rule
     val compose = createComposeRule()
+
+    /** The host sentence the iOS baseline prints verbatim (a real baseline defect). */
+    private val hostFailure = "The operation couldn't be completed. (ProbeKit.ProbeHostError error 3.)"
 
     private fun fullFacts(): AutomationFacts = AutomationFacts(
         snapshot = AutomationSnapshot(
@@ -83,8 +95,7 @@ class NativeAutomationPageTest {
         onOpenDetail: (String) -> Unit = {},
         onOpenHistory: (String) -> Unit = {},
         onNewSchedule: (() -> Unit)? = null,
-        onRetry: (() -> Unit)? = null,
-        onDismissFailure: (() -> Unit)? = null,
+        onRefresh: (() -> Unit)? = null,
     ) {
         compose.setContent {
             PdshTheme {
@@ -95,8 +106,7 @@ class NativeAutomationPageTest {
                     onOpenHistory = onOpenHistory,
                     onBackToCatalog = {},
                     onNewSchedule = onNewSchedule,
-                    onRetry = onRetry,
-                    onDismissFailure = onDismissFailure,
+                    onRefresh = onRefresh,
                 )
             }
         }
@@ -134,6 +144,7 @@ class NativeAutomationPageTest {
         )
         assertEquals(AutomationStatus.EMPTY, state.status)
         assertTrue(state.isEmpty)
+        assertFalse(state.hasFailure)
         assertEquals(0, state.scheduleCount)
         assertEquals(AutomationRoute.CATALOG, state.route)
         var created = 0
@@ -143,11 +154,69 @@ class NativeAutomationPageTest {
         compose.onNodeWithText(UiStrings.AUTOMATION_EMPTY).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.AUTOMATION_EMPTY_HINT).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.AUTOMATION_UNKNOWN).assertDoesNotExist()
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_LIST).assertDoesNotExist()
         compose.onNodeWithText(UiStrings.AUTOMATION_TASK_COUNT.format(0)).assertDoesNotExist()
+        // The failure section is absent when the host reported no error.
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_ATTENTION).assertDoesNotExist()
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_FAILURE).assertDoesNotExist()
 
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_NEW).performClick()
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_CTA).performClick()
         assertEquals(1, created)
+    }
+
+    /**
+     * The state the iOS baseline captures: an empty catalog AND a failed read.
+     *
+     * iOS prints both (`NativeAutomationPage.swift:18-44` then `:69-71`), so the
+     * page must show the empty block, the CTA and the red 需要处理 section at once.
+     * The pre-alignment Android page showed only the failure, which is why
+     * `page-sessions-schedules` did not match.
+     */
+    @Test
+    fun `a failed read adds the section and keeps the empty block and the CTA`() {
+        val state = AutomationScreenState.from(
+            AutomationFacts(
+                snapshot = AutomationSnapshot(schedules = emptyList()),
+                failure = hostFailure,
+            ),
+        )
+        assertEquals(AutomationStatus.EMPTY, state.status)
+        assertTrue(state.hasFailure)
+        assertEquals(hostFailure, state.failure)
+        var created = 0
+        show(state, onNewSchedule = { created += 1 })
+
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_EMPTY).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.AUTOMATION_EMPTY).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_CTA).assertIsDisplayed()
+        // `需要处理` is the section's header, the host's own sentence is its row.
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_ATTENTION).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.AUTOMATION_ATTENTION).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_FAILURE).assertIsDisplayed()
+        compose.onNodeWithText(hostFailure).assertIsDisplayed()
+
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_CTA).performClick()
+        assertEquals(1, created)
+    }
+
+    /**
+     * A failure beside a reported catalog keeps the catalog: a failed read
+     * disproves nothing about rows the host already sent (iOS keeps them).
+     */
+    @Test
+    fun `a failed read never drops a schedule the host still reports`() {
+        val state = AutomationScreenState.from(fullFacts().copy(failure = "读取超时"))
+        assertEquals(AutomationStatus.READY, state.status)
+        assertTrue(state.hasFailure)
+        assertEquals(2, state.scheduleCount)
+        assertEquals(listOf("daily", "weekly"), state.schedules.map { it.id })
+        show(state)
+
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_ROW_PREFIX + "daily").assertIsDisplayed()
+        compose.onNodeWithText("每日构建").assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_FAILURE))
+        compose.onNodeWithText("读取超时").assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.AUTOMATION_ATTENTION).assertIsDisplayed()
     }
 
     @Test
@@ -173,36 +242,34 @@ class NativeAutomationPageTest {
             .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_ROW_PREFIX + "weekly"))
         compose.onNodeWithText("每周周报").assertIsDisplayed()
         compose.onNodeWithText(UiStrings.AUTOMATION_STOPPED).assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_LIST)
-            .performScrollToNode(hasText(UiStrings.AUTOMATION_READ_ONLY))
-        compose.onNodeWithText(UiStrings.AUTOMATION_READ_ONLY).assertIsDisplayed()
+        // The row's one line is 会话 · 规则 · 下次计划, the three facts iOS prints.
+        compose.onNodeWithText(
+            UiStrings.AUTOMATION_META_FORMAT.format(
+                "发布会话",
+                UiStrings.AUTOMATION_META_FORMAT.format("cron 0 9 * * 1-5", "2026-11-02 09:00"),
+            ),
+        ).assertIsDisplayed()
     }
 
+    /** The bar of the iOS page: ✕, 刷新 leading and 新建 trailing, plus the large title. */
     @Test
-    fun `a failed read wins over stale schedules and offers retry and dismiss`() {
-        val state = AutomationScreenState.from(fullFacts().copy(failure = "读取超时"))
-        assertEquals(AutomationStatus.FAILED, state.status)
-        assertTrue(state.isFailed)
-        assertTrue(state.schedules.isEmpty())
-        assertNull(state.scheduleCount)
-        var retried = 0
-        var dismissed = 0
-        show(
-            state,
-            onRetry = { retried += 1 },
-            onDismissFailure = { dismissed += 1 },
+    fun `the catalog draws the iOS bar and the large title`() {
+        val state = AutomationScreenState.from(
+            AutomationFacts(snapshot = AutomationSnapshot(schedules = emptyList())),
         )
+        var refreshed = 0
+        var created = 0
+        show(state, onNewSchedule = { created += 1 }, onRefresh = { refreshed += 1 })
 
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_FAILURE).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.AUTOMATION_LOAD_FAILED).assertIsDisplayed()
-        compose.onNodeWithText("读取超时").assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_LIST).assertDoesNotExist()
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EMPTY).assertDoesNotExist()
-        compose.onNodeWithText("每日构建").assertDoesNotExist()
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_RETRY).performClick()
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_DISMISS).performClick()
-        assertEquals(1, retried)
-        assertEquals(1, dismissed)
+        compose.onNodeWithText(UiStrings.AUTOMATION_TITLE).assertIsDisplayed()
+        // 新建 (the bar item) and 新建任务 (the CTA) are two different labels.
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_NEW).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.AUTOMATION_NEW_SHORT).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_REFRESH).performClick()
+        assertEquals(1, refreshed)
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_NEW).performClick()
+        assertEquals(1, created)
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_BACK).assertIsDisplayed()
     }
 
     @Test
@@ -223,6 +290,23 @@ class NativeAutomationPageTest {
         compose.onNodeWithText(UiStrings.AUTOMATION_EMPTY).assertDoesNotExist()
         compose.onNodeWithText(UiStrings.AUTOMATION_TASK_COUNT.format(0)).assertDoesNotExist()
         compose.onNodeWithText(UiStrings.AUTOMATION_ACTIVE).assertDoesNotExist()
+        // 未知 is not 失败: an unreported list has nothing to handle yet.
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_ATTENTION).assertDoesNotExist()
+    }
+
+    /** An unread list that ALSO failed says both: 未知 content, 需要处理 section. */
+    @Test
+    fun `an unreported list with a failure says unknown and shows the section`() {
+        val state = AutomationScreenState.from(AutomationFacts(failure = "连接被拒绝"))
+        assertEquals(AutomationStatus.UNKNOWN, state.status)
+        assertTrue(state.hasFailure)
+        show(state)
+
+        compose.onNodeWithText(UiStrings.AUTOMATION_UNKNOWN_STATE).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_FAILURE))
+        compose.onNodeWithText("连接被拒绝").assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.AUTOMATION_ATTENTION).assertIsDisplayed()
     }
 
     @Test
@@ -260,7 +344,8 @@ class NativeAutomationPageTest {
         showLive(fullFacts(), onEdit = { edited = it })
 
         compose.onNodeWithTag(UiPageTags.AUTOMATION_ROW_PREFIX + "daily").performClick()
-        compose.onNodeWithText(UiStrings.AUTOMATION_DETAIL_TITLE).assertIsDisplayed()
+        // The child page's bar keeps the iOS inline title (定时任务), not a new one.
+        compose.onNodeWithText(UiStrings.AUTOMATION_TITLE).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.AUTOMATION_DETAIL).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.AUTOMATION_NEXT_RUN).assertIsDisplayed()
         compose.onNodeWithText("2026-11-02 09:00").assertIsDisplayed()
@@ -274,8 +359,56 @@ class NativeAutomationPageTest {
             .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_HISTORY_OPEN))
         compose.onNodeWithTag(UiPageTags.AUTOMATION_HISTORY_OPEN).performClick()
         compose.onNodeWithTag(UiPageTags.AUTOMATION_HISTORY_LIST).assertIsDisplayed()
+        // The history page's bar title is 投递记录, as on iOS (:205). The list also
+        // carries the host's retention notice under the same word, so the bar's
+        // copy is the first of the two.
+        compose.onAllNodesWithText(UiStrings.AUTOMATION_HISTORY_TITLE).onFirst().assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.AUTOMATION_HISTORY_ROW).assertIsDisplayed()
         compose.onNodeWithText("跑一遍构建").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the detail offers 编辑 and 删除 and the delete asks first`() {
+        var edited = 0
+        var confirmed = 0
+        var cancelled = 0
+        compose.setContent {
+            var local by remember { mutableStateOf(AutomationLocalState()) }
+            PdshTheme {
+                NativeAutomationPage(
+                    state = AutomationScreenState.from(fullFacts(), local),
+                    onBack = {},
+                    onOpenDetail = { id -> local = local.apply(AutomationUiEvent.OpenDetail(id)) },
+                    onOpenHistory = { id -> local = local.apply(AutomationUiEvent.OpenHistory(id)) },
+                    onBackToCatalog = { local = local.apply(AutomationUiEvent.Back) },
+                    onEditSchedule = { edited += 1 },
+                    onRequestDelete = { id -> local = local.apply(AutomationUiEvent.RequestDelete(id)) },
+                    onConfirmDelete = { confirmed += 1 },
+                    onCancelDelete = {
+                        cancelled += 1
+                        local = local.apply(AutomationUiEvent.CancelDelete)
+                    },
+                )
+            }
+        }
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_ROW_PREFIX + "daily"))
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_ROW_PREFIX + "daily").performClick()
+        compose.onNodeWithText(UiStrings.AUTOMATION_EDIT_SHORT).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.AUTOMATION_DELETE).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.AUTOMATION_EDIT_SHORT).performClick()
+        assertEquals(1, edited)
+
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_DELETE).performClick()
+        // `NativeAutomationPage.swift:102`–`:109`: the destructive verb and a cancel.
+        compose.onNode(isDialog()).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.AUTOMATION_CONFIRM_DELETE).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.AUTOMATION_CONFIRM_DELETE_MESSAGE).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_DELETE_CONFIRM).performClick()
+        assertEquals(1, confirmed)
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_DELETE_CANCEL).performClick()
+        assertEquals(1, cancelled)
+        compose.onNodeWithText(UiStrings.AUTOMATION_DELETE_TASK).assertDoesNotExist()
     }
 
     @Test
@@ -321,5 +454,11 @@ class NativeAutomationPageTest {
         assertTrue(states[5].detailMissing)
         // Replaying the same script yields exactly the same sequence (purity).
         assertEquals(states.map { it.signature() }, run().map { it.signature() })
+        // The failure flag is part of the signature, so a sequence that only
+        // changes the error still differs.
+        assertTrue(
+            states.map { it.signature() } !=
+                run().map { it.signature() }.map { it.replace(":clear:", ":failure:") },
+        )
     }
 }

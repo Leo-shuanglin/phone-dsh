@@ -53,11 +53,16 @@ public struct PDSHPageResolver: Sendable {
     public let libraryRoot: URL
     /// Session id → the session's materialized workspace directory.
     public let workspaceRoot: @Sendable (String) -> URL?
+    /// A per-preview user grant for external images/fonts/media/connect.
+    /// Scripts from `https:` remain forbidden in every tier.
+    public let networkAllowed: @Sendable (URL) -> Bool
 
     public init(libraryRoot: URL,
-                workspaceRoot: @escaping @Sendable (String) -> URL?) {
+                workspaceRoot: @escaping @Sendable (String) -> URL?,
+                networkAllowed: @escaping @Sendable (URL) -> Bool = { _ in false }) {
         self.libraryRoot = libraryRoot.standardizedFileURL.resolvingSymlinksInPath()
         self.workspaceRoot = workspaceRoot
+        self.networkAllowed = networkAllowed
     }
 
     /// Resolves `pdsh-page://<host>/<path>` to a validated file.
@@ -224,18 +229,47 @@ public enum PDSHPageScheme {
         }
     }
 
-    /// The tier a page declares in its first bytes; `sandbox` is the default.
+    /// The tier a page declares in its first 64 KiB; `sandbox` is the default.
+    ///
+    /// This is a real `<meta>` attribute parse, not a substring scan: the
+    /// attributes may be in any order and may use single/double quotes or no
+    /// quotes. An invalid tier, an absent meta, or a meta outside the prefix
+    /// all fall back to the safe tier. The host still takes `min(declared,
+    /// network grant)`; a page can never upgrade the host policy by itself.
     public static func declaredTier(inHTML prefix: Data) -> PDSHCSPSandboxTier {
-        let text = String(decoding: prefix, as: UTF8.self).lowercased()
-        for tier in [PDSHCSPSandboxTier.online, .local, .sandbox] {
-            if text.contains("name=\"pdsh-csp\"" ) || text.contains("name='pdsh-csp'") {
-                if text.contains("content=\"\(tier.rawValue)\"")
-                    || text.contains("content='\(tier.rawValue)'") {
-                    return tier
-                }
+        let text = String(decoding: prefix, as: UTF8.self)
+        guard let meta = try? NSRegularExpression(pattern: "<meta\\b[^>]*>",
+                                                  options: [.caseInsensitive]) else {
+            return .sandbox
+        }
+        let ns = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        for match in meta.matches(in: text, options: [], range: full) {
+            let tag = ns.substring(with: match.range)
+            let attributes = metaAttributes(in: tag)
+            guard attributes["name"]?.lowercased() == "pdsh-csp",
+                  let raw = attributes["content"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  let tier = PDSHCSPSandboxTier(rawValue: raw) else { continue }
+            return tier
+        }
+        return .local
+    }
+
+    private static func metaAttributes(in tag: String) -> [String: String] {
+        guard let regex = try? NSRegularExpression(
+            pattern: "([A-Za-z_:][-A-Za-z0-9_:.]*)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s\"'>]+))",
+            options: []) else { return [:] }
+        let ns = tag as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        var result: [String: String] = [:]
+        for match in regex.matches(in: tag, options: [], range: full) {
+            let key = ns.substring(with: match.range(at: 1)).lowercased()
+            for group in 2...4 where match.range(at: group).location != NSNotFound {
+                result[key] = ns.substring(with: match.range(at: group))
+                break
             }
         }
-        return .sandbox
+        return result
     }
 
     /// The host-enforced policy of a tier (spec-render-media-v1 §B.4).
@@ -258,7 +292,27 @@ public enum PDSHPageScheme {
             "media-src \(origin)\(network)",
             "connect-src \(connect)",
             "frame-src 'none'",
+            "frame-ancestors 'none'",
             "worker-src blob: \(origin)",
+            "object-src 'none'",
+            "base-uri 'none'",
+            "form-action 'none'",
+        ].joined(separator: "; ")
+    }
+
+    /// SVG is a document, not a passive image: it can contain scripts and
+    /// external references. It gets a static-only policy even when the URL is
+    /// loaded as a top-level page.
+    public static func svgContentSecurityPolicy() -> String {
+        [
+            "default-src 'none'",
+            "script-src 'none'",
+            "style-src 'unsafe-inline'",
+            "img-src data:",
+            "font-src data:",
+            "connect-src 'none'",
+            "frame-src 'none'",
+            "frame-ancestors 'none'",
             "object-src 'none'",
             "base-uri 'none'",
             "form-action 'none'",
@@ -451,8 +505,21 @@ public final class PDSHPageSchemeHandler: NSObject, WKURLSchemeHandler {
                 headers["Content-Range"] = "bytes \(range.start)-\(range.end)/\(total)"
             }
             headers["Content-Length"] = String(bodyLength)
-            if file.isHTML {
-                let tier = PDSHPageScheme.declaredTier(inHTML: firstChunk.prefix(4096))
+            let isSVG = file.url.pathExtension.lowercased() == "svg"
+            if isSVG {
+                headers["Content-Security-Policy"] = PDSHPageScheme.svgContentSecurityPolicy()
+            } else if file.isHTML {
+                var tier = PDSHPageScheme.declaredTier(inHTML: firstChunk.prefix(64 * 1024))
+                // Meta is a request, never a grant. A page can restrict its
+                // tier; only the host's per-preview grant can widen it. The
+                // sandbox tier stays sandbox even when network is granted.
+                if tier != .sandbox {
+                    if tier == .online, !resolver.networkAllowed(url) {
+                        tier = .local
+                    } else if resolver.networkAllowed(url) {
+                        tier = .online
+                    }
+                }
                 headers["Content-Security-Policy"] =
                     PDSHPageScheme.contentSecurityPolicy(for: tier)
             }

@@ -23,6 +23,7 @@
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
@@ -31,6 +32,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
+import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
+import com.phonedsh.ui.surface.SettingsCardGap
+import com.phonedsh.ui.surface.SettingsFormRow
+import com.phonedsh.ui.surface.SettingsGroupCard
+import com.phonedsh.ui.surface.SettingsListTopInset
+import com.phonedsh.ui.surface.SettingsSectionHeader
+import com.phonedsh.ui.surface.SettingsSectionLabelIndent
+import com.phonedsh.ui.surface.SettingsSubPageFrame
 
 // ---------------------------------------------------------------------------
 // Facts
@@ -115,7 +124,7 @@ public data class AboutScreenState(public val sections: List<AboutSectionView>) 
             val versionRows = listOf(
                 AboutRowView(
                     id = "version.version",
-                    title = UiStrings.ABOUT_VERSION,
+        title = UiStrings.ABOUT_VERSION,
                     value = facts.version ?: UiStrings.UNKNOWN,
                     tone = if (facts.version == null) PageTone.UNKNOWN else PageTone.NORMAL,
                 ),
@@ -227,48 +236,60 @@ public fun AboutPage(
     onOpenLicenses: (() -> Unit)? = null,
     onOpenDeveloper: (() -> Unit)? = null,
 ) {
-    PageFrame(
+    SettingsSubPageFrame(
         title = UiStrings.ABOUT,
+        backGlyph = SETTINGS_CLOSE_GLYPH,
         onBack = onBack,
         modifier = modifier,
+        grouped = true,
     ) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .testTag(UiTags.ABOUT_LIST),
-            verticalArrangement = Arrangement.spacedBy(pageListGap),
+            contentPadding = PaddingValues(top = SettingsListTopInset),
+            verticalArrangement = Arrangement.spacedBy(SettingsCardGap),
         ) {
+            // One card per section. The baseline's 关于 page is a single inset-grouped
+            // card holding 版本 + one footnote; this page carries the three
+            // Android-only fact groups as well, so it is one card each — the chrome
+            // (26 pt card, 1 pt inset separator, 17 pt label, 13 pt footnote) is the
+            // baseline's, the row count is this platform's.
             state.sections.forEach { section ->
-                item(key = "header-${section.id}") {
-                    SectionHeader(
-                        title = section.title,
-                        expanded = section.expanded,
-                        onToggle = { onToggleSection(section.id) },
-                        trailing = UiStrings.ROW_COUNT.format(section.rows.size),
-                        tag = UiTags.ABOUT_SECTION,
-                    )
-                }
-                if (section.expanded) {
-                    items(count = section.rows.size, key = { index -> section.rows[index].id }) { index ->
-                        val row = section.rows[index]
-                        val action = when (row.id) {
-                            AboutScreenState.LICENSES_ROW_ID -> onOpenLicenses
-                            AboutScreenState.DEVELOPER_ROW_ID -> onOpenDeveloper
-                            else -> null
-                        }
-                        InfoRow(
-                            title = row.title,
-                            value = when {
-                                row.nav && action == null -> UiStrings.UNAVAILABLE
-                                else -> row.value
-                            },
-                            tone = when {
-                                row.nav && action == null -> PageTone.UNKNOWN
-                                else -> row.tone
-                            },
-                            enabled = action != null || !row.nav,
-                            onClick = action,
+                item(key = "card-${section.id}") {
+                    SettingsGroupCard {
+                        SettingsSectionHeader(
+                            title = section.title,
+                            expanded = section.expanded,
+                            onToggle = { onToggleSection(section.id) },
+                            trailing = UiStrings.ROW_COUNT.format(section.rows.size),
+                            tag = UiTags.ABOUT_SECTION,
                         )
+                        if (section.expanded) {
+                            section.rows.forEachIndexed { index, row ->
+                                val action = when (row.id) {
+                                    AboutScreenState.LICENSES_ROW_ID -> onOpenLicenses
+                                    AboutScreenState.DEVELOPER_ROW_ID -> onOpenDeveloper
+                                    else -> null
+                                }
+                                SettingsFormRow(
+                                    title = row.title,
+                                    value = when {
+                                        row.nav && action == null -> UiStrings.UNAVAILABLE
+                                        else -> row.value
+                                    },
+                                    tone = when {
+                                        row.nav && action == null -> PageTone.UNKNOWN
+                                        else -> row.tone
+                                    },
+                                    enabled = action != null || !row.nav,
+                                    chevron = row.nav,
+                                    dividerBelow = index != section.rows.lastIndex,
+                                    dividerLeadingInset = SettingsSectionLabelIndent,
+                                    onClick = action,
+                                )
+                            }
+                        }
                     }
                 }
             }

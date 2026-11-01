@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.sp
 import com.phonedsh.ui.theme.generated.TokenType
 import com.phonedsh.ui.theme.generated.UiTokenData
 
-/** The twelve typography tokens as ready-to-use text styles. */
+/** The fourteen typography tokens as ready-to-use text styles. */
 @Immutable
 public data class UiType(
     public val body: TextStyle,
@@ -40,6 +40,22 @@ public data class UiType(
     public val headline: TextStyle,
     /** System type role: Material `titleSmall` is the declared Android mapping (±2pt tolerance). */
     public val subheadline: TextStyle,
+    /**
+     * System type role: iOS `.largeTitle` — 34 pt / 700. Declared by the spec as
+     * `typography.largeTitle`; a page dimension title (settings index) reads it.
+     *
+     * Deliberately the last fields: appending keeps every earlier field's position
+     * and meaning, so a positional construction or a destructuring that predates the
+     * two system roles cannot silently shift ([fromSpec] uses named arguments).
+     */
+    public val largeTitle: TextStyle,
+    /**
+     * System type role: iOS `.body` row label — 17 pt / 400. Declared by the spec as
+     * `typography.rowLabel`; settings / session / file list rows read it.
+     *
+     * @see largeTitle for why the new fields are appended, not inserted.
+     */
+    public val rowLabel: TextStyle,
 ) {
     public companion object {
         /** Builds the styles from `typography.styles`; `sp` carries the system font scale. */
@@ -56,6 +72,8 @@ public data class UiType(
             jsonBody = UiTokenData.typeJsonBody.style(),
             headline = UiTokenData.typeHeadline.style(),
             subheadline = UiTokenData.typeSubheadline.style(),
+            largeTitle = UiTokenData.typeLargeTitle.style(),
+            rowLabel = UiTokenData.typeRowLabel.style(),
         )
     }
 }

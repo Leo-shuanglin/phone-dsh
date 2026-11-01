@@ -16,11 +16,14 @@
 // Measured here: engine fact, engine uptime, WebView provider/version, help from
 // the engine's one view, HELLO presence (the page that sent HELLO is loaded), the
 // foreground-service fact (this app declares none), the battery-exemption fact,
-// the launch's exact egress grant and the sessions the journal lane stored.
+// the launch's exact egress grant, whether the app's one workspace directory
+// exists, and the sessions the journal lane stored.
 //
-// Not measured (so `null`): workspace folders, archived sessions, pinned order,
-// the session queue, schedules, session configuration, model profiles,
-// web-search settings, MCP servers, memory budget and power.
+// Not measured (so `null`): archived sessions, pinned order, the session queue,
+// schedules, session configuration, model profiles, web-search settings, MCP
+// servers, memory budget and power. The workspace *catalog* is not measured
+// either: this host has no `workspace/list` read, so the one folder row below is
+// the single workspace root this app itself owns, not a catalog entry.
 package com.phonedsh.probe
 
 import android.view.View
@@ -59,7 +62,9 @@ import com.phonedsh.ui.page.WebViewRuntime
 import com.phonedsh.ui.page.WorkbenchCommand
 import com.phonedsh.ui.page.WorkbenchFile
 import com.phonedsh.ui.page.WorkbenchSnapshot
+import com.phonedsh.ui.page.WorkspaceFolder
 import com.phonedsh.ui.page.WorkspaceFoldersSnapshot
+import com.phonedsh.ui.surface.preview.PreviewWorkspace
 import java.time.ZoneId
 
 /**
@@ -73,6 +78,9 @@ import java.time.ZoneId
  * @param webViewVersion the provider's version name, or `null`.
  * @param egressGrant the exact origin the launch allow-listed, or `null`.
  * @param batteryExemption whether the app is exempt from battery optimisation.
+ * @param workspacePresent whether `<filesDir>/xl/materialized/workspace` is a
+ *   directory: the measured existence of the tree the files page lists. `false`
+ *   means the host measured no workspace on disk, not an empty one.
  */
 internal data class HostReadings(
     val webView: View?,
@@ -82,6 +90,7 @@ internal data class HostReadings(
     val webViewKernel: WebViewKernelReport?,
     val egressGrant: GatewayHostRule?,
     val batteryExemption: FactState,
+    val workspacePresent: Boolean,
 )
 
 /**
@@ -164,8 +173,7 @@ internal fun buildNavFacts(
     }
 
     return PdshNavFacts(
-        // No host read exists for a DSH workspace folder; 未知, never "none".
-        workspaceFolders = WorkspaceFoldersSnapshot(writable = FactState.NO),
+        workspaceFolders = workspaceFoldersFact(readings.workspacePresent),
         workbench = workbench,
         // The model key is the one setting this host *can* read: it is stored in the
         // Android Keystore under this App's own account, so the page can show the
@@ -252,6 +260,54 @@ internal fun buildNavFacts(
         ),
     )
 }
+
+// ---------------------------------------------------------------------------
+// The one workspace folder
+// ---------------------------------------------------------------------------
+
+/**
+ * The folder row the 工作文件夹 page shows, from the one workspace fact this host
+ * actually measured.
+ *
+ * This host has no DSH workspace *catalog* (`workspace/list` is not read), so it
+ * cannot report a list of workspaces. What it does own is exactly one workspace on
+ * disk — `<filesDir>/xl`, the root every durable store is built over
+ * (`ProbeEngineViewModel.WORKSPACE_DIRECTORY`) — and the files page lists that
+ * workspace's materialized tree (`<workspace>/materialized/workspace`,
+ * `WalPaths.materializedWorkspace`). [present] is that tree's existence, measured
+ * by the composition root.
+ *
+ * The row is reported only when the directory exists: one real folder that opens a
+ * real listing. When it does not (an install whose engine never recovered), the
+ * snapshot keeps `folders = null` — 未知, because "no workspace directory was
+ * measured" is a different claim from "the host has no folders".
+ *
+ * The name and id are the materialized directory's own name (`workspace`, the
+ * mirror of the Worker's `/dsh/workspace`), which the page's own display rule
+ * renders 默认文件夹 — the baseline's name for its built-in folder. No catalog id,
+ * display name or session count is invented: [WorkspaceFolder.sessionCount] stays
+ * `null` (未知), because this host has no per-folder session index.
+ *
+ * @param present whether the materialized workspace directory exists.
+ */
+private fun workspaceFoldersFact(present: Boolean): WorkspaceFoldersSnapshot =
+    if (!present) {
+        WorkspaceFoldersSnapshot(writable = FactState.NO)
+    } else {
+        WorkspaceFoldersSnapshot(
+            folders = listOf(
+                WorkspaceFolder(
+                    id = LOCAL_WORKSPACE_NAME,
+                    name = LOCAL_WORKSPACE_NAME,
+                    sessionCount = null,
+                ),
+            ),
+            // The host cannot create, switch or delete a folder (§1 names no such
+            // command), so the page stays read-only. Opening a folder's files is a
+            // read, not a write: that edge is the route's, never this flag's.
+            writable = FactState.NO,
+        )
+    }
 
 // ---------------------------------------------------------------------------
 // Sessions facts (SessionsPage's host inputs)
@@ -438,6 +494,15 @@ private fun webViewProviderOrNull(readings: HostReadings): WebViewRuntime? {
 
 /** The one model service this host knows, by the name the settings row shows. */
 private const val LOCAL_PROVIDER_NAME: String = "DeepSeek（本机）"
+
+/**
+ * The materialized workspace's own directory name.
+ *
+ * Taken from the preview root's last segment (`PreviewWorkspace.WORKSPACE`) instead
+ * of being spelled again here: the folder row and the files page then name the same
+ * tree by construction, so the two cannot drift.
+ */
+private const val LOCAL_WORKSPACE_NAME: String = PreviewWorkspace.WORKSPACE
 
 /** The host's own words for the missing foreground service. */
 private const val FOREGROUND_SERVICE_REASON: String = "App 未声明前台服务"

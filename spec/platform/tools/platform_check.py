@@ -51,7 +51,11 @@ CLASS_SCHEMA_NAME = "divergence-class.schema.json"
 EXCEPTION_FIELDS = ("justification_class", "evidence", "approved_by")
 BASELINE_NOT_APPLICABLE = "not-applicable"
 JUSTIFICATION_CLASSES = ("os-mechanism-absent", "hardware-absent", "distribution-policy")
-DIVERGENCE_CLASSES = ("os-forced", "hardware-absent", "policy-forbidden")
+# `copy-forced`: the two platforms must say different words because one of them
+# would be stating something false. It is not `os-forced` — there is no API to
+# name — and dressing a wording difference up as a mechanism difference would make
+# `android_mechanism` a lie the checker cannot catch.
+DIVERGENCE_CLASSES = ("os-forced", "hardware-absent", "policy-forbidden", "copy-forced")
 EVIDENCE_LEVELS = ("device-gate", "emulator-probe", "spec-only", "not-verified")
 
 # The thirteen OS primitives of plan section 3.2. The section currently has

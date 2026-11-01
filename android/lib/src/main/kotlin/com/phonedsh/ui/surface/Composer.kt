@@ -82,7 +82,11 @@ public object ComposerTokens {
         UiTokenNames.STROKE_HAIRLINE,
         UiTokenNames.GEOMETRY_COMPOSER_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_COMPOSER_MAX_HEIGHT,
+        UiTokenNames.GEOMETRY_COMPOSER_PORT_TOP,
         UiTokenNames.GEOMETRY_COMPOSER_CONTROL_SIZE,
+        UiTokenNames.GEOMETRY_COMPOSER_CONTROL_ROW_HEIGHT,
+        UiTokenNames.GEOMETRY_COMPOSER_CONTROL_TOP,
+        UiTokenNames.GEOMETRY_COMPOSER_CONTROL_BOTTOM,
         UiTokenNames.GEOMETRY_SEND_BUTTON_DIAMETER,
         UiTokenNames.GEOMETRY_INLINE_STOP_DIAMETER,
         UiTokenNames.GEOMETRY_COMPOSER_TRAILING_RESERVE,
@@ -164,13 +168,15 @@ public fun Composer(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    // iOS: leading 14, trailing 8, top 4. The composer's declared
-                    // token set has no 14/8/4 length, so the closest declared
-                    // lengths are used and the deviation is reported.
+                    // iOS: leading 14, trailing 8, top 8 (`ChatPage.swift:1849-1852`).
+                    // The spec has no 14 or 8 *horizontal* length, so leading reuses
+                    // the 12 pt outer margin and trailing the 6 pt icon gap. The port
+                    // top has its own token (`composerPortTop`): it happens to equal
+                    // the control row's bottom inset, but it is a different edge.
                     .padding(
                         start = tokens.geometry.composerOuterMarginTop,
                         end = tokens.spacing.iconText,
-                        top = tokens.spacing.iconText,
+                        top = tokens.geometry.composerPortTop,
                     ),
             ) {
                 Box {
@@ -222,12 +228,23 @@ public fun Composer(
                         .fillMaxWidth()
                         // The tool row keeps clear of the keys: iOS reserves 40 pt on
                         // the trailing edge so nothing slides under the send key.
+                        // Its vertical insets are the spec's own control tokens now:
+                        // 10 top / 8 bottom (`ChatPage.swift:1868-1869`; `86a39aac`
+                        // took the bottom from 12 to 8). The old code reused the
+                        // 12 pt outer top margin for both, which is what made the
+                        // card taller than the iOS baseline.
+                        //
+                        // The row itself is the iOS 32 pt frame
+                        // (`composerControlRowHeight`); the controls inside keep
+                        // their 28 pt edge. With only `composerControlSize` as a
+                        // floor the row measured 30.86 dp, which was the last
+                        // missing dp of the card height.
                         .padding(
                             end = tokens.geometry.composerTrailingReserve,
-                            top = tokens.geometry.composerOuterMarginTop,
-                            bottom = tokens.geometry.composerOuterMarginTop,
+                            top = tokens.geometry.composerControlTop,
+                            bottom = tokens.geometry.composerControlBottom,
                         )
-                        .defaultMinSize(minHeight = tokens.geometry.composerControlSize),
+                        .defaultMinSize(minHeight = tokens.geometry.composerControlRowHeight),
                 ) {
                     controls?.invoke()
                 }
@@ -264,7 +281,9 @@ public fun Composer(
         if (stat != null || contextPercent != null) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText, Alignment.CenterHorizontally),
+                // ios-chat-official.png: the stats line sits under the card's leading
+                // edge (x 29.3), not centred under it.
+                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText, Alignment.Start),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (stat != null) {
@@ -304,8 +323,11 @@ private fun SendKey(
         modifier = Modifier
             .size(tokens.geometry.sendButtonDiameter)
             .clip(CircleShape)
-            .background(tokens.colors.accent)
-            .alpha(if (enabled) 1f else DISABLED_ALPHA)
+            // The fill carries the disabled state, not a layer alpha: an `.alpha()`
+            // after `.background()` dims what is drawn *inside* the layer, which left
+            // the disabled key at full saturation with only its glyph faded. iOS's
+            // disabled fill measures `#D7E0FF`, i.e. the accent at 20 % over white.
+            .background(tokens.colors.accent.copy(alpha = if (enabled) 1f else DISABLED_FILL_ALPHA))
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .testTag(UiTags.COMPOSER_SEND)
             .semantics { contentDescription = label },
@@ -389,8 +411,11 @@ private fun ContextRing(percent: Int) {
 /** The draft cap the field enforces (iOS `value.count > 8_000`). */
 private const val MAX_DRAFT_CHARS: Int = 8_000
 
-/** Dimming of the disabled send key (iOS `.opacity(canSubmit ? 1 : 0.4)`). */
-private const val DISABLED_ALPHA: Float = 0.4f
+/**
+ * The disabled send key's fill alpha: the baseline's `#D7E0FF` is the accent at
+ * 20 % over white (`ios-chat-default.png`, sampled at the key's centre).
+ */
+private const val DISABLED_FILL_ALPHA: Float = 0.2f
 
 private const val ARROW_UP: String = "↑"
 private const val STOP_GLYPH: String = "■"

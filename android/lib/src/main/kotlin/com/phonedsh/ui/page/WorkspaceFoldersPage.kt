@@ -56,6 +56,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
@@ -341,20 +342,33 @@ public fun WorkspaceFoldersPage(
     onDismissFailure: (() -> Unit)? = null,
 ) {
     val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
     PageFrame(
         title = UiStrings.WORKSPACE_FOLDERS,
         onBack = onBack,
         rootTag = UiPageTags.WORKSPACE_ROOT,
         modifier = modifier,
         actions = {
-            // `NativeShell.swift:376`: the baseline's toolbar verb is 添加; the
-            // empty state carries the longer 添加工作文件夹 call to action below.
-            SessionTextAction(
-                label = UiStrings.WORKSPACE_ADD,
-                onClick = onBeginCreate,
-                tone = SessionActionTone.ACCENT,
-                modifier = Modifier.testTag(UiPageTags.WORKSPACE_NEW),
-                enabled = state.canWrite,
+            // `NativeShell.swift:376`: the baseline's toolbar verb is 添加, drawn as
+            // a 17 pt semibold accent label. `SessionTextAction` would render 13 pt,
+            // so the header action is its own label; the empty state carries the
+            // longer 添加工作文件夹 call to action below.
+            BasicText(
+                text = UiStrings.WORKSPACE_ADD,
+                style = type.headline.copy(
+                    color = if (state.canWrite) tokens.colors.accent else tokens.colors.tertiary,
+                ),
+                maxLines = 1,
+                modifier = Modifier
+                    .testTag(UiPageTags.WORKSPACE_NEW)
+                    .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+                    .clickable(
+                        enabled = state.canWrite,
+                        role = Role.Button,
+                        onClick = onBeginCreate,
+                    )
+                    .semantics { contentDescription = UiStrings.WORKSPACE_ADD }
+                    .padding(tokens.spacing.iconText),
             )
         },
     ) {
@@ -455,26 +469,43 @@ private fun EmptyWorkspace(
     Column(
         modifier = modifier
             .fillMaxSize()
+            // `ios-workspace-folders.png`: the empty block starts directly below the
+            // title area (24 pt of breathing room), not vertically centred.
+            .padding(top = tokens.spacing.cardInset * 2)
             .testTag(UiPageTags.WORKSPACE_EMPTY),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+        verticalArrangement = Arrangement.Top,
     ) {
         BasicText(
             text = UiStrings.WORKSPACE_EMPTY,
-            style = type.body.copy(color = tokens.colors.tertiary),
+            // `NativeShell.swift:347`: 17 pt semibold primary.
+            style = type.headline.copy(
+                color = tokens.colors.primary,
+                textAlign = TextAlign.Center,
+            ),
+            modifier = Modifier.fillMaxWidth(),
         )
         BasicText(
             text = UiStrings.WORKSPACE_EMPTY_HINT,
-            style = type.caption.copy(color = tokens.colors.tertiary),
-            modifier = Modifier.padding(top = tokens.spacing.badgeInsetV),
+            // `NativeShell.swift:349`: 13 pt secondary, centred.
+            style = type.secondary.copy(
+                color = tokens.colors.secondary,
+                textAlign = TextAlign.Center,
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = tokens.spacing.badgeInsetV),
         )
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
-                    top = tokens.spacing.iconText,
-                    start = tokens.geometry.pageOuterMarginH,
-                    end = tokens.geometry.pageOuterMarginH,
+                    top = tokens.spacing.cardInset,
+                    // `ios-workspace-folders.png`: the CTA is 337.7 pt wide, i.e. the
+                    // page margin twice on each side, matching the baseline's inset
+                    // grouped row inset plus the button's own 16 pt inset.
+                    start = tokens.geometry.pageOuterMarginH * 2,
+                    end = tokens.geometry.pageOuterMarginH * 2,
                 )
                 // Page-level geometry: the CTA is a page control and takes the page
                 // row floor rather than a screen-specific button height.
@@ -589,7 +620,12 @@ private fun FolderRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag(UiPageTags.WORKSPACE_ROW)
-                .clickable(enabled = writable, role = Role.Button, onClick = { onOpenFiles(folder) })
+                // Opening a folder's file list is a READ; `writable` gates creating,
+                // switching and deleting (and the host correctly reports NO for those
+                // on this App). Binding the two together made the row dead on every
+                // host that is honest about being read-only, which is every host —
+                // the drawer row was the only way left into the Files page.
+                .clickable(role = Role.Button, onClick = { onOpenFiles(folder) })
                 // Page-level geometry: a folder row is a compact list row and uses the
                 // page margin.
                 .defaultMinSize(minHeight = tokens.geometry.pageListRowMinHeight)
@@ -848,6 +884,7 @@ private const val DEFAULT_FOLDER_NAME: String = "workspace"
 internal object WorkspaceFoldersPageTokens {
     val refs: List<String> = listOf(
         UiTokenNames.COLORS_PRIMARY,
+        UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_TERTIARY,
         UiTokenNames.COLORS_ACCENT,
         UiTokenNames.COLORS_ON_ACCENT,
@@ -859,6 +896,7 @@ internal object WorkspaceFoldersPageTokens {
         UiTokenNames.TYPOGRAPHY_HEADLINE,
         UiTokenNames.SPACING_ICON_TEXT,
         UiTokenNames.SPACING_BADGE_INSET_V,
+        UiTokenNames.SPACING_CARD_INSET,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_PAGE_LIST_ROW_MIN_HEIGHT,

@@ -17,16 +17,26 @@ import SwiftUI
 import WebKit
 
 /// The entry a PAGE surface opens.
+public enum PDSHWebMediaKind: String, Equatable, Sendable {
+    case video, image
+}
+
 public enum PDSHPageEntry: Equatable, Sendable {
     /// A file in a session's workspace: `pdsh-page://<sessionID>/<path>`.
     case workspace(sessionID: String, path: String)
     /// A file in the bundled Web3DLib: `pdsh-page://lib/<path>`.
     case library(path: String)
+    /// A workspace 3D model rendered by the bundled viewer.
+    case model(sessionID: String, path: String)
+    /// A workspace animated image or video codec rendered by a bundled HTML
+    /// viewer (GIF/WebM), where AVKit is not the right surface.
+    case webMedia(sessionID: String, path: String, kind: PDSHWebMediaKind)
 
     /// The path inside its root (workspace or library).
     public var path: String {
         switch self {
-        case .workspace(_, let path), .library(let path): return path
+        case .workspace(_, let path), .library(let path), .model(_, let path), .webMedia(_, let path, _):
+            return path
         }
     }
 
@@ -41,6 +51,21 @@ public enum PDSHPageEntry: Equatable, Sendable {
         case .library(let path):
             components.host = PDSHPageScheme.libraryHost
             components.path = "/" + path
+        case .model(let sessionID, let path):
+            components.host = PDSHPageScheme.libraryHost
+            components.path = "/3d-viewer.html"
+            components.queryItems = [
+                URLQueryItem(name: "session", value: sessionID),
+                URLQueryItem(name: "path", value: path),
+            ]
+        case .webMedia(let sessionID, let path, let kind):
+            components.host = PDSHPageScheme.libraryHost
+            components.path = "/media-viewer.html"
+            components.queryItems = [
+                URLQueryItem(name: "session", value: sessionID),
+                URLQueryItem(name: "path", value: path),
+                URLQueryItem(name: "kind", value: kind.rawValue),
+            ]
         }
         return components.url
     }
@@ -133,6 +158,7 @@ public struct PDSHPageWebView: UIViewRepresentable {
                          forMainFrameOnly: true))
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
         view.scrollView.isScrollEnabled = true
         view.isInspectable = false
         view.load(URLRequest(url: url))
@@ -175,7 +201,7 @@ public struct PDSHPageWebView: UIViewRepresentable {
     })();
     """
 
-    public final class Coordinator: NSObject, WKNavigationDelegate {
+    public final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         let resolver: PDSHPageResolver
         let failure: Binding<String?>
 
@@ -192,6 +218,38 @@ public struct PDSHPageWebView: UIViewRepresentable {
             decisionHandler(
                 navigationAction.request.url?.scheme == PDSHPageScheme.name
                     ? .allow : .cancel)
+        }
+
+        // No popups, file pickers, or JavaScript panels: the preview is a
+        // read-only page surface, and a page must not be able to open another
+        // in-app web view or reach the host file picker.
+        public func webView(_ webView: WKWebView,
+                            createWebViewWith configuration: WKWebViewConfiguration,
+                            for navigationAction: WKNavigationAction,
+                            windowFeatures: WKWindowFeatures) -> WKWebView? {
+            nil
+        }
+
+        public func webView(_ webView: WKWebView,
+                            runJavaScriptAlertPanelWithMessage message: String,
+                            initiatedByFrame frame: WKFrameInfo,
+                            completionHandler: @escaping () -> Void) {
+            completionHandler()
+        }
+
+        public func webView(_ webView: WKWebView,
+                            runJavaScriptConfirmPanelWithMessage message: String,
+                            initiatedByFrame frame: WKFrameInfo,
+                            completionHandler: @escaping (Bool) -> Void) {
+            completionHandler(false)
+        }
+
+        public func webView(_ webView: WKWebView,
+                            runJavaScriptTextInputPanelWithPrompt prompt: String,
+                            defaultText: String?,
+                            initiatedByFrame frame: WKFrameInfo,
+                            completionHandler: @escaping (String?) -> Void) {
+            completionHandler(nil)
         }
 
         public func webView(_ webView: WKWebView,

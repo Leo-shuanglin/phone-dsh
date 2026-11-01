@@ -52,7 +52,17 @@ from pathlib import Path
 
 UI_REL = Path("spec") / "ui" / "v1"
 PROBE_REL = Path("examples") / "probe-app" / "PhoneDSHProbe"
-README_MAX_LINES = 280
+# PR #13 (9d46fc3c) rebuilt SettingsPage as a five-tab sheet, which added eleven
+# `*Page` structs to the baseline: the settings tab bodies/children
+# (NativeGeneralSettingsPage, NativeShortcutsPage, PhonePermissionsPage,
+# NativeAgentPresetsPage, NativePluginInventoryPage) plus
+# SessionArtifactsPage/SessionArtifactPreviewPage,
+# NativeDeviceConnectionPage/NativeDeviceSessionPage, and two pages left with no
+# entry at all (ChatPreferencesPage, NativeSettingsDocumentPage). The inventory has
+# to name every one of them, and it also needs the three-way reachability legend
+# (reachable / -uiPreview-only / unreachable) those pages made necessary.
+# 280 -> 300 rather than leaving the inventory wrong; the file is 293 lines.
+README_MAX_LINES = 300
 MAX_DEFERRED_PAIRS = 8
 REQUIRED_SURFACES = (
     "bubble",
@@ -372,8 +382,15 @@ def check_geometry(document) -> int:
         if not isinstance(entry, dict):
             raise CheckError(f"geometry.{name} is not an object")
         value = entry.get("value")
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-            raise CheckError(f"geometry.{name}.value must be a positive number")
+        # 0 is a legal length: it means "no inset", not "unmeasured". Commit
+        # 86a39aac took the composer's outer bottom padding from 8 to 0, so the
+        # token has to be able to say zero instead of the value being deleted
+        # (the surface still declares it). Negative lengths stay invalid, and a
+        # screenRatio still has to be in (0, 1].
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise CheckError(
+                f"geometry.{name}.value must be a non-negative number (0 = no inset)"
+            )
         if entry.get("unit") not in units:
             raise CheckError(f"geometry.{name}.unit must be one of {units}")
         if entry.get("unit") == "screenRatio" and not 0 < value <= 1:
@@ -809,7 +826,7 @@ README_PHRASES = (
     ("只记录，不改基线", "the baseline observations are recorded, not fixed"),
     ("生成 Swift/Compose", "the P5 token generator must be registered as a work item"),
 )
-BASELINE_ANCHORS = ("SessionActivityPage", "DailyBriefPage", "NativeTab", "ChatPage.swift:716")
+BASELINE_ANCHORS = ("SessionActivityPage", "DailyBriefPage", "NativeTab", "ChatPage.swift:1048")
 
 
 def check_readme_notes(readme: str) -> None:

@@ -1,11 +1,15 @@
-// Model-provider page: four states, the fold sequence, and the key never leaks.
+// Model-provider page: four states, the fold sequence, the editor, and no key leak.
 // SPDX-License-Identifier: MIT
 //
-// The security assertions are negative on purpose: a snapshot that carries a
-// whole key and a whole URL is projected, and the test proves that neither the
-// composed tree nor the state's display fields contain them. `performScrollToNode`
-// runs before the negative assertion because a LazyColumn item outside the
-// viewport is not composed; asserting before scrolling would be a false green.
+// The structure assertions follow the 2026-11-01 contract
+// (`spec/ui/v1/pages/model-provider-settings.json`): 服务 / the untitled action
+// group (`添加模型服务`, `编辑默认服务`) / 生效方式, plus the editor's 模型目录 and
+// 密钥. The security assertions are negative on purpose: a snapshot that carries
+// a whole key and a whole URL is projected, and the test proves that neither the
+// composed tree nor the state's display fields contain them.
+// `performScrollToNode` runs before the negative assertion because a LazyColumn
+// item outside the viewport is not composed; asserting before scrolling would be
+// a false green.
 package com.phonedsh.ui.page
 
 import androidx.compose.runtime.getValue
@@ -15,12 +19,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
@@ -57,6 +63,8 @@ class ModelProviderSettingsPageTest {
         onAdd: () -> Unit = {},
         onEdit: (String) -> Unit = {},
         onRetry: (() -> Unit)? = null,
+        onStartEngine: () -> Unit = {},
+        onDelete: (String) -> Unit = {},
     ) {
         val state = ModelProviderScreenState.from(facts)
         compose.setContent {
@@ -68,28 +76,24 @@ class ModelProviderSettingsPageTest {
                     onToggleSection = {},
                     onBack = {},
                     onRetry = onRetry,
+                    onStartEngine = onStartEngine,
+                    onDelete = onDelete,
                 )
             }
         }
     }
 
     /** A live host: the fold and the row callbacks update the projected state. */
-    private fun showLive(
-        facts: ModelProviderFacts,
-        onAdd: () -> Unit = {},
-        onEdit: (String) -> Unit = {},
-        onRetry: (() -> Unit)? = null,
-    ) {
+    private fun showLive(facts: ModelProviderFacts) {
         compose.setContent {
             var local by remember { mutableStateOf(ModelProviderLocalState()) }
             PdshTheme {
                 ModelProviderSettingsPage(
                     state = ModelProviderScreenState.from(facts, local),
-                    onAdd = onAdd,
-                    onEdit = onEdit,
+                    onAdd = {},
+                    onEdit = {},
                     onToggleSection = { id -> local = local.apply(ModelProviderUiEvent.ToggleSection(id)) },
                     onBack = {},
-                    onRetry = onRetry,
                 )
             }
         }
@@ -98,23 +102,25 @@ class ModelProviderSettingsPageTest {
     // ------------------------------------------------------------------ states
 
     @Test
-    fun `an empty snapshot shows the empty state, not a blank list`() {
+    fun `an empty snapshot shows the empty state inside the service group`() {
         show(ModelProviderFacts(profiles = emptyList()))
         compose.onNodeWithTag(UiPageTags.PROVIDER_ROOT).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.PROVIDER_EMPTY).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_EMPTY).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_EMPTY_HINT).assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertDoesNotExist()
+        // The contract's untitled action group stays reachable with no rows.
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
+        compose.onNodeWithText(UiStrings.PROVIDER_ADD_SERVICE).assertIsDisplayed()
     }
 
     @Test
     fun `a configured service renders its model, redacted host and key suffix`() {
         var added = 0
-        var edited: String? = null
         show(
             ModelProviderFacts(profiles = listOf(deepSeek)),
             onAdd = { added += 1 },
-            onEdit = { edited = it },
         )
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
@@ -127,10 +133,50 @@ class ModelProviderSettingsPageTest {
         compose.onNodeWithText(UiStrings.PROVIDER_ENDPOINT.format("api.deepseek.com")).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_KEY_SUFFIX.format("9f3a")).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_KEY_CONFIGURED_HINT).assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.PROVIDER_ROW_PREFIX + "deepseek").performClick()
-        assertEquals("deepseek", edited)
+        // The row's own actions: the contract's 编辑 / 删除.
+        compose.onNodeWithText(UiStrings.PROVIDER_EDIT).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_DELETE).assertIsDisplayed()
+        // 添加模型服务 is the untitled group's criterion row.
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
         compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
         assertEquals(1, added)
+    }
+
+    @Test
+    fun `the contract's 生效方式 group renders its hint and the start action`() {
+        var started = 0
+        show(
+            ModelProviderFacts(profiles = listOf(deepSeek), engineStarted = FactState.NO),
+            onStartEngine = { started += 1 },
+        )
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasText(UiStrings.PROVIDER_SECTION_APPLY))
+        compose.onNodeWithText(UiStrings.PROVIDER_SECTION_APPLY).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasText(UiStrings.PROVIDER_RESTART_HINT_IDLE))
+        compose.onNodeWithText(UiStrings.PROVIDER_RESTART_HINT_IDLE).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasText(UiStrings.PROVIDER_START_ENGINE))
+        compose.onNodeWithText(UiStrings.PROVIDER_START_ENGINE).performClick()
+        assertEquals(1, started)
+    }
+
+    @Test
+    fun `a running engine swaps the hint and hides the start action`() {
+        val state = ModelProviderScreenState.from(
+            ModelProviderFacts(profiles = listOf(deepSeek), engineStarted = FactState.YES),
+        )
+        assertEquals(UiStrings.PROVIDER_RESTART_HINT_RUNNING, state.restartHint)
+        assertFalse(state.canStartEngine)
+        assertEquals(
+            UiStrings.PROVIDER_RESTART_HINT_IDLE,
+            ModelProviderScreenState(phase = SettingsDataPhase.READY).restartHint,
+        )
+        show(ModelProviderFacts(profiles = listOf(deepSeek), engineStarted = FactState.YES))
+        compose.onNodeWithText(UiStrings.PROVIDER_START_ENGINE).assertDoesNotExist()
     }
 
     @Test
@@ -142,8 +188,8 @@ class ModelProviderSettingsPageTest {
         )
         compose.onNodeWithTag(UiPageTags.PROVIDER_FAILURE).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_FAILURE_KEY).assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.PROVIDER_EMPTY).assertDoesNotExist()
-        compose.onNodeWithText(UiStrings.RETRY).performClick()
+        // The contract declares no retry label; the affordance is the glyph.
+        compose.onNodeWithText("↻").performClick()
         assertEquals(1, retried)
     }
 
@@ -174,6 +220,86 @@ class ModelProviderSettingsPageTest {
         compose.onNodeWithText(UiStrings.UNKNOWN).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.SETTINGS_UNKNOWN_HINT).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.NOT_CONFIGURED).assertDoesNotExist()
+    }
+
+    @Test
+    fun `a service the host never named wears the page's own label`() {
+        val unnamed = ProviderProfile(id = "blank", name = "   ")
+        val state = ModelProviderScreenState.from(ModelProviderFacts(profiles = listOf(unnamed)))
+        assertTrue(state.rows.single().nameIsFallback)
+        assertEquals(UiStrings.MODEL_PROVIDER_TITLE, state.rows.single().name)
+        show(ModelProviderFacts(profiles = listOf(unnamed)))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ROW_PREFIX + "blank"))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_ROW_PREFIX + "blank").assertIsDisplayed()
+        // The title and the unnamed row both say 模型服务.
+        compose.onAllNodesWithText(UiStrings.MODEL_PROVIDER_TITLE).assertCountEquals(2)
+    }
+
+    // ------------------------------------------------------------------ editor
+
+    @Test
+    fun `添加模型服务 opens the editor with the contract's model rows`() {
+        show(ModelProviderFacts(profiles = emptyList()))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
+        // The editor replaces the list: the sheet is a full-surface panel here.
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertDoesNotExist()
+        // The editor's toolbar: 测试 / 取消 / 保存, the contract's three actions.
+        compose.onNodeWithText(UiStrings.PROVIDER_TEST).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CANCEL).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.SAVE).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_FIELD_NAME).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_DEFAULT_MODEL).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_REASONING_EFFORT).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_MODEL_CATALOG).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_TEXT_INPUT).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_IMAGE_INPUT).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_DELETE_MODEL).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_ADD_MODEL).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_KEY_SECTION).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_IMPORT_CLIPBOARD).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `the editor's cancel returns to the service list`() {
+        show(ModelProviderFacts(profiles = listOf(deepSeek)))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
+        compose.onNodeWithText(UiStrings.CANCEL).performClick()
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_FIELD_NAME).assertDoesNotExist()
+    }
+
+    // ----------------------------------------------------------------- delete
+
+    @Test
+    fun `the delete confirmation carries the row's name, as the baseline formats it`() {
+        var deleted: String? = null
+        show(ModelProviderFacts(profiles = listOf(deepSeek)), onDelete = { deleted = it })
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ROW_PREFIX + "deepseek"))
+        compose.onNodeWithText(UiStrings.PROVIDER_DELETE).performClick()
+        compose.onNodeWithText(UiStrings.PROVIDER_DELETE_CONFIRM_TITLE).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_DELETE_CONFIRM_TEXT).assertIsDisplayed()
+        // `删除 %@` with the service's name: the formatted copy, not the template.
+        compose.onNodeWithText(UiStrings.PROVIDER_DELETE_NAMED.format("DeepSeek")).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_DELETE_NAMED.format("DeepSeek")).performClick()
+        assertEquals("deepseek", deleted)
+    }
+
+    @Test
+    fun `the delete confirmation can be cancelled`() {
+        var deleted: String? = null
+        show(ModelProviderFacts(profiles = listOf(deepSeek)), onDelete = { deleted = it })
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ROW_PREFIX + "deepseek"))
+        compose.onNodeWithText(UiStrings.PROVIDER_DELETE).performClick()
+        compose.onNodeWithText(UiStrings.CANCEL).performClick()
+        assertNull(deleted)
+        compose.onNodeWithText(UiStrings.PROVIDER_DELETE_CONFIRM_TITLE).assertDoesNotExist()
     }
 
     // --------------------------------------------------------------- security
@@ -250,6 +376,34 @@ class ModelProviderSettingsPageTest {
         assertNull(redactEndpointHost(null))
     }
 
+    // ------------------------------------------------------------------ draft
+
+    @Test
+    fun `a new draft starts from the adapter's documented defaults`() {
+        val draft = ProviderDraft.new()
+        assertTrue(draft.isNew)
+        assertEquals(ProviderDraft.DEFAULT_ENDPOINT, draft.endpoint)
+        assertEquals(ProviderDraft.DEFAULT_MODEL, draft.model)
+        // Saving needs a display name first; the URL is already the default one.
+        assertFalse(draft.canSave)
+        assertTrue(draft.copy(name = "DeepSeek").canSave)
+        assertEquals(UiStrings.PROVIDER_PROTOCOL_ANTHROPIC, draft.protocolHint)
+        // The key is not a fact: a new draft starts empty.
+        assertEquals("", draft.apiKey)
+    }
+
+    @Test
+    fun `an existing draft never reads the stored endpoint or key back`() {
+        val state = ModelProviderScreenState.from(ModelProviderFacts(profiles = listOf(deepSeek)))
+        val draft = ProviderDraft.from(state.rows.single())
+        assertFalse(draft.isNew)
+        assertEquals("DeepSeek", draft.name)
+        assertEquals("deepseek-flash", draft.model)
+        assertEquals("", draft.endpoint)
+        assertEquals("", draft.apiKey)
+        assertTrue(draft.canSave)
+    }
+
     // --------------------------------------------------------------- sequence
 
     @Test
@@ -257,7 +411,6 @@ class ModelProviderSettingsPageTest {
         val facts = ModelProviderFacts(profiles = listOf(deepSeek, decoy()))
         val script = listOf(
             ModelProviderUiEvent.ToggleSection(ModelProviderScreenState.SERVICES_SECTION_ID),
-            ModelProviderUiEvent.ToggleSection(ModelProviderScreenState.HELP_SECTION_ID),
             ModelProviderUiEvent.ToggleSection(ModelProviderScreenState.SERVICES_SECTION_ID),
         )
         var local = ModelProviderLocalState()
@@ -268,8 +421,7 @@ class ModelProviderSettingsPageTest {
                 add(ModelProviderScreenState.from(facts, local))
             }
         }
-        assertEquals(listOf(true, false, false, true), states.map { it.servicesExpanded })
-        assertEquals(listOf(true, true, false, false), states.map { it.helpExpanded })
+        assertEquals(listOf(true, false, true), states.map { it.servicesExpanded })
         // A fold changes visibility only: the row sequence never moves.
         assertEquals(1, states.map { it.rows }.distinct().size)
         assertEquals(SettingsDataPhase.READY, states.first().phase)
@@ -291,13 +443,14 @@ class ModelProviderSettingsPageTest {
         compose.onNodeWithText("DeepSeek").assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.PROVIDER_SERVICES_SECTION).performClick()
         compose.onNodeWithText("DeepSeek").assertDoesNotExist()
-        compose.onNodeWithTag(UiPageTags.PROVIDER_HELP_SECTION).assertIsDisplayed()
+        // The contract's groups below the fold stay reachable.
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasText(UiStrings.PROVIDER_SECTION_APPLY))
+        compose.onNodeWithText(UiStrings.PROVIDER_SECTION_APPLY).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_SERVICES_SECTION))
         compose.onNodeWithTag(UiPageTags.PROVIDER_SERVICES_SECTION).performClick()
         compose.onNodeWithText("DeepSeek").assertIsDisplayed()
-        // The help group folds independently.
-        compose.onNodeWithText(UiStrings.PROVIDER_PRIVACY).assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.PROVIDER_HELP_SECTION).performClick()
-        compose.onNodeWithText(UiStrings.PROVIDER_PRIVACY).assertDoesNotExist()
     }
 
     private fun decoy(): ProviderProfile = ProviderProfile(

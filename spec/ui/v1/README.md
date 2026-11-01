@@ -31,7 +31,7 @@ python3 spec/ui/v1/tools/ui_check.py --root . && python3 -m unittest discover -s
 checker 强制：tokens 过 schema；6 个签名面的 token 引用全部存在且含页面层几何；每个叶子 token 都有 `file:line` 来源
 （缺来源、来源过期、颜色不来自 `NativeChatTheme.swift` 除非标了 `baselineInconsistency`，都失败）；WCAG 对比度
 （正文 4.5 / 大字与非文本 3.0，已登记债在 `--strict` 下失败）；8 条平台差异与 §5 逐条对齐并带 type-role 映射；
-页面清单覆盖基线里真实存在的每个 `*Page`；README ≤ 280 行；数据文件里不出现外链、邮箱、绝对用户路径。
+页面清单覆盖基线里真实存在的每个 `*Page`；README ≤ 300 行（PR #13 的五分页设置新增 11 个 `*Page`，cap 由 280 抬到 300，见 `tools/ui_check.py`）；数据文件里不出现外链、邮箱、绝对用户路径。
 
 `tokens.json` 是 token 的唯一来源；`golden/tokens.golden.json` 只是 schema 示例，不是规范来源。
 来源分级：**颜色除 `onAccent`（平台常量）与 `ctaOverride`（页面层覆盖，已标 baselineInconsistency）外，一律来自
@@ -42,6 +42,8 @@ checker 强制：tokens 过 schema；6 个签名面的 token 引用全部存在�
 
 页面按真实文件反推。入口 = 从哪儿打开；导航关系 = 打开后怎么回去。P5 列：`must` = 必须 parity，`later` = 可延后。
 
+入口分三类，别混。**可达** = 产品里点得到；**预览专用** = 只有 DEBUG 的 `-uiPreview` 路由（`NativeShell.swift:737` 的 `PreviewScreen`），产品没有入口；**不可达** = 连预览路由都没有，只剩结构体。PR #13 把设置改成五分页后，about / network / MCP 三条设置行消失：前两条降级为预览专用，MCP 变成不可达。
+
 | 页面 | 职责 | 入口 | 导航关系 | P5 |
 |---|---|---|---|---|
 | ChatPage | 对话、输入坞、审批/问题卡、目标条 | RootView 的默认原生面（NativeShell） | 根页；自绘页头：抽屉 / 改名 / 运行状态 / `⋯` | must |
@@ -49,28 +51,41 @@ checker 强制：tokens 过 schema；6 个签名面的 token 引用全部存在�
 | SessionActivityPage | 单会话的步骤/用量/上下文 | **触发点缺失（sheet 已接线但无人置位，基线不可达）** | sheet | later |
 | SessionHistoryPage | 历史回合列表与单回合详情 | 页头 `⋯` →「历史」，或 ChatPage 的目标行 | push；回合详情复用 ChatPage 的折叠规则 | later |
 | GoalDetailPage | 单个目标的 objective / 状态 / 动作 | ChatPage 的目标条 | sheet；打开失败保留上一个目标（fail-quiet） | later |
-| FilesPage | 工作区文件树、预览、导入 | 抽屉「工作文件夹」里点某个文件夹 | 页面栈；预览子页 FilePreviewPage | must |
+| FilesPage | 工作区文件树、导入 | 对话内工具输出 → 工作区面板「文件」段（内联） | 页面栈；文件行 push `PreviewSurface`（独立预览面，契约 `pages/preview-surface.json`） | must |
 | NativeWorkbenchPage | 会话内工作面板（文件 / 命令两段） | 对话里点工具写出的文件路径（含待预览路径补开） | sheet，`完成` 关闭 | must |
-| PDSHShellPage | 只读加速器命令（argv 来自 caps） | 工作面板第二段、设置行「命令」 | 段内页面 | must |
-| WorkspaceFoldersPage | 工作区文件夹增删与切换 | 抽屉「工作文件夹」 | push；每行打开 FilesPage | must |
-| SettingsPage | 设置总入口与分组 | 抽屉底行「设置」 | sheet（NavigationStack） | must |
-| ModelProviderSettingsPage | 模型服务、密钥、编解码 | 设置首行、起手卡「去配置模型服务」、启动失败横幅 | sheet | must |
-| WebSearchSettingsPage | 网页搜索开关与后端 | 设置行、配置页 | push / sheet | must |
-| MCPSettingsPage | MCP 服务器列表与编辑 | 设置行 | push / sheet；编辑子页 MCPEditorPage | must |
-| NativeConfigurationPage | 会话级与插件配置 | 页头 `⋯` → 本会话设置 | sheet | must |
+| PDSHShellPage | 只读加速器命令（argv 来自 caps） | 工作面板第二段 | 段内页面 | must |
+| WorkspaceFoldersPage | 工作区文件夹增删与切换 | **预览专用（`-uiPreview workspace`）；iOS 抽屉在 PR #13 后只剩「定时任务 / 设置」两行，Android 仍有独立路由** | push；每行打开 FilesPage | must |
+| SettingsPage | 五分页设置：通用 / 模型 / 插件 / 手机权限 / 预设 | 抽屉底行「设置」 | sheet（NavigationStack，iPad 走 NavigationSplitView）；分区是分段 `Picker`，tab 体内嵌 | must |
+| NativeGeneralSettingsPage | 通用 tab：权限、语言、外观、字号、过程折叠、快捷键、发送行为、版本 | 「通用」tab（内嵌，不单独成页） | 内嵌；三个行动作开 PermissionDefaultsPage / NativeShortcutsPage / LicensesPage | must |
+| NativeShortcutsPage | 快捷键对照与恢复全部默认 | 「通用」tab 的「快捷键」行 | push，返回回「通用」 | must |
+| PhonePermissionsPage | 手机权限清单、能力授权与最近审计 | 「手机权限」tab（`embedded: true`） | tab 体内嵌；授权走系统弹窗 | must |
+| NativeAgentPresetsPage | Agent 预设列表、设为默认、配置入口 | 「预设」tab | tab 体内嵌；「查看配置」开 NativeSettingsDocumentPage | must |
+| NativePluginInventoryPage | 内置插件清单、搜索与插件配置入口 | 「插件」tab | tab 体内嵌；「插件配置」开 NativeConfigurationPage | must |
+| ModelProviderSettingsPage | 模型服务、密钥、编解码 | 「模型」tab、起手卡「去配置模型服务」、启动失败横幅 | tab 体内嵌；编辑子页 ModelProviderEditorPage | must |
+| SessionArtifactsPage | 本会话产物、未归属产物与预览 | 页头 `⋯` →「产物」 | sheet；预览子页 SessionArtifactPreviewPage | must |
+| SessionArtifactPreviewPage | 单个产物的内容预览 | SessionArtifactsPage 的行点击 | 内嵌 sheet，不单独成页 | must |
+| NativeDeviceConnectionPage | 已配对的真机连接与传输能力 | 页头 `⋯` →「设备连接」 | sheet；行打开 NativeDeviceSessionPage | must |
+| NativeDeviceSessionPage | 只读的设备会话转录（历史、实时） | NativeDeviceConnectionPage 的行 | push，只读，无写动作 | later |
+| NativeConfigurationPage | 会话级与插件配置 | 页头 `⋯` → 本会话设置；「插件」tab 的「插件配置」行 | sheet | must |
+| WebSearchSettingsPage | 网页搜索开关与后端 | 「插件」tab →「插件配置」页 → 网页搜索 | push / sheet | must |
+| MCPSettingsPage | MCP 服务器列表与编辑 | **不可达（PR #13 后全仓无调用点，无预览路由；契约仍在）** | push / sheet；编辑子页 MCPEditorPage | later |
 | NativeAutomationPage | 定时任务、计划详情与历史 | 抽屉「定时任务」、会话页入口 | push；子页 ScheduleDetailPage、ScheduleHistoryPage、ScheduleEditorPage | must |
-| EgressAllowListPage | 出网白名单 | 设置行 | push | must |
-| RuntimeDetailsPage | 运行时状态、停止与重启 | 页头运行状态点、设置行 | sheet | must |
-| SettingsAboutPage | 版本、许可、开发者入口 | 设置 | push；子页 LicensesPage | must |
-| WebSurfacePage | 完整 DSH 页面（WebView 宿主） | RootView 的默认面（引擎就绪时） | 全屏容器，不做返回栈 | must |
-| MemoryPage | 记忆条目与来源 | 设置 → 探针工具（仅 DEBUG） | push | later |
-| ProbesPage | 设备探针与报告 | 设置 → 探针工具（仅 DEBUG） | push | later |
-| BackgroundPage | 后台保活诊断 | 设置 → 探针工具（仅 DEBUG） | push | later |
-| TaskScreenPage | 任务屏预览 | 设置 → 探针工具（仅 DEBUG） | push | later |
-| ExportPage | 导出诊断包 | 设置 → 探针工具（仅 DEBUG） | push / sheet | later |
+| EgressAllowListPage | 出网白名单 | **预览专用（`-uiPreview settings.network`；产品无入口）** | push | later |
+| RuntimeDetailsPage | 运行时状态、停止与重启 | 页头运行状态点 | sheet | must |
+| SettingsAboutPage | 版本、许可、开发者入口 | **预览专用（`-uiPreview settings.about`；产品无「关于」页）** | push；子页 LicensesPage | later |
+| WebSurfacePage | 完整 DSH 页面（WebView 宿主） | **iOS 已删除（495da9b5）；Android 侧是独立全屏宿主，见 `pages/_android-only.json`** | 全屏容器，不做返回栈 | later |
+| MemoryPage | 记忆条目与来源 | **不可达（开发者工具页已随 PR #13 删除）** | push | later |
+| ProbesPage | 设备探针与报告 | **不可达（同上）** | push | later |
+| BackgroundPage | 后台保活诊断 | **不可达（同上）** | push | later |
+| TaskScreenPage | 任务屏预览 | **不可达（同上）** | push | later |
+| ExportPage | 导出诊断包 | **不可达（全仓无调用点）** | push / sheet | later |
 | DailyBriefPage | 每日简报 | **基线无入口（孤页）** | 不可达 | later |
+| ChatPreferencesPage | 聊天外观、字号、过程折叠、转录密度 | **不可达（全仓无调用点；设置已改五分页）** | push | later |
+| NativeSettingsDocumentPage | 配置文件的只读查看与分享 | **不可达（全仓无调用点）** | sheet | later |
 
-内嵌子页随父页实现、不单独排期：CommandExecutionResultPage、ModelProviderEditorPage、SessionQueuePage、PermissionDefaultsPage、DevelopmentToolsPage、DeveloperPage。开发者页由连续点击版本号进入，仅 DEBUG 存在。
+内嵌子页随父页实现、不单独排期：CommandExecutionResultPage、ModelProviderEditorPage、SessionQueuePage、PermissionDefaultsPage、LicensesPage、ScheduleDetailPage、ScheduleHistoryPage、ScheduleEditorPage。
+
+`FilePreviewPage` 在 PR15 里被删除，预览改成一个独立面 `PreviewSurface`（它不是 `*Page` struct，提取器不生成契约，见 `pages/preview-surface.json` 的 `handRegistered`）。
 
 页面结构另有机器可读契约：`pages/<page-id>.json`（分区 / 行 / 动作 / 呈现，每项带 `file:line` 来源，由 `tools/extract_ios_pages.py` 从基线抽取），`tools/page_structure_check.py` 用它比对 Android 页面；平台被迫差异只走 `pages/_whitelist.json`（每条 MUST 引用 `spec/platform/whitelist.json` 的 id），已知差异记 `pages/_baseline.json` 且只减不增，`--strict` 输出待对齐清单。非 `Section` 的分组（`PageSection` / `GroupBox` / 粗体标题 `Text`）记 `kind: region`，识别不出的记 `implicit`（不整页跳过）；`states` 只作人读（`"advisory": true`，比较器不读）；Android 无 iOS 对应的页登记在 `pages/_android-only.json`，有 `public fun *Page()` 却既无契约也不在该文件里即失败。
 契约标题 MUST 是**渲染形态**：`dynamicTitle:true` 只表示「固定模板 + 一个可变量」（`title:"Rows (N)"` + `titleTemplate:"Rows ({model.probeRows.count})"`，比较用 template、数字与模板槽归一到 `#`）；标题**就是数据**（`Section(fileGroupTitle)`）记 `title:null` + `titleSource:"expression"` + `titleExpression` + `criterion`，不许冒充 `dynamicTitle`；`title` 里出现源码表达式即契约错误，Android 把表达式当字面量渲染 → `extra-section`。
@@ -83,10 +98,10 @@ Android 侧的分区 / 动作 MUST 走 `SessionSectionLabel`、`SectionHeader(ti
 
 | 观察 | 证据 | P5 处置 |
 |---|---|---|
-| SessionActivityPage 的 sheet 已接线但无人置位 | `ChatPage.swift:51` 声明、`ChatPage.swift:292` 接线，全仓无 `showActivity = true` | 不实现；iOS 恢复入口再开 |
+| SessionActivityPage 的 sheet 已接线但无人置位 | `ChatPage.swift:79` 声明、`ChatPage.swift:502` 接线，全仓无 `showActivity = true` | 不实现；iOS 恢复入口再开 |
 | DailyBriefPage 没有任何入口 | `DailyBriefPage.swift:8` 有页面，全仓无调用点 | 不实现；iOS 恢复入口再开 |
-| NativeTab 四 Tab 枚举是死代码 | `NativeShell.swift:12` 定义、全仓无引用；实际外壳 = Chat + 抽屉 | 按 §1 的抽屉外壳实现，不实现 Tab 栏 |
-| ChatPage 自带一份调色板，与主题层不一致 | `ChatPage.swift:716` accent #2F5BFF、`ChatPage.swift:717` surface #F2F3F5、`ChatPage.swift:723` hairline #DDDCE2 vs `NativeChatTheme.swift:20/14/18` | accent 记为 `colors.ctaOverride`（§4 债表）；hairline/surface 只记录 |
+| NativeTab 四 Tab 枚举是死代码 | `NativeShell.swift:13` 定义、全仓无引用；实际外壳 = Chat + 抽屉 | 按 §1 的抽屉外壳实现，不实现 Tab 栏 |
+| ChatPage 自带一份调色板，与主题层不一致 | `ChatPage.swift:1048` accent #2F5BFF、`:1049` surface #F2F3F5、`:1055` hairline #DDDCE2；主题层 `NativeChatTheme.swift:22` 只声明 accent = `NativeParityTokens.accent`，没有 surface/hairline | accent 记为 `colors.ctaOverride`（§4 债表）；hairline/surface 只记录 |
 
 ## 2. 组件语义清单
 
@@ -167,16 +182,21 @@ This section exists because the first implementation hit exactly this fork: `com
 
 | 签名面 | 颜色 / 字号 / 圆角 / 描边 / 动效 / 间距（`spacing.*`） | 页面层几何（`geometry.*`） |
 |---|---|---|
-| 气泡 | `colors.selector` `colors.primary` `colors.secondary` `typography.body` `typography.secondary` `radius.bubble` | `bubblePadding` `bubbleLineSpacing` `bubbleMaxWidth` |
+| 气泡 | `colors.selector` `colors.primary` `colors.secondary` `typography.body` `typography.secondary` `radius.bubble` | `bubblePadding` `bubblePaddingH` `bubblePaddingV` `bubbleBadgeGap` `bubbleLineSpacing` `bubbleMaxWidth` |
 | 工具行 | `colors.code` `colors.codeBanner` `colors.border` `colors.secondary` `colors.tertiary` `typography.code` `typography.secondary` `typography.codeLabel` `radius.codeBlock` `stroke.hairline` `motion.disclosure` | `disclosureRowHeight` `disclosureIconGap` `toolDetailIndent` `toolDetailVertical` `toolCardInset` `terminalCardMaxHeight` |
 | thinking_pill | `colors.secondary` `colors.tertiary` `colors.caption` `typography.secondary` `typography.shimmer` `motion.shimmer` | `disclosureRowHeight` `summaryDotDiameter` `summaryDotGap` `thinkingContentIndent` `thinkingContentVertical` |
 | 审批卡 | `colors.selector` `colors.primary` `colors.ctaOverride` `colors.onAccent` `colors.secondary` `typography.headline` `typography.subheadline` `radius.card` `spacing.iconText` | `cardPadding` `cardOuterMarginH` `cardOuterMarginV` `primaryButtonHeight` `secondaryButtonHeight` `cardAreaMaxHeightRatio` |
-| composer | `colors.input` `colors.borderLight` `colors.accent` `colors.onAccent` `colors.tertiary` `colors.secondary` `colors.primary` `typography.body` `typography.secondary` `radius.composer` `stroke.hairline` `spacing.iconText` | `composerMinHeight` `composerMaxHeight` `composerControlSize` `sendButtonDiameter` `inlineStopDiameter` `composerTrailingReserve` `composerOuterMarginH` `composerOuterMarginTop` `composerOuterMarginBottom` `statPillMinHeight` |
+| composer | `colors.input` `colors.borderLight` `colors.accent` `colors.onAccent` `colors.tertiary` `colors.secondary` `colors.primary` `typography.body` `typography.secondary` `radius.composer` `stroke.hairline` `spacing.iconText` | `composerMinHeight` `composerMaxHeight` `composerPortTop` `composerControlSize` `composerControlRowHeight` `composerControlTop` `composerControlBottom` `sendButtonDiameter` `inlineStopDiameter` `composerTrailingReserve` `composerOuterMarginH` `composerOuterMarginTop` `composerOuterMarginBottom` `statPillMinHeight` |
 | fail-loud 横幅 | `colors.warning` `colors.danger` `colors.secondary` `typography.secondary` `typography.caption` | `bannerGap` `bannerInsetH` `bannerInsetV` `toolFailureBannerInset` |
 
 本轮实测的页面层几何**全部是固定值**（iOS 用固定 `frame`，全仓无 `@ScaledMetric`），所以每条 `scalesWith` 都是
 `null`；若 P5 要让某条几何随字号派生，必须把 `scalesWith` 指向对应 `typography.*` 并走评审——checker 会拒绝
 指向不存在的字号 token 的派生。
+
+**规则变更（L22，2026-11-01，属规则而非取值）**：`geometry.value` 下限从 0.05 改成 0——0 是合法长度（无内边距），
+0.05 是假值；依据是 commit `86a39aac` 把 `composerOuterMarginBottom` 改成 0。同轮 composer 面的 token 上限从 24
+抬到 26（新增 `composerControlRowHeight`、`composerPortTop`），上限按该面实际规模定，不按每次编辑逐次抬。
+这两条在 `schema/tokens.schema.json` 与 `tokens.json` 的 note 里都有记录。
 
 审批卡的标题/副标题是系统语义字号，记成 `tier: system` 的 token：`headline` 17pt/600、`subheadline` 15pt/400，
 来源 `platform default, not measured in this repo` 且 `needsDeviceMeasure: true`；仍走 `baseSize × 平台缩放系数`，
