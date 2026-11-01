@@ -46,6 +46,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -501,7 +502,10 @@ private fun ListingBody(
     onOpenFile: (WorkspaceFile) -> Unit,
     onQueryChange: (String) -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
+    // The search field is pinned at the top; the IME must shrink the list under it
+    // instead of covering the last rows, which a no-op scroll cannot lift
+    // (spec §5 row `insets`: the page consumes its IME inset, not the host).
+    Column(modifier = Modifier.fillMaxSize().imePadding()) {
         SearchField(query = state.query, onQueryChange = onQueryChange)
         when {
             // A host that has not reported the listing: waiting, not "no files".

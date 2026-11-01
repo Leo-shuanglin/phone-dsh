@@ -47,6 +47,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -983,6 +984,11 @@ private fun ProviderEditor(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            // The key field is the last input of this scrolled form; without the
+            // IME inset the viewport still ends under the keyboard and the field
+            // cannot be scrolled clear (spec §5 row `insets`). `imePadding` sits
+            // outside `verticalScroll` so it shrinks the viewport, not the content.
+            .imePadding()
             .verticalScroll(rememberScrollState()),
     ) {
         Row(

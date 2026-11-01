@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 import { getCommandNames } from 'just-bash/browser'
 import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import { createMemoryChannelPair } from '../../channel/src/index.ts'
-import { createWorkerCommands } from '../../shell-ext/src/index.ts'
+import { UBUNTU_DESCRIPTION, createWorkerCommands } from '../../shell-ext/src/index.ts'
 import { SHELL_MANIFEST_PATH } from '../../shell-ext/src/contract.ts'
 import type { WorkerToolbox } from '../../wasi-toolbox/src/index.ts'
 import {
@@ -688,4 +688,44 @@ test('boot publishes both files before ready and a second boot emits no VFS_MUT'
     await second.stop()
   }
   assert.equal(SHELL_MANIFEST_PATH, CAPABILITIES_JSON_PATH, 'the 127 trailer points at the published file')
+})
+
+test('the ubuntu section exists only when the host answered the probe', () => {
+  const base = { commands: ['bash', 'phone', 'ubuntu'], accelerators: ['phone'] }
+  // No probe answer: no section and no row. The command may still be in the
+  // command list a caller handed in, but the manifest must not describe an
+  // environment that did not answer.
+  const without = buildCapabilityManifest(manifestInput(base))
+  assert.equal(without.json.ubuntu, undefined)
+  assert.doesNotMatch(without.markdown, /## Local Ubuntu environment/u)
+  assert.deepEqual(without.json.phone?.tools.map(tool => tool.name), ['info'])
+
+  // The probe answered: the section is the exact text `ubuntu --help` prints,
+  // every cost fact is in the injected instructions, and the document still
+  // fits the budget.
+  const withUbuntu = buildCapabilityManifest(manifestInput({
+    ...base,
+    ubuntu: { env: 'ubuntu-24.04', backend: 'mock', commands: ['run', 'status', 'close'] },
+  }))
+  assert.equal(withUbuntu.json.ubuntu?.backend, 'mock')
+  assert.equal(withUbuntu.json.ubuntu?.env, 'ubuntu-24.04')
+  assert.deepEqual(withUbuntu.json.ubuntu?.commands, ['run', 'status', 'close'])
+  assert.ok(withUbuntu.markdown.includes(UBUNTU_DESCRIPTION), 'the help text and the manifest are one constant')
+  const text = withUbuntu.markdown.replace(/\s+/gu, ' ')
+  for (const fact of [
+    /separate local Linux environment/u,
+    /does not run DSH/u,
+    /takes time, uses disk and battery/u,
+    /asks for no approval/u, // the gate is not built; the text says so
+    /Close it when you are done/u,
+    /must not start this environment/u,
+    /MOCK adapter/u,
+  ]) {
+    assert.match(text, fact)
+  }
+  assert.deepEqual(withUbuntu.json.phone?.tools.map(tool => tool.name), ['info', 'ubuntu'])
+  assert.ok(
+    Buffer.byteLength(withUbuntu.markdown, 'utf8') <= AGENTS_MD_MAX_BYTES,
+    `the ubuntu section must fit the budget (${String(Buffer.byteLength(withUbuntu.markdown, 'utf8'))} B)`,
+  )
 })

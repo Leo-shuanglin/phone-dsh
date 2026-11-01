@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -289,6 +290,10 @@ private fun PluginInventoryBody(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
+            // The search field is an early row of this list; the IME must shrink the
+            // viewport so the rows below it stay reachable, not just leave the field
+            // visible (spec §5 row `insets`).
+            .imePadding()
             .testTag(UiPageTags.PLUGIN_INVENTORY_LIST)
             .padding(horizontal = tokens.geometry.pageOuterMarginH),
         // unverified geometry: `spec/ui/v1/tokens.json` declares no page-level card

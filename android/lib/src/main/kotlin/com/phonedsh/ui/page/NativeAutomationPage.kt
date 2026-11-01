@@ -85,6 +85,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -1776,6 +1777,12 @@ private fun ScheduleEditorPage(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
+                // The timing fields (本地时间 / 时区 / 星期 / Cron) are the last rows
+                // of this form. Measured on the L50 emulator: with 每周 selected the
+                // 星期 field's bottom sits under the keyboard and the list has no
+                // room left to scroll, so the IME inset must shrink the viewport
+                // (spec §5 row `insets`).
+                .imePadding()
                 .testTag(UiPageTags.AUTOMATION_EDITOR_LIST),
             verticalArrangement = Arrangement.spacedBy(pageListGap),
         ) {

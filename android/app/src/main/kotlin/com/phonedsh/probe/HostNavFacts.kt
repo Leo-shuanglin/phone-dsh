@@ -48,6 +48,7 @@ import com.phonedsh.ui.page.MCPRegistryFacts
 import com.phonedsh.engine.KernelVerdict
 import com.phonedsh.engine.WebViewKernelReport
 import com.phonedsh.ui.page.NewSessionBlock
+import com.phonedsh.ui.page.PhoneCapability
 import com.phonedsh.ui.page.ProviderKeyStatus
 import com.phonedsh.ui.page.ProviderProfile
 import com.phonedsh.ui.page.ModelProviderFacts
@@ -95,6 +96,12 @@ import java.time.ZoneId
  *   `:domain`'s `AndroidHostPermissions` over the platform snapshot
  *   `AndroidDeviceCapabilities.platformFacts`. It is one walk of the platform's
  *   permission state; the phone-permissions page is its only consumer today.
+ * @param permissionAsks the permissions this app has already sent to the platform
+ *   (`PhonePermissionAsks`). It is a host fact, not a value of the snapshot: Android
+ *   cannot tell 未请求 from 已拒绝 by itself, so the ask log is what the 已拒绝 branch
+ *   of the permission mapping reads.
+ * @param permissionInFlight the capability whose system permission prompt is on
+ *   screen, or `null`; the page disarms that one row while it is up.
  */
 internal data class HostReadings(
     val webView: View?,
@@ -107,6 +114,8 @@ internal data class HostReadings(
     val background: HostBackgroundReadings,
     val workspacePresent: Boolean,
     val permissions: HostPermissionReadings,
+    val permissionAsks: Set<String> = emptySet(),
+    val permissionInFlight: PhoneCapability? = null,
 )
 
 /**
@@ -259,7 +268,11 @@ internal fun buildNavFacts(
         // the host reports only the rows something on this device actually answered
         // and leaves the rest to the page's unread state, and it reports no audit
         // because it has none. See `HostPhonePermissions.kt` for the row-by-row rule.
-        phonePermissions = phonePermissionsFacts(readings.permissions),
+        phonePermissions = phonePermissionsFacts(
+            readings = readings.permissions,
+            asked = readings.permissionAsks,
+            inFlight = readings.permissionInFlight,
+        ),
         settings = SettingsFacts(
             // No permission editor exists on this host, so no preset is stored.
             defaultPermissionTier = null,

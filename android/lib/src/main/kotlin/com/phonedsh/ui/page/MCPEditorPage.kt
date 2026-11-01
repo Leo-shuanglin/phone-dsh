@@ -52,6 +52,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicText
@@ -692,6 +693,10 @@ public fun MCPEditorPage(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
+                    // The form's fields are rows of this list (名称 / 命令 / URL /
+                    // 认证头 …); the IME shrinks the viewport so the focused row
+                    // can be brought clear of the keyboard (spec §5 row `insets`).
+                    .imePadding()
                     .testTag(UiPageTags.MCP_EDITOR_LIST),
                 verticalArrangement = Arrangement.spacedBy(pageListGap),
             ) {

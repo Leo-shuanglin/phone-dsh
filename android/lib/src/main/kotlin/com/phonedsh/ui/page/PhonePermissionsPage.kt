@@ -36,6 +36,19 @@
 //   audit   [PhoneCapabilityAuditRecord] — tool, capability, time, egress and
 //           outcome of a real use.
 //
+// 请求 is a promise, not a decoration
+// -----------------------------------
+// The request dimension used to be derived from the status alone, which is exact on
+// iOS (`.notDetermined` ⇒ the system will prompt) and wrong on Android, where a
+// capability can have *no* request path at all: no such permission, no such
+// framework, or a grant only the settings app can change. The host now states that
+// per row as [PhoneGrantRoute]; a host that says nothing keeps the baseline's own
+// rule, so this AAR still renders an iOS-shaped snapshot exactly as before. The rule
+// the page enforces for a host that does answer: **a row with no raisable system
+// request never offers one** — it is either 去系统设置 (the settings app can change
+// it) or BLOCKED (nothing can), and a row that says 去系统设置 renders that one
+// control and nothing else.
+//
 // Section shape (contract: 2 sections, 3 rows)
 // --------------------------------------------
 // Five group sections whose titles come from the enum — the baseline renders
@@ -393,6 +406,35 @@ public enum class PhoneCapabilityAction {
     CONFIRM_BIOMETRIC,
 }
 
+/**
+ * How a grant for this capability can be obtained **on this host**, if at all.
+ *
+ * `status.canRequest` alone cannot answer that on Android: the page's seven statuses
+ * are iOS's, and a capability the host reads no status for falls back to
+ * [PhoneCapabilityStatus.NotDetermined] — whose `canRequest` is `true` — so a row
+ * with *no* request path at all would still be armed as 请求 and a tap would open the
+ * confirmation for a system dialog that can never appear. That is the fake control this enum
+ * removes: the host states, per capability, which of the three routes exists.
+ *
+ * Absent from [PhonePermissionsFacts.grantRoutes] means the host did not say, and the
+ * page then keeps the baseline's own rule (`status.canRequest` → 请求), which is what
+ * an iOS-shaped host needs and what this AAR did before the routes existed.
+ */
+public enum class PhoneGrantRoute {
+    /** A system permission dialog can be raised for this row right now. */
+    REQUEST,
+
+    /**
+     * The grant is only changed in the system settings app: a special-access page
+     * (DND access, background location) has no `requestPermissions` dialog at all,
+     * and a revoked or 不再询问 permission is repaired there too.
+     */
+    SYSTEM_SETTINGS,
+
+    /** No grant exists, or this host has no system page that would grant one. */
+    NONE,
+}
+
 // ---------------------------------------------------------------------------
 // audit: what the phone actually used
 // ---------------------------------------------------------------------------
@@ -438,6 +480,9 @@ public data class PhoneCapabilityAuditRecord(
  * @param requesting the capability whose system request is in flight, if any.
  * @param audit the recent uses; `null` means the host reported none, which is not
  *   the same statement as "there were no uses".
+ * @param grantRoutes per capability, the one route by which a grant can be obtained
+ *   on this host ([PhoneGrantRoute]); a capability absent from the map is "the host
+ *   did not say" and keeps the baseline's `status.canRequest` rule.
  */
 @Immutable
 public data class PhonePermissionsFacts(
@@ -445,6 +490,7 @@ public data class PhonePermissionsFacts(
     public val enabled: Set<PhoneCapability> = emptySet(),
     public val requesting: PhoneCapability? = null,
     public val audit: List<PhoneCapabilityAuditRecord>? = null,
+    public val grantRoutes: Map<PhoneCapability, PhoneGrantRoute> = emptyMap(),
 )
 
 // ---------------------------------------------------------------------------
@@ -603,12 +649,14 @@ public data class PhonePermissionsScreenState(
             // that reported nothing keeps `null`, which is 未知 and not a guess.
             val status = statuses?.let { it[capability] ?: PhoneCapabilityStatus.NotDetermined }
             val requesting = facts.requesting == capability
+            val grantRoute = facts.grantRoutes[capability]
+            val action = actionFor(capability, status, requesting, grantRoute)
             return PhoneCapabilityRowState(
                 capability = capability,
                 status = status,
                 statusLabel = statusLabel(capability, status),
                 tone = tone(capability, status),
-                action = actionFor(capability, status, requesting),
+                action = action,
                 enabled = capability in facts.enabled && status?.permitsUse == true,
                 requesting = requesting,
                 // Dimming follows the baseline's `.opacity(blocksInteraction ? 0.4 : 1)`
@@ -617,7 +665,12 @@ public data class PhonePermissionsScreenState(
                 // disabled, so dimming it would fade a page that is merely unread
                 // instead of refused (and 设备状态, always on, is never dimmed).
                 blocked = status?.blocksInteraction == true,
-                showsOpenSettings = status == PhoneCapabilityStatus.Denied,
+                // The visible repair verb is 去系统设置 exactly when that is what a
+                // tap does: a 已拒绝 row, and a row whose grant only exists in the
+                // settings app (no request dialog for it at all). Printing it for a
+                // row whose action is requested instead would be a second, dead
+                // control on the same row.
+                showsOpenSettings = action == PhoneCapabilityAction.OPEN_SETTINGS,
                 showsLimitedPhotos = status is PhoneCapabilityStatus.Limited &&
                     capability == PhoneCapability.PHOTOS,
             )
@@ -667,11 +720,18 @@ public data class PhonePermissionsScreenState(
             else -> PhoneStatusTone.SECONDARY
         }
 
-        /** What the next tap does (`PhonePermissionsPage.swift:201`). */
+        /**
+         * What the next tap does (`PhonePermissionsPage.swift:201`), narrowed by the
+         * host's own answer about how a grant can be obtained.
+         *
+         * @param grantRoute [PhoneGrantRoute] for this row, or `null` when the host
+         *   did not say (the baseline's rule then applies: 未请求 → 请求).
+         */
         public fun actionFor(
             capability: PhoneCapability,
             status: PhoneCapabilityStatus?,
             requesting: Boolean,
+            grantRoute: PhoneGrantRoute? = null,
         ): PhoneCapabilityAction = when {
             capability.readOnlyAlwaysOn -> PhoneCapabilityAction.ALWAYS_ON
             requesting || status == null -> PhoneCapabilityAction.BLOCKED
@@ -679,7 +739,13 @@ public data class PhonePermissionsScreenState(
             status == PhoneCapabilityStatus.Denied -> PhoneCapabilityAction.OPEN_SETTINGS
             capability == PhoneCapability.BIOMETRICS -> PhoneCapabilityAction.CONFIRM_BIOMETRIC
             status.permitsUse -> PhoneCapabilityAction.ENABLE
-            status.canRequest -> PhoneCapabilityAction.REQUEST
+            // 请求 only where the host said a system dialog can be raised. Without a
+            // route the page keeps the baseline's own rule, because an iOS-shaped
+            // host reports `notDetermined` for a row it really can ask about.
+            status.canRequest &&
+                (grantRoute == null || grantRoute == PhoneGrantRoute.REQUEST) ->
+                PhoneCapabilityAction.REQUEST
+            grantRoute == PhoneGrantRoute.SYSTEM_SETTINGS -> PhoneCapabilityAction.OPEN_SETTINGS
             else -> PhoneCapabilityAction.BLOCKED
         }
 
@@ -708,9 +774,12 @@ public data class PhonePermissionsScreenState(
  *   [PhoneCapabilityRowState.action].
  * @param onToggleCapability the switch was flipped: `true` asks for the same
  *   activation as a tap, `false` only switches the app's own use off.
- * @param onOpenSettings 去系统设置: open this app's system settings page.
+ * @param onOpenSettings 去系统设置: open the system page that can change **this
+ *   capability's** grant. It carries the capability because the page has two rows
+ *   that lead to two different pages (一个已拒绝的运行时权限 opens the app's own
+ *   settings; 专注模式 opens the DND-access page, which is not under app settings).
  * @param onManagePhotos 管理可访问照片: open the limited-library picker.
- * @param onConfirmRequest 继续 in the confirmation.
+ * @param onConfirmRequest 继续 in the confirmation: perform the row's request.
  * @param onCancelConfirmation 取消 in the confirmation.
  * @param onAcknowledgeDisable 知道了 in the disable notice.
  * @param onDismissDisable the disable notice was dismissed without a button.
@@ -723,7 +792,7 @@ public fun PhonePermissionsPage(
     embedded: Boolean = false,
     onTapCapability: (PhoneCapability) -> Unit = {},
     onToggleCapability: (PhoneCapability, Boolean) -> Unit = { _, _ -> },
-    onOpenSettings: () -> Unit = {},
+    onOpenSettings: (PhoneCapability) -> Unit = {},
     onManagePhotos: () -> Unit = {},
     onConfirmRequest: () -> Unit = {},
     onCancelConfirmation: () -> Unit = {},
@@ -782,10 +851,13 @@ public fun PhonePermissionsPage(
         )
     }
     state.disableNoticeBody?.let { notice ->
+        val capability = state.disableNotice
         DisableNoticeDialog(
             body = notice,
             onAcknowledge = onAcknowledgeDisable,
-            onOpenSettings = onOpenSettings,
+            // The notice's 去系统设置 is about the capability it just switched off,
+            // so it opens that capability's page, not a generic app-settings one.
+            onOpenSettings = { if (capability != null) onOpenSettings(capability) },
             onDismiss = onDismissDisable,
         )
     }
@@ -797,7 +869,7 @@ private fun PhonePermissionsBody(
     state: PhonePermissionsScreenState,
     onTapCapability: (PhoneCapability) -> Unit,
     onToggleCapability: (PhoneCapability, Boolean) -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenSettings: (PhoneCapability) -> Unit,
     onManagePhotos: () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
@@ -841,7 +913,7 @@ private fun CapabilityGroupCard(
     rows: List<PhoneCapabilityRowState>,
     onTapCapability: (PhoneCapability) -> Unit,
     onToggleCapability: (PhoneCapability, Boolean) -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenSettings: (PhoneCapability) -> Unit,
     onManagePhotos: () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
@@ -886,7 +958,7 @@ private fun CapabilityRow(
     row: PhoneCapabilityRowState,
     onTapCapability: (PhoneCapability) -> Unit,
     onToggleCapability: (PhoneCapability, Boolean) -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenSettings: (PhoneCapability) -> Unit,
     onManagePhotos: () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
@@ -940,7 +1012,7 @@ private fun CapabilityRow(
         if (row.showsOpenSettings) {
             SessionTextAction(
                 label = UiStrings.PHONE_PERMISSIONS_OPEN_SETTINGS,
-                onClick = onOpenSettings,
+                onClick = { onOpenSettings(row.capability) },
                 tone = SessionActionTone.ACCENT,
             )
         }

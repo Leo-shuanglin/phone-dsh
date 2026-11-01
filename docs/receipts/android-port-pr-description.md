@@ -518,3 +518,232 @@ kinds=turn_started,user_message×4,assistant_message,usage,tool_call,tool_result
 
 **先证明需求，再给能力**——第一步已经成立。第二步（把 `ubuntu.exec` 接进 Worker）
 **没做**，所以「Agent 会不会主动申请」这个问题**还没有答案**。
+
+---
+
+## 十三、P4 闭环：切走后回合真的续跑了
+
+L39 把机接完时，端到端仍是死的——**阻断点不在接线，在 `:dsh` 的收尾逻辑**：
+
+```
+D14 Running -> Draining via scenePhase(background)
+  → 关 epoch → stop worker → Parked → APP_TURN_FAILED reason=channel_lost
+```
+
+**这是一份真实的规格冲突**：计划 §7.9 说锁屏「尽量完成」，`budgets.md` §2 的 D14 表却把
+`scenePhase(background)` 无条件映射到 `Draining`。
+
+**裁决**：D14 那张表的前提是「**没有**后台窗口」。窗口真在位时适用计划 §7.9——
+D14 的 `Draining` 是「没有执行权时优雅收尾」，而窗口在位时**执行权还在**，
+此时 drain 是**主动放弃一个系统已经允许你继续的执行**。
+
+### 实现
+
+- 新 seam `TurnWindow`（`InPlace(backend) | Absent | Unreadable`），读 `TurnRuntime.snapshot()`——
+  **只有 `TurnJobService.onStartJob`（UIDT）或 `TurnForegroundService.onStartCommand`（FGS）真跑起来才算**，
+  `TurnBackground.start()` 仅 schedule 不算
+- `WindowHold`：hold 期间每 250 ms 复查；窗口结束 → 释放并回灌 `scenePhase(background)` 走原有 drain
+- **读不到一律倒向「没有窗口」**（fail-safe），有测试
+- **超时 600 秒强制回灌**，复用既有 DrainLane 20 秒死线
+- **用户「停止本轮」不豁免**：≤250 ms 的下一 tick 读到窗口消失 → 立即 drain
+
+### 设备实证（最终代码 + 18 dex APK）
+
+```
+00:37:13 BG_TURN_START channel=USER_INITIATED_JOB result=uidt_scheduled:8401
+00:37:18 HOME
+00:37:19 window: the turn window is in place (backend=uidt); the Running -> Draining edge is deferred
+00:37:19 window: scenePhase(background) with a uidt window in place; keeping Running (plan §7.9)
+00:37:40 APP_TURN_OK session=... reason=completed tool_edges=true
+00:37:40 window: the uidt window ended after 20866 ms; the deferred background edge is released
+00:37:40 D14 Running -> Draining via scenePhase(background)
+00:37:40 drain: epoch closed, durable_upto=71
+```
+
+**HOME → OK 的 21 秒内没有任何 drain，`APP_TURN_FAILED|channel_lost` 为 0。**
+（验收按「`APP_TURN_OK` 之前不得出现 drain」判断——OK 之后 15 ms 那次收尾是正常的。）
+
+### 顺带修掉一句误导了三处代码的注释
+
+`DrainLane.kt` / `PhoneDshHost.kt` 里那句「this App declares no service」**是错的**——
+`:app` 源 manifest 没有，但 `:dsh` 的 AAR 有 4 个组件且已合并进 APK。**结论对、理由错**，
+已改成 AAR 合并事实 + 窗口读数。
+
+### 残余边界（如实写）
+
+**「已排队但还没进执行槽」不算窗口** → 极早 HOME（或 UIDT 因网络约束 pending）时仍会 drain。
+`TurnRuntime` 只看得见「已启动」，看不见「已排队」；要读 pending 需要 Context / `JobScheduler.getPendingJob`，
+宿主没有这个 seam。**这是一条真实的边界，不是遗漏。**
+
+---
+
+## 十四、权限请求流：17 行里只有 1 行是真的
+
+计划要求「UI 与交互双端一致」。iOS 的权限申请是「点 → 系统弹窗 → 批准/拒绝 → 状态更新」。
+Android 原来是这样：
+
+```
+HostPhonePermissions.kt:85   // No request is in flight: this build never calls `requestPermissions`.
+PdshNavHost.kt:1551          onConfirmRequest = { ...CancelConfirmation }   ← 只关弹窗
+```
+
+### 「假控件」的真实形状（和我最初的判断不同）
+
+我以为是 4 个 `Unavailable` 行（提醒事项/实时活动/快捷指令/家庭）在假请求。
+**实测不是——那 4 行本来就是 `BLOCKED`。**
+
+真正的假控件是**没有 status 的行**：页面把「宿主没报状态」回落成 `NotDetermined`（可请求）→
+`REQUEST` → 点开确认框 → 继续什么也不做。**本 build 实测 17 行显示 `REQUEST`，只有 1 行（通知）是真的。**
+
+### 修法
+
+宿主侧新增**路由表**（`PhoneGrantRoute`），读 **merged manifest 的 declared 集合**决定每行怎么走：
+
+| 原来 REQUEST → 现在 | 行 |
+|---|---|
+| `OPEN_SETTINGS`（特殊访问） | 专注模式 |
+| `BLOCKED`（无任何授权路径） | 通讯录、日历、健康、照片、相机、麦克风、语音识别、定位、运动、蓝牙、本地网络、文件、剪贴板、后台定位、音乐（**15 行**）|
+| 仍然 `REQUEST`（真请求） | 通知 |
+
+**关键设计**：这张表是读 manifest 推出来的，所以 **manifest 一旦补 `<uses-permission>`，
+对应行自动变 `REQUEST`，零代码改动**（有 JVM 测试钉住）。
+
+### 「已拒绝 vs 未请求」怎么分
+
+Android 对「从未问」和「问了被拒」返回同一个 `DENIED`，`shouldShowRequestPermissionRationale`
+在两种情况下都是 false。所以只能自己记：`SharedPreferences` 的 ask 日志。
+**已答复拒绝后行变「已拒绝 + 去系统设置」，永不再调 `requestPermissions`**——那个「第二次不再弹窗」的陷阱踩不到。
+
+### 设备证据（AVD android-35，用完已删）
+
+- 点「请求」→ **真弹系统框**（`com.google.android.permissioncontroller`，`Allow PDSH 引擎探针 to send you notifications?`）
+- 批准 → `已允许`；`dumpsys package` = `granted=true`
+- 拒绝 → `已拒绝` + `去系统设置`；**force-stop 重启后仍是「已拒绝」**
+- 反向验证：`家庭` 行 `clickable=true enabled=false`，点它 `topResumedActivity` 不变、无 dialog
+
+### 同时补的 manifest
+
+`ACCESS_NOTIFICATION_POLICY`（`protectionLevel=normal`）。不声明的话本 App **不会出现在
+系统「勿扰访问」列表里**，专注模式的「去系统设置」会跳到正确页面但页面上没有本 App 的开关。
+
+---
+
+## 十五、IME / insets：只改了实测需要的 8 页
+
+L44 报「12 个页面有 `BasicTextField` 且零 IME 处理」。**但逐页实测后只有一部分真的需要改。**
+
+| 页面 | 实测 |
+|---|---|
+| **Files** | 造 40 个文件：修复前滚到底最后一行 y2228–2337 **被键盘（1517 起）盖住且无滚动余量**；修复后 y1408–1501 完整露出 |
+| **Automation** | 「每周」的「星期」字段 y1512–1638，**底边被盖 5px**；修复后 y1487–1613 |
+| Sessions / PluginInventory | 搜索框在顶部，字段可见；但列表底部同样不可达（同一容器结构） |
+| WebSearch / MCPEditor / ModelProvider / PDSHShell | 宿主 `writable=NO` 或无快照，**字段不可聚焦**，按结构判断加了 |
+| Egress | 居中 overlay 卡片（y≈950–1450），几何上不遮；**未改** |
+| DailyBrief / TaskScreen / Tools | **未路由**，无语境 |
+
+**加了 8 页，都是页内容容器，不是宿主、不是页头。** L44 特意没在宿主统一加——
+那会和 Chat/WorkspaceFolders 已处理的叠成双倍、还会把页头顶掉。
+
+**`ChatPage` / `WorkspaceFoldersPage` 一个字没动**：`git diff --quiet` exit 0，
+`gate` 的 11 张与 `ios-parity` 的 26 张**全部 0 diff**，没有用 `--update`。
+
+---
+
+## 十六、一个会毁掉所有设备验证的坑
+
+**多个车道在同一个 checkout 并发跑 gradle**，会污染 `app/build` 的 build cache，
+产出一版**只有 5 个 dex、缺 `:lib` / `:platform-android` 类**的 APK——装上必崩
+`NoClassDefFoundError: AndroidSecureStore`。**连 `clean` 都会 `FROM-CACHE`**。
+
+**复验时必须**：
+
+```bash
+./gradlew clean :app:assembleDebug --no-build-cache   # 才是完整 18 dex
+```
+
+两条独立车道各自撞了一次并各自查出来。**这是我这轮编排的失误**——不该让多路在同一 checkout 并行构建。
+
+---
+
+## 十七、`ubuntu` 进 Worker 工具面：Agent 第一次真正看得见它
+
+契约（§12）和 mock 适配器（L47）都到位后，把命令接进了 Worker 的命令表。
+
+### 存在性靠 **probe**，不靠 caps
+
+`channel.md` §4.1 的 caps 词汇是**封闭**的，而 `ubuntu` 是**写**工具——不能冒充只读 accelerator，
+也不能自造 `accelerator:ubuntu`。所以：
+
+```
+HELLO caps 无 accelerator:phone        → 不注册（不发请求）
+有 phone                                → 发一条 EXEC_REQ: phone ubuntu probe（4s 上限）
+宿主答 {available:true, env, backend, commands} → 注册
+任何失败（unsupported / 超时 / 坏 JSON）        → 不注册，且不失败 boot
+```
+
+**未 advertised 时命令根本没进表** → `ubuntu: command not found`，**exit 127**（不是超时、不是假成功）。
+有测试钉住这条。
+
+### 说明原文（Agent 唯一能读到的信息）
+
+```
+`ubuntu` runs one command in a separate local Linux environment. It is for tasks that need
+a full Linux userland: a toolchain (gcc, make, ...), a package manager, or a program that
+only runs on Linux.
+
+It does not run DSH. The turn, the context, the session and every file stay in DSH.
+Ordinary work — ls, cat, grep, git, python3, reading, editing, searching — runs in the
+existing bash and must not start this environment.
+
+It costs. Starting the environment takes time, uses disk and battery. Close it when you
+are done (ubuntu close): files inside it are not kept, and the next use starts a fresh
+environment and waits again.
+
+This build asks for no approval. The per-session approval gate is part of the design but
+is not implemented yet, so the environment starts without asking. ...
+
+This build is wired to a MOCK adapter. ... a mock exit=0 is not a real compile or run.
+```
+
+**最后那段「不许把 mock 当真实结果」是我要求加的，也确实是必要的**——它挡住了一次假成功（见下）。
+
+### 真模型联调：**它看见了，而且选择了保守**
+
+第一轮（用户指定的 gcc prompt，`APP_TURN_OK reason=completed tool_edges=true`）：
+
+- 它调了 `ubuntu status`（不带 jobId）→ 得到 usage 错误 → **证明命令存在**
+- 它的 reasoning 原文：
+  > 「`ubuntu` is mock adapter — cannot claim real compile. Need be honest. Must not present mock
+  > output as real. … Could use `ubuntu run -- gcc`? It returns synthetic backend=mock.
+  > Explicitly forbidden to present as real. … **Better avoid.**」
+- 最终原话：
+  > 「我没法在当前环境里完成"用 gcc 编译并运行"这一步，因此不会伪造运行结果。…
+  > `ubuntu` 适配器在当前构建中是 **mock**，其退出码是模拟生成的，不能当作真实的编译或运行结果。」
+
+→ **判定 (b)：不是没看到，是读懂说明后选择保守。**
+
+第二轮（显式要求执行）：`ubuntu run -- gcc --version`、`ubuntu status`、`ubuntu close` 全部成功，
+输出带 `backend=mock`、`egress=false`、`authorityExited=worker-vfs`、`sealMock`、
+`internalAccessObserved=false`、3 个产物（20 MiB / 15.5 MiB / 12 B）。**它明确答「是 mock，不是真实执行」。**
+
+### 两个从这次联调得到的结论
+
+1. **说明的第一职责（防假成功）达成了**：Agent 引用那句 mock 警告来决定不提交 job，没有把合成
+   `exit=0` 当真实编译。
+2. **但同一句也压住了「主动申请」**：模型把「不要假装」读成了「不要用」。**接真环境时应删掉或弱化
+   mock 段**，再观察主动率。**这是下一轮要改的，现在如实记下来。**
+
+### 一条我修掉的假话
+
+说明原本写「首次使用需要用户批准」——**而 mock build 没有批准 UI**。
+**一句 build 兑现不了的承诺，和把 mock 的退出码说成真实编译是同一类缺陷。** 已改成
+「This build asks for no approval … 批准门是实现的一部分但还没做」，并把两条测试的断言跟着改。
+
+### 残余（如实写）
+
+- **传输不是设计表里的「不出行」**：`ubuntu.exec` 的宿主工具语义成立，但线仍是 **0x20 EXEC_REQ**
+  （挂在 `phone` 工具目录下）。Android 没有 `bridge.md` §12 的 page↔host bridge 实现，
+  Worker 也没有第二条到宿主的请求路。要让「走宿主工具、不出行」真正成立，需要实现 §12 的传输。
+- `ubuntu run` 是**同步等终态**，不是 §12 的 async JobRef API；长任务会撞 120 秒 shell 墙钟。
+- `ubuntu fetch` 没做成 CLI（lane 有实现，artifacts 只列不取）。
+- **mock 的 seal 不封任何东西**——靠输出与 JSON 的 `sealMock=true` / `backend=mock` 说明。

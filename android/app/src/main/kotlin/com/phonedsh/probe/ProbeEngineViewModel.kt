@@ -624,12 +624,16 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         workspacePresent = Files.isDirectory(walPaths.materializedWorkspace),
         // The phone-permission matrix's device read: the platform snapshot comes from
         // `:domain`'s `AndroidDeviceCapabilities`, the permission state from
-        // `AndroidHostPermissions` over it. Both are application-context reads; no
-        // permission is requested, and nothing here writes.
+        // `AndroidHostPermissions` over it. Both are application-context reads; the
+        // walk itself requests no permission and writes nothing — the request is the
+        // Activity's (`MainActivity.phonePermission`), and what it leaves behind is
+        // read back here as the ask log and the in-flight row.
         permissions = AndroidHostPermissions(
             getApplication<Application>(),
             AndroidDeviceCapabilities.platformFacts(getApplication<Application>()),
         ).read(),
+        permissionAsks = PhonePermissionAsks.asked(),
+        permissionInFlight = PhonePermissionAsks.inFlight,
     )
 
     /** The facts every routed page reads, rebuilt from one host walk. */

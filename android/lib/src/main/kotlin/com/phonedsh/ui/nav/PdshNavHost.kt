@@ -71,6 +71,7 @@ import com.phonedsh.ui.page.NativeConfigurationPage
 import com.phonedsh.ui.page.NativePluginInventoryPage
 import com.phonedsh.ui.page.NativeWorkbenchPage
 import com.phonedsh.ui.page.PDSHShellPage
+import com.phonedsh.ui.page.PhoneCapability
 import com.phonedsh.ui.page.PhoneCapabilityAction
 import com.phonedsh.ui.page.PhonePermissionsLocalState
 import com.phonedsh.ui.page.PhonePermissionsPage
@@ -344,6 +345,12 @@ public fun PdshNavHost(
     chatSubpages: ChatSubpageFacts = ChatSubpageFacts(),
     workspaceRoot: File? = null,
     backLevel: PdshBackLevel? = null,
+    // The phone-permissions page is the one page whose 请求 is not a write this file
+    // can perform: a system permission prompt belongs to the Activity, so the gesture
+    // is handed back with the row it was made on. Empty by default, so a host that
+    // cannot prompt still renders the page — as a read-only surface.
+    onPhonePermissionRequest: (PhoneCapability) -> Unit = {},
+    onPhonePermissionSettings: (PhoneCapability) -> Unit = {},
 ) {
     val route = nav.current
     if (route == PdshRoute.Home) {
@@ -361,8 +368,16 @@ public fun PdshNavHost(
             is PdshRoute.Preview -> PreviewRoute(route, onBack, workspaceRoot)
             PdshRoute.Automation -> AutomationRoute(facts, onBack, onHostAction, backLevel)
             PdshRoute.Configuration -> ConfigurationRoute(facts, onBack, onNavigate)
-            PdshRoute.Settings ->
-                SettingsRoute(facts, onBack, onNavigate, onHostAction, onSettingsWrite, backLevel)
+            PdshRoute.Settings -> SettingsRoute(
+                facts = facts,
+                onBack = onBack,
+                onNavigate = onNavigate,
+                onHostAction = onHostAction,
+                onSettingsWrite = onSettingsWrite,
+                backLevel = backLevel,
+                onPhonePermissionRequest = onPhonePermissionRequest,
+                onPhonePermissionSettings = onPhonePermissionSettings,
+            )
             PdshRoute.ModelProvider -> ModelProviderRoute(facts, onBack, onHostAction)
             PdshRoute.WebSearch -> WebSearchRoute(facts, onBack, onHostAction)
             PdshRoute.Mcp -> McpRoute(facts, onBack, onHostAction, onNavigate)
@@ -380,7 +395,13 @@ public fun PdshNavHost(
                 SessionArtifactsRoute(route.sessionId, onBack, backLevel)
             PdshRoute.AgentPresets -> AgentPresetsRoute(onBack)
             PdshRoute.PluginInventory -> PluginInventoryRoute(facts, onBack, onNavigate)
-            PdshRoute.PhonePermissions -> PhonePermissionsRoute(facts, onBack, backLevel = backLevel)
+            PdshRoute.PhonePermissions -> PhonePermissionsRoute(
+                facts = facts,
+                onBack = onBack,
+                onRequestPermission = onPhonePermissionRequest,
+                onOpenPermissionSettings = onPhonePermissionSettings,
+                backLevel = backLevel,
+            )
             PdshRoute.ChatPreferences -> ChatPreferencesRoute(facts, onBack)
             PdshRoute.SettingsDocument -> SettingsDocumentRoute(onBack)
             PdshRoute.Shortcuts -> ShortcutsRoute(onBack)
@@ -821,6 +842,11 @@ private fun SettingsRoute(
     onHostAction: (PdshHostAction) -> Unit,
     onSettingsWrite: (SettingsWrite) -> Unit,
     backLevel: PdshBackLevel?,
+    // 手机权限 is a *tab* of this sheet as well as a route (§1 names both entry
+    // points), so the two hosted gestures reach it here too — a tab whose 请求 did
+    // nothing would be the same fake control the pushed page no longer has.
+    onPhonePermissionRequest: (PhoneCapability) -> Unit = {},
+    onPhonePermissionSettings: (PhoneCapability) -> Unit = {},
 ) {
     // 新会话默认权限 is the settings sheet's own child page in the baseline, so it
     // is a local page swap here, not a route the stack owns.
@@ -886,6 +912,8 @@ private fun SettingsRoute(
                             onBack = onBack,
                             embedded = true,
                             backLevel = backLevel,
+                            onRequestPermission = onPhonePermissionRequest,
+                            onOpenPermissionSettings = onPhonePermissionSettings,
                         )
                     SettingsTab.PRESETS -> AgentPresetsRoute(onBack = onBack, embedded = true)
                 }
@@ -1510,6 +1538,8 @@ private fun PhonePermissionsRoute(
     onBack: () -> Unit,
     embedded: Boolean = false,
     backLevel: PdshBackLevel? = null,
+    onRequestPermission: (PhoneCapability) -> Unit = {},
+    onOpenPermissionSettings: (PhoneCapability) -> Unit = {},
 ) {
     var local by remember { mutableStateOf(PhonePermissionsLocalState()) }
     // The request confirmation and the disable notice are this page's own modals:
@@ -1538,17 +1568,36 @@ private fun PhonePermissionsRoute(
         state = state,
         onDone = onBack,
         onTapCapability = { capability ->
-            // Only 未请求 opens the confirmation; every other row is the host's job.
+            // The tap performs the row's own action, so no clickable row is inert:
+            // 请求 confirms the purpose first, and a row whose only repair is the
+            // settings page opens it (the baseline's `activate()` does the same for
+            // `.denied`). BLOCKED / ALWAYS_ON rows are not clickable at all.
             val row = state.groups.asSequence().flatMap { it.rows }
                 .firstOrNull { it.capability == capability }
-            if (row?.action == PhoneCapabilityAction.REQUEST) {
-                local = local.apply(PhonePermissionsUiEvent.Confirm(capability))
+            when (row?.action) {
+                PhoneCapabilityAction.REQUEST ->
+                    local = local.apply(PhonePermissionsUiEvent.Confirm(capability))
+                PhoneCapabilityAction.OPEN_SETTINGS -> onOpenPermissionSettings(capability)
+                else -> Unit
             }
         },
         onToggleCapability = { capability, value ->
             if (!value) local = local.apply(PhonePermissionsUiEvent.NotifyDisabled(capability))
         },
-        onConfirmRequest = { local = local.apply(PhonePermissionsUiEvent.CancelConfirmation) },
+        // 去系统设置 opens the page that holds this capability's grant: the same host
+        // gesture as a 继续 on a row that has no prompt to raise.
+        onOpenSettings = onOpenPermissionSettings,
+        // 继续 is a real request now, not a dismissal: the purpose has been shown, and
+        // the host performs the row's request — a system permission prompt, or the
+        // system page that holds the grant when there is no prompt to raise. The
+        // confirmation closes first so the platform's own dialog is the only thing on
+        // screen; the row's new state comes from the host's next read, never from
+        // this callback.
+        onConfirmRequest = {
+            val capability = local.confirmation
+            local = local.apply(PhonePermissionsUiEvent.CancelConfirmation)
+            if (capability != null) onRequestPermission(capability)
+        },
         onCancelConfirmation = { local = local.apply(PhonePermissionsUiEvent.CancelConfirmation) },
         onAcknowledgeDisable = { local = local.apply(PhonePermissionsUiEvent.AcknowledgeDisable) },
         onDismissDisable = { local = local.apply(PhonePermissionsUiEvent.AcknowledgeDisable) },

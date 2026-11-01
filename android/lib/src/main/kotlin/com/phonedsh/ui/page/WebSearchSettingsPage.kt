@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -325,6 +326,10 @@ public fun WebSearchSettingsPage(
             LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
+                        // The address/key fields are rows near the bottom of this
+                        // list; the IME must shrink it so they can scroll clear of
+                        // the keyboard (spec §5 row `insets`).
+                        .imePadding()
                         .testTag(UiPageTags.WEB_SEARCH_LIST),
                     verticalArrangement = Arrangement.Top,
                 ) {

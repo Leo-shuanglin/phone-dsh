@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import com.phonedsh.dsh.background.NotificationCapability
+import com.phonedsh.ui.page.PhoneCapability
 
 class MainActivity : ComponentActivity() {
     private val engine: ProbeEngineViewModel by viewModels()
@@ -26,6 +27,16 @@ class MainActivity : ComponentActivity() {
      * before the dialog was answered.
      */
     private var backgroundRevision by mutableIntStateOf(0)
+
+    /**
+     * The phone-permissions page's counterpart: bumped when a permission answer
+     * changes the matrix, and on every resume **after** the user may have changed a
+     * grant somewhere else (the settings page this app sends them to, or the
+     * system's own app info page). The facts are rebuilt from a fresh device read —
+     * this counter never carries a status, so a page that was not re-read cannot
+     * show an answer it did not observe.
+     */
+    private var permissionRevision by mutableIntStateOf(0)
 
     /** True while a 跑一轮 tap waits for the POST_NOTIFICATIONS answer. */
     private var turnAfterPermission = false
@@ -44,7 +55,12 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         Log.i(TAG, "POST_NOTIFICATIONS_ANSWER granted=$granted")
+        // The 跑一轮 prompt is the same permission the phone-permissions page shows,
+        // so its answer is recorded in the one ask log the page reads: a denial here
+        // must not leave that page claiming 未请求 for a permission the user refused.
+        PhonePermissionAsks.record(listOf(NotificationCapability.POST_NOTIFICATIONS))
         backgroundRevision++
+        permissionRevision++
         if (turnAfterPermission) {
             turnAfterPermission = false
             // Denied still runs the turn: it becomes a foreground-only turn, which
@@ -53,12 +69,52 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * The phone-permissions page's one-permission prompt.
+     *
+     * Same contract as [notificationPermission] — the answer arrives after the
+     * snapshot that drew the row was taken — but the answered permission is not
+     * known at registration time, so the ask is read back from the log
+     * ([PhonePermissionAsks.inFlightPermissions]) and recorded before the facts are
+     * rebuilt. Nothing here reports success: the page's next read is the only thing
+     * that can turn the row 已允许, and `granted` is logged, not stored, so a denied
+     * answer can never be mistaken for a grant.
+     */
+    private val phonePermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val permissions = PhonePermissionAsks.inFlightPermissions()
+        Log.i(
+            TAG,
+            "PHONE_PERMISSION_ANSWER permissions=$permissions granted=$granted " +
+                "rationale=${permissions.map(::shouldShowRequestPermissionRationale)}",
+        )
+        PhonePermissionAsks.answered(permissions)
+        permissionRevision++
+    }
+
+    /**
+     * The multi-permission form, used where Android requires one prompt for a pair —
+     * precise and approximate location must be requested together from API 31, or the
+     * platform drops the request instead of showing a dialog.
+     */
+    private val phonePermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { result ->
+        Log.i(TAG, "PHONE_PERMISSIONS_ANSWER result=$result")
+        PhonePermissionAsks.answered(result.keys)
+        permissionRevision++
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // The key store must exist before the launch config, because the config
         // asks it for the key's *state* while building the Worker env, and before
         // the view model constructs the gateway that asks it for the credential.
         ApiKeyStore.install(applicationContext)
+        // The phone-permissions page's ask log, read before the first facts build so
+        // the very first frame already knows which rows were already answered.
+        PhonePermissionAsks.install(applicationContext)
         // Development only: a key dropped into the app's own files dir is imported and
         // the plaintext is deleted. Gated on the *install's* debuggable flag rather than
         // BuildConfig (this module compiles with `buildConfig = false`); a release APK
@@ -91,9 +147,12 @@ class MainActivity : ComponentActivity() {
                 turn = turn,
                 recoveryNotice = recoveryNotice,
                 backgroundRevision = backgroundRevision,
+                permissionRevision = permissionRevision,
                 onStart = engine::start,
                 onStop = engine::stop,
                 onRunTurn = ::runTurnOrAskForNotifications,
+                onPhonePermissionRequest = ::requestPhonePermission,
+                onPhonePermissionSettings = ::openPhonePermissionSettings,
             )
         }
     }
@@ -120,6 +179,69 @@ class MainActivity : ComponentActivity() {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             checkSelfPermission(NotificationCapability.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
+
+    override fun onResume() {
+        super.onResume()
+        // A grant can change while this activity is stopped: the user may have just
+        // been sent to the settings page by this very page, or revoked something from
+        // the system's own app-info screen. Re-walking on resume is the only way the
+        // matrix reports what the platform says now instead of what it said before.
+        permissionRevision++
+    }
+
+    /**
+     * 继续 in the phone-permissions confirmation: raise the real system request.
+     *
+     * The decision is the host's, taken here from the same readings the page was
+     * drawn from: one declared runtime permission is asked with the single-permission
+     * launcher, a pair (location) with the multiple form, and a capability with no
+     * requestable permission at all goes to the system page that can change it —
+     * which is the same thing its 去系统设置 control does. Nothing is faked: an empty
+     * request set is not "granted", it is a row the page should not have armed.
+     *
+     * @param capability the row whose 继续 was pressed.
+     */
+    private fun requestPhonePermission(capability: PhoneCapability) {
+        val readings = engine.hostReadings().permissions
+        val permissions = requestablePermissions(capability, readings)
+        when {
+            permissions.size == 1 -> {
+                PhonePermissionAsks.started(capability, permissions)
+                // Rebuild the facts first so the row is already disarmed/requesting
+                // when the dialog appears over it.
+                permissionRevision++
+                phonePermission.launch(permissions.single())
+            }
+
+            permissions.size > 1 -> {
+                PhonePermissionAsks.started(capability, permissions)
+                permissionRevision++
+                phonePermissions.launch(permissions.toTypedArray())
+            }
+
+            else -> {
+                Log.i(TAG, "PHONE_PERMISSION_NONE capability=${capability.id} -> settings")
+                openPhonePermissionSettings(capability)
+            }
+        }
+    }
+
+    /**
+     * 去系统设置: open the page that holds this capability's switch.
+     *
+     * The capability decides which page, because they are not the same one: a denied
+     * runtime permission lives on this app's own details page, while 专注模式's DND
+     * access is a special-access page that app details does not contain.
+     */
+    private fun openPhonePermissionSettings(capability: PhoneCapability) {
+        val intent = phonePermissionSettingsIntent(this, capability)
+        if (intent == null) {
+            Log.w(TAG, "PHONE_PERMISSION_NO_SETTINGS capability=${capability.id}")
+            return
+        }
+        Log.i(TAG, "PHONE_PERMISSION_SETTINGS capability=${capability.id} action=${intent.action}")
+        startActivity(intent)
+    }
 
     private companion object {
         const val TAG = "PDSHMain"

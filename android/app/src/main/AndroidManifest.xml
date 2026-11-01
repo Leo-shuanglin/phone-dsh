@@ -6,6 +6,14 @@
          Declared here too so the demo's requirement is visible in :app. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Do Not Disturb access for the phone-permissions page's 专注模式 row.
+         `protectionLevel=normal`, so it needs no runtime prompt — but without the
+         declaration the app never appears in the system's "Do Not Disturb access"
+         list, and the row's 去系统设置 lands on a page with no switch for it
+         (measured 2026-11-01). The grant is still the user's: the row routes to
+         that system page and reads `isNotificationPolicyAccessGranted` back. -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
     <!--
       The background surface is NOT declared here, and must not be: it belongs to
       :dsh, whose library manifest declares the two services, the two receivers and

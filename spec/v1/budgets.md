@@ -39,7 +39,7 @@ before the transition.
 | boot: persisted `Running`, `Draining` or `Recovering` | `Recovering` | process start | Cold recovery: WAL scan, replay, overlay, worker boot; admission closed. |
 | boot: persisted `Failed` | `Failed` | process start | Keep admission closed; report the user action needed. |
 | boot: no persisted state | `Recovering` | process start | New workspace; WAL starts at mseq 1. |
-| `Running` | `Draining` | scenePhase background | Close admission; start the background task and the 20 s timer. |
+| `Running` | `Draining` | scenePhase background, and no background window is in place (plan §7.9: with a window the host stays `Running`) | Close admission; start the background task and the 20 s timer. |
 | `Draining` | `Parked` | background drain complete, or 20 s deadline | Close the epoch (wal.md §5.2), fsync, stop the worker. A deadline ends the wait and aborts in-flight channel requests; the epoch close still runs. |
 | `Draining` | `Recovering` | restart path: planned WebContent restart, WebContent termination, or boot | Close the epoch, restart the worker, verify the lease. |
 | `Parked` | `Recovering` | scenePhase active | Boot the worker and verify the lease; admission stays closed. |
@@ -63,7 +63,7 @@ without `Reclaiming`, and a drain deadline never reopens admission.
 
 | Signal | Source | Effect |
 |---|---|---|
-| scenePhase | App lifecycle | `background` → `Draining`; `active` → `Parked`/`Recovering` and lease verification. |
+| scenePhase | App lifecycle | `background` → `Draining` when no background window is in place (plan §7.9); `active` → `Parked`/`Recovering` and lease verification. |
 | background task expiry | iOS background task | Force the `Draining` deadline (20 s), abort in-flight requests, continue to the pending target. |
 | WebContent termination | WKWebView delegate | Count it; in the foreground `Running`/`Draining` → `Recovering`. |
 | planned restart timer | controller | Restart at a tool-call boundary when engine heap > 75% for 3 samples, after a WebContent termination, or after 24 h of continuous running; never mid-turn (§4). |

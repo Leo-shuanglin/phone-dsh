@@ -686,7 +686,12 @@ public fun SessionsPage(
             // inset 16 on both sides, so every hairline runs 16 -> 304. The search
             // bar above it belongs to the window, not to this column, which is why
             // it stays 402 - 32 wide (`SessionsPage.swift:594`, `NativeShell.swift:97`).
-            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            // The search capsule stays pinned; the list under it consumes the IME
+            // inset so its last row can still be scrolled above the keyboard
+            // (spec §5 row `insets`). The page's own `navigationBarsPadding` below
+            // is the existing bottom inset; the IME inset is only added while the
+            // keyboard is up, so the resting frame is unchanged.
+            Box(modifier = Modifier.fillMaxWidth().weight(1f).imePadding()) {
                 PullToRefreshBox(
                     isRefreshing = state.refreshInFlight,
                     onRefresh = onRefresh ?: {},

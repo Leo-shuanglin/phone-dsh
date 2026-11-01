@@ -50,6 +50,8 @@ import com.phonedsh.dsh.exec.AdmissionGate
 import com.phonedsh.dsh.exec.ExecBridge
 import com.phonedsh.dsh.exec.ExecCapability
 import com.phonedsh.dsh.exec.ExecWorkspace
+import com.phonedsh.dsh.localexec.UbuntuHostTool
+import com.phonedsh.dsh.localexec.UbuntuPhoneCatalog
 import com.phonedsh.dsh.tools.InMemoryRequestLedger
 import com.phonedsh.dsh.tools.RegisteredTool
 import com.phonedsh.dsh.tools.RequestLedger
@@ -100,7 +102,26 @@ object HostExec {
         shellMounts: List<AcceleratorMount> = emptyList(),
     ): ExecBridge {
         val tools = ArrayList<RegisteredTool>(1 + shellMounts.size)
-        tools.add(RegisteredTool(PhoneInfoTool.NAME, PhoneInfoTool()))
+        // `phone` is one tool with a small catalog: `info` (the device facts,
+        // unchanged) and `ubuntu` (the local Linux environment, L51). The
+        // environment is a host tool, not an accelerator — it writes, so it
+        // stays out of the read-only name set — and the Worker discovers it by
+        // probing `phone ubuntu probe` at boot. A host without this wiring
+        // answers the probe with `unsupported`, so the Agent's `ubuntu` command
+        // does not exist there (127).
+        tools.add(
+            RegisteredTool(
+                PhoneInfoTool.NAME,
+                UbuntuPhoneCatalog(
+                    info = PhoneInfoTool(),
+                    ubuntu = UbuntuHostTool(
+                        clock = clock,
+                        logger = logger,
+                        admissionOpen = { controller.admission == Admission.OPEN },
+                    ),
+                ),
+            ),
+        )
         for (accelerator in ShellAccelerators.detect(shellMounts)) {
             tools.add(
                 RegisteredTool(

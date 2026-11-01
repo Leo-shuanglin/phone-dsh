@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -119,6 +120,10 @@ internal fun PDSHShellPage(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                // 工作目录 / 参数 live in the run card, below the device facts. The
+                // IME inset sits outside `verticalScroll` so it shrinks the viewport
+                // and the focused field can be scrolled clear (spec §5 row `insets`).
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .navigationBarsPadding(),
         ) {

@@ -45,6 +45,19 @@
 // finishes and the same `scenePhase(active)` is re-fed afterwards, so the round
 // trip stays inside budgets.md §2 instead of growing an edge the contract does
 // not have.
+//
+// ---- the window that guards that drain (L49) ------------------------------
+// The D14 row's premise is "no background window". While the platform holds a
+// UIDT job or a dataSync foreground service for this turn it has *granted*
+// execution authority, and plan §7.9 promises "尽量完成" there; draining then
+// abandons a turn the OS was still running (L39 measured exactly that:
+// `APP_TURN_FAILED reason=channel_lost` while job 8401 was in its execution
+// slot). So `scenePhase(background)` is offered to [WindowHold] first: a
+// measured window defers the edge, the edge is fed when the window ends (turn
+// complete, 停止本轮, platform stop) or when the bounded hold expires, and an
+// unreadable window is treated as no window — a failed reading can cost a turn,
+// it can never exempt one. [TurnWindowRead] is the reading; nothing here
+// hard-codes `true`.
 
 package com.phonedsh.dsh.host
 
@@ -81,6 +94,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -238,6 +252,13 @@ interface PhoneDshHost {
  *   pre-P15 behaviour — every boot is a cold start — which is honest for a
  *   build with no workspace; the App passes a store so a `Parked` host survives
  *   a kill and the §3 boot mapping is reachable.
+ * @param turnWindow the measured answer to "does the OS hold a window for the
+ *   running turn"; it guards `Running -> Draining` (plan §7.9). Defaults to
+ *   [TurnWindowRead.Platform]; see [WindowHold] for why an unreadable window is
+ *   not a window.
+ * @param windowHoldMaxMillis the bound on that guard ([WINDOW_HOLD_MAX_MILLIS]).
+ * @param windowWatchIntervalMillis how often the window is re-read while the
+ *   edge is deferred ([WINDOW_WATCH_INTERVAL_MILLIS]).
  */
 class DefaultPhoneDshHost(
     override val engine: EngineHost,
@@ -275,6 +296,31 @@ class DefaultPhoneDshHost(
      * caller that forgot to measure — a `≤ 3 GiB` device with an 8× file quota.
      */
     private val deviceBudgets: ControllerBudgets = HostBudgetTier.UNMEASURED,
+    /**
+     * The turn-window reading that guards `Running -> Draining` (plan §7.9).
+     *
+     * Defaults to [TurnWindowRead.Platform], the `:dsh` background lane's own
+     * record, because that is the only reading available without a `Context` and
+     * the App's composition root cannot pass one. A composition with no background
+     * lane passes [TurnWindowRead.NoBackgroundLane] and says so; no composition
+     * hard-codes "the window is there". A read that throws is turned into
+     * [TurnWindow.Unreadable] by [WindowHold], and therefore into no window.
+     */
+    private val turnWindow: TurnWindowRead = TurnWindowRead.Platform,
+    /**
+     * The longest a measured window may defer `Running -> Draining`.
+     *
+     * See [WINDOW_HOLD_MAX_MILLIS] for the value and why it is this one. It is a
+     * parameter so the bound is testable without waiting minutes.
+     */
+    private val windowHoldMaxMillis: Long = WINDOW_HOLD_MAX_MILLIS,
+    /**
+     * How often the window is re-read while the edge is deferred.
+     *
+     * See [WINDOW_WATCH_INTERVAL_MILLIS]; tests pass a value that never fires and
+     * drive [checkWindowHold] themselves.
+     */
+    private val windowWatchIntervalMillis: Long = WINDOW_WATCH_INTERVAL_MILLIS,
 ) : PhoneDshHost {
     override val boot: HostBoot = HostBoot.generate(clock, random)
 
@@ -423,6 +469,26 @@ class DefaultPhoneDshHost(
     )
 
     /**
+     * The guard on `Running -> Draining`: the window (plan §7.9) that defers the
+     * background edge, and the bound that ends the deferral.
+     *
+     * While a window is in place the host keeps `Running` and the turn keeps its
+     * execution authority; [checkWindowHold] re-reads the window on
+     * [windowWatchIntervalMillis] and feeds the queued edge when it ends. The
+     * reading is [turnWindow], a measurement — [WindowHold] converts a failed
+     * read into "no window", so the fail-safe direction is the drain.
+     */
+    private val hold = WindowHold(
+        clock = clock,
+        window = turnWindow,
+        maxHoldMillis = windowHoldMaxMillis,
+        logger = logger,
+    )
+
+    /** The coroutine that re-reads the window while a background edge is held. */
+    private var holdWatch: Job? = null
+
+    /**
      * `true` when a foreground return arrived while the host was `Draining` and
      * the resume is waiting for the drain to finish.
      *
@@ -516,6 +582,9 @@ class DefaultPhoneDshHost(
         bootGeneration.incrementAndGet()
         readyState.value = false
         retry.release()
+        // A stop is not a turn outcome: the deferred background edge is dropped,
+        // and a later start must be allowed to defer a fresh one.
+        hold.releaseForForeground("the host is stopping")
         val cancelled = synchronized(jobsLock) { jobs.toList().also { jobs.clear() } }
         cancelled.forEach { it.cancel() }
         engine.stop()
@@ -537,6 +606,15 @@ class DefaultPhoneDshHost(
      * facade's own state rather than inferred from a log line.
      */
     internal fun isDrainInFlight(): Boolean = drain.isDraining
+
+    /**
+     * Diagnostic: `true` while `scenePhase(background)` is deferred for a measured
+     * turn window (plan §7.9).
+     *
+     * Exposed for the JVM tests, which assert that a window in place keeps the
+     * host `Running` instead of inferring it from a log line.
+     */
+    internal fun isBackgroundEdgeHeld(): Boolean = hold.isHeld
 
     // ---- wiring -----------------------------------------------------------------
 
@@ -573,6 +651,11 @@ class DefaultPhoneDshHost(
 
     private fun applySignal(signal: LifecycleSignal) {
         if (signal is AppForeground) {
+            // It never drives a transition on its own (see the field). It does end
+            // the refusal an *expired* window hold installs: the next background
+            // spell is a fresh window. The live hold is released by
+            // `scenePhase(active)`, which always follows a real return.
+            if (signal.foreground) hold.onForeground()
             foreground = signal.foreground
             logger.debug("app foreground: ${signal.foreground}")
             return
@@ -597,6 +680,12 @@ class DefaultPhoneDshHost(
      * *is* a row (`Parked -> Recovering`), so the round trip stays inside the
      * table instead of adding an edge to it.
      *
+     * A *background* edge is queued the same way when the measured turn window
+     * is in place: §2's `Running -> Draining` row has "no background window" as
+     * its premise (plan §7.9), so [WindowHold] defers it until the window ends or
+     * the bounded hold expires. The machine still owns the row; the facade only
+     * decides when its guard is satisfied.
+     *
      * `internal` because it is the facade's one signal entry point and two
      * callers are not `LifecycleSignals`: the retry lane (in this module) and a
      * future model edge, whose `UpstreamUnavailable(429)` is a D14 signal with
@@ -604,43 +693,147 @@ class DefaultPhoneDshHost(
      * what a signal means.
      */
     internal fun handle(signal: ControllerSignal) {
-        if (signal is ControllerSignal.ScenePhaseChanged && signal.phase == ScenePhase.ACTIVE) {
-            if (controller.state == HostState.DRAINING) {
-                resumeAfterDrain = true
-                logger.info("scenePhase(active) in Draining: the drain finishes first, then the resume")
-                if (!drain.foregroundReturn()) {
-                    // The drain finished between the state check and this call, or
-                    // no drain was ever armed (a boot mapping cannot produce this,
-                    // but a composition that armed nothing would). Either way the
-                    // exit must be taken here instead of waiting for one.
-                    when (controller.state) {
-                        HostState.DRAINING -> {
-                            logger.warn("no drain was in flight in Draining; arming it now to take the exit")
-                            drain.arm(controller.drainDeadlineAtMillis)
-                            if (drain.isDraining) drain.foregroundReturn()
-                        }
-
-                        HostState.PARKED -> {
-                            // The completion ran before `resumeAfterDrain` was set,
-                            // so its own resume did not see it: take the row here.
-                            logger.info("the drain completed just now; the resume runs here (Parked -> Recovering)")
-                            resumeAfterDrain = false
-                            dispatch(signal)
-                        }
-
-                        else -> Unit
-                    }
+        if (signal is ControllerSignal.ScenePhaseChanged) {
+            if (signal.phase == ScenePhase.BACKGROUND) {
+                if (controller.state == HostState.RUNNING && holdBackgroundEdge()) return
+            } else if (signal.phase == ScenePhase.ACTIVE) {
+                if (
+                    controller.state == HostState.RUNNING &&
+                    hold.releaseForForeground("the app came back to the foreground")
+                ) {
+                    logger.info(
+                        "window: scenePhase(active) in Running released the held background edge; " +
+                            "no D14 edge is taken (none exists out of Running, and none is needed)",
+                    )
+                    return
                 }
-                return
-            }
-            if (controller.state == HostState.RECOVERING) {
-                // `Parked -> Recovering` starts the worker; an already-Recovering
-                // host has no such row, so a return here must not stall in a
-                // state whose only exit is the lease check.
-                startWorker("foreground return in Recovering")
+                if (controller.state == HostState.DRAINING) {
+                    resumeAfterDrain = true
+                    logger.info("scenePhase(active) in Draining: the drain finishes first, then the resume")
+                    if (!drain.foregroundReturn()) {
+                        // The drain finished between the state check and this call, or
+                        // no drain was ever armed (a boot mapping cannot produce this,
+                        // but a composition that armed nothing would). Either way the
+                        // exit must be taken here instead of waiting for one.
+                        when (controller.state) {
+                            HostState.DRAINING -> {
+                                logger.warn("no drain was in flight in Draining; arming it now to take the exit")
+                                drain.arm(controller.drainDeadlineAtMillis)
+                                if (drain.isDraining) drain.foregroundReturn()
+                            }
+
+                            HostState.PARKED -> {
+                                // The completion ran before `resumeAfterDrain` was set,
+                                // so its own resume did not see it: take the row here.
+                                logger.info("the drain completed just now; the resume runs here (Parked -> Recovering)")
+                                resumeAfterDrain = false
+                                dispatch(signal)
+                            }
+
+                            else -> Unit
+                        }
+                    }
+                    return
+                }
+                if (controller.state == HostState.RECOVERING) {
+                    // `Parked -> Recovering` starts the worker; an already-Recovering
+                    // host has no such row, so a return here must not stall in a
+                    // state whose only exit is the lease check.
+                    startWorker("foreground return in Recovering")
+                }
             }
         }
         dispatch(signal)
+    }
+
+    /**
+     * Offers one `scenePhase(background)` to the measured turn window.
+     *
+     * @return `true` when the edge is deferred (the caller must not feed it), i.e.
+     *   a window is in place. `false` for no window, an unreadable window and a
+     *   hold that already expired — all three feed the edge, which is the
+     *   fail-safe direction.
+     */
+    private fun holdBackgroundEdge(): Boolean {
+        val heldWindow = hold.hold() ?: return false
+        startHoldWatch()
+        logger.info(
+            "window: scenePhase(background) with a ${heldWindow.backend.wireName} window in place; " +
+                "keeping Running (plan §7.9). The window watch feeds the edge when the window " +
+                "ends, and at the latest after $windowHoldMaxMillis ms",
+        )
+        return true
+    }
+
+    /**
+     * The coroutine behind a held edge: re-read the window on the facade's scope
+     * until [checkWindowHold] says the hold is gone.
+     *
+     * Armed once per hold; a second `scenePhase(background)` while one is held
+     * does not start a second watch. The job is in [jobs], so [stop] cancels it.
+     */
+    private fun startHoldWatch() {
+        synchronized(jobsLock) {
+            if (holdWatch?.isActive == true) return
+            val job = scope.launch {
+                while (true) {
+                    delay(windowWatchIntervalMillis)
+                    if (!checkWindowHold()) return@launch
+                }
+            }
+            holdWatch = job
+            jobs += job
+            job.invokeOnCompletion { synchronized(jobsLock) { jobs.remove(job) } }
+        }
+    }
+
+    /**
+     * One look at a held window.
+     *
+     * @return `true` while the hold is still in place (the watch keeps polling).
+     *
+     * `internal` so the JVM tests drive the transition deterministically instead
+     * of waiting on a wall clock: the fake window changes, one call here, and the
+     * deferred edge is fed inline.
+     */
+    internal fun checkWindowHold(): Boolean {
+        val release = hold.check() ?: return hold.isHeld
+        onWindowReleased(release)
+        return false
+    }
+
+    /**
+     * Feeds the deferred `scenePhase(background)` once the window is gone (or the
+     * bound expired).
+     *
+     * The row it takes is the ordinary `Running -> Draining`, so the drain's exit
+     * — epoch close, worker stop, `Draining -> Parked` — is unchanged; this method
+     * only decides *when* it is fed. A host that has already left `Running` (a
+     * racing engine termination, a failure) does not have that row any more, and a
+     * visible app makes the queued edge stale: both drop it with a log line
+     * instead of inventing an edge.
+     */
+    private fun onWindowReleased(release: WindowHold.Release) {
+        if (controller.state != HostState.RUNNING) {
+            logger.warn(
+                "window: the hold ended (${release.reason.wireName}) but the host is now " +
+                    "${controller.state.wireName}; the deferred edge has no row from there",
+            )
+            return
+        }
+        if (foreground) {
+            logger.info(
+                "window: the hold ended (${release.reason.wireName}) with the app visible again; " +
+                    "the deferred scenePhase(background) is dropped",
+            )
+            return
+        }
+        logger.info(
+            "window: feeding the deferred scenePhase(background) " +
+                "(reason=${release.reason.wireName}, held ${release.heldMillis} ms); " +
+                "the ordinary Draining -> Parked exit runs now",
+        )
+        dispatch(ControllerSignal.ScenePhaseChanged(ScenePhase.BACKGROUND))
     }
 
     private fun dispatch(signal: ControllerSignal) {
@@ -666,8 +859,13 @@ class DefaultPhoneDshHost(
      *
      * Two groups are owned here:
      * * `ARM_DRAIN_DEADLINE` — the drain's exit ([drain]); `START_BACKGROUND_TASK`
-     *   is reported by it as "no background window" (this App declares no
-     *   service), never as a silent drop;
+     *   is reported by it as "in-process, no window opened by the drain", never as
+     *   a silent drop. The APK *does* declare the background service: the merged
+     *   `:dsh` manifest ships `TurnForegroundService` / `TurnJobService` /
+     *   `TurnStopReceiver` / `BootReceiver`, and `aapt2` shows them in the packaged
+     *   APK. Whether a window is *in place for this turn* is a reading
+     *   ([TurnWindowRead]), and the drain row is only fed when that reading says
+     *   no window is there;
      * * `START_WORKER` / `RESTART_WORKER` — the `:engine` seam. Without these the
      *   resume path `Parked -> Recovering` would reach `Recovering` with a
      *   stopped worker, and `Recovering -> Running` waits for an engine that
@@ -1109,5 +1307,31 @@ class DefaultPhoneDshHost(
          * to remove, hence the bound and the warning.
          */
         const val WORKER_STOP_BOUND_MILLIS: Long = 5_000L
+
+        /**
+         * The longest a measured turn window may defer `Running -> Draining`.
+         *
+         * Plan §7.9 says "尽量完成" while a window is in place, and a hold with no
+         * bound would leave a wedged turn (a dead network, a model that never
+         * answers) holding the host in `Running` forever. 600 s is the bound the
+         * exec lane already gives one command
+         * (`UbuntuExecRequest.DEFAULT_JOB_TIMEOUT_MS`), so a turn cannot hold the
+         * host longer than its own job would have been allowed to run. On UIDT the
+         * platform's execution slot is shorter than this and ends first: the
+         * window then reads absent and the ordinary drain runs without waiting for
+         * the bound.
+         */
+        const val WINDOW_HOLD_MAX_MILLIS: Long = 600_000L
+
+        /**
+         * How often the window is re-read while the edge is held.
+         *
+         * 250 ms is the price of noticing a 停止本轮 press (which ends the window
+         * with no callback into the host) quickly enough that the drain is not
+         * delayed by a human-visible amount, and it is a read of a process-local
+         * snapshot — no I/O, no allocation. Only a host with a held background
+         * edge polls at all.
+         */
+        const val WINDOW_WATCH_INTERVAL_MILLIS: Long = 250L
     }
 }

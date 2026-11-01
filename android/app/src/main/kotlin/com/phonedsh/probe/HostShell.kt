@@ -76,6 +76,7 @@ import com.phonedsh.ui.nav.PdshNavFacts
 import com.phonedsh.ui.nav.PdshNavHost
 import com.phonedsh.ui.nav.PdshNavState
 import com.phonedsh.ui.nav.PdshRoute
+import com.phonedsh.ui.page.PhoneCapability
 import com.phonedsh.ui.page.WorkbenchSection
 import com.phonedsh.ui.theme.PdshTheme
 import com.phonedsh.ui.theme.PdshThemeValues
@@ -95,9 +96,18 @@ import com.phonedsh.ui.theme.PdshThemeValues
  *   permission answer changes what the background facts may say. It is a fact
  *   key, not a value: the facts are still measured, this only says "measure
  *   again", because the grant happens after the first snapshot was taken.
+ * @param permissionRevision the same kind of key for the phone-permissions matrix:
+ *   bumped when a permission answer arrives, when the Activity resumes (a grant can
+ *   change in the settings page this app sends the user to), and when a request is
+ *   launched so the row can show it is in flight.
  * @param onStart start the engine.
  * @param onStop stop the engine.
  * @param onRunTurn run one turn through the App's own `/api` lane.
+ * @param onPhonePermissionRequest 继续 on a capability row: raise the real system
+ *   request (or, for a capability with no requestable permission, open the page that
+ *   holds it).
+ * @param onPhonePermissionSettings 去系统设置 on a capability row: open the system page
+ *   that can change that capability's grant.
  */
 @Composable
 internal fun HostShell(
@@ -109,15 +119,24 @@ internal fun HostShell(
     turn: AppTurnState,
     recoveryNotice: RecoveryNotice?,
     backgroundRevision: Int,
+    permissionRevision: Int,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onRunTurn: () -> Unit,
+    onPhonePermissionRequest: (PhoneCapability) -> Unit = {},
+    onPhonePermissionSettings: (PhoneCapability) -> Unit = {},
 ) {
     // The facts are one host walk per lifecycle/HELLO/turn change: a page never
     // asks the host for anything itself. `backgroundRevision` is the one key that
     // is not engine state: a permission answer lands after the first walk and must
     // not leave the runtime page showing the pre-answer verdict.
-    val facts: PdshNavFacts = remember(state, handshake, turn, backgroundRevision) {
+    val facts: PdshNavFacts = remember(
+        state,
+        handshake,
+        turn,
+        backgroundRevision,
+        permissionRevision,
+    ) {
         engine.navFacts(state, handshake, turn)
     }
     // The one fact in that snapshot that is not an engine reading: whether the
@@ -209,6 +228,12 @@ internal fun HostShell(
                         onSettingsWrite = { write ->
                             notice = "宿主未实现：${settingsWriteLabel(write)}，本次未保存"
                         },
+                        // The two hosted gestures of the phone-permissions page: a real
+                        // system request, and the settings page that can change the
+                        // grant. Both are the Activity's, because a permission prompt
+                        // is an Activity-scoped contract.
+                        onPhonePermissionRequest = onPhonePermissionRequest,
+                        onPhonePermissionSettings = onPhonePermissionSettings,
                         home = {
                             ProbeScreen(
                                 state = state,
