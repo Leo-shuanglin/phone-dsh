@@ -118,6 +118,120 @@ public data class PdshNavFacts(
     public val shell: ShellSnapshot = ShellSnapshot(),
     public val phonePermissions: PhonePermissionsFacts = PhonePermissionsFacts(),
     public val background: BackgroundFacts = BackgroundFacts(),
+    /** Per-operation host availability; omitted actions remain unavailable. */
+    public val actionAvailability: PdshActionAvailabilities = PdshActionAvailabilities(),
+    /** Current chat/session identity; null means the host has not read it. */
+    public val sessionIdentity: PdshSessionIdentity? = null,
+    /** Session list; null means unread, while an empty list means read and empty. */
+    public val sessions: List<PdshSessionRecord>? = null,
+    /** Workspace target, preserving 日常 default, explicit unassigned, and unknown. */
+    public val workspaceSelection: PdshWorkspaceSelection? = null,
+    /** Device and connection facts; null means the host supplied no device read. */
+    public val device: PdshDeviceFacts? = null,
+    /** Permission summary; null means the host did not measure it. */
+    public val permissionSummary: PdshPermissionSummary? = null,
+    /** Artifact catalog; null means unread, empty means read with no artifacts. */
+    public val artifacts: List<PdshArtifactFact>? = null,
+    /** Durable context-loss fact; null means none was reported to this snapshot. */
+    public val contextLost: PdshContextLostFact? = null,
+    /** License catalog; null means the host has not read or does not expose one. */
+    public val licenses: List<PdshLicenseFact>? = null,
+    /** Request-bound provider result receipts; null means no result read was supplied. */
+    public val providerOperations: List<PdshProviderOperationFact>? = null,
+)
+
+/** Session identity facts kept distinct from route and local draft state. */
+public data class PdshSessionIdentity(
+    /** Host session id; null when a current session is not known. */
+    public val sessionId: String?,
+    /** Host-reported title; null when unread or untitled. */
+    public val title: String?,
+    /** Host-reported workspace id; null when unassigned or unknown. */
+    public val workspaceId: String?,
+)
+
+/** One host-read session row, including archive status. */
+public data class PdshSessionRecord(
+    /** Stable session id from the host. */
+    public val id: String,
+    /** Host-reported title; null remains unknown. */
+    public val title: String?,
+    /** Host-reported archive state; null remains unknown. */
+    public val archived: Boolean?,
+    /** Host-reported workspace id; null remains unassigned or unknown. */
+    public val workspaceId: String?,
+    /** Host-reported update timestamp; null means it was not measured. */
+    public val updatedAt: String?,
+)
+
+/** Workspace selection without conflating default, unassigned, and unread. */
+public sealed interface PdshWorkspaceSelection {
+    /** The host selected its built-in 日常 default group. */
+    public data object DailyDefault : PdshWorkspaceSelection
+    /** The host selected this identified workspace. */
+    public data class Assigned(public val workspaceId: String) : PdshWorkspaceSelection
+    /** The host explicitly reported no workspace assignment. */
+    public data object Unassigned : PdshWorkspaceSelection
+    /** The host did not report a selection. */
+    public data object Unknown : PdshWorkspaceSelection
+}
+
+/** Device facts retain unknown collection and capability states. */
+public data class PdshDeviceFacts(
+    /** Host-read devices; null means catalog unread and empty means none found. */
+    public val devices: List<PdshDeviceRecord>?,
+    /** Whether this host can connect; null means unknown. */
+    public val canConnect: Boolean?,
+)
+
+/** One device row returned by a host read. */
+public data class PdshDeviceRecord(
+    /** Stable host/device identity. */
+    public val id: String,
+    /** Host-reported display name; null remains unknown. */
+    public val name: String?,
+    /** Host-reported connected state; null remains unknown. */
+    public val connected: Boolean?,
+)
+
+/** Compact permission read without inferred grants. */
+public data class PdshPermissionSummary(
+    /** Permissions measured by the host; null means unread. */
+    public val permissions: Map<String, Boolean>?,
+    /** Host-reported read failure, if any. */
+    public val failure: String?,
+)
+
+/** Host-reported artifact facts preserve attribution uncertainty. */
+public data class PdshArtifactFact(
+    /** Stable artifact id. */
+    public val id: String,
+    /** Host-reported display name; null remains unknown. */
+    public val name: String?,
+    /** Original resource URI when the host read one. */
+    public val originalUri: String?,
+    /** Session attribution; null means the host did not establish one. */
+    public val sessionId: String?,
+)
+
+/** Durable context-loss report associated with the request and session that produced it. */
+public data class PdshContextLostFact(
+    /** Correlation id of the operation that reported the loss. */
+    public val requestId: String,
+    /** Session whose context was lost. */
+    public val sessionId: String,
+    /** Host-reported explanation. */
+    public val reason: String,
+)
+
+/** One license row read from the host's actual catalog. */
+public data class PdshLicenseFact(
+    /** Stable catalog identity. */
+    public val id: String,
+    /** Host-reported display name. */
+    public val name: String?,
+    /** Host-reported license text or URI, if available. */
+    public val source: String?,
 )
 
 /**
