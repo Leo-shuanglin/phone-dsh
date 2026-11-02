@@ -120,6 +120,24 @@ public object ChatMetrics {
     /** Icon-to-title gap. Source: design spec (`间隔 6`). Confidence: exact. */
     public const val DISCLOSURE_ICON_GAP_PT: Int = 6
 
+    /** List disclosure artwork box. Source: `NativeMessageRows.swift:34-35`. Confidence: exact. */
+    public const val DISCLOSURE_LIST_ICON_BOX_PT: Int = 16
+    /** List disclosure category artwork. Source: `NativeMessageRows.swift:32`. Confidence: exact. */
+    public const val DISCLOSURE_LIST_CATEGORY_ICON_PT: Int = 14
+    /** List disclosure artwork-to-title gap. Source: `NativeMessageRows.swift:36`. Confidence: exact. */
+    public const val DISCLOSURE_LIST_ICON_GAP_PT: Int = 8
+
+    /** Compact Markdown block gap. Source: `NativeMarkdownBody.swift` variant blockSpacing. Confidence: exact. */
+    public const val MARKDOWN_COMPACT_BLOCK_SPACING_PT: Int = 4
+    /** Compact Markdown list stack gap. Source: `NativeMarkdownBody.swift` list spacing. Confidence: exact. */
+    public const val MARKDOWN_COMPACT_LIST_STACK_SPACING_PT: Int = 2
+    /** Compact Markdown marker-to-text gap. Source: `NativeMarkdownBody.swift` list HStack. Confidence: exact. */
+    public const val MARKDOWN_COMPACT_LIST_ITEM_GAP_PT: Int = 8
+    /** Compact inline-code font. Source: `NativeMarkdownBody.swift:267-272`. Confidence: exact. */
+    public const val MARKDOWN_COMPACT_INLINE_CODE_SIZE_PT: Int = 13
+    /** Normal inline code uses the chosen code font size plus one. Source: `NativeMarkdownBody.swift:267-272`. Confidence: exact. */
+    public const val MARKDOWN_INLINE_CODE_SIZE_OFFSET_PT: Int = 1
+
     /** Expanded thinking body's leading indent. Source: `NativeMessageRows.swift:92` (`.padding(.leading, 22)`). Confidence: exact. */
     public const val THINKING_CONTENT_INDENT_PT: Int = 22
 
