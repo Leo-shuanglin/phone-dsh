@@ -443,6 +443,10 @@ public fun PdshNavHost(
                 state = chat,
                 title = chatTitle,
                 folderSubtitle = chatFolderSubtitle,
+                collapseTiming = facts.settings.preferences.collapseTiming,
+                onSetCollapseTiming = if (preferencesWritable == FactState.YES) { option ->
+                    onPreferenceWrite(SettingsPreferenceChoice(SettingsScreenState.COLLAPSE_TIMING_ROW_ID, option.id))
+                } else null,
                 timelineRetryAvailability = timelineRetryAvailability,
                 permissionApproveAvailability = permissionApproveAvailability,
                 permissionDenyAvailability = permissionDenyAvailability,
@@ -601,6 +605,8 @@ private fun ChatRoute(
     state: ChatScreenState?,
     title: String?,
     folderSubtitle: String?,
+    collapseTiming: com.phonedsh.ui.page.CollapseTiming?,
+    onSetCollapseTiming: ((com.phonedsh.ui.page.CollapseTiming) -> Unit)?,
     timelineRetryAvailability: PdshActionAvailability<() -> Unit>,
     permissionApproveAvailability: PdshActionAvailability<(PendingAnswer) -> Unit>,
     permissionDenyAvailability: PdshActionAvailability<(PendingAnswer) -> Unit>,
@@ -792,6 +798,8 @@ private fun ChatRoute(
         onOpenSessions = { if (onOpenDrawer != null) onOpenDrawer() else onNavigate(PdshRoute.Sessions) },
         title = title ?: UiStrings.SESSION_TITLE_NEW,
         folderSubtitle = folderSubtitle,
+        collapseTiming = collapseTiming,
+        onSetCollapseTiming = onSetCollapseTiming,
         // The page-head menu's 后台任务（N）/定时任务（N） rows exist only while the
         // host reported rows (`ChatPage.swift:247`/`:252`); with no read they are
         // absent instead of opening a sheet that can only say 读取不到.

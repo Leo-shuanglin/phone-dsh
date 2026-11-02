@@ -231,8 +231,8 @@ public object ChatMetrics {
      * Source: commit `86a39aac` changed `ChatPage.swift:1894` `.padding(.bottom, 8)`
      * to `.padding(.bottom, 0)` — the stats line sits against the home-indicator
      * safe area instead of stacking an 8 pt card inset on top of it. `tokens.json`
-     * still declares `geometry.composerOuterMarginBottom: 8`; the implementation is
-     * the baseline, so 0 is the value to draw.
+     * had retained an obsolete bottom-inset role; the live component now reads
+     * this source-owned zero value directly.
      * Confidence: exact.
      */
     public const val COMPOSER_OUTER_MARGIN_BOTTOM_PT: Int = 0

@@ -207,7 +207,6 @@ public data class UiGeometry(
     public val secondaryButtonHeight: Dp,
     /** `geometry.cardAreaMaxHeightRatio` is a `screenRatio`, not a dp. */
     public val cardAreaMaxHeightRatio: Float,
-    public val composerMinHeight: Dp,
     public val composerMaxHeight: Dp,
     /** Input port top inset; its own token, same 8 as the row bottom. */
     public val composerPortTop: Dp,
@@ -222,7 +221,6 @@ public data class UiGeometry(
     public val inlineStopDiameter: Dp,
     public val composerOuterMarginH: Dp,
     public val composerOuterMarginTop: Dp,
-    public val composerOuterMarginBottom: Dp,
     public val statPillMinHeight: Dp,
     public val bannerGap: Dp,
     public val bannerInsetH: Dp,
@@ -398,7 +396,6 @@ public data class UiTokens(
                 primaryButtonHeight = UiTokenData.geometryPrimaryButtonHeight.dp(),
                 secondaryButtonHeight = UiTokenData.geometrySecondaryButtonHeight.dp(),
                 cardAreaMaxHeightRatio = UiTokenData.geometryCardAreaMaxHeightRatio.ratio(),
-                composerMinHeight = UiTokenData.geometryComposerMinHeight.dp(),
                 composerMaxHeight = UiTokenData.geometryComposerMaxHeight.dp(),
                 composerPortTop = UiTokenData.geometryComposerPortTop.dp(),
                 composerControlSize = UiTokenData.geometryComposerControlSize.dp(),
@@ -409,7 +406,6 @@ public data class UiTokens(
                 inlineStopDiameter = UiTokenData.geometryInlineStopDiameter.dp(),
                 composerOuterMarginH = UiTokenData.geometryComposerOuterMarginH.dp(),
                 composerOuterMarginTop = UiTokenData.geometryComposerOuterMarginTop.dp(),
-                composerOuterMarginBottom = UiTokenData.geometryComposerOuterMarginBottom.dp(),
                 statPillMinHeight = UiTokenData.geometryStatPillMinHeight.dp(),
                 bannerGap = UiTokenData.geometryBannerGap.dp(),
                 bannerInsetH = UiTokenData.geometryBannerInsetH.dp(),

@@ -2481,7 +2481,7 @@ private fun ComposerDock(
                 // stack already draws more than this, so the floor pins the page's
                 // number against a collapse rather than adding space today. The outer
                 // *bottom* margin the same commit took from 8 to 0 is applied by the
-                // Composer surface itself (`geometry.composerOuterMarginBottom`), not
+                // Composer surface itself (the source-owned zero bottom margin), not
                 // by this page, so it stays a separate follow-up.
                 modifier = Modifier.heightIn(min = ChatMetrics.composerHeight),
                 text = composer.draft,
