@@ -422,6 +422,26 @@ public object UiStateProjector {
                     "kind" to JsonString("question"),
                     "multiple" to JsonBool(items?.firstOrNull()?.multiple ?: false),
                     "options" to JsonArray(options.map { JsonString(it) }),
+                    // Preserve every field the host actually supplied. Header,
+                    // detail, descriptions and intent are not in HarnessQuestionItem.
+                    "questionItems" to JsonArray(
+                        (items ?: listOf(
+                            com.phonedsh.agentcore.HarnessQuestionItem(
+                                id = "answer",
+                                prompt = request.prompt,
+                                options = request.options,
+                            ),
+                        )).map { item ->
+                            JsonObject(
+                                mapOf(
+                                    "id" to JsonString(item.id),
+                                    "prompt" to JsonString(bounded(item.prompt).first),
+                                    "options" to JsonArray(item.options.map(::JsonString)),
+                                    "multiple" to JsonBool(item.multiple),
+                                ),
+                            )
+                        },
+                    ),
                     "requestId" to JsonString(request.requestId),
                     "truncated" to JsonBool(truncated),
                 ),

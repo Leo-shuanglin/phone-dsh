@@ -116,8 +116,9 @@ internal class ControllerEffects(
                 }
 
                 // Performed by the host facade rather than by a notification:
-                // the drain's exit (budgets.md §2 `Draining -> Parked`) and the
-                // worker edges belong to DrainLane / the `:engine` seam. They are
+                // reset recovery is owned by PhoneDshHost.resetFailure(), the
+                // drain's exit (budgets.md §2 `Draining -> Parked`) by DrainLane,
+                // and the worker edges by DrainLane / the `:engine` seam. They are
                 // named here so the notifier lane does not read as their owner,
                 // and they are NOT dropped: PhoneDshHost.applyHostEffects
                 // performs them.
@@ -129,6 +130,7 @@ internal class ControllerEffects(
                 ControllerEffect.FSYNC_MATERIALIZED,
                 ControllerEffect.START_WORKER,
                 ControllerEffect.RESTART_WORKER,
+                ControllerEffect.RE_RUN_RECOVERY,
                 ControllerEffect.STOP_WORKER,
                 -> logger.debug(
                     "effect '${effect.label}' is performed by the host facade, not by a Notifier",

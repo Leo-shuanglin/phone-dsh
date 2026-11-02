@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -39,6 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -142,6 +145,8 @@ public fun Composer(
     sendLabel: String = UiStrings.COMPOSER_SEND_LABEL,
     controls: (@Composable () -> Unit)? = null,
     onTruncated: () -> Unit = {},
+    onMenuKey: (KeyEvent) -> Boolean = { false },
+    onMenuSubmit: () -> Boolean = { false },
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -162,6 +167,7 @@ public fun Composer(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .onPreviewKeyEvent(onMenuKey)
                 .background(color = tokens.colors.input, shape = shape)
                 .border(width = tokens.stroke.hairline, color = tokens.colors.borderLight, shape = shape),
         ) {
@@ -208,7 +214,16 @@ public fun Composer(
                         cursorBrush = SolidColor(tokens.colors.accent),
                         keyboardOptions = KeyboardOptions(
                             capitalization = KeyboardCapitalization.Sentences,
-                            imeAction = ImeAction.Default,
+                            // iOS gives the software keyboard a Send return key and
+                            // intercepts Return before it inserts a newline. Keep
+                            // multiline editing for hardware/newline input, while
+                            // the soft keyboard's primary action submits the draft.
+                            imeAction = ImeAction.Send,
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onSend = {
+                                if (!onMenuSubmit() && enabled && canSubmit) onSend()
+                            },
                         ),
                         modifier = Modifier
                             .fillMaxWidth()

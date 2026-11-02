@@ -38,8 +38,14 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
+import com.phonedsh.agentcore.JsonArray
+import com.phonedsh.agentcore.JsonBool
+import com.phonedsh.agentcore.JsonObject
+import com.phonedsh.agentcore.JsonNumber
+import com.phonedsh.agentcore.JsonString
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
+import com.phonedsh.ui.state.ToolVariant
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
@@ -111,6 +117,7 @@ public fun ToolRow(
     expanded: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
+    showsSummaryWhenExpanded: Boolean = false,
     detail: (@Composable () -> Unit)? = null,
 ) {
     val tokens = LocalUiTokens.current
@@ -168,7 +175,7 @@ public fun ToolRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
-            if (summary.isNotEmpty()) {
+            if (summary.isNotEmpty() && (showsSummaryWhenExpanded || !expanded)) {
                 BasicText(
                     text = UiStrings.DOT_SEPARATOR,
                     style = type.secondary.copy(color = tokens.colors.secondary),
@@ -218,6 +225,10 @@ public fun ToolDetailCard(
     banner: String,
     body: String,
     modifier: Modifier = Modifier,
+    variant: ToolVariant = ToolVariant.GENERIC,
+    arguments: JsonObject? = null,
+    metadata: JsonObject? = null,
+    isError: Boolean = false,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -241,23 +252,164 @@ public fun ToolDetailCard(
             horizontalArrangement = Arrangement.spacedBy(tokens.geometry.disclosureIconGap),
         ) {
             BasicText(
-                text = banner,
+                text = toolDisplayTitle(banner),
                 style = type.codeLabel.copy(color = tokens.colors.secondary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        BasicText(
-            text = body,
-            style = type.code.copy(color = tokens.colors.secondary),
+        val command = arguments.text("command") ?: arguments.text("script")
+        val plan = arguments.text("plan")
+        val oldText = arguments.text("old_string") ?: arguments.text("old_str")
+        val newText = arguments.text("new_string") ?: arguments.text("new_str")
+            ?: arguments.text("content") ?: arguments.text("file_text")
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = tokens.geometry.terminalCardMaxHeight)
                 .verticalScroll(rememberScrollState())
                 .padding(tokens.geometry.toolCardInset),
-        )
+            verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+        ) {
+            when (variant) {
+                ToolVariant.BASH -> if (!command.isNullOrEmpty()) {
+                    BasicText(text = "\$ $command", style = type.code.copy(color = tokens.colors.primary))
+                }
+
+                ToolVariant.EDIT, ToolVariant.WRITE -> if (newText != null) {
+                    if (oldText != null) {
+                        DiffLine(text = oldText, added = false)
+                    }
+                    DiffLine(text = newText, added = true)
+                }
+
+                ToolVariant.PLAN -> if (!plan.isNullOrBlank()) {
+                    MarkdownBody(markdown = plan)
+                }
+
+                ToolVariant.TODO -> ToolTodoDetails(arguments = arguments)
+
+                ToolVariant.QUESTION -> ToolQuestionDetails(arguments = arguments)
+
+                ToolVariant.SEARCH, ToolVariant.WEB_SEARCH, ToolVariant.WEB_FETCH -> {
+                    val query = arguments.text("query") ?: arguments.text("pattern") ?: arguments.text("url")
+                    if (!query.isNullOrBlank()) {
+                        BasicText(text = query, style = type.secondary.copy(color = tokens.colors.primary))
+                    }
+                }
+
+                ToolVariant.READ, ToolVariant.GENERIC -> Unit
+            }
+            if (body.isNotEmpty()) {
+                BasicText(
+                    text = body,
+                    style = type.code.copy(color = if (isError) tokens.colors.danger else tokens.colors.secondary),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            metadata?.let { meta ->
+                val fields = meta.members.entries.mapNotNull { (key, value) ->
+                    if (key !in TOOL_METADATA_FIELDS) return@mapNotNull null
+                    val rendered = when (value) {
+                        is JsonString -> value.value
+                        is JsonNumber -> value.raw
+                        is JsonBool -> value.value.toString()
+                        else -> null
+                    }
+                    rendered?.takeIf { it.isNotEmpty() }?.let { key to it }
+                }
+                fields.forEach { (key, value) ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText)) {
+                        BasicText(text = "$key:", style = type.caption.copy(color = tokens.colors.secondary))
+                        BasicText(text = value, style = type.caption.copy(color = tokens.colors.primary))
+                    }
+                }
+            }
+        }
     }
 }
+
+@Composable
+private fun DiffLine(text: String, added: Boolean) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    BasicText(
+        text = (if (added) "+ " else "− ") + text,
+        style = type.code.copy(color = if (added) tokens.colors.success else tokens.colors.danger),
+    )
+}
+
+@Composable
+private fun ToolTodoDetails(arguments: JsonObject?) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val todos = (arguments?.get("todos") as? JsonArray)?.values.orEmpty()
+    todos.forEach { raw ->
+        val todo = raw as? JsonObject ?: return@forEach
+        val content = todo.text("content") ?: return@forEach
+        val status = todo.text("status")
+        val marker = when (status) {
+            "completed" -> "✓"
+            "in_progress" -> "›"
+            else -> "□"
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText)) {
+            BasicText(text = marker, style = type.secondary.copy(color = tokens.colors.secondary))
+            BasicText(text = content, style = type.secondary.copy(color = tokens.colors.primary))
+            val label = when (status) {
+                "completed" -> "已完成"
+                "in_progress" -> "进行中"
+                "pending" -> "待处理"
+                else -> null
+            }
+            if (label != null) BasicText(text = label, style = type.caption.copy(color = tokens.colors.secondary))
+        }
+    }
+}
+
+@Composable
+private fun ToolQuestionDetails(arguments: JsonObject?) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val questions = (arguments?.get("questions") as? JsonArray)?.values.orEmpty()
+    questions.forEach { raw ->
+        val question = raw as? JsonObject ?: return@forEach
+        val prompt = question.text("question") ?: question.text("prompt") ?: return@forEach
+        BasicText(text = prompt, style = type.secondary.copy(color = tokens.colors.primary))
+        val options = (question["options"] as? JsonArray)?.values.orEmpty()
+        options.forEach { optionRaw ->
+            val option = optionRaw as? JsonObject
+            val label = option?.text("label") ?: (optionRaw as? JsonString)?.value ?: return@forEach
+            val description = option?.text("description")
+            BasicText(
+                text = "• $label" + (description?.let { " — $it" } ?: ""),
+                style = type.caption.copy(color = tokens.colors.secondary),
+            )
+        }
+    }
+}
+
+private fun toolDisplayTitle(raw: String): String = when (raw) {
+    "bash", "pwsh", "exec_command", "write_stdin" -> "运行命令"
+    "read" -> "读取"
+    "read_image" -> "读取图片"
+    "grep" -> "搜索文件内容"
+    "glob" -> "查找文件"
+    "web_search" -> "网页搜索"
+    "web_fetch" -> "网页获取"
+    "edit", "apply_patch", "str_replace_editor" -> "编辑"
+    "write" -> "写入"
+    "todo_write" -> "更新任务清单"
+    "ask_user_question", "request_user_input" -> "提问"
+    "exit_plan_mode" -> "提交计划"
+    else -> raw
+}
+
+private fun JsonObject?.text(key: String): String? = (this?.get(key) as? JsonString)?.value
+
+private val TOOL_METADATA_FIELDS = setOf(
+    "path", "url", "query", "exitCode", "exit_code", "durationMs", "duration_ms", "bytes", "resultCount",
+)
 
 /** The 工具调用 prefix's mark (iOS `sparkles`, drawn as text because the icon set is an asset catalog). */
 private const val TOOL_GLYPH: String = "✦"

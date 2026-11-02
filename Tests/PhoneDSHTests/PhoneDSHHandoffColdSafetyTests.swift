@@ -1202,8 +1202,16 @@ final class PhoneDSHHandoffColdSafetyTests: XCTestCase {
         let intent = try FenceAuthority.loadHandoffAuthorityIntent(
             root: fixture.workspace)
         XCTAssertNil(intent)
+        // A page that refused to terminate belongs to this live Worker
+        // incarnation: a new Worker/process can clear it, so the failure is
+        // process-scoped and the controller backs off instead of persisting a
+        // terminal `Failed`. The guarantees this regression owns are unchanged:
+        // no CAS, no snapshot, no handoff intent and closed admission.
         let state = await host.state
-        XCTAssertEqual(state, .failed)
+        XCTAssertEqual(state, .starting)
+        let diagnostics = await host.diagnostics()
+        XCTAssertEqual(diagnostics.hostState, .backoff)
+        XCTAssertEqual(diagnostics.admission, .closed)
         try await host.stop()
     }
 
@@ -1237,6 +1245,9 @@ final class PhoneDSHHandoffColdSafetyTests: XCTestCase {
         let intent = try FenceAuthority.loadHandoffAuthorityIntent(
             root: fixture.workspace)
         XCTAssertNil(intent)
+        // A missing teardown hook is a property of the injected engine/build:
+        // a new Worker or a new process cannot add the conformance, so the
+        // refusal is workspace-scoped (`Failed`, not `Backoff`).
         let state = await host.state
         XCTAssertEqual(state, .failed)
         try await host.stop()
@@ -1270,9 +1281,14 @@ final class PhoneDSHHandoffColdSafetyTests: XCTestCase {
         let intent = try FenceAuthority.loadHandoffAuthorityIntent(
             root: fixture.workspace)
         XCTAssertNil(intent)
+        // The bridge shutdown failed on this live engine; a retry with a fresh
+        // Worker/process can clear it, so the failure backs off instead of
+        // persisting a terminal `Failed`. No CAS was sent and admission stays
+        // closed.
         let state = await host.state
-        XCTAssertEqual(state, .failed)
+        XCTAssertEqual(state, .starting)
         let diagnostics = await host.diagnostics()
+        XCTAssertEqual(diagnostics.hostState, .backoff)
         XCTAssertEqual(diagnostics.admission, .closed)
         try await host.stop()
     }
@@ -1315,9 +1331,14 @@ final class PhoneDSHHandoffColdSafetyTests: XCTestCase {
         let intent = try FenceAuthority.loadHandoffAuthorityIntent(
             root: fixture.workspace)
         XCTAssertNil(intent)
+        // Cancelling the caller is a process-scoped accident, not a workspace
+        // fact: the next attempt can stop a fresh Worker. The invariants this
+        // regression owns are unchanged: no CAS, no snapshot, no handoff
+        // intent and closed admission.
         let state = await host.state
-        XCTAssertEqual(state, .failed)
+        XCTAssertEqual(state, .starting)
         let diagnostics = await host.diagnostics()
+        XCTAssertEqual(diagnostics.hostState, .backoff)
         XCTAssertEqual(diagnostics.admission, .closed,
                        "a cancelled stop must not reopen local admission")
         try await host.stop()
@@ -1351,6 +1372,8 @@ final class PhoneDSHHandoffColdSafetyTests: XCTestCase {
         let intent = try FenceAuthority.loadHandoffAuthorityIntent(
             root: fixture.workspace)
         XCTAssertNil(intent)
+        // Like the terminate-only wrapper above, the missing shutdown hook is a
+        // build capability a new Worker/process cannot provide: terminal.
         let state = await host.state
         XCTAssertEqual(state, .failed)
         try await host.stop()
@@ -1605,22 +1628,33 @@ final class PhoneDSHHandoffColdSafetyTests: XCTestCase {
         let secondHost = try makeHost(fixture, engine: secondEngine,
                                       transport: remote,
                                       store: InMemoryHandoffReclaimTokenStore())
-        // The controller is persisted Failed, so D14 still makes start() fail
-        // loud. The point is that the definite marker no longer blocks the
-        // explicit user reset (the old failure would have been a dead end).
+        // The persisted `Failed` controller is now a retry window, not a dead
+        // end: a plain start reports `backoffNotElapsed` instead of the old
+        // permanent `hostFailed`, and the definite marker must already be gone
+        // so the new process can retry once the window elapses.
+        var retryAt: Date?
         do {
             try await secondHost.start()
-            XCTFail("a persisted Failed controller must refuse a plain start")
+            XCTFail("a persisted retry window must refuse an immediate start")
         } catch {
-            guard case PhoneDSHError.hostFailed = error else {
-                return XCTFail("expected hostFailed, got \(error)")
+            guard case PhoneDSHError.backoffNotElapsed(let deadline) = error else {
+                return XCTFail("expected backoffNotElapsed, got \(error)")
             }
+            retryAt = deadline
         }
         XCTAssertEqual(secondEngine.bootCount, 0)
         let cleared = try FenceAuthority.loadHandoffAuthorityIntent(
             root: fixture.workspace)
         XCTAssertNil(cleared)
-        try await secondHost.reset()
+        // A definite rejection is not a dead end: once the controller's retry
+        // window elapses, the ordinary cold start boots the new host without
+        // any manual acknowledgement.
+        let window = try XCTUnwrap(retryAt)
+        let remaining = window.timeIntervalSinceNow + 0.25
+        if remaining > 0 {
+            try await Task.sleep(for: .seconds(remaining))
+        }
+        try await secondHost.start()
         XCTAssertEqual(secondEngine.bootCount, 1)
         let state = await secondHost.state
         XCTAssertEqual(state, .running)
@@ -1759,8 +1793,15 @@ final class PhoneDSHHandoffColdSafetyTests: XCTestCase {
         XCTAssertEqual(counters.segmentsUploads, 0)
         XCTAssertEqual(engine.shutdownCount, 1,
                        "the engine teardown still precedes the refused CAS")
+        // An unsettled inbound write is a property of this incarnation; the
+        // next attempt re-reads the WAL and may converge, so the controller
+        // backs off instead of persisting a terminal `Failed`. The CAS, the
+        // snapshot and admission stay exactly as before: not sent, closed.
         let state = await host.state
-        XCTAssertEqual(state, .failed)
+        XCTAssertEqual(state, .starting)
+        let diagnostics = await host.diagnostics()
+        XCTAssertEqual(diagnostics.hostState, .backoff)
+        XCTAssertEqual(diagnostics.admission, .closed)
         await host.releaseInboundWriteForTesting()
         try await host.stop()
     }

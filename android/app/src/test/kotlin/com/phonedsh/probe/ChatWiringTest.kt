@@ -93,7 +93,9 @@ class ChatWiringTest {
         assertTrue(
             "ChatTurnRunner no longer opts into the Worker's assistant frames: the " +
                 "answer would arrive as one block after the turn ended",
-            "assistantStream" in stringsOf(runner),
+            runner.getResourceAsStream("ChatTurnRunner.class")!!.use {
+                String(it.readBytes(), Charsets.ISO_8859_1).contains("sessionFollowOpenFrame")
+            } && "assistantStream" in stringsOf(Class.forName("com.phonedsh.dsh.turn.DshTurnClientKt")),
         )
         assertTrue(
             "ChatTurnRunner no longer names the Worker's cancel endpoint: 停止 would " +

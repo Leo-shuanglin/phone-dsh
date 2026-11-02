@@ -34,6 +34,8 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
+import com.phonedsh.ui.state.EngineLifecycleFacts
+import com.phonedsh.ui.state.EngineLifecycleStatus
 import com.phonedsh.ui.theme.PdshTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -59,6 +61,7 @@ class SettingsPageTest {
         onSelectMode: (BusyEnterMode) -> Unit = {},
         onSelectPreference: (SettingsPreferenceChoice) -> Unit = {},
         onBack: () -> Unit = {},
+        onRestartEngine: (() -> Unit)? = null,
         tabContent: (@Composable (SettingsTab) -> Unit)? = null,
     ) {
         val state = SettingsScreenState.from(facts)
@@ -73,11 +76,33 @@ class SettingsPageTest {
                     tab = tab,
                     onSelectTab = onSelectTab,
                     onSelectPreference = onSelectPreference,
+                    onRestartEngine = onRestartEngine,
                     onToggleDeveloperTools = onToggleDeveloperTools,
                     tabContent = tabContent,
                 )
             }
         }
+    }
+
+    @Test
+    fun `settings shows measured host state and only shows restart after a failed engine`() {
+        var restarted = 0
+        val facts = SettingsFacts(
+            engineLifecycle = EngineLifecycleFacts(
+                status = EngineLifecycleStatus.FAILED,
+                statusLabel = "failed",
+                needsReset = true,
+            ),
+        )
+        val state = SettingsScreenState.from(facts)
+        assertEquals(SettingsScreenState.ENGINE_SECTION_ID, state.sections[1].id)
+        show(facts = facts, onRestartEngine = { restarted += 1 })
+        compose.onNodeWithText(UiStrings.ENGINE_STATE_LABEL).assertIsDisplayed()
+        compose.onNodeWithText("failed").assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.ENGINE_RESTART_HINT).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.SETTINGS_ROW_PREFIX + SettingsScreenState.ENGINE_RESTART_ROW_ID)
+            .performClick()
+        assertEquals(1, restarted)
     }
 
     /** The 通用 tab scrolls: a row below the fold is only composed once it is near. */

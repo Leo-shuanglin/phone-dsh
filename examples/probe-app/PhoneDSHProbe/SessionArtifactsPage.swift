@@ -43,7 +43,7 @@ struct SessionArtifactsPage: View {
             if let loadError {
                 Section {
                     Text(loadError)
-                        .font(.footnote)
+                        .font(.system(size: 13))
                         .foregroundStyle(ChatPage.danger)
                     Button("重试") { Task { await loadArtifacts() } }
                         .foregroundStyle(ChatPage.accent)
@@ -54,10 +54,10 @@ struct SessionArtifactsPage: View {
             if sessionArtifacts.isEmpty && !isLoading {
                 Section {
                     VStack(spacing: 8) {
-                        Text("本 session 还没有已确认归属的产物")
-                            .font(.system(size: 17, weight: .semibold))
+                        Text("本会话 还没有已确认归属的产物")
+                            .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                             .multilineTextAlignment(.center)
-                        Text("此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本 session。")
+                        Text("此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本会话。")
                             .font(.system(size: 13))
                             .foregroundStyle(ChatPage.inkSecondary)
                             .multilineTextAlignment(.center)
@@ -67,7 +67,7 @@ struct SessionArtifactsPage: View {
                     .listRowSeparator(.hidden)
                 }
             } else if !sessionArtifacts.isEmpty {
-                Section("本 session") {
+                Section("本会话") {
                     ForEach(sessionArtifacts, id: \.artifactID) { artifact in
                         artifactRow(artifact, unassigned: false)
                     }
@@ -82,14 +82,12 @@ struct SessionArtifactsPage: View {
                 } header: {
                     Text("未归属")
                 } footer: {
-                    Text("这些记录没有当前会话的真实来源信息，不计为本 session 产物。")
+                    Text("这些记录没有当前会话的真实来源信息，不计为本会话产物。")
                 }
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Color.white)
-        .navigationTitle("本 session 产物")
+        .homeGroupedList()
+        .navigationTitle("本会话产物")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -120,15 +118,15 @@ struct SessionArtifactsPage: View {
                     .frame(width: 34, height: 38)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(artifact.name)
-                        .font(.body)
+                        .font(.system(size: HomeSpec.bodySize))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     Text(ByteCountFormatter.string(fromByteCount: Int64(artifact.byteCount), countStyle: .file))
-                        .font(.caption)
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                     if unassigned {
                         Text("未归属")
-                            .font(.caption2)
+                            .font(.system(size: 13))
                             .foregroundStyle(ChatPage.inkSecondary)
                     }
                 }
@@ -137,7 +135,7 @@ struct SessionArtifactsPage: View {
                     ProgressView().controlSize(.small)
                 } else {
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.tertiary)
                 }
             }
@@ -146,7 +144,7 @@ struct SessionArtifactsPage: View {
         }
         .buttonStyle(.plain)
         .disabled(openingID != nil)
-        .accessibilityHint(unassigned ? "预览未归属产物" : "预览本 session 产物")
+        .accessibilityHint(unassigned ? "预览未归属产物" : "预览本会话产物")
     }
 
     private func loadArtifacts() async {

@@ -193,11 +193,18 @@ targets:
       - path: PhoneDSHProbe/DailyBriefModel.swift
       - path: PhoneDSHProbe/NativeConversationModels.swift
       - path: PhoneDSHProbe/NativeTranscriptProjector.swift
+      - path: PhoneDSHProbe/NativeAskQuestionCard.swift
+      - path: PhoneDSHProbe/NativeSubagentToolRows.swift
+      - path: PhoneDSHProbe/NativeToolTitleTable.swift
+      - path: PhoneDSHProbe/NativeToolCardChrome.swift
+      - path: PhoneDSHProbe/NativeToolDetailsCard.swift
       - path: PhoneDSHProbe/NativeToolCallModel.swift
       - path: PhoneDSHProbe/NativeMarkdownModel.swift
       - path: PhoneDSHProbe/NativeChatFormatting.swift
       - path: PhoneDSHProbe/NativeDiffModel.swift
+      - path: PhoneDSHProbe/NativeParityTokens.swift
       - path: PhoneDSHProbe/NativeChatTheme.swift
+      - path: PhoneDSHProbe/HomeSpec.swift
       - path: PhoneDSHProbe/NativeChatPreferences.swift
       # The scripted model upstream, the smoke evidence readers (WAL
       # replay/journal/step formats) and the kill-matrix support ship as the
@@ -278,11 +285,18 @@ targets:
       - path: PhoneDSHProbe/DailyBriefModel.swift
       - path: PhoneDSHProbe/NativeConversationModels.swift
       - path: PhoneDSHProbe/NativeTranscriptProjector.swift
+      - path: PhoneDSHProbe/NativeAskQuestionCard.swift
+      - path: PhoneDSHProbe/NativeSubagentToolRows.swift
+      - path: PhoneDSHProbe/NativeToolTitleTable.swift
+      - path: PhoneDSHProbe/NativeToolCardChrome.swift
+      - path: PhoneDSHProbe/NativeToolDetailsCard.swift
       - path: PhoneDSHProbe/NativeToolCallModel.swift
       - path: PhoneDSHProbe/NativeMarkdownModel.swift
       - path: PhoneDSHProbe/NativeChatFormatting.swift
       - path: PhoneDSHProbe/NativeDiffModel.swift
+      - path: PhoneDSHProbe/NativeParityTokens.swift
       - path: PhoneDSHProbe/NativeChatTheme.swift
+      - path: PhoneDSHProbe/HomeSpec.swift
       - path: PhoneDSHProbe/NativeChatPreferences.swift
     dependencies:
       - target: PhoneDSHProbe

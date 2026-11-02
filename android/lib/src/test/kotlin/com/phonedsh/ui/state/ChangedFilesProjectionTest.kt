@@ -25,7 +25,7 @@ class ChangedFilesProjectionTest {
     @Test
     fun `a settled edit becomes one changed file on the closing answer`() {
         val state = ChatScreenState.from(nodes(toolCall(), toolResult()))
-        val assistant = state.rows.filterIsInstance<ChatRow.Assistant>().single()
+        val assistant = allTurnRows(state.rows).filterIsInstance<ChatRow.Assistant>().single()
         assertTrue("a closed turn's last answer is the closing row", assistant.closing)
         assertEquals(
             listOf(ChatFileChange("notes/a.md", "notes/a.md", 1, 1)),
@@ -53,7 +53,7 @@ class ChangedFilesProjectionTest {
                 toolResult("create", slot = "tool-result-2", seq = 6),
             ),
         )
-        val changes = state.rows.filterIsInstance<ChatRow.Assistant>().single().changes
+        val changes = allTurnRows(state.rows).filterIsInstance<ChatRow.Assistant>().single().changes
         assertEquals(
             listOf(
                 // A write has no old text: iOS sees one empty old line, so +2 -1.
@@ -73,7 +73,7 @@ class ChangedFilesProjectionTest {
                 toolCall(id = "running", seq = 9, slot = "tool-call-2"),
             ),
         )
-        assertTrue(state.rows.filterIsInstance<ChatRow.Assistant>().single().changes.isEmpty())
+        assertTrue(allTurnRows(state.rows).filterIsInstance<ChatRow.Assistant>().single().changes.isEmpty())
     }
 
     @Test
@@ -84,7 +84,7 @@ class ChangedFilesProjectionTest {
                 toolResult(),
             ),
         )
-        assertTrue(state.rows.filterIsInstance<ChatRow.Assistant>().single().changes.isEmpty())
+        assertTrue(allTurnRows(state.rows).filterIsInstance<ChatRow.Assistant>().single().changes.isEmpty())
     }
 
     @Test
@@ -109,11 +109,21 @@ class ChangedFilesProjectionTest {
         )
         assertEquals(
             listOf(ChatFileChange("notes/a.md", "notes/a.md", 0, 1)),
-            state.rows.filterIsInstance<ChatRow.Assistant>().single().changes,
+            allTurnRows(state.rows).filterIsInstance<ChatRow.Assistant>().single().changes,
         )
     }
 
     // ------------------------------------------------------------------ fixtures
+
+    /** Inspect all source content, including entries hidden by the default completed-turn fold. */
+    private fun allTurnRows(rows: List<ChatRow>): List<ChatRow> = rows.flatMap { row ->
+        when (row) {
+            is ChatRow.ProcessGroup -> allTurnRows(row.entries)
+            is ChatRow.TurnProcess -> allTurnRows(row.entries)
+            is ChatRow.TurnTail -> emptyList()
+            else -> listOf(row)
+        }
+    }
 
     private val turnID: String = "session/s1/turn/turn-0001"
 

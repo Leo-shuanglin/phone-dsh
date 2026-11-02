@@ -79,6 +79,10 @@ function runPython(script: string, options: {
     ...process.env,
     PYTHONNOUSERSITE: '1',
     PYTHONDONTWRITEBYTECODE: '1',
+    // Every request below targets a fake _call transport. Ambient developer
+    // proxies must not turn it into an unsupported real CONNECT request.
+    NO_PROXY: '*',
+    no_proxy: '*',
   }
   delete env.PYTHONHOME
   delete env.PYTHONPATH

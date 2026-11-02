@@ -831,6 +831,52 @@ final class PhoneDSHHostTests: XCTestCase {
         try await host.stop()
     }
 
+    func testWebContentTerminationRetriesOneTransientBootFailure() async throws {
+        let fixture = try FacadeFixture()
+        defer { fixture.cleanup() }
+        let engine = MockEngine(worker: MockWorker())
+        let host = try makeHost(fixture, engine: engine)
+        try await host.start()
+
+        // WebKit kills the page process and the reload issued in the same turn
+        // loses the race against the replacement WebContent process. The one
+        // retry must turn that into a normal recovery instead of a persisted
+        // `Failed` controller.
+        engine.setBootError(WebEngineError.navigationFailed("无法连接服务器"), times: 1)
+        engine.emit(.terminated(1))
+        try await waitUntil(timeout: 10) {
+            let diagnostics = await host.diagnostics()
+            return diagnostics.state == .running && engine.bootCount >= 3
+        }
+        let diagnostics = await host.diagnostics()
+        XCTAssertEqual(diagnostics.hostState, .running)
+        XCTAssertEqual(diagnostics.admission, .open)
+        XCTAssertNil(diagnostics.lastError)
+        XCTAssertGreaterThanOrEqual(engine.bootCount, 3,
+                                    "the replacement Worker must have been retried")
+        try await host.stop()
+    }
+
+    func testWebContentTerminationExhaustedRetriesEnterBackoff() async throws {
+        let fixture = try FacadeFixture()
+        defer { fixture.cleanup() }
+        let engine = MockEngine(worker: MockWorker())
+        let host = try makeHost(fixture, engine: engine)
+        try await host.start()
+
+        engine.setBootError(WebEngineError.navigationFailed("无法连接服务器"))
+        engine.emit(.terminated(1))
+        try await waitUntil(timeout: 10) {
+            let diagnostics = await host.diagnostics()
+            return diagnostics.hostState == .backoff
+        }
+        let diagnostics = await host.diagnostics()
+        XCTAssertEqual(diagnostics.state, .starting)
+        XCTAssertEqual(diagnostics.admission, .closed)
+        XCTAssertEqual(engine.bootCount, 4, "one initial boot plus three recovery attempts")
+        try? await host.stop()
+    }
+
     func testWebContentTerminationPublishesExactlyOneRestartedEvent() async throws {
         let fixture = try FacadeFixture()
         defer { fixture.cleanup() }
@@ -1008,7 +1054,11 @@ final class PhoneDSHHostTests: XCTestCase {
         try await host.stop()
     }
 
-    func testResetAfterFailedStartRecoversTheHost() async throws {
+    /// A failed boot is no longer a dead end. The persisted failure carries a
+    /// retry window, so a plain `start()` reports the wait instead of a terminal
+    /// refusal, and the host recovers on its own once the window elapses — no
+    /// user acknowledgement involved.
+    func testStartAfterFailedBootWaitsForTheRetryWindowAndRecovers() async throws {
         let fixture = try FacadeFixture()
         defer { fixture.cleanup() }
         let engine = MockEngine(worker: MockWorker(), lockdown: true)
@@ -1019,18 +1069,19 @@ final class PhoneDSHHostTests: XCTestCase {
         } catch let error as PhoneDSHError {
             XCTAssertEqual(error, .lockdownMode)
         }
-        // D14: a failed host stays failed until the user acknowledges it.
         do {
             try await host.start()
-            XCTFail("start() must keep failing while the host is failed")
+            XCTFail("start() must wait out the retry window")
         } catch let error as PhoneDSHError {
-            guard case .hostFailed = error else {
+            guard case .backoffNotElapsed = error else {
                 return XCTFail("unexpected error: \(error)")
             }
         }
 
         engine.setLockdown(false)
-        try await host.reset()
+        // The window is `min(60 s, 5 s * 2^(retry-1))`; one failure means 5 s.
+        try await Task.sleep(for: .seconds(6))
+        try await host.start()
         let state = await host.state
         XCTAssertEqual(state, .running)
         let diagnostics = await host.diagnostics()
@@ -1039,7 +1090,10 @@ final class PhoneDSHHostTests: XCTestCase {
         try await host.stop()
     }
 
-    func testColdStartFromPersistedFailurePreservesTheOriginalReason() async throws {
+    /// Incident regression: a persisted failure used to make a plain `start()`
+    /// refuse forever (`hostFailed`), which bricked the App across restarts.
+    /// It now reports the retry window instead and keeps the original reason.
+    func testColdStartFromPersistedFailureWaitsForTheRetryWindow() async throws {
         let fixture = try FacadeFixture()
         defer { fixture.cleanup() }
         let firstEngine = MockEngine(worker: MockWorker(), lockdown: true)
@@ -1055,14 +1109,16 @@ final class PhoneDSHHostTests: XCTestCase {
         let secondHost = try makeHost(fixture, engine: secondEngine)
         do {
             try await secondHost.start()
-            XCTFail("a persisted Failed controller must refuse a plain start")
+            XCTFail("a persisted failure must wait out its retry window")
         } catch let error as PhoneDSHError {
-            guard case .hostFailed(let detail) = error else {
-                return XCTFail("expected hostFailed, got \(error)")
+            guard case .backoffNotElapsed(let deadline) = error else {
+                return XCTFail("expected backoffNotElapsed, got \(error)")
             }
-            XCTAssertEqual(detail, PhoneDSHError.lockdownMode.description)
+            XCTAssertGreaterThan(deadline, Date())
         }
         XCTAssertEqual(secondEngine.bootCount, 0)
+        let diagnostics = await secondHost.diagnostics()
+        XCTAssertFalse(diagnostics.admission == .open)
         try? await secondHost.stop()
         try? await firstHost.stop()
     }

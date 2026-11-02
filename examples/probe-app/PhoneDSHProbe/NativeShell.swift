@@ -4,6 +4,7 @@
 // 会话占一格是产品决定（高频检索）；定时任务并进会话页的第二段。
 
 import SwiftUI
+import PhoneDSH
 import PhoneDSHAgentCore
 import UIKit
 
@@ -51,9 +52,9 @@ struct RunStatusDot: View {
     let needsModelConfiguration: Bool
 
     private var color: Color {
-        if needsModelConfiguration || parked { return Color(red: 0xC7 / 255, green: 0x77 / 255, blue: 0) }
+        if needsModelConfiguration || parked { return NativeParityTokens.warning }
         return started
-            ? Color(red: 0x0E / 255, green: 0x9F / 255, blue: 0x6E / 255)
+            ? HomeSpec.success
             : Color(uiColor: .tertiaryLabel)
     }
 
@@ -84,10 +85,9 @@ struct RunStatusDot: View {
 /// push-aside drawer. Both layouts retain the same conversation view and draft.
 struct NativeShell: View {
     init() {
-        // 页面底全 App 纯白:分组列表默认那层 #F2F2F7 会和白卡片叠出接缝,
-        // 分层靠间距和分隔线,不靠底色差。
-        UITableView.appearance().backgroundColor = .white
-        UICollectionView.appearance().backgroundColor = .white
+        // HomeSpec chrome for every list, pushed page and sheet: #F7F7F7 page,
+        // white rows, a flat navigation bar.
+        HomeAppearance.apply()
     }
 
     @State private var drawerOpen = false
@@ -105,19 +105,11 @@ struct NativeShell: View {
             let usesSidebar = proxy.size.width >= drawerWidth + 580
             let sidebarVisible = usesSidebar && !sidebarCollapsed
             let modalDrawerVisible = !usesSidebar && drawerOpen
-            let pageOffset = sidebarVisible ? drawerWidth : (usesSidebar ? 0 : contentOffset)
             let panelOpen = usesSidebar
                 ? Binding(get: { !sidebarCollapsed }, set: { sidebarCollapsed = !$0 })
                 : $drawerOpen
 
             ZStack(alignment: .topLeading) {
-                SessionsDrawerPanel(isOpen: panelOpen,
-                                    topInset: proxy.safeAreaInsets.top,
-                                    bottomInset: proxy.safeAreaInsets.bottom,
-                                    isPersistent: usesSidebar)
-                    .allowsHitTesting(sidebarVisible || modalDrawerVisible)
-                    .accessibilityHidden(!sidebarVisible && !modalDrawerVisible)
-
                 NavigationStack {
                     ChatPage(openDrawer: {
                         if usesSidebar {
@@ -128,40 +120,32 @@ struct NativeShell: View {
                     }, drawerExpanded: sidebarVisible)
                 }
                 .frame(width: max(0, proxy.size.width - (sidebarVisible ? drawerWidth : 0)))
-                // 白对白时阴影不够用,再加一条 0.5 的断线:#D5D4DB,只贴页面左缘、只在抽屉开着时出现。
-                // 它挂在页面自己身上(所以在 offset 之前),跟着页面走;0.5 宽不参与布局,
-                // 也不随内容滚动。阴影保持原深度,两样一起加深会变成一道黑边。
-                .overlay(alignment: .leading) {
-                    if sidebarVisible || modalDrawerVisible {
-                        Rectangle()
-                            .fill(Color(red: 0xD5 / 255, green: 0xD4 / 255, blue: 0xDB / 255))
-                            .frame(width: 0.5)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .offset(x: pageOffset)
-                // 页面左缘一条柔和阴影,让它看得出压在菜单上面。
-                .shadow(color: .black.opacity(modalDrawerVisible ? 0.18 : 0), radius: 16, x: -8)
+                // A persistent sidebar sits beside the page; the phone drawer
+                // slides over it instead, so the page itself never moves.
+                .offset(x: sidebarVisible ? drawerWidth : 0)
                 .accessibilityHidden(modalDrawerVisible)
 
-                // 「点页面任意处收回」只盖页面露出来的那块,不盖抽屉。
-                // 这一层必须靠布局定位(左边让出 contentOffset),不能挂在被 offset 的页面上:
-                // overlay 的命中区停在改写前的 0..402,抽屉那 320 点整块被它吃掉,
-                // 于是抽屉里所有控件都点不动。
+                // Scrim over the page: tap or swipe left to close. It follows
+                // the drag so the page brightens as the drawer leaves.
                 if modalDrawerVisible {
-                    HStack(spacing: 0) {
-                        Color.clear
-                            .frame(width: max(0, min(drawerWidth, contentOffset)))
-                            .allowsHitTesting(false)
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .onTapGesture { closeDrawer() }
-                            .gesture(closeDrag)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                    .accessibilityHidden(true)
+                    Color.black
+                        .opacity(0.28 * drawerProgress)
+                        .contentShape(Rectangle())
+                        .onTapGesture { closeDrawer() }
+                        .gesture(closeDrag)
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
                 }
+
+                SessionsDrawerPanel(isOpen: panelOpen,
+                                    topInset: proxy.safeAreaInsets.top,
+                                    bottomInset: proxy.safeAreaInsets.bottom,
+                                    isPersistent: usesSidebar)
+                    .offset(x: drawerOffset(usesSidebar: usesSidebar, sidebarVisible: sidebarVisible))
+                    .shadow(color: .black.opacity(modalDrawerVisible ? 0.12 : 0), radius: 20, x: 6)
+                    .simultaneousGesture(modalDrawerVisible ? closeDrag : nil)
+                    .allowsHitTesting(sidebarVisible || modalDrawerVisible)
+                    .accessibilityHidden(!sidebarVisible && !modalDrawerVisible)
             }
             .ignoresSafeArea()
             // 菜单盖着状态栏那一条,那上面的字必须深色;只有抽屉开着时把外观压成浅色。
@@ -195,9 +179,16 @@ struct NativeShell: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
-    /// 页面右移的距离:开着是 320,拖动时跟手减。
-    private var contentOffset: CGFloat {
-        drawerOpen ? max(0, drawerWidth + dragOffset) : 0
+    /// The phone drawer's x: 0 open, following a leftward drag, fully off
+    /// screen (plus its shadow) closed. A persistent sidebar is just shown or hidden.
+    private func drawerOffset(usesSidebar: Bool, sidebarVisible: Bool) -> CGFloat {
+        if usesSidebar { return sidebarVisible ? 0 : -drawerWidth }
+        return drawerOpen ? min(0, dragOffset) : -(drawerWidth + 32)
+    }
+
+    /// 1 when the drawer is fully open, falling to 0 as it is dragged away.
+    private var drawerProgress: CGFloat {
+        drawerOpen ? max(0, 1 + dragOffset / drawerWidth) : 0
     }
 
     /// 展开 0.28 秒、收回 0.22 秒,用系统那条曲线;已经开着时再点不加第二层。
@@ -216,9 +207,10 @@ struct NativeShell: View {
     }
 
     private var closeDrag: some Gesture {
-        DragGesture()
+        DragGesture(minimumDistance: 12)
             .onChanged { value in
-                // 只跟手往左:往右没有东西可让。
+                // 只跟手往左,而且只认横向为主的拖动:抽屉里上下滑列表不能把它带走。
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
                 dragOffset = min(0, value.translation.width)
             }
             .onEnded { value in
@@ -243,12 +235,11 @@ struct SessionsDrawerPanel: View {
     private let width: CGFloat = 320
 
     var body: some View {
-        SessionsDrawer(isOpen: $isOpen, topInset: topInset, bottomInset: bottomInset,
+        HomeDrawer(isOpen: $isOpen, topInset: topInset, bottomInset: bottomInset,
                        isPersistent: isPersistent)
             .frame(width: width)
             .frame(maxHeight: .infinity)
-            // 面板是白纸,不跟系统深色走:盖到状态栏下面时,状态栏的字必须是深色。
-            .background(Color.white)
+            .background(HomeSpec.page)
             .environment(\.colorScheme, .light)
             .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0,
                                               bottomTrailingRadius: isPersistent ? 0 : 22,
@@ -271,50 +262,6 @@ struct SessionsDrawerPanel: View {
     }
 }
 
-/// Sessions, scheduled tasks — and settings as its last row, so the drawer is
-/// the only map of the app.
-struct SessionsDrawer: View {
-    @Binding var isOpen: Bool
-    var topInset: CGFloat = 0
-    var bottomInset: CGFloat = 0
-    var isPersistent = false
-    @State private var showSettings = false
-    @State private var showSchedules = false
-    @State private var management = DSHManagementModel.shared
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                SessionsPage(onSelect: {
-                    if !isPersistent { isOpen = false }
-                })
-                    .toolbar(.hidden, for: .navigationBar)
-
-                Divider()
-
-                // The two global entries sit together at the bottom, out of
-                // the session list, so they read as the app's furniture.
-                VStack(spacing: 0) {
-                    DrawerRow(title: "定时任务", systemImage: "clock.arrow.circlepath", badge: management.scheduleRecords.isEmpty ? nil : "\(management.scheduleRecords.count)") {
-                        showSchedules = true
-                    }
-                    DrawerRow(title: "设置", systemImage: "gearshape") {
-                        showSettings = true
-                    }
-                }
-                .background(Color.white)
-                .padding(.bottom, bottomInset + 16)
-            }
-            .background(Color.white)
-            .sheet(isPresented: $showSettings) {
-                NavigationStack { SettingsPage() }
-                    .presentationDragIndicator(.visible)
-            }
-            .navigationDestination(isPresented: $showSchedules) { NativeAutomationPage() }
-        }
-    }
-}
-
 /// The folder list remains a separate page, and each folder opens its files.
 struct WorkspaceFoldersPage: View {
     @State private var management = DSHManagementModel.shared
@@ -331,7 +278,7 @@ struct WorkspaceFoldersPage: View {
                 } label: {
                     HStack(spacing: 12) {
                         Text(Self.displayName(workspace))
-                            .font(.system(size: 17))
+                            .font(.system(size: HomeSpec.bodySize))
                             .foregroundStyle(.primary)
                         Spacer(minLength: 12)
                         Text(workspace.sessionIDs.count == 1
@@ -346,7 +293,7 @@ struct WorkspaceFoldersPage: View {
             if management.workspaces.isEmpty {
                 VStack(spacing: 8) {
                     Text("还没有工作文件夹")
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                     Text("会话把生成的文件放在文件夹里。新建一个文件夹给它用。")
                         .font(.system(size: 13))
                         .foregroundStyle(ChatPage.inkSecondary)
@@ -355,7 +302,7 @@ struct WorkspaceFoldersPage: View {
                         showingNewWorkspace = true
                     } label: {
                         Text("添加工作文件夹")
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
                             .frame(height: 50)
@@ -370,12 +317,13 @@ struct WorkspaceFoldersPage: View {
                 .listRowSeparator(.hidden)
             }
         }
+        .homeGroupedList()
         .navigationTitle("工作文件夹")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("添加") { showingNewWorkspace = true }
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                     .foregroundStyle(ChatPage.accent)
             }
         }
@@ -393,15 +341,13 @@ struct WorkspaceFoldersPage: View {
             // VFS); this creates the folder there first.
             Text("会在 DSH 工作区里新建同名文件夹并登记为工作文件夹。")
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Color.white)
+        .homeGroupedList()
     }
 
     /// 自带的那个文件夹叫「默认文件夹」,用户自己建的按原名显示。
     static func displayName(_ workspace: ManagedWorkspace) -> String {
         let raw = workspace.title
-        if raw.lowercased() == "workspace" { return "默认文件夹" }
+        if DrawerTitles.isDefaultWorkspace(raw) { return DrawerTitles.defaultFolderName }
         return raw
     }
 }
@@ -420,7 +366,7 @@ struct DrawerRow: View {
                 Image(systemName: systemImage)
                     .font(.system(size: 18))
                     .frame(width: 22)
-                Text(title).font(.system(size: 17))
+                Text(title).font(.system(size: HomeSpec.bodySize))
                 Spacer()
                 if let badge {
                     Text(badge).font(.system(size: 13)).foregroundStyle(.secondary)
@@ -466,7 +412,6 @@ struct EgressAllowListPage: View {
             Section {
                 Toggle("允许连任何网站", isOn: allowAllBinding)
                     .frame(minHeight: 48)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 16))
             } footer: {
                 Text("打开之后,下面这些地址就不起作用了。")
             }
@@ -476,21 +421,18 @@ struct EgressAllowListPage: View {
                     Text(allowAll ? "现在全部能连。" : "还没有地址,现在连不出去。")
                         .foregroundStyle(SessionsPage.ink)
                         .frame(minHeight: 48)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 16))
                     Button {
                         restoreDefaults()
                     } label: {
                         Text("恢复成默认的")
                             .foregroundStyle(ChatPage.accent)
                             .frame(minHeight: 48, alignment: .leading)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 16))
                     }
                 } else {
                     ForEach(hosts, id: \.self) { host in
                         Text(host)
                             .frame(minHeight: 48)
                             .contentShape(Rectangle())
-                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 16))
                             .contextMenu {
                                 // 开关开着也留这条:名单里有一张过期的地址,
                                 // 用户想清掉的正是它,不能逼他先去关开关。
@@ -514,7 +456,6 @@ struct EgressAllowListPage: View {
                         }
                         .foregroundStyle(ChatPage.accent)
                         .frame(minHeight: 48, alignment: .leading)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 16))
                     }
                 }
             } header: {
@@ -535,9 +476,7 @@ struct EgressAllowListPage: View {
                 }
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Color.white)
+        .homeGroupedList()
         .navigationTitle("网络访问")
         .navigationBarTitleDisplayMode(.inline)
         .task { load() }
@@ -553,7 +492,7 @@ struct EgressAllowListPage: View {
                         .frame(height: 28)
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(Color(red: 0xF2 / 255, green: 0xF3 / 255, blue: 0xF5 / 255))
+                                .fill(HomeSpec.userBubble)
                         )
                     Spacer(minLength: 0)
                 }
@@ -652,7 +591,7 @@ struct EgressAllowListPage: View {
                 .onTapGesture { adding = false }
             VStack(alignment: .leading, spacing: 12) {
                 Text("添加地址")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                 TextField("只写域名,不用写 http://", text: $draft)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
@@ -673,7 +612,7 @@ struct EgressAllowListPage: View {
                         .foregroundStyle(ChatPage.accent)
                         .disabled(Self.trim(draft).isEmpty)
                 }
-                .font(.system(size: 17))
+                .font(.system(size: HomeSpec.bodySize))
             }
             .padding(20)
             .frame(maxWidth: 300)
@@ -730,6 +669,7 @@ struct EgressAllowListPage: View {
 enum PreviewScreen: String, Identifiable, CaseIterable {
     case settings
     case settingsModel = "settings.model"
+    case settingsModelAdd = "settings.model.add"
     case settingsSearch = "settings.search"
     case settingsNetwork = "settings.network"
     case settingsPlugins = "settings.plugins"
@@ -785,6 +725,8 @@ enum PreviewScreen: String, Identifiable, CaseIterable {
         switch self {
         case .settings: SettingsPage()
         case .settingsModel: ModelProviderSettingsPage()
+        case .settingsModelAdd:
+            ModelProviderEditorPage(profile: ProviderProfile(id: "", displayName: "", baseURL: "https://api.deepseek.com/v1", model: "deepseek-flash"), isNew: true, onSaved: { _ in })
         case .settingsSearch: WebSearchSettingsPage()
         case .settingsNetwork: EgressAllowListPage()
         case .settingsPlugins: NativeConfigurationPage()
@@ -897,11 +839,31 @@ struct DrawerPreview: View {
 struct SettingsAboutPage: View {
     var body: some View {
         List {
-            LabeledContent("版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
-            Text("会话记录和文件都保存在这台手机上。")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            Section {
+                VStack(spacing: 8) {
+                    Image("LogoBackground")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 64, height: 64)
+                        .accessibilityHidden(true)
+                    Text("Phone DSH")
+                        .font(.system(size: HomeSpec.navTitleSize, weight: .semibold))
+                    Text("运行在手机上的 DeepSeek Harness")
+                        .font(.system(size: 14))
+                        .foregroundStyle(HomeSpec.textPlaceholder)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .listRowBackground(Color.clear)
+            }
+            Section {
+                LabeledContent("版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
+                LabeledContent("构建", value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—")
+            } footer: {
+                Text("会话记录和文件都保存在这台手机上。")
+            }
         }
+        .homeGroupedList()
         .navigationTitle("关于")
         .navigationBarTitleDisplayMode(.inline)
     }

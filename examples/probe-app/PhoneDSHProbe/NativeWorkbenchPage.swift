@@ -12,29 +12,32 @@ struct NativeWorkbenchPage: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Picker("工作面板", selection: $section) {
-                    Text("文件").tag(0)
-                    Text("命令").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .padding(.bottom, 8)
+            Group {
                 if section == 0 {
                     FilesPage(initialPath: initialPath)
                 } else {
                     PDSHShellPage()
                 }
             }
-            .navigationTitle("工作区")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("完成") { onClose?(); dismiss() }.leadingBarText()
+                // The two panes switch in the bar itself, the way phone apps
+                // put a segmented title in the middle of the navigation bar.
+                ToolbarItem(placement: .principal) {
+                    Picker("工作区", selection: $section) {
+                        Text("文件").tag(0)
+                        Text("命令").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 180)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { onClose?(); dismiss() }
+                        .fontWeight(.semibold)
                 }
             }
         }
         .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
+        .homeSheetChrome()
     }
 }

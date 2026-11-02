@@ -69,6 +69,7 @@
 package com.phonedsh.dsh.host
 
 import com.phonedsh.controller.ControllerEffect
+import com.phonedsh.controller.ControllerFailure
 import com.phonedsh.controller.ControllerSignal
 import com.phonedsh.controller.ControllerStateMachine
 import com.phonedsh.controller.ControllerBudgets
@@ -204,6 +205,14 @@ interface PhoneDshHost {
 
     /** Stops the engine and the subscriptions; idempotent. */
     fun stop()
+
+    /**
+     * Queues an explicit failure acknowledgement. Returns false unless D14 is
+     * currently `Failed`, and true when a reset request is accepted. The actual
+     * D14 `UserReset` signal and recovery run on the facade scope after start
+     * preparation is ready; callers never edit controller state directly.
+     */
+    fun resetFailure(): Boolean
 }
 
 /**
@@ -545,6 +554,7 @@ class DefaultPhoneDshHost(
     override val state: StateFlow<HostState> = mutableState.asStateFlow()
 
     private val started = AtomicBoolean(false)
+    private val resetQueued = AtomicBoolean(false)
 
     /**
      * Invalidates a boot job that was launched by a previous [start] when
@@ -658,6 +668,51 @@ class DefaultPhoneDshHost(
         engine.stop()
         notifier.cancel(ControllerEffects.BOOT_RECOVERY_NOTIFICATION_ID)
         logger.info("host stopped: engine stopped, subscriptions cancelled")
+    }
+
+    /**
+     * Explicit `Failed -> Recovering` acknowledgement (`D14 UserReset`).
+     *
+     * Start preparation first, then feed the same serialized signal path as
+     * lifecycle/controller events. This keeps the final HELLO/recovery context
+     * ready before reset effects boot a replacement worker.
+     */
+    override fun resetFailure(): Boolean {
+        if (controller.state != HostState.FAILED) return false
+        if (!resetQueued.compareAndSet(false, true)) return false
+        if (!started.get()) {
+            try {
+                start()
+            } catch (failure: Exception) {
+                resetQueued.set(false)
+                logger.warn("user reset not accepted: host start threw ${failure.javaClass.simpleName}")
+                return false
+            }
+        }
+        val generation = bootGeneration.get()
+        val job = scope.launch {
+            try {
+                val isReady = readyState.value || withTimeoutOrNull(USER_RESET_READY_TIMEOUT_MILLIS) {
+                    readyState.first { it }
+                    true
+                } == true
+                if (!isReady || !current(generation)) {
+                    logger.warn("user reset not applied: boot preparation did not become ready")
+                    return@launch
+                }
+                if (controller.state != HostState.FAILED) {
+                    logger.warn("user reset not applied: host left Failed before the reset signal")
+                    return@launch
+                }
+                logger.info("user acknowledged the failed host; feeding D14 UserReset")
+                handle(ControllerSignal.UserReset)
+            } finally {
+                resetQueued.set(false)
+            }
+        }
+        synchronized(jobsLock) { jobs += job }
+        job.invokeOnCompletion { synchronized(jobsLock) { jobs.remove(job) } }
+        return true
     }
 
     /** `true` while [generation] is the boot job the facade still wants. */
@@ -985,6 +1040,11 @@ class DefaultPhoneDshHost(
                 if (ControllerEffect.FORCE_DRAIN_DEADLINE in record.effects) {
                     abortInFlightWork("forced by the drain deadline")
                 }
+                if (ControllerEffect.RE_RUN_RECOVERY in record.effects) {
+                    readyState.value = false
+                    notifier.cancel(ControllerEffects.HOST_FAILURE_NOTIFICATION_ID)
+                    resetFailedHostWorker(record.signal)
+                }
                 if (ControllerEffect.ARM_DRAIN_DEADLINE in record.effects) {
                     drain.arm(controller.drainDeadlineAtMillis)
                 }
@@ -1218,6 +1278,53 @@ class DefaultPhoneDshHost(
                 )
             }
         }
+    }
+
+    /** Performs the host-owned `RE_RUN_RECOVERY` action for D14 UserReset. */
+    private fun resetFailedHostWorker(reason: String) {
+        val generation = bootGeneration.get()
+        val job = scope.launch {
+            try {
+                val currentEngine = engine.state.value
+                val engineMayOwnWorker = currentEngine is EngineHostState.Running ||
+                    currentEngine is EngineHostState.Starting || currentEngine is EngineHostState.Recovering
+                if (engineMayOwnWorker) {
+                    logger.info("user reset ($reason): stopping the failed Worker before recovery")
+                    engine.stop()
+                    if (!awaitWorkerStopped()) {
+                        logger.warn(
+                            "user reset ($reason): Worker did not report stopped within " +
+                                "$WORKER_STOP_BOUND_MILLIS ms; recovery continues",
+                        )
+                    }
+                }
+                if (!current(generation) || controller.state != HostState.RECOVERING) return@launch
+                closeEpochForRestart("user reset ($reason)")
+                if (!current(generation) || controller.state != HostState.RECOVERING) return@launch
+
+                // The controller effect is a real recovery pass, not only a
+                // state transition: reseed the VFS proof and HELLO before the
+                // replacement Worker starts.
+                helloState = helloState.copy(wal = recoverWal())
+                openJournal()
+                if (!current(generation) || controller.state != HostState.RECOVERING) return@launch
+                startWorker("user reset ($reason)")
+                readyState.value = true
+                logger.info("user reset recovery complete: replacement Worker start requested")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                logger.warn("user reset recovery failed (${failure.javaClass.simpleName}); returning to Failed")
+                handle(
+                    ControllerSignal.FailureRaised(
+                        reason = ControllerFailure.HOST_DEFECT,
+                        detail = "user reset recovery failed",
+                    ),
+                )
+            }
+        }
+        synchronized(jobsLock) { jobs += job }
+        job.invokeOnCompletion { synchronized(jobsLock) { jobs.remove(job) } }
     }
 
     /** The row's `CLOSE_EPOCH`: reported, never fatal to the restart itself. */
@@ -1518,6 +1625,8 @@ class DefaultPhoneDshHost(
          * to remove, hence the bound and the warning.
          */
         const val WORKER_STOP_BOUND_MILLIS: Long = 5_000L
+        /** Bound for the boot preparation that resetFailure must await before feeding UserReset. */
+        const val USER_RESET_READY_TIMEOUT_MILLIS: Long = 30_000L
 
         /**
          * The longest a measured turn window may defer `Running -> Draining`.

@@ -69,6 +69,7 @@ class ScheduleEditorPageTest {
     private fun facts(writable: FactState = FactState.UNKNOWN): AutomationFacts = AutomationFacts(
         snapshot = AutomationSnapshot(schedules = listOf(reported)),
         writable = writable,
+        currentSessionID = "worker-session-1",
     )
 
     /**
@@ -81,7 +82,7 @@ class ScheduleEditorPageTest {
         initial: AutomationScheduleDraft,
         submitted: Boolean = false,
         writable: FactState = FactState.UNKNOWN,
-        onSubmit: () -> Unit = {},
+        onSubmit: (AutomationScheduleDraft, String) -> Unit = { _, _ -> },
         onCancel: () -> Unit = {},
     ): List<AutomationScheduleDraft> {
         val edits = mutableListOf<AutomationScheduleDraft>()
@@ -181,65 +182,6 @@ class ScheduleEditorPageTest {
     }
 
     // -------------------------------------------------------------- the write
-
-    @Test
-    fun `保存 stays inert until both required fields carry text, then submits the typed draft`() {
-        var submitted = 0
-        val edits = showEditor(
-            AutomationScheduleDraft.from(schedule = null, timeZone = "Asia/Shanghai"),
-            onSubmit = { submitted += 1 },
-        )
-
-        // iOS disables 保存 while 名称 or 提醒内容 is blank (`:284`–`:285`).
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_SAVE).performClick()
-        assertEquals("a blank form never submits", 0, submitted)
-
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_NAME).performTextInput("周报")
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_PROMPT).performTextInput("总结这一周")
-        assertEquals("周报", edits.last().title)
-        assertEquals("总结这一周", edits.last().prompt)
-
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_SAVE).performClick()
-        assertEquals(1, submitted)
-    }
-
-    @Test
-    fun `取消 hands the cancel gesture back and never submits`() {
-        var cancelled = 0
-        var submitted = 0
-        showEditor(
-            AutomationScheduleDraft.from(schedule = null, timeZone = "Asia/Shanghai"),
-            onSubmit = { submitted += 1 },
-            onCancel = { cancelled += 1 },
-        )
-
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_CANCEL).performClick()
-        assertEquals(1, cancelled)
-        assertEquals(0, submitted)
-    }
-
-    @Test
-    fun `the rule chooser picks a rule and the form swaps its fields`() {
-        val edits = showEditor(AutomationScheduleDraft.from(schedule = null, timeZone = "Asia/Shanghai"))
-
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_RULE).performClick()
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_RULE_DIALOG).assertIsDisplayed()
-        // All six options are on screen (`:264`–`:269`), each its own control.
-        listOf("after", "at", "every", "daily", "weekly", "cron").forEach { wire ->
-            compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_RULE_OPTION_PREFIX + wire)
-                .assertIsDisplayed()
-        }
-        compose.onNodeWithText(UiStrings.AUTOMATION_EDITOR_RULE_DAILY).assertIsDisplayed()
-
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_RULE_OPTION_PREFIX + "daily").performClick()
-        assertEquals(AutomationRule.DAILY, edits.last().rule)
-        // 每天 asks for a local time and a zone (`:302`–`:303`).
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + "time").assertIsDisplayed()
-        scrollTo(UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + "time-zone")
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + "time-zone").assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.AUTOMATION_EDITOR_TIME_FIELD).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.AUTOMATION_EDITOR_TIME_ZONE_FIELD).assertIsDisplayed()
-    }
 
     @Test
     fun `a submitted form that does not validate prints the baseline's sentence`() {

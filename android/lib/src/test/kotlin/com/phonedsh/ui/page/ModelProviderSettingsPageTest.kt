@@ -26,6 +26,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -62,6 +63,8 @@ class ModelProviderSettingsPageTest {
         facts: ModelProviderFacts,
         onAdd: () -> Unit = {},
         onEdit: (String) -> Unit = {},
+        onTest: (ProviderDraft) -> Unit = {},
+        onSave: (ProviderDraft, String) -> Unit = { _, _ -> },
         onRetry: (() -> Unit)? = null,
         onStartEngine: () -> Unit = {},
         onDelete: (String) -> Unit = {},
@@ -77,10 +80,64 @@ class ModelProviderSettingsPageTest {
                     onBack = {},
                     onRetry = onRetry,
                     onStartEngine = onStartEngine,
+                    onTest = onTest,
+                    onSave = onSave,
                     onDelete = onDelete,
                 )
             }
         }
+    }
+
+    @Test
+    fun `connection test progress and failure stay inline without closing or replacing the editor draft`() {
+        var testedDraft: ProviderDraft? = null
+        val facts = mutableStateOf(ModelProviderFacts(profiles = emptyList()))
+        compose.setContent {
+            PdshTheme {
+                ModelProviderSettingsPage(
+                    state = ModelProviderScreenState.from(facts.value),
+                    onAdd = {},
+                    onEdit = {},
+                    onToggleSection = {},
+                    onBack = {},
+                    onTest = { draft ->
+                        testedDraft = draft
+                        facts.value = facts.value.copy(
+                            connectionTest = ProviderConnectionTestFact(
+                                profileId = draft.id,
+                                isNew = draft.isNew,
+                                isTesting = true,
+                            ),
+                        )
+                    },
+                )
+            }
+        }
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
+        compose.onNodeWithText(UiStrings.PROVIDER_TEST).performClick()
+        assertTrue(requireNotNull(testedDraft).isNew)
+        compose.onNodeWithText("测试中…").assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CANCEL).assertIsDisplayed()
+
+        // The host publishes only a safe result fact. Recomposition must retain
+        // the inline editor and its typed draft; the key field is never replaced
+        // by the host's result payload.
+        compose.runOnIdle {
+            facts.value = facts.value.copy(
+                connectionTest = ProviderConnectionTestFact(
+                    profileId = "",
+                    isNew = true,
+                    isTesting = false,
+                    succeeded = false,
+                    message = "密钥被服务拒绝（HTTP 401）。",
+                ),
+            )
+        }
+        compose.onNodeWithTag("pdsh.provider.test-result").assertIsDisplayed()
+        compose.onNodeWithText("密钥被服务拒绝（HTTP 401）。").assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_FIELD_NAME).assertIsDisplayed()
     }
 
     /** A live host: the fold and the row callbacks update the projected state. */
@@ -269,6 +326,100 @@ class ModelProviderSettingsPageTest {
             .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
         compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
         compose.onNodeWithText(UiStrings.CANCEL).performClick()
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_FIELD_NAME).assertDoesNotExist()
+    }
+
+    @Test
+    fun `failed save keeps the exact editor draft and shows the host reason inline`() {
+        var submitted: ProviderDraft? = null
+        var requestId: String? = null
+        val facts = mutableStateOf(ModelProviderFacts(profiles = emptyList()))
+        compose.setContent {
+            PdshTheme {
+                ModelProviderSettingsPage(
+                    state = ModelProviderScreenState.from(facts.value),
+                    onAdd = {},
+                    onEdit = {},
+                    onToggleSection = {},
+                    onBack = {},
+                    onSave = { draft, id ->
+                        submitted = draft
+                        requestId = id
+                        facts.value = facts.value.copy(
+                            providerSave = ProviderSaveFact(
+                                requestId = id,
+                                profileId = draft.id,
+                                isNew = draft.isNew,
+                                isSaving = true,
+                            ),
+                        )
+                    },
+                )
+            }
+        }
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
+        val nameField = compose.onNodeWithTag("pdsh.provider.field.${UiStrings.PROVIDER_FIELD_NAME}")
+        nameField.performTextInput("用户服务")
+        compose.onNodeWithText(UiStrings.SAVE).performClick()
+        assertEquals("用户服务", submitted?.name)
+        assertTrue(requestId?.isNotBlank() == true)
+        compose.onNodeWithText("保存中…").assertIsDisplayed()
+
+        compose.runOnIdle {
+            val draft = requireNotNull(submitted)
+            facts.value = facts.value.copy(
+                providerSave = ProviderSaveFact(
+                    requestId = requireNotNull(requestId),
+                    profileId = draft.id,
+                    isNew = draft.isNew,
+                    isSaving = false,
+                    succeeded = false,
+                    message = "本机存储不可写，本次未保存",
+                ),
+            )
+        }
+        compose.onNodeWithTag("pdsh.provider.save-result").assertIsDisplayed()
+        compose.onNodeWithText("本机存储不可写，本次未保存").assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CANCEL).assertIsDisplayed()
+        nameField.assertIsDisplayed()
+    }
+
+    @Test
+    fun `successful provider save closes only the matching editor request`() {
+        val facts = mutableStateOf(ModelProviderFacts(profiles = emptyList()))
+        compose.setContent {
+            PdshTheme {
+                ModelProviderSettingsPage(
+                    state = ModelProviderScreenState.from(facts.value),
+                    onAdd = {},
+                    onEdit = {},
+                    onToggleSection = {},
+                    onBack = {},
+                    onSave = { draft, requestId ->
+                        facts.value = facts.value.copy(
+                            providerSave = ProviderSaveFact(
+                                requestId = requestId,
+                                profileId = draft.id,
+                                isNew = draft.isNew,
+                                isSaving = false,
+                                succeeded = true,
+                                message = "已保存到本机",
+                            ),
+                        )
+                    },
+                )
+            }
+        }
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
+        compose.onNodeWithTag("pdsh.provider.field.${UiStrings.PROVIDER_FIELD_NAME}")
+            .performTextInput("新服务")
+        compose.onNodeWithText(UiStrings.SAVE).performClick()
+        compose.waitForIdle()
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_FIELD_NAME).assertDoesNotExist()
     }

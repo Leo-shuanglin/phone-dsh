@@ -133,6 +133,26 @@ final class ChatWorkflowTests: XCTestCase {
                        configuration.helloTimeout + 60)
     }
 
+    func testOnlyFailedHostNeedsResetAfterStart() {
+        XCTAssertTrue(ChatEngineLifecycle.needsReset(afterStartIn: .failed))
+        XCTAssertFalse(ChatEngineLifecycle.needsReset(afterStartIn: .stopped),
+                       "a persisted Backoff leaves the host stopped and must remain startable")
+        XCTAssertFalse(ChatEngineLifecycle.needsReset(afterStartIn: .running))
+    }
+
+    func testStoppedEngineAcceptsAComposerStartOnlyWhenLifecycleIsIdle() {
+        XCTAssertTrue(ChatEngineLifecycle.canStartBySending(
+            hostIsStopped: true, busy: false, parked: false, hostLifecycleTransition: false))
+        XCTAssertFalse(ChatEngineLifecycle.canStartBySending(
+            hostIsStopped: false, busy: false, parked: false, hostLifecycleTransition: false))
+        XCTAssertFalse(ChatEngineLifecycle.canStartBySending(
+            hostIsStopped: true, busy: true, parked: false, hostLifecycleTransition: false))
+        XCTAssertFalse(ChatEngineLifecycle.canStartBySending(
+            hostIsStopped: true, busy: false, parked: true, hostLifecycleTransition: false))
+        XCTAssertFalse(ChatEngineLifecycle.canStartBySending(
+            hostIsStopped: true, busy: false, parked: false, hostLifecycleTransition: true))
+    }
+
     func testTerminalEventsReleasePendingInteractions() {
         XCTAssertTrue(TurnResourceCleanup.isTerminal(.turnEnded(turnID: "turn", reason: .failed("stalled"))))
         XCTAssertTrue(TurnResourceCleanup.isTerminal(.exited(reason: "worker stopped")))

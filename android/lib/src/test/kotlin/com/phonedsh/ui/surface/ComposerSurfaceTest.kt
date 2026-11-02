@@ -17,6 +17,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
@@ -40,6 +41,14 @@ class ComposerSurfaceTest {
         compose.onNodeWithTag(UiTags.COMPOSER).assertIsDisplayed()
         compose.onNodeWithTag(UiTags.COMPOSER_SEND).assertIsEnabled()
         compose.onNodeWithTag(UiTags.COMPOSER_SEND).performClick()
+        assertEquals(1, sent)
+    }
+
+    @Test
+    fun `the soft keyboard send action submits a submittable draft`() {
+        var sent = 0
+        show(text = "hello", canSubmit = true, onSend = { sent += 1 })
+        compose.onNodeWithTag(UiTags.COMPOSER_FIELD).performImeAction()
         assertEquals(1, sent)
     }
 

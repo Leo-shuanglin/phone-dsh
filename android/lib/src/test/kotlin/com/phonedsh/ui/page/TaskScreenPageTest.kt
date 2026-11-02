@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -252,6 +253,11 @@ class TaskScreenPageTest {
         compose.onNodeWithTag(UiPageTags.TASK_SCREEN_SHOW).performClick()
 
         compose.onNodeWithTag(UiPageTags.TASK_SCREEN_ROOT + ".presented").assertIsDisplayed()
+        compose.onNodeWithText("phone DSH probe").assertIsDisplayed()
+        compose.onNodeWithText(
+            "Screen dimmed for long tasks. The phone can still lock manually.",
+        ).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.TASK_SCREEN_ROOT + ".presented").assertHasNoClickAction()
         // The baseline passes the *current* status line into the cover
         // (`TaskScreenConfiguration(status: statusLine)`), and the host is told the
         // same pair the person asked for.

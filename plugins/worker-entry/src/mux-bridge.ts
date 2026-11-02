@@ -371,8 +371,12 @@ export function parseMuxClientFrame(text: string): WorkerEntryMuxClientFrame {
  * The frame passes through the phone mux projection first (see
  * `./mux-projection.ts`): DSH's jittered `llm/retry` waits are rounded to whole
  * milliseconds so the canonical encoder can carry them, while canonical JSON
- * itself keeps refusing floats. `report` observes every round that changes a
- * value; the receive path passes a console logger.
+ * itself keeps refusing floats. The projection is the only place that rounds —
+ * it reads DSH's original number, so pre-rounding a wait here would put the
+ * same integer on the wire but hide the round from `report`, and the console
+ * log is the only evidence that the host rewrote a model event. `report`
+ * therefore observes every round that changes a value; the receive path passes
+ * a console logger.
  */
 export function encodeMuxFrameLine(
   frame: WorkerEntryMuxServerFrame,
@@ -384,8 +388,11 @@ export function encodeMuxFrameLine(
 function muxWireFrame(frame: WorkerEntryMuxServerFrame): Record<string, unknown> {
   switch (frame.type) {
     case 'item':
+      // The value reaches the projection unmodified: rounding belongs to
+      // `./mux-projection.ts` alone, which needs DSH's original number to
+      // report the round (see `encodeMuxFrameLine`).
       return frame.value !== undefined
-        ? { type: frame.type, streamId: frame.streamId, value: muxWireValue(frame.value) }
+        ? { type: frame.type, streamId: frame.streamId, value: frame.value }
         : { type: frame.type, streamId: frame.streamId }
     case 'end':
       return { type: frame.type, streamId: frame.streamId }
@@ -400,23 +407,6 @@ function muxWireFrame(frame: WorkerEntryMuxServerFrame): Record<string, unknown>
         },
       }
   }
-}
-
-/**
- * The frame's wire shape, with no numeric rewriting.
- *
- * Rounding lives in `projectMuxServerFrame` and nowhere else. This function used
- * to round `llm/retry`'s `delayMs` on its own, which silently pre-empted the
- * projection: the value was already an integer by the time the projection looked
- * at it, so the projection reported nothing and the "every rounding is logged"
- * invariant was dead code. One owner — the projection, which reports.
- */
-function muxWireValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(muxWireValue)
-  if (!isRecord(value)) return value
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [key, muxWireValue(item)]),
-  )
 }
 
 function writeMuxFrame(sink: WorkerEntryResponseSink, frame: WorkerEntryMuxServerFrame): void {

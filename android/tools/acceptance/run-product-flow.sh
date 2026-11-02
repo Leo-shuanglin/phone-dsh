@@ -513,14 +513,18 @@ cleanup() {
    fi
    save_state
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 # ---------------------------------------------------------------- navigation
 ensure_home() {
    local end=$((SECONDS + 45))
    while [ "$SECONDS" -lt "$end" ]; do
       if ui_dump "$RUN_DIR/last.xml"; then
-         if ui_has --text "会话列表" --exact || ui_has --text "还没有会话"; then return 0; fi
+         # iOS's sessions surface has no page-title row. Identify its two real
+         # controls so a correct title-less list is not mistaken for a failure.
+         if ui_has --text "搜索会话" --exact && ui_has --text "新建会话" --exact; then return 0; fi
          if ui_has --text "重试本地引擎" || ui_has --text "启动本地引擎"; then
             ui_tap_exact "启动本地引擎" >/dev/null 2>&1 || true
          fi

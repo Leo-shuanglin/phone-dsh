@@ -22,10 +22,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -87,6 +85,7 @@ internal fun HostSessionsScreen(
     state: EngineState,
     turn: AppTurnState,
     onBack: (() -> Unit)? = null,
+    onOpenDrawer: (() -> Unit)? = null,
     onHostNotice: (String) -> Unit,
     onOpenChat: () -> Unit = {},
     refreshOnEnter: Boolean = true,
@@ -103,8 +102,15 @@ internal fun HostSessionsScreen(
         if (refreshOnEnter) engine.refreshSessions()
     }
     var local by remember { mutableStateOf(SessionsLocalState()) }
-    val facts = remember(state, turn, sessionSnapshot) {
-        buildSessionsFacts(state, turn, sessionSnapshot)
+    val (workspacePresent, workspacePath) = engine.chatWorkspaceSnapshot()
+    val facts = remember(state, turn, sessionSnapshot, workspacePresent, workspacePath) {
+        buildSessionsFacts(
+            state = state,
+            turn = turn,
+            snapshot = sessionSnapshot,
+            workspacePresent = workspacePresent,
+            workspacePath = workspacePath,
+        )
     }
     val nowMs = remember { engine.nowMillis() }
     val screenState = remember(facts, local, nowMs) {
@@ -145,6 +151,10 @@ internal fun HostSessionsScreen(
         onRetry = { engine.refreshSessions() },
         onDismissFailure = { engine.clearSessionsFailure() },
         onBack = onBack,
+        onOpenDrawer = onOpenDrawer,
+        // This build owns one fixed `/dsh/workspace` root. It cannot create,
+        // rename, delete or switch a second root without changing worker cwd.
+        workspaceActionsAvailable = false,
         onToggleWorkspace = { workspace -> local = local.toggleWorkspace(workspace) },
         onWorkspaceMenuToggle = { workspace ->
             local = local.copy(
@@ -186,18 +196,22 @@ internal fun HostSessionsScreen(
             local = local.copy(creatingWorkspace = false, newWorkspaceDraft = "")
         },
         onToggleArchived = { local = local.copy(showArchived = !local.showArchived) },
-        onRestoreArchived = { _: ArchivedRowView ->
+        onRestoreArchived = { row: ArchivedRowView ->
             local = local.copy(showArchived = true)
-            handOff("restore-archived")
+            if (!engine.restoreChatSession(row.id)) {
+                onHostNotice("无法恢复此会话，列表已保留原状态")
+            }
         },
         onSessionMenuToggle = { row ->
             local = local.copy(
                 sessionMenuID = if (local.sessionMenuID == row.id) null else row.id,
             )
         },
-        onArchiveSession = { _: SessionRowView ->
+        onArchiveSession = { row: SessionRowView ->
             local = local.copy(sessionMenuID = null)
-            handOff("archive")
+            if (!engine.archiveChatSession(row.id)) {
+                onHostNotice("无法归档此会话，列表已保留原状态")
+            }
         },
     )
 }
@@ -219,10 +233,8 @@ internal fun HostSessionsScreen(
  * one session list in the app rather than two. What this file adds around it is
  * exactly what a home needs and the list page cannot own:
  *
- *   * the drawer entry. The drawer was only reachable from the probe's header
- *     while the probe was home (the L10 report's finding), so removing the probe
- *     without adding this control would have made every other page unreachable
- *     by touch;
+ *   * the drawer entry in the sessions page's existing empty navigation band,
+ *     so it does not add a second header above the iOS list structure;
  *   * the 模型服务 onboarding card. A fresh install has no key, and the product
  *     answer is to say so and open the settings page that can fix it — not to
  *     leave a probe full of D14 state as the first screen. This card is the one
@@ -277,7 +289,6 @@ internal fun HostHomeScreen(
             // the header is not pushed under the system bar.
             .windowInsetsPadding(WindowInsets.statusBars),
     ) {
-        HomeHeader(onOpenDrawer = onOpenDrawer)
         if (!providerConfigured) {
             ProviderSetupCard(onOpenModelProvider = onOpenModelProvider)
         }
@@ -297,49 +308,13 @@ internal fun HostHomeScreen(
                 state = state,
                 turn = turn,
                 onBack = null,
+                onOpenDrawer = onOpenDrawer,
                 onHostNotice = onHostNotice,
                 onOpenChat = onOpenChat,
                 refreshOnEnter = false,
                 modifier = Modifier.fillMaxSize(),
             )
         }
-    }
-}
-
-/**
- * The home's header: the drawer control and the page's own name.
- *
- * The drawer is the only way to reach the other pages by touch (no route draws a
- * drawer button), so this control is what makes the app navigable at all. The
- * glyph is the probe header's own (☰) and the spoken name is the baseline's
- * (`UiStrings.HEADER_DRAWER`), so the two faces cannot disagree about the verb.
- */
-@Composable
-private fun HomeHeader(onOpenDrawer: () -> Unit) {
-    val tokens = PdshThemeValues.tokens
-    val type = PdshThemeValues.type
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
-            .padding(horizontal = tokens.geometry.pageOuterMarginH),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BasicText(
-            text = DRAWER_GLYPH,
-            style = type.secondary.copy(color = tokens.colors.secondary),
-            modifier = Modifier
-                .clickable(role = Role.Button, onClick = onOpenDrawer)
-                .semantics { contentDescription = UiStrings.HEADER_DRAWER }
-                // unverified geometry: no header-action token; the icon gap is
-                // what keeps the touch target two text lines tall, the same
-                // reuse the probe header makes.
-                .padding(tokens.spacing.iconText),
-        )
-        BasicText(
-            text = UiStrings.SESSIONS,
-            style = type.headline.copy(color = tokens.colors.primary),
-        )
     }
 }
 
@@ -479,12 +454,3 @@ private fun sessionGestureLabel(gesture: String): String = when (gesture) {
 
 /** This screen's logcat tag; only the stable gesture names above reach it. */
 private const val TAG_SESSIONS: String = "PDSHSessions"
-
-/**
- * The home header's drawer glyph.
- *
- * The same character the probe header uses for the same control, because this
- * app has one drawer: two faces drawing two different marks for it would read as
- * two different destinations.
- */
-private const val DRAWER_GLYPH: String = "☰"

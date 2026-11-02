@@ -73,11 +73,13 @@
 // signature-surface geometry, so no `unverified geometry` marker applies.
 package com.phonedsh.ui.page
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -85,11 +87,13 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -99,8 +103,14 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -109,7 +119,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -119,6 +131,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -138,6 +151,7 @@ import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.util.UUID
 
 // ---------------------------------------------------------------------------
 // Facts
@@ -396,12 +410,18 @@ public data class AutomationEditorState(
     public val draft: AutomationScheduleDraft,
     /** False until 保存 is pressed; the baseline reports the rule only then (`:320`). */
     public val submitted: Boolean = false,
+    /** Per-attempt id; a host receipt must match before the sheet can close. */
+    public val submissionID: String? = null,
+    /** The form stays locked until the host reports this attempt. */
+    public val saving: Boolean = false,
+    /** iOS disables 新建保存 when no actual worker session id exists. */
+    public val targetAvailable: Boolean = true,
 ) {
     /** The sentence the 错误 section prints, or `null`. */
     public val error: String? get() = if (submitted) draft.timingError() else null
 
     /** 保存 is enabled exactly while the two required fields carry text (`:284`). */
-    public val canSubmit: Boolean get() = draft.canSubmit
+    public val canSubmit: Boolean get() = draft.canSubmit && targetAvailable && !saving
 }
 
 /**
@@ -455,6 +475,16 @@ public data class AutomationHistory(
     public val deliveries: List<AutomationDelivery>? = null,
     public val notice: String? = null,
     public val hasMore: Boolean = false,
+    /** Opaque host cursor to pass back as `before` for the next page. */
+    public val before: String? = null,
+    public val failure: String? = null,
+)
+
+/** A write receipt only exists after the host has reread the resulting record. */
+@Immutable
+public data class AutomationWriteReceipt(
+    public val requestID: String,
+    public val savedSchedule: AutomationSchedule? = null,
     public val failure: String? = null,
 )
 
@@ -472,26 +502,26 @@ public data class AutomationSnapshot(
 )
 
 /**
- * The page's read-only input.
+ * The host's automation facts and verified scheduler responses.
  *
  * @param snapshot the host's snapshot; `null` means no snapshot was reported.
  * @param failure the host's read failure; non-null when the last read failed.
  *   It is carried beside [snapshot], never instead of it: iOS keeps
  *   `scheduleRecords` and sets `error` in the same read (`DSHManagementModel
  *   .swift:702-717`).
- * @param writable whether the host can persist a schedule the editor submits.
- *   `NO` does not disable 保存 — §1 keeps the save a handoff to the host — but it
- *   prints [UiStrings.AUTOMATION_EDITOR_HANDOFF_HINT] beside the form so the
- *   person knows the save is a handoff rather than a local commit. `UNKNOWN` is
- *   not `NO`: a host that did not report writability has not said it is
- *   read-only, and asserting a negative we did not measure is the one thing this
- *   page never does.
+ * @param writable whether the host can perform schedule writes.
+ * @param writeReceipt a matching save response, with the catalog record the host
+ *   reread; the editor remains open until this contains a saved record.
+ * @param currentSessionID the active DSH session id for new schedules, if any.
  */
 @Immutable
 public data class AutomationFacts(
     public val snapshot: AutomationSnapshot? = null,
     public val failure: String? = null,
     public val writable: FactState = FactState.UNKNOWN,
+    public val writeReceipt: AutomationWriteReceipt? = null,
+    /** Current DSH worker session for a new reminder, never the App chat id. */
+    public val currentSessionID: String? = null,
 )
 
 // ---------------------------------------------------------------------------
@@ -526,9 +556,8 @@ public enum class AutomationRoute {
     /**
      * The embedded `ScheduleEditorPage` (`NativeAutomationPage.swift:212`).
      *
-     * The baseline presents it as a `.sheet` over this page; the port keeps it a
-     * child view of the same page (README §1: an embedded subpage ships with its
-     * parent, it is not a route of its own).
+     * The baseline presents it as a `.sheet` over the catalog/detail face; the
+     * route state records which page remains underneath the modal.
      */
     EDITOR,
 }
@@ -598,10 +627,11 @@ public data class AutomationDeliveryView(
  *   [status]: it renders as the 需要处理 section below whatever content the
  *   snapshot still supports.
  * @param hasUnmeasuredValues true when a visible catalog/detail value is 未知.
- * @param editor the embedded `ScheduleEditorPage`'s form while
- *   [route] is [AutomationRoute.EDITOR]; `null` on every other route.
- * @param writable whether the host can persist a submitted schedule
- *   ([AutomationFacts.writable]); `NO` prints the handoff hint beside the form.
+ * @param editor the `ScheduleEditorPage`'s form while [route] is
+ *   [AutomationRoute.EDITOR]; `null` on every other route.
+ * @param writable whether the host can persist a submitted schedule.
+ * @param editorReturnRoute the catalog or detail face underneath the sheet.
+ * @param writeReceipt the host response used to confirm and dismiss a save.
  */
 @Immutable
 public data class AutomationScreenState(
@@ -624,6 +654,14 @@ public data class AutomationScreenState(
     public val confirmDeleteId: String? = null,
     public val editor: AutomationEditorState? = null,
     public val writable: FactState = FactState.UNKNOWN,
+    /** Route that remains visible beneath the editor sheet. */
+    public val editorReturnRoute: AutomationRoute = AutomationRoute.CATALOG,
+    /** Opaque cursor from the last history read. */
+    public val historyCursor: String? = null,
+    /** The latest host write receipt, backed by a catalog record reread. */
+    public val writeReceipt: AutomationWriteReceipt? = null,
+    /** The actual DSH worker session id, if one is open. */
+    public val currentSessionID: String? = null,
 ) {
     /** True when the catalog list was not reported. */
     public val isUnknown: Boolean get() = status == AutomationStatus.UNKNOWN
@@ -652,6 +690,10 @@ public data class AutomationScreenState(
         append(if (hasUnmeasuredValues) "partial" else "complete").append(':')
         append(editor?.draft?.rule?.wire ?: "-").append(':')
         append(if (editor?.submitted == true) "submitted" else "draft").append(':')
+        append(editor?.submissionID ?: "-").append(':')
+        append(editorReturnRoute.name).append(':')
+        append(writeReceipt?.requestID ?: "-").append(':')
+        append(currentSessionID ?: "-").append(':')
         append(schedules.joinToString(",") { it.id }).append(':')
         append(deliveries.joinToString(",") { it.id })
     }
@@ -682,7 +724,13 @@ public data class AutomationScreenState(
             // schedule: the baseline opens 新建自动化 from the empty state too
             // (`NativeAutomationPage.swift:27`), so it survives every status.
             val editorRoute = local.route == AutomationRoute.EDITOR && local.editor != null
-            val editor = local.editor.takeIf { editorRoute }
+            val editor = local.editor.takeIf { editorRoute }?.let { current ->
+                val receipt = facts.writeReceipt
+                current.copy(
+                    saving = current.submissionID != null && receipt?.requestID != current.submissionID,
+                    targetAvailable = !current.draft.isNew || !facts.currentSessionID.isNullOrBlank(),
+                )
+            }
             if (status != AutomationStatus.READY) {
                 return AutomationScreenState(
                     status = status,
@@ -698,10 +746,13 @@ public data class AutomationScreenState(
                     historyNotice = null,
                     historyHasMore = false,
                     historyFailure = null,
-                    failure = facts.failure,
+                    failure = facts.failure ?: facts.writeReceipt?.failure,
                     hasUnmeasuredValues = false,
                     editor = editor,
                     writable = facts.writable,
+                    editorReturnRoute = local.editorReturnRoute,
+                    writeReceipt = facts.writeReceipt,
+                    currentSessionID = facts.currentSessionID,
                 )
             }
             val schedules = rawSchedules.orEmpty().map(::scheduleView)
@@ -757,12 +808,16 @@ public data class AutomationScreenState(
                 historyNotice = history?.notice,
                 historyHasMore = historyStatus == AutomationHistoryStatus.READY && history?.hasMore == true,
                 historyFailure = history?.failure,
-                failure = facts.failure,
+                failure = facts.failure ?: facts.writeReceipt?.failure,
                 hasUnmeasuredValues = schedules.any { it.hasUnmeasuredValues },
                 // A confirmation for a schedule the new snapshot dropped is stale.
                 confirmDeleteId = local.deleteConfirmId?.takeIf { id -> schedules.any { it.id == id } },
                 editor = editor,
                 writable = facts.writable,
+                editorReturnRoute = local.editorReturnRoute,
+                historyCursor = history?.before,
+                writeReceipt = facts.writeReceipt,
+                currentSessionID = facts.currentSessionID,
             )
         }
 
@@ -836,7 +891,7 @@ public sealed interface AutomationUiEvent {
     public data class EditDraft(public val draft: AutomationScheduleDraft) : AutomationUiEvent
 
     /** 保存 (`NativeAutomationPage.swift:283`): record the attempt, keep the values. */
-    public data object SubmitDraft : AutomationUiEvent
+    public data class SubmitDraft(public val requestID: String) : AutomationUiEvent
 
     /** 取消 (`:281`): drop the draft and return to the catalog. */
     public data object CancelEditor : AutomationUiEvent
@@ -853,6 +908,8 @@ public sealed interface AutomationUiEvent {
 @Immutable
 public data class AutomationLocalState(
     public val route: AutomationRoute = AutomationRoute.CATALOG,
+    /** The catalog/detail face that remains behind the editor sheet. */
+    public val editorReturnRoute: AutomationRoute = AutomationRoute.CATALOG,
     public val selectedScheduleId: String? = null,
     public val deleteConfirmId: String? = null,
     public val editor: AutomationEditorState? = null,
@@ -879,16 +936,24 @@ public data class AutomationLocalState(
         // closing it keep the catalog selection untouched.
         is AutomationUiEvent.OpenEditor -> copy(
             route = AutomationRoute.EDITOR,
+            editorReturnRoute = if (route == AutomationRoute.EDITOR) editorReturnRoute else route,
             editor = AutomationEditorState(event.draft),
             deleteConfirmId = null,
         )
 
         is AutomationUiEvent.EditDraft -> copy(editor = editor?.copy(draft = event.draft))
 
-        AutomationUiEvent.SubmitDraft -> copy(editor = editor?.copy(submitted = true))
+        is AutomationUiEvent.SubmitDraft -> copy(
+            editor = editor?.copy(
+                submitted = true,
+                submissionID = event.requestID,
+                saving = true,
+            ),
+        )
 
         AutomationUiEvent.CancelEditor -> copy(
-            route = AutomationRoute.CATALOG,
+            route = editorReturnRoute,
+            editorReturnRoute = AutomationRoute.CATALOG,
             editor = null,
             deleteConfirmId = null,
         )
@@ -897,7 +962,8 @@ public data class AutomationLocalState(
             // 取消 and the system back are the same act on the form: the draft is
             // dropped and nothing is submitted (`:281`).
             AutomationRoute.EDITOR -> copy(
-                route = AutomationRoute.CATALOG,
+                route = editorReturnRoute,
+                editorReturnRoute = AutomationRoute.CATALOG,
                 editor = null,
                 deleteConfirmId = null,
             )
@@ -947,17 +1013,19 @@ public data class AutomationLocalState(
  * @param onNewSchedule present the page's own editor for a new schedule (`:30`,
  *   `:83`); `null` hides the trailing 新建 control and the empty-state CTA. The
  *   host applies `AutomationUiEvent.OpenEditor`.
- * @param onEditSchedule present the page's own editor for an existing schedule
- *   (`:63`, `:157`); `null` hides the detail row.
+ * @param onEditSchedule present the editor sheet for an existing schedule
+ *   (`:63`, `:157`); `null` leaves the toolbar menu action disabled.
  * @param onLoadMoreHistory ask the host for older delivery rows; `null` hides
  *   the action even when the host says more exist.
  * @param onDraftChange one field of the editor's form changed; the host applies
  *   `AutomationUiEvent.EditDraft`.
  * @param onSubmitDraft 保存 (`:283`); the host applies
- *   `AutomationUiEvent.SubmitDraft` and then hands the validated draft to the
- *   host's schedule store.
+ *   `AutomationUiEvent.SubmitDraft` and sends the validated draft plus its
+ *   unique request id to the scheduler.
  * @param onCancelEditor 取消 (`:281`); the host applies
  *   `AutomationUiEvent.CancelEditor`. `null` hides the control.
+ * @param onEditorSaved close the sheet after the matching host receipt contains
+ *   a reread schedule record.
  */
 @Composable
 public fun NativeAutomationPage(
@@ -970,13 +1038,14 @@ public fun NativeAutomationPage(
     onRefresh: (() -> Unit)? = null,
     onNewSchedule: (() -> Unit)? = null,
     onEditSchedule: ((String) -> Unit)? = null,
-    onLoadMoreHistory: (() -> Unit)? = null,
+    onLoadMoreHistory: ((String, String?) -> Unit)? = null,
     onRequestDelete: ((String) -> Unit)? = null,
     onConfirmDelete: ((String) -> Unit)? = null,
     onCancelDelete: (() -> Unit)? = null,
     onDraftChange: ((AutomationScheduleDraft) -> Unit)? = null,
-    onSubmitDraft: (() -> Unit)? = null,
+    onSubmitDraft: ((AutomationScheduleDraft, String) -> Unit)? = null,
     onCancelEditor: (() -> Unit)? = null,
+    onEditorSaved: (() -> Unit)? = null,
 ) {
     // `.confirmationDialog("删除此自动化任务？", …)` (:102–:109): a modal on the
     // baseline, so it is the standard Material dialog, not an inline panel.
@@ -987,7 +1056,9 @@ public fun NativeAutomationPage(
             onCancel = { onCancelDelete?.invoke() },
         )
     }
-    when (state.route) {
+    val editorOverlay = state.route == AutomationRoute.EDITOR
+    val visibleRoute = if (editorOverlay) state.editorReturnRoute else state.route
+    when (visibleRoute) {
         AutomationRoute.CATALOG -> AutomationFrame(
             largeTitle = UiStrings.AUTOMATION_TITLE,
             // iOS `.topBarLeading` holds 刷新 beside the sheet's ✕; the bar slot
@@ -1024,7 +1095,7 @@ public fun NativeAutomationPage(
                     label = UiStrings.AUTOMATION_NEW_SHORT,
                     onClick = { onNewSchedule?.invoke() },
                     tag = UiPageTags.AUTOMATION_NEW,
-                    enabled = onNewSchedule != null,
+                    enabled = onNewSchedule != null && !state.currentSessionID.isNullOrBlank(),
                 )
             },
             rootTag = UiPageTags.AUTOMATION_ROOT,
@@ -1042,6 +1113,13 @@ public fun NativeAutomationPage(
             title = UiStrings.AUTOMATION_TITLE,
             onBack = onBackToCatalog,
             backTag = UiPageTags.AUTOMATION_BACK,
+            trailing = {
+                AutomationDetailMenu(
+                    scheduleID = state.detail?.id,
+                    onEdit = onEditSchedule,
+                    onDelete = onRequestDelete,
+                )
+            },
             rootTag = UiPageTags.AUTOMATION_ROOT,
             modifier = modifier,
         ) {
@@ -1062,16 +1140,53 @@ public fun NativeAutomationPage(
         ) {
             AutomationHistoryContent(state = state, onLoadMore = onLoadMoreHistory)
         }
+        AutomationRoute.EDITOR -> Unit
+    }
 
-        // The baseline's `.sheet` (`:92`, `:99`): its own inline title, 取消 in the
-        // cancellation slot (`:281`) and 保存 in the confirmation slot (`:283`).
-        AutomationRoute.EDITOR -> ScheduleEditorPage(
+    if (editorOverlay && state.editor != null) {
+        AutomationEditorSheet(
             state = state,
             onCancel = { onCancelEditor?.invoke() },
-            onSubmit = { onSubmitDraft?.invoke() },
+            onSubmit = { draft, requestID -> onSubmitDraft?.invoke(draft, requestID) },
             onDraftChange = onDraftChange,
             modifier = modifier,
         )
+    }
+    LaunchedEffect(state.editor?.submissionID, state.writeReceipt) {
+        val requestID = state.editor?.submissionID ?: return@LaunchedEffect
+        val receipt = state.writeReceipt?.takeIf { it.requestID == requestID } ?: return@LaunchedEffect
+        if (receipt.savedSchedule != null) onEditorSaved?.invoke()
+    }
+}
+
+/** The editor is a modal sheet over its catalog or detail parent, as on iOS. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AutomationEditorSheet(
+    state: AutomationScreenState,
+    onCancel: () -> Unit,
+    onSubmit: (AutomationScheduleDraft, String) -> Unit,
+    onDraftChange: ((AutomationScheduleDraft) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    LaunchedEffect(sheetState) { sheetState.show() }
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val editorSheetHeight = maxHeight * AUTOMATION_EDITOR_SHEET_HEIGHT_RATIO
+        ModalBottomSheet(
+            onDismissRequest = onCancel,
+            sheetState = sheetState,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Box(Modifier.fillMaxWidth().height(editorSheetHeight)) {
+                ScheduleEditorPage(
+                    state = state,
+                    onCancel = onCancel,
+                    onSubmit = onSubmit,
+                    onDraftChange = onDraftChange,
+                )
+            }
+        }
     }
 }
 
@@ -1349,6 +1464,79 @@ private fun AutomationScheduleRow(
     }
 }
 
+/** The detail page's iOS toolbar Menu (`NativeAutomationPage.swift:155-159`). */
+@Composable
+private fun AutomationDetailMenu(
+    scheduleID: String?,
+    onEdit: ((String) -> Unit)?,
+    onDelete: ((String) -> Unit)?,
+) {
+    val tokens = LocalUiTokens.current
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Box(
+            modifier = Modifier
+                .size(AUTOMATION_DETAIL_MENU_TARGET.dp)
+                .clickable(role = Role.Button, onClick = { expanded = true })
+                .semantics { contentDescription = AUTOMATION_DETAIL_MENU_LABEL }
+                .testTag(AUTOMATION_DETAIL_MENU_TAG),
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(Modifier.size(AUTOMATION_DETAIL_MENU_GLYPH.dp)) {
+                val center = Offset(size.width / 2f, size.height / 2f)
+                drawCircle(
+                    color = tokens.colors.secondary,
+                    radius = size.minDimension * 0.47f,
+                    center = center,
+                    style = Stroke(width = size.minDimension * 0.08f),
+                )
+                val radius = size.minDimension * 0.055f
+                repeat(3) { index ->
+                    drawCircle(
+                        color = tokens.colors.secondary,
+                        radius = radius,
+                        center = Offset(size.width * (0.31f + index * 0.19f), center.y),
+                    )
+                }
+            }
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.testTag(AUTOMATION_DETAIL_ACTIONS_MENU_TAG),
+        ) {
+            DropdownMenuItem(
+                text = {
+                    BasicText(
+                        text = UiStrings.AUTOMATION_EDIT_SHORT,
+                        style = LocalUiType.current.body.copy(color = tokens.colors.primary),
+                    )
+                },
+                enabled = scheduleID != null && onEdit != null,
+                onClick = {
+                    expanded = false
+                    scheduleID?.let { onEdit?.invoke(it) }
+                },
+                modifier = Modifier.testTag(AUTOMATION_DETAIL_MENU_EDIT_TAG),
+            )
+            DropdownMenuItem(
+                text = {
+                    BasicText(
+                        text = UiStrings.AUTOMATION_DELETE,
+                        style = LocalUiType.current.body.copy(color = tokens.colors.danger),
+                    )
+                },
+                enabled = scheduleID != null && onDelete != null,
+                onClick = {
+                    expanded = false
+                    scheduleID?.let { onDelete?.invoke(it) }
+                },
+                modifier = Modifier.testTag(AUTOMATION_DETAIL_MENU_DELETE_TAG),
+            )
+        }
+    }
+}
+
 /** One schedule's detail, including the route into its delivery history. */
 @Composable
 private fun AutomationDetailContent(
@@ -1464,28 +1652,6 @@ private fun AutomationDetailContent(
                 )
             }
         }
-        if (onEditSchedule != null) {
-            item(key = "automation.detail.edit") {
-                InfoRow(
-                    title = UiStrings.AUTOMATION_EDIT_SHORT,
-                    value = null,
-                    onClick = { onEditSchedule(detail.id) },
-                    modifier = Modifier.testTag(UiPageTags.AUTOMATION_EDIT),
-                )
-            }
-        }
-        // The row's other swipe verb (`:64`). The store belongs to the host, so the
-        // row is drawn only when the host can delete; the confirmation is the page's.
-        if (onRequestDelete != null) {
-            item(key = "automation.detail.delete") {
-                InfoRow(
-                    title = UiStrings.AUTOMATION_DELETE,
-                    value = null,
-                    onClick = { onRequestDelete(detail.id) },
-                    modifier = Modifier.testTag(UiPageTags.AUTOMATION_DELETE),
-                )
-            }
-        }
         if (detail.hasUnmeasuredValues) {
             item(key = "automation.detail.unmeasured") {
                 InfoRow(
@@ -1523,8 +1689,9 @@ private fun AutomationDetailContent(
 @Composable
 private fun AutomationHistoryContent(
     state: AutomationScreenState,
-    onLoadMore: (() -> Unit)?,
+    onLoadMore: ((String, String?) -> Unit)?,
 ) {
+    val historyScheduleID = state.detail?.id
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -1603,12 +1770,12 @@ private fun AutomationHistoryContent(
                 ) { index ->
                     AutomationDeliveryRow(delivery = state.deliveries[index])
                 }
-                if (state.historyHasMore && onLoadMore != null) {
+                if (state.historyHasMore && onLoadMore != null && historyScheduleID != null) {
                     item(key = "automation.history.more") {
                         InfoRow(
                             title = UiStrings.AUTOMATION_HISTORY_MORE,
                             value = null,
-                            onClick = onLoadMore,
+                            onClick = { onLoadMore(historyScheduleID, state.historyCursor) },
                             modifier = Modifier.testTag(UiPageTags.AUTOMATION_HISTORY_MORE),
                         )
                     }
@@ -1772,12 +1939,8 @@ private fun AutomationBarAction(
  * inside the page's own frame: the same two slots, the same three groups, the
  * same field order.
  *
- * What it does **not** do is dismiss itself on 保存. The baseline dismisses only
- * when `updateSchedule`/`createSchedule` reported success (`:346`); this host has
- * no schedule store, so the page would be claiming an outcome it did not observe.
- * The form therefore keeps its values, reports the rule's sentence when the draft
- * does not validate, and the host's answer to the handoff is what the person
- * reads above the page.
+ * The sheet stays open while the host writes. It dismisses only after a matching
+ * successful write receipt contains the schedule record the host reread.
  *
  * @param state the page state; [AutomationScreenState.editor] carries the draft.
  * @param onCancel 取消 (`:281`).
@@ -1789,7 +1952,7 @@ private fun AutomationBarAction(
 private fun ScheduleEditorPage(
     state: AutomationScreenState,
     onCancel: () -> Unit,
-    onSubmit: () -> Unit,
+    onSubmit: (AutomationScheduleDraft, String) -> Unit,
     onDraftChange: ((AutomationScheduleDraft) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
@@ -1818,8 +1981,8 @@ private fun ScheduleEditorPage(
         },
         trailing = {
             SessionTextAction(
-                label = UiStrings.AUTOMATION_EDITOR_SAVE,
-                onClick = onSubmit,
+                label = if (editor.saving) AUTOMATION_EDITOR_SAVING_LABEL else UiStrings.AUTOMATION_EDITOR_SAVE,
+                onClick = { onSubmit(draft, UUID.randomUUID().toString()) },
                 tone = SessionActionTone.ACCENT,
                 enabled = editor.canSubmit,
                 modifier = Modifier.testTag(UiPageTags.AUTOMATION_EDITOR_SAVE),
@@ -2038,6 +2201,8 @@ private fun AutomationRuleFields(
                     value = draft.at,
                     onValueChange = { value -> onDraftChange(draft.copy(at = value)) },
                     tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + AutomationRule.AT.wire,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
                 )
             }
 
@@ -2055,12 +2220,16 @@ private fun AutomationRuleFields(
                     value = draft.localTime,
                     onValueChange = { value -> onDraftChange(draft.copy(localTime = value)) },
                     tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + TIME_FIELD_SUFFIX,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
                 )
                 AutomationField(
                     label = UiStrings.AUTOMATION_EDITOR_TIME_ZONE_FIELD,
                     value = draft.timeZone,
                     onValueChange = { value -> onDraftChange(draft.copy(timeZone = value)) },
                     tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + ZONE_FIELD_SUFFIX,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
                 )
             }
 
@@ -2070,19 +2239,27 @@ private fun AutomationRuleFields(
                     value = draft.localTime,
                     onValueChange = { value -> onDraftChange(draft.copy(localTime = value)) },
                     tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + TIME_FIELD_SUFFIX,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
                 )
                 AutomationField(
                     label = UiStrings.AUTOMATION_EDITOR_TIME_ZONE_FIELD,
                     value = draft.timeZone,
                     onValueChange = { value -> onDraftChange(draft.copy(timeZone = value)) },
                     tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + ZONE_FIELD_SUFFIX,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
                 )
                 AutomationField(
                     label = UiStrings.AUTOMATION_EDITOR_WEEKDAYS_FIELD,
                     value = draft.weekdays,
                     onValueChange = { value -> onDraftChange(draft.copy(weekdays = value)) },
                     tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + WEEKDAYS_FIELD_SUFFIX,
-                    keyboardType = KeyboardType.Number,
+                    // iOS uses numbersAndPunctuation because weekdays are a
+                    // comma-separated list (1,2,3...), not one numeric value.
+                    keyboardType = KeyboardType.Text,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
                 )
             }
 
@@ -2092,12 +2269,16 @@ private fun AutomationRuleFields(
                     value = draft.cron,
                     onValueChange = { value -> onDraftChange(draft.copy(cron = value)) },
                     tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + CRON_FIELD_SUFFIX,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
                 )
                 AutomationField(
                     label = UiStrings.AUTOMATION_EDITOR_TIME_ZONE_FIELD,
                     value = draft.timeZone,
                     onValueChange = { value -> onDraftChange(draft.copy(timeZone = value)) },
                     tag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + ZONE_FIELD_SUFFIX,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
                 )
             }
         }
@@ -2125,6 +2306,8 @@ private fun AutomationField(
     tag: String,
     minLines: Int = 1,
     keyboardType: KeyboardType = KeyboardType.Text,
+    capitalization: KeyboardCapitalization = KeyboardCapitalization.Sentences,
+    autoCorrectEnabled: Boolean = true,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -2147,7 +2330,13 @@ private fun AutomationField(
             textStyle = type.body.copy(color = tokens.colors.primary),
             cursorBrush = SolidColor(tokens.colors.accent),
             minLines = minLines,
-            keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = ImeAction.Done),
+            maxLines = if (minLines > 1) PROMPT_FIELD_MAX_LINES else 1,
+            keyboardOptions = KeyboardOptions(
+                capitalization = capitalization,
+                autoCorrectEnabled = autoCorrectEnabled,
+                keyboardType = keyboardType,
+                imeAction = ImeAction.Done,
+            ),
             modifier = Modifier
                 .fillMaxWidth()
                 // Page-level geometry: an editor field is a page row.
@@ -2157,6 +2346,8 @@ private fun AutomationField(
         )
     }
 }
+
+private const val PROMPT_FIELD_MAX_LINES = 6
 
 /**
  * The 规则 chooser (`Picker("规则", selection: $rule)`, `:263`–`:270`).
@@ -2444,6 +2635,17 @@ private const val TIME_FIELD_SUFFIX: String = "time"
 private const val ZONE_FIELD_SUFFIX: String = "time-zone"
 private const val WEEKDAYS_FIELD_SUFFIX: String = "weekdays"
 private const val CRON_FIELD_SUFFIX: String = "cron"
+
+/** Source: `ScheduleDetailPage`'s unlabelled `ellipsis.circle` toolbar Menu. */
+private const val AUTOMATION_DETAIL_MENU_LABEL: String = "更多操作"
+private const val AUTOMATION_DETAIL_MENU_TAG: String = "automation.detail.menu"
+private const val AUTOMATION_DETAIL_ACTIONS_MENU_TAG: String = "automation.detail.actions"
+private const val AUTOMATION_DETAIL_MENU_EDIT_TAG: String = "automation.detail.menu.edit"
+private const val AUTOMATION_DETAIL_MENU_DELETE_TAG: String = "automation.detail.menu.delete"
+private const val AUTOMATION_DETAIL_MENU_TARGET: Float = 44f
+private const val AUTOMATION_DETAIL_MENU_GLYPH: Float = 22f
+private const val AUTOMATION_EDITOR_SHEET_HEIGHT_RATIO: Float = 0.92f
+private const val AUTOMATION_EDITOR_SAVING_LABEL: String = "保存中…"
 
 private val WHITESPACE: Regex = Regex("\\s+")
 

@@ -90,8 +90,11 @@ struct NativeTurnTail: View {
     var onBranch: () -> Void = {}
     var onUsage: () -> Void = {}
 
+    /// Home action row (HomeSpec): 24pt buttons 12pt apart (36pt step),
+    /// #555, aligned to the content edge. Branch shows only when available;
+    /// usage keeps its glyph; the clock is dropped from the home transcript.
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             actionButton(systemImage: isCopied ? "checkmark" : "doc.on.doc",
                          label: isCopied ? "复制成功" : "复制",
                          action: onCopy)
@@ -106,49 +109,17 @@ struct NativeTurnTail: View {
                              label: extra.accessibilityLabel,
                              action: extra.action)
             }
-            actionButton(systemImage: "arrow.triangle.branch",
-                         label: "在新对话中分支",
-                         isEnabled: isBranchAvailable,
-                         hint: isBranchAvailable ? "" : "仅可从已完成轮次的最后一条消息分支",
-                         action: onBranch)
-            trailingInfo
-        }
-        .frame(height: 28)
-        // Official `TurnTailNodeView.module.css` `.actions` offsets: the row
-        // hangs 6pt into the transcript's leading padding and starts 4pt below
-        // the previous row (12pt response gap + 4 = the official 16pt).
-        .padding(.top, 4)
-        .padding(.leading, -6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var trailingInfo: some View {
-        HStack(spacing: 8) {
+            if isBranchAvailable {
+                actionButton(systemImage: "arrow.triangle.branch",
+                             label: "在新对话中分支",
+                             action: onBranch)
+            }
             if showsUsage {
-                Button {
-                    onUsage()
-                } label: {
-                    // SF approximation of `IconDatabaseOutlineRegular`; the
-                    // official phone trigger is a bare 28pt glyph (15pt icon).
-                    Image(systemName: "cylinder")
-                        .font(.system(size: 15, weight: .regular))
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(NativeParityTokens.labelTertiary)
-                .accessibilityLabel("本轮用量")
-            }
-            if let time = time {
-                Text(NativeMessageClock.string(for: time))
-                    .font(.system(size: 12).monospacedDigit())
-                    .foregroundStyle(NativeParityTokens.labelTertiary)
-                    .lineLimit(1)
-                    .frame(height: 24)
+                actionButton(systemImage: "cylinder", label: "本轮用量", action: onUsage)
             }
         }
-        // Official `.endInfo { margin-left: 8px }` adds to the row gap.
-        .padding(.leading, 8)
+        .frame(height: HomeSpec.composerIcon)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func actionButton(systemImage: String,
@@ -161,12 +132,12 @@ struct NativeTurnTail: View {
             action()
         } label: {
             Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .regular))
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
+                .font(.system(size: 16, weight: .regular))
+                .frame(width: HomeSpec.composerIcon, height: HomeSpec.composerIcon)
+                .contentShape(Rectangle().inset(by: -6))
         }
         .buttonStyle(.plain)
-        .foregroundStyle(NativeParityTokens.labelTertiary)
+        .foregroundStyle(HomeSpec.textSecondary)
         .opacity(isEnabled ? 1 : 0.4)
         .accessibilityLabel(label)
         .accessibilityHint(hint)

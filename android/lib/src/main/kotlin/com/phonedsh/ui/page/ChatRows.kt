@@ -19,6 +19,7 @@
 // invented here.
 package com.phonedsh.ui.page
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,10 +27,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -37,10 +44,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -51,9 +64,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.phonedsh.ui.UiMetrics
+import com.phonedsh.ui.ChatMetrics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.state.ChatRow
+import com.phonedsh.ui.state.ChatTurnState
+import com.phonedsh.ui.state.ChatProcessCategory
 import com.phonedsh.ui.state.ContextEntry
 import com.phonedsh.ui.state.ToolEntry
 import com.phonedsh.ui.state.contextSourceName
@@ -76,6 +92,7 @@ import com.phonedsh.ui.theme.generated.UiTokenNames
 internal object ChatRowsTokens {
     val refs: List<String> = listOf(
         UiTokenNames.COLORS_ACCENT,
+        UiTokenNames.COLORS_BORDER,
         UiTokenNames.COLORS_DANGER,
         UiTokenNames.COLORS_PRIMARY,
         UiTokenNames.COLORS_SECONDARY,
@@ -85,7 +102,6 @@ internal object ChatRowsTokens {
         UiTokenNames.GEOMETRY_BANNER_GAP,
         UiTokenNames.GEOMETRY_COMPOSER_CONTROL_SIZE,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_STAT_PILL_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_SUMMARY_DOT_DIAMETER,
         UiTokenNames.GEOMETRY_THINKING_CONTENT_INDENT,
         UiTokenNames.GEOMETRY_TOOL_DETAIL_INDENT,
@@ -96,6 +112,7 @@ internal object ChatRowsTokens {
         UiTokenNames.SPACING_CODE_TOOLBAR,
         UiTokenNames.SPACING_COPY_GAP,
         UiTokenNames.SPACING_ICON_TEXT,
+        UiTokenNames.STROKE_HAIRLINE,
         UiTokenNames.TYPOGRAPHY_CAPTION,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
     )
@@ -147,32 +164,22 @@ internal fun ChatRowList(
  */
 @Composable
 internal fun rowGap(previous: ChatRow?, current: ChatRow): Dp? {
-    val tokens = LocalUiTokens.current
     if (previous == null) return null
-    return when {
-        // iOS `.toolCall` / `.toolResult`.
-        current is ChatRow.ToolRun -> tokens.spacing.codeToolbar
-        // iOS `.context`.
-        current is ChatRow.Context -> tokens.spacing.codeToolbar
-        // iOS' `.systemEvent` / `.turnError` / `.maxTokens` rows take the generic
-        // same-kind/other-kind rule below; its own `.status` branch (6 pt) is
-        // unreachable there because `.status` rows are never drawn.
-        kindOf(previous) == kindOf(current) -> tokens.spacing.cardInset
-        // unverified geometry: the composer's 20 pt stat-pill floor reused as the
-        // 20 pt gap between two rows of different kinds; tokens.json has no
-        // page-level 20 pt spacing token.
-        else -> tokens.geometry.statPillMinHeight
+    if (current is ChatRow.TurnTail) {
+        // TurnProcess owns its final answer in Android's collapsed aggregate row;
+        // it is the effective previous assistant for this official tail gap.
+        return if (previous is ChatRow.Assistant || previous is ChatRow.TurnProcess) IOS_RESPONSE_GAP else IOS_PROCESS_GAP
     }
-}
-
-/** The row kind, as the iOS spacing function compares them. */
-private fun kindOf(row: ChatRow): String = when (row) {
-    is ChatRow.User -> KIND_USER
-    is ChatRow.Assistant -> KIND_ASSISTANT
-    is ChatRow.Thinking -> KIND_THINKING
-    is ChatRow.ToolRun -> KIND_TOOL
-    is ChatRow.Context -> KIND_CONTEXT
-    is ChatRow.SystemEvent -> KIND_SYSTEM
+    if (current is ChatRow.TurnProcess || previous is ChatRow.TurnProcess) {
+        return IOS_TURN_CONTROL_GAP
+    }
+    // iOS ChatPage.spacing(before:in:) uses 12pt whenever an assistant response
+    // is adjacent and 6pt for ordinary/process rows.
+    return if (previous is ChatRow.Assistant || current is ChatRow.Assistant) {
+        IOS_RESPONSE_GAP
+    } else {
+        IOS_PROCESS_GAP
+    }
 }
 
 /**
@@ -286,6 +293,29 @@ internal fun ChatRowItem(
             }
         }
 
+        is ChatRow.ProcessGroup -> ProcessGroupRow(
+            row = row,
+            // iOS NativeToolCallRow/ToolRunRow starts expanded; the shared local
+            // id is therefore a user-collapsed marker for this group.
+            expanded = row.id !in expandedRowIds || !row.showsHeader,
+            expandedRowIds = expandedRowIds,
+            onToggle = { onToggleRow(row.id) },
+            onToggleRow = onToggleRow,
+            onOpenFile = onOpenFile,
+            modifier = modifier,
+        )
+
+        is ChatRow.TurnProcess -> TurnProcessRow(
+            row = row,
+            expandedRowIds = expandedRowIds,
+            onToggle = { onToggleRow(row.id) },
+            onToggleRow = onToggleRow,
+            onOpenFile = onOpenFile,
+            modifier = modifier,
+        )
+
+        is ChatRow.TurnTail -> TurnTailRow(row = row, modifier = modifier)
+
         is ChatRow.Context -> ContextGroupRow(
             entries = row.entries,
             expanded = row.id in expandedRowIds,
@@ -295,12 +325,243 @@ internal fun ChatRowItem(
                 .padding(horizontal = horizontal),
         )
 
+        is ChatRow.QuestionReply -> Column(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(horizontal = horizontal),
+            verticalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+            horizontalAlignment = Alignment.End,
+        ) {
+            ChatBubble(role = BubbleRole.USER, text = row.text)
+            MessageActions(text = row.text, modifier = Modifier.align(Alignment.End))
+        }
+
         is ChatRow.SystemEvent -> SystemEventRow(
             row = row,
             modifier = modifier
                 .fillMaxWidth()
                 .padding(horizontal = horizontal),
         )
+    }
+}
+
+@Composable
+private fun ProcessGroupRow(
+    row: ChatRow.ProcessGroup,
+    expanded: Boolean,
+    expandedRowIds: Set<String>,
+    onToggle: () -> Unit,
+    onToggleRow: (String) -> Unit,
+    onOpenFile: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Column(modifier = modifier.fillMaxWidth()) {
+        if (row.showsHeader) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp)
+                    .clickable(role = Role.Button, onClick = onToggle)
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = row.title
+                        stateDescription = if (expanded) UiStrings.EXPANDED else UiStrings.COLLAPSED
+                    }
+                    .testTag(PROCESS_GROUP_TAG)
+                    .padding(bottom = if (expanded) tokens.spacing.codeToolbar else ChatMetrics.NO_GAP_PT.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ChatMetrics.DISCLOSURE_ICON_GAP_PT.dp),
+            ) {
+                BasicText(
+                    text = if (expanded) "⌃" else processCategoryGlyph(row.categories.firstOrNull()),
+                    style = type.secondary.copy(color = tokens.colors.tertiary),
+                    modifier = Modifier.width(ChatMetrics.DISCLOSURE_ICON_PT.dp),
+                )
+                BasicText(
+                    text = row.title,
+                    style = type.secondary.copy(color = tokens.colors.tertiary),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (!row.showsHeader || expanded) {
+            Column(verticalArrangement = Arrangement.spacedBy(IOS_PROCESS_GAP)) {
+                row.entries.forEach { entry ->
+                    ChatRowItem(
+                        row = entry,
+                        expandedRowIds = expandedRowIds,
+                        onToggleRow = onToggleRow,
+                        onOpenFile = onOpenFile,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun processCategoryGlyph(category: ChatProcessCategory?): String = when (category) {
+    ChatProcessCategory.THINKING -> "◌"
+    ChatProcessCategory.READ, ChatProcessCategory.READ_IMAGE, ChatProcessCategory.WEB_FETCH -> "▤"
+    ChatProcessCategory.SEARCH, ChatProcessCategory.WEB_SEARCH -> "⌕"
+    ChatProcessCategory.EDIT, ChatProcessCategory.WRITE -> "✎"
+    ChatProcessCategory.COMMANDS, ChatProcessCategory.CODE -> "›_"
+    ChatProcessCategory.SUBAGENTS -> "⋯"
+    ChatProcessCategory.PLAN -> "☷"
+    ChatProcessCategory.QUESTIONS -> "?"
+    ChatProcessCategory.TOOLS, null -> "◦"
+}
+
+@Composable
+private fun TurnProcessRow(
+    row: ChatRow.TurnProcess,
+    expandedRowIds: Set<String>,
+    onToggle: () -> Unit,
+    onToggleRow: (String) -> Unit,
+    onOpenFile: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val expanded = row.expanded || !row.foldable
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp)
+                .height(ChatMetrics.TURN_PROCESS_HEIGHT_PT.dp)
+                .clickable(enabled = row.foldable, role = Role.Button, onClick = onToggle)
+                .semantics(mergeDescendants = true) {
+                    contentDescription = turnProcessLabel(row.outcome, row.elapsedMillis)
+                    stateDescription = if (expanded) UiStrings.EXPANDED else UiStrings.COLLAPSED
+                }
+                .testTag(TURN_PROCESS_TAG),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicText(
+                text = turnProcessLabel(row.outcome, row.elapsedMillis),
+                style = type.secondary.copy(color = if (row.outcome == ChatTurnState.FAILED) tokens.colors.danger else tokens.colors.tertiary),
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (row.foldable) {
+                BasicText(
+                    text = if (expanded) "⌃" else "⌄",
+                    style = type.secondary.copy(color = tokens.colors.tertiary),
+                )
+            }
+        }
+        Box(
+            Modifier.fillMaxWidth().padding(horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp)
+                .height(tokens.stroke.hairline).background(tokens.colors.border),
+        )
+        val visibleEntries = if (expanded) row.entries else listOfNotNull(row.closingAssistant)
+        if (visibleEntries.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(IOS_PROCESS_GAP)) {
+                visibleEntries.forEachIndexed { index, entry ->
+                    val top = if (index == 0) IOS_TURN_CONTROL_GAP else rowGap(visibleEntries[index - 1], entry) ?: ChatMetrics.NO_GAP_PT.dp
+                    ChatRowItem(
+                        row = entry,
+                        expandedRowIds = expandedRowIds,
+                        onToggleRow = onToggleRow,
+                        onOpenFile = onOpenFile,
+                        modifier = Modifier.padding(top = top),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun turnProcessLabel(outcome: ChatTurnState, elapsedMillis: Long?): String = when (outcome) {
+    ChatTurnState.RUNNING -> "正在处理"
+    ChatTurnState.STOPPED -> "已停止"
+    ChatTurnState.FAILED -> "处理失败"
+    ChatTurnState.COMPLETED -> elapsedMillis?.let { "已完成，用时 ${runDuration(it)}" } ?: "已完成"
+}
+
+private fun runDuration(elapsedMillis: Long): String {
+    val total = (elapsedMillis.coerceAtLeast(1_000L) / 1_000L).toInt()
+    val hours = total / 3600
+    val minutes = (total / 60) % 60
+    val seconds = total % 60
+    return buildString {
+        if (hours > 0) append("${hours}小时")
+        if (total >= 60) append("${minutes}分")
+        append("${seconds}秒")
+    }
+}
+
+@Composable
+private fun TurnTailRow(row: ChatRow.TurnTail, modifier: Modifier = Modifier) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    var copied by remember(row.turnID) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            kotlinx.coroutines.delay(1_000)
+            copied = false
+        }
+    }
+    Row(
+        modifier = modifier.fillMaxWidth()
+            .padding(horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp)
+            .padding(top = tokens.geometry.toolDetailVertical)
+            .offset(x = -ChatMetrics.FLOW_GAP_PT.dp)
+            .height(tokens.geometry.composerControlSize)
+            .testTag(TURN_TAIL_TAG),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+    ) {
+        TurnTailAction(glyph = if (copied) "✓" else COPY_GLYPH, label = if (copied) "复制成功" else "复制") {
+            clipboard.setText(AnnotatedString(row.assistantText))
+            copied = true
+        }
+        TurnTailAction(glyph = "↗", label = "分享") {
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                this.type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, row.assistantText)
+            }
+            context.startActivity(Intent.createChooser(intent, "分享回答"))
+        }
+        Spacer(Modifier.weight(1f))
+        row.timeMillis?.let { millis ->
+            BasicText(
+                text = chatClock(millis),
+                style = type.caption.copy(color = tokens.colors.tertiary),
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TurnTailAction(glyph: String, label: String, onClick: () -> Unit) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Box(
+        modifier = Modifier.size(tokens.geometry.composerControlSize).clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        BasicText(glyph, style = type.secondary.copy(color = tokens.colors.tertiary))
+    }
+}
+
+private fun chatClock(timeMillis: Long): String {
+    val now = java.util.Calendar.getInstance()
+    val then = java.util.Calendar.getInstance().apply { timeInMillis = timeMillis }
+    val time = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(timeMillis))
+    return when {
+        now.get(java.util.Calendar.YEAR) != then.get(java.util.Calendar.YEAR) ->
+            java.text.SimpleDateFormat("yyyy年M月d日 HH:mm", java.util.Locale.getDefault()).format(java.util.Date(timeMillis))
+        now.get(java.util.Calendar.DAY_OF_YEAR) != then.get(java.util.Calendar.DAY_OF_YEAR) ->
+            java.text.SimpleDateFormat("M月d日 HH:mm", java.util.Locale.getDefault()).format(java.util.Date(timeMillis))
+        else -> time
     }
 }
 
@@ -318,13 +579,14 @@ private fun ToolEntryRow(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    val canExpand = entry.body.isNotEmpty() || entry.banner.isNotEmpty()
+    val canExpand = entry.body.isNotEmpty() || entry.filePath != null || entry.arguments != null
     ToolRow(
-        title = entry.title,
+        title = entry.displayTitle,
         summary = entry.summary,
         state = entry.state,
         expanded = expanded,
         onToggle = onToggle,
+        showsSummaryWhenExpanded = true,
         detail = if (canExpand || entry.filePath != null) {
             {
                 ToolDetail(
@@ -374,7 +636,14 @@ private fun ToolDetail(
             )
         }
         if (canExpand) {
-            ToolDetailCard(banner = entry.banner.ifEmpty { entry.title }, body = entry.body)
+            ToolDetailCard(
+                banner = entry.title,
+                body = entry.body,
+                variant = entry.variant,
+                arguments = entry.arguments,
+                metadata = entry.metadata,
+                isError = entry.state == com.phonedsh.ui.surface.ToolRowState.ERROR,
+            )
         }
     }
 }
@@ -606,6 +875,13 @@ private fun MessageActions(
 
 /** The answer placeholder iOS draws while an answer has no text yet. */
 private const val EMPTY_ANSWER: String = "\u2026"
+private const val PROCESS_GROUP_TAG: String = "pdsh.chat.process-group"
+private const val TURN_PROCESS_TAG: String = "pdsh.chat.turn-process"
+private const val TURN_TAIL_TAG: String = "pdsh.chat.turn-tail"
+
+private val IOS_PROCESS_GAP: Dp = ChatMetrics.FLOW_GAP_PT.dp
+private val IOS_RESPONSE_GAP: Dp = ChatMetrics.RESPONSE_GAP_PT.dp
+private val IOS_TURN_CONTROL_GAP: Dp = ChatMetrics.TURN_GAP_PT.dp
 
 private const val KIND_USER: String = "user"
 private const val KIND_ASSISTANT: String = "assistant"

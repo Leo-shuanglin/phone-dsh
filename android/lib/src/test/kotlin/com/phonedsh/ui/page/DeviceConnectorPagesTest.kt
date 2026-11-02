@@ -129,7 +129,9 @@ class DeviceConnectorPagesTest {
         }
         compose.onNodeWithText(DISPLAY_NAME).assertIsDisplayed()
         compose.onNodeWithText(DEVICE_ID).assertIsDisplayed()
-        compose.onNodeWithText("devicews").assertIsDisplayed()
+        // The iOS screen has no connector-source diagnostic row; it starts with
+        // the published device list beneath 真实连接设备.
+        compose.onNodeWithTag(UiPageTags.DEVICE_SOURCE).assertDoesNotExist()
         compose.onNodeWithTag(UiPageTags.DEVICE_ROW).performClick()
         assertEquals(DEVICE_ID, opened)
 
@@ -503,6 +505,12 @@ class DeviceConnectorPagesTest {
                 declared.toSet().sorted(),
             )
         }
+        val sessionPage = source("NativeDeviceSessionPage.kt")
+        assertTrue(
+            "NativeDeviceSessionPage.kt: the loading mark must use its named measured metrics",
+            sessionPage.contains("modifier = Modifier.size(DEVICE_SESSION_LOADING_MARK_SIZE_DP.dp)") &&
+                sessionPage.contains("strokeWidth = DEVICE_SESSION_LOADING_MARK_STROKE_DP.dp"),
+        )
     }
 
     @Test

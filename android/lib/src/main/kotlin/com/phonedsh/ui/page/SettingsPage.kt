@@ -88,6 +88,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
+import com.phonedsh.ui.state.EngineLifecycleFacts
+import com.phonedsh.ui.state.EngineLifecycleStatus
 import com.phonedsh.ui.surface.SettingsCardGap
 import com.phonedsh.ui.surface.SettingsChevronSlot
 import com.phonedsh.ui.surface.SettingsFootnoteRow
@@ -229,6 +231,9 @@ public enum class SettingsRowKind {
 
     /** The 13 pt explanatory line inside a card. Carries [SettingsRowView.text]. */
     FOOTNOTE,
+
+    /** A plain in-card action such as acknowledging a failed engine. */
+    ACTION,
 }
 
 /**
@@ -385,6 +390,8 @@ public data class SettingsFacts(
     public val mcpServerCount: Int? = null,
     public val webSearch: WebSearchSummary? = null,
     public val egressAddressCount: Int? = null,
+    /** Current engine lifecycle and reset requirement; null means unread. */
+    public val engineLifecycle: EngineLifecycleFacts? = null,
 )
 
 /** The web-search page's summary; kept for the host's snapshot, not drawn here. */
@@ -448,6 +455,7 @@ public data class SettingsSectionView(
 @Immutable
 public data class SettingsScreenState(
     public val sections: List<SettingsSectionView>,
+    public val engineLifecycle: EngineLifecycleFacts? = null,
 ) {
     /** One row by id. */
     public fun row(id: String): SettingsRowView? =
@@ -459,6 +467,10 @@ public data class SettingsScreenState(
     public companion object {
         /** The 权限 card (`SettingsPage.swift:100-106`). */
         public const val PERMISSION_SECTION_ID: String = "permission"
+        public const val ENGINE_SECTION_ID: String = "engine"
+        public const val ENGINE_STATUS_ROW_ID: String = "engine.status"
+        public const val ENGINE_RESTART_ROW_ID: String = "engine.restart"
+        public const val ENGINE_RESTART_HINT_ROW_ID: String = "engine.restartHint"
 
         /** The 语言 / 外观 / 字号大小 card (`:108-128`). */
         public const val PREFERENCES_SECTION_ID: String = "preferences"
@@ -746,8 +758,51 @@ public data class SettingsScreenState(
                 },
             )
 
+            val engineSection = facts.engineLifecycle?.let { lifecycle ->
+                SettingsSectionView(
+                    id = ENGINE_SECTION_ID,
+                    rows = buildList {
+                        add(
+                            SettingsRowView(
+                                id = ENGINE_STATUS_ROW_ID,
+                                kind = SettingsRowKind.VALUE,
+                                title = UiStrings.ENGINE_STATE_LABEL,
+                                value = lifecycle.statusLabel ?: lifecycle.status.settingsLabel(),
+                                dividerBelow = lifecycle.needsReset,
+                            ),
+                        )
+                        if (lifecycle.needsReset) {
+                            add(
+                                SettingsRowView(
+                                    id = ENGINE_RESTART_ROW_ID,
+                                    kind = SettingsRowKind.ACTION,
+                                    title = UiStrings.ENGINE_RESTART,
+                                ),
+                            )
+                            add(
+                                SettingsRowView(
+                                    id = ENGINE_RESTART_HINT_ROW_ID,
+                                    kind = SettingsRowKind.FOOTNOTE,
+                                    title = "",
+                                    text = UiStrings.ENGINE_RESTART_HINT,
+                                    dividerBelow = false,
+                                ),
+                            )
+                        }
+                    },
+                )
+            }
             return SettingsScreenState(
-                sections = listOf(permission, preferencesCard, work, composer, about, appendix),
+                sections = buildList {
+                    add(permission)
+                    engineSection?.let(::add)
+                    add(preferencesCard)
+                    add(work)
+                    add(composer)
+                    add(about)
+                    add(appendix)
+                },
+                engineLifecycle = facts.engineLifecycle,
             )
         }
 
@@ -879,6 +934,15 @@ public data class SettingsScreenState(
     }
 }
 
+private fun EngineLifecycleStatus.settingsLabel(): String = when (this) {
+    EngineLifecycleStatus.UNKNOWN -> UiStrings.UNKNOWN
+    EngineLifecycleStatus.STOPPED -> UiStrings.ENGINE_STATE_STOPPED
+    EngineLifecycleStatus.STARTING -> UiStrings.ENGINE_STATE_STARTING
+    EngineLifecycleStatus.RUNNING -> UiStrings.ENGINE_STATE_RUNNING
+    EngineLifecycleStatus.RECOVERING -> UiStrings.ENGINE_STATE_RECOVERING
+    EngineLifecycleStatus.FAILED -> UiStrings.ENGINE_STATE_FAILED
+}
+
 /**
  * One permission preset row of the 新会话默认权限 sub-page.
  *
@@ -956,6 +1020,7 @@ public fun SettingsPage(
     onSelectTab: (SettingsTab) -> Unit = {},
     onSelectPreference: (SettingsPreferenceChoice) -> Unit = {},
     onToggleDeveloperTools: (Boolean) -> Unit = {},
+    onRestartEngine: (() -> Unit)? = null,
     tabContent: (@Composable (SettingsTab) -> Unit)? = null,
 ) {
     val tokens = LocalUiTokens.current
@@ -1022,6 +1087,7 @@ public fun SettingsPage(
                     onSelectBusyEnterMode = onSelectBusyEnterMode,
                     onSelectPreference = onSelectPreference,
                     onToggleDeveloperTools = onToggleDeveloperTools,
+                    onRestartEngine = onRestartEngine,
                 )
             }
         } else if (tabContent != null) {
@@ -1113,6 +1179,7 @@ public fun GeneralTabBody(
     modifier: Modifier = Modifier,
     onSelectPreference: (SettingsPreferenceChoice) -> Unit = {},
     onToggleDeveloperTools: (Boolean) -> Unit = {},
+    onRestartEngine: (() -> Unit)? = null,
 ) {
     LazyColumn(
         modifier = modifier
@@ -1140,6 +1207,7 @@ public fun GeneralTabBody(
                             onSelectBusyEnterMode = onSelectBusyEnterMode,
                             onSelectPreference = onSelectPreference,
                             onToggleDeveloperTools = onToggleDeveloperTools,
+                            onRestartEngine = onRestartEngine,
                         )
                     }
                 }
@@ -1163,6 +1231,7 @@ private fun SettingsCardRow(
     onSelectBusyEnterMode: (BusyEnterMode) -> Unit,
     onSelectPreference: (SettingsPreferenceChoice) -> Unit,
     onToggleDeveloperTools: (Boolean) -> Unit,
+    onRestartEngine: (() -> Unit)?,
 ) {
     val tags = Modifier.testTag(UiPageTags.SETTINGS_ROW_PREFIX + row.id)
     when (row.kind) {
@@ -1210,6 +1279,16 @@ private fun SettingsCardRow(
             enabled = row.enabled,
             onClick = row.destination?.let { destination -> { onNavigate(destination) } },
         )
+
+        SettingsRowKind.ACTION -> SettingsGroupedRow(
+            title = row.title,
+            modifier = tags,
+            accentTitle = true,
+            dividerBelow = row.dividerBelow,
+            enabled = row.enabled && onRestartEngine != null,
+            onClick = onRestartEngine,
+        )
+
     }
 }
 

@@ -42,6 +42,7 @@ import type { Command } from 'just-bash/browser'
 import { currentToolCall, deriveIdemKey } from '@phone-dsh/dsh-exec-bridge'
 import { byteStringOutput, byteStringToBytes, bytesToByteString, concatBytes, decodeUtf8 } from './encoding.ts'
 import { appendShellTrailer, SHELL_MANIFEST_PATH, SHELL_REASON_EXIT } from './contract.ts'
+import { phoneProviderFailure } from './phone-errors.ts'
 import type { ExecClient, ExecEvent, ExecRequest, Hello, IdemKeyFacts, ToolCallContext } from '@phone-dsh/dsh-exec-bridge'
 
 /**
@@ -91,6 +92,14 @@ export interface AcceleratorResult {
   readonly stderr: string
   readonly exitCode: number
   readonly signal?: string | null | undefined
+  /**
+   * Typed terminal error code the host sent (exec.md §2.2), kept so
+   * {@link createAcceleratorCommands} can render a phone provider failure as
+   * the bounded `{ok:false,error:{…}}` result instead of a backend line.
+   */
+  readonly providerCode?: string
+  /** The host's own message for {@link providerCode}, bounded by the caller. */
+  readonly providerMessage?: string
 }
 
 /** The dispatcher the command definitions forward to. */
@@ -125,31 +134,12 @@ export function advertisedAccelerators(hello: Pick<Hello, 'capabilities'>): stri
   return [...new Set(names.filter((name): name is string => typeof name === 'string' && name !== ''))]
 }
 
-
-
-/**
- * The host `exec_id` for one accelerator dispatch: `<identity>-a<sequence>`.
- *
- * `spec/v1/exec.md:78-79` pins the shape. D6 bounds the wire id to 64
- * characters, so only the prefix is shortened — the `-aN` sequence suffix always
- * survives, because the host uses it to tell two dispatches of the same tool
- * call apart. This is the one place that builds it.
- *
- * The prefix is the call identity, which is **not** necessarily a digest: the
- * session/turn/step fallback is a plain composite like `session-a-1-1`, and a
- * caller with no identity uses `xl`. Only the length is bounded.
- *
- * @param prefix - the call identity.
- * @param sequence - the dispatch sequence within this identity.
- * @returns the bounded wire id.
- */
-export function acceleratorExecID(prefix: string, sequence: number): string {
-  if (!Number.isSafeInteger(sequence) || sequence < 0) {
-    throw new Error(`accelerator exec_id sequence must be a non-negative safe integer (got ${String(sequence)})`)
-  }
+/** Stable, call-scoped identity bounded by the host's 64-character exec_id. */
+export function acceleratorExecID(idemKey: string, sequence: number): string {
+  if (!/^[0-9a-f]{64}$/u.test(idemKey)) throw new Error('accelerator exec_id needs a sha256 idem_key')
+  if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error('accelerator sequence is invalid')
   const suffix = `-a${String(sequence)}`
-  const head = prefix.length + suffix.length <= 64 ? prefix : prefix.slice(0, 64 - suffix.length)
-  return `${head}${suffix}`
+  return `${idemKey.slice(0, 64 - suffix.length)}${suffix}`
 }
 
 /**
@@ -198,12 +188,12 @@ export function createExecBridgeAccelerators(options: ExecBridgeAcceleratorOptio
       if (!Number.isSafeInteger(requiresMseq) || requiresMseq < 0) {
         throw new Error(`accelerator requires_mseq ${String(requiresMseq)} is outside the JSON safe-integer range`)
       }
-      // D6 bounds the host wire id to 64 characters. Keep the `-aN` sequence
-      // suffix intact and shorten only the prefix when the identity is long.
-      // The prefix is the derived `idem_key`, not the raw tool-call identity: the
-      // derivation is what makes two calls of the same tool distinguishable and
-      // what bounds the key to a fixed 64-character digest. The host matches the
-      // two fields (see `spec/v1/exec.md:78-79`), so they must share one source.
+      // exec.md §2: `exec_id` follows D6 (1..64 chars) and is conventionally
+      // `<XL_IDEMPOTENCY_KEY>-<n>`. A process-local sequence restarts at zero
+      // on a Worker rebuild, so the persistent identity comes from the sha256
+      // idem_key: the result is always exactly 64 D6-safe characters and
+      // unrelated calls cannot reuse an exec_id already owned by the host
+      // ledger. A plaintext identity key would neither be bounded nor stable.
       const execId = acceleratorExecID(idemKey, sequence++)
       const execRequest: ExecRequest = {
         exec_id: execId,
@@ -356,7 +346,18 @@ function hostRefusal(
       exitCode,
     }
   }
-  return { stdout, stderr: `${stderr}${event.code}: ${event.message}\n`, exitCode: 1 }
+  // Every other terminal error keeps the host's typed code and message: those
+  // describe a provider failure, and `createAcceleratorCommands` turns the
+  // phone ones into exec.md §2.2's bounded structured result. The phone
+  // `unsupported` branch above deliberately omits them — that refusal never
+  // reached a provider.
+  return {
+    stdout,
+    stderr: `${stderr}${event.code}: ${event.message}\n`,
+    exitCode: 1,
+    providerCode: event.code,
+    providerMessage: event.message,
+  }
 }
 
 /**
@@ -377,6 +378,15 @@ export function createAcceleratorCommands(host: AcceleratorHost): Command[] {
     const stdin = ctx.stdin === undefined ? '' : ctx.stdin as unknown as string
     try {
       const result = await host.exec({ argv: [name, ...args], cwd: ctx.cwd, env, stdin, signal: ctx.signal })
+      // exec.md §2.2: a phone provider failure is a bounded
+      // `{ok:false,error:{…}}` result that keeps the original exit code, not a
+      // backend line the model cannot act on.
+      if (name === 'phone') {
+        const failure = phoneProviderFailure(args[0], result)
+        if (failure !== undefined) {
+          return { ...byteStringOutput(failure), stderr: '', exitCode: result.exitCode }
+        }
+      }
       return { ...byteStringOutput(result.stdout), stderr: result.stderr, exitCode: result.exitCode }
     } catch (error) {
       return {

@@ -15,6 +15,7 @@ import androidx.lifecycle.AndroidViewModel
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
 import com.phonedsh.agentcore.JsonValue
+import com.phonedsh.agentcore.toJsonString
 import com.phonedsh.controller.Admission
 import com.phonedsh.controller.ControllerBudgets
 import com.phonedsh.controller.ControllerStateMachine
@@ -796,7 +797,8 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         if (state is EngineHostState.Running && runningSinceMillis == null) {
             runningSinceMillis = clock.monotonicMillis()
         }
-        return buildNavFacts(hostReadings(), state, handshake, turn, preferenceStore.snapshot())
+        val measured = buildNavFacts(hostReadings(), state, handshake, turn, preferenceStore.snapshot())
+        return measured.copy(settings = measured.settings.copy(engineLifecycle = nativeEngineLifecycle()))
     }
 
     /**
@@ -1003,6 +1005,50 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     fun start() = host.start()
 
     fun stop() = host.stop()
+
+    private val nativeLaunchStarted = AtomicBoolean(false)
+    private val sendStartupInFlight = AtomicBoolean(false)
+
+    internal fun startNativeSurface() {
+        if (!nativeLaunchStarted.compareAndSet(false, true)) return
+        if (host.state.value == com.phonedsh.controller.HostState.FAILED) restartChatEngine() else start()
+    }
+
+    internal fun nativeEngineLifecycle(): com.phonedsh.ui.state.EngineLifecycleFacts {
+        val failed = host.state.value == com.phonedsh.controller.HostState.FAILED || state.value is EngineHostState.Failed
+        val status = if (failed) com.phonedsh.ui.state.EngineLifecycleStatus.FAILED else when (state.value) {
+            EngineHostState.Stopped -> com.phonedsh.ui.state.EngineLifecycleStatus.STOPPED
+            EngineHostState.Starting -> com.phonedsh.ui.state.EngineLifecycleStatus.STARTING
+            EngineHostState.Recovering -> com.phonedsh.ui.state.EngineLifecycleStatus.RECOVERING
+            is EngineHostState.Running -> com.phonedsh.ui.state.EngineLifecycleStatus.RUNNING
+            is EngineHostState.Failed -> com.phonedsh.ui.state.EngineLifecycleStatus.FAILED
+        }
+        return com.phonedsh.ui.state.EngineLifecycleFacts(status, needsReset = failed,
+            canStartBySending = status == com.phonedsh.ui.state.EngineLifecycleStatus.STOPPED &&
+                modelRoute.route != ModelRoute.NONE && !sendStartupInFlight.get())
+    }
+
+    internal fun restartChatEngine() {
+        stopChat()
+        chatPreparationJob?.cancel()
+        turnScope.launch {
+            try {
+                host.stop()
+                host.start()
+                withTimeout(HOST_READY_TIMEOUT_MILLIS) { host.ready.first { it } }
+                host.resetFailure()
+                withTimeout(ENGINE_READY_TIMEOUT_MILLIS) {
+                    host.state.first { it == com.phonedsh.controller.HostState.RUNNING }
+                    engine.state.first { it is EngineHostState.Running }
+                }
+                mutableChat.update { it.copy(error = null, bannerDismissed = false) }
+                prepareChatSession()
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) {
+                mutableChat.update { it.copy(error = "引擎还没恢复，请查看运行状态后重试。", bannerDismissed = false) }
+            }
+        }
+    }
 
     /**
      * The one line that records this launch's model route.
@@ -1280,14 +1326,293 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     /** The page's state, assembled from the host's own readings. */
     internal fun chatSurfaceState(): ChatScreenState = chatScreenState(
         ui = mutableChat.value,
-        engineStarted = state.value is EngineHostState.Running,
+        engineStarted = state.value is EngineHostState.Running && host.state.value != com.phonedsh.controller.HostState.FAILED,
         providerNeedsKey = modelRoute.route == ModelRoute.NONE,
-        canSend = state.value is EngineHostState.Running,
+        canSend = state.value is EngineHostState.Running && host.state.value != com.phonedsh.controller.HostState.FAILED,
+        lifecycle = nativeEngineLifecycle(),
     )
 
     /** What the person typed. Local state; the page never stores it. */
     internal fun chatDraftChanged(text: String) {
         mutableChat.update { it.copy(draft = text) }
+    }
+
+    internal fun chatWorkspaceSnapshot(): Pair<Boolean, String?> =
+        Files.isDirectory(walPaths.materializedWorkspace) to "/dsh/workspace"
+
+    internal fun chatImeChanged(visible: Boolean) {
+        mutableChat.update { it.copy(imeVisible = visible) }
+    }
+
+    internal fun expandChatPending() {
+        mutableChat.update { it.copy(pendingExpanded = true) }
+    }
+
+    internal fun toggleChatRow(id: String) {
+        mutableChat.update { it.copy(expandedRowIds = if (id in it.expandedRowIds) {
+            it.expandedRowIds - id
+        } else it.expandedRowIds + id) }
+    }
+
+    internal fun archiveChatSession(chatId: String): Boolean = updateChatMetadata(chatId) {
+        chatStore.setArchived(chatId, true)
+    }
+
+    internal fun restoreChatSession(chatId: String): Boolean = updateChatMetadata(chatId) {
+        chatStore.setArchived(chatId, false)
+    }
+
+    internal fun setChatSessionPinned(chatId: String, pinned: Boolean): Boolean = updateChatMetadata(chatId) {
+        chatStore.setPinned(chatId, pinned)
+    }
+
+    private fun updateChatMetadata(chatId: String, write: () -> Boolean): Boolean {
+        if (mutableChat.value.chatId == chatId && mutableChat.value.running) return false
+        if ((mutableSessions.value.sessions + mutableSessions.value.archivedSessions).none { it.id == chatId }) return false
+        chatIo.launch {
+            runCatching {
+                check(write()) { "会话不存在，修改没有保存" }
+                applyChatRecords(chatStore.loadAll())
+            }.onFailure {
+                mutableSessions.update { snapshot -> snapshot.copy(failure = "会话修改没有保存，请重试。") }
+            }
+        }
+        return true
+    }
+
+    private fun applyChatRecords(records: List<ChatRecord>) {
+        fun ChatRecord.listing() = HostSessionRecord(id, updatedAtMs, title, workspaceID, pinned)
+        val ids = records.map { it.id }.toSet()
+        val claims = records.flatMap { it.workerSessionIds }.toSet()
+        val active = records.filterNot { it.archived }
+        mutableSessions.update { snapshot -> snapshot.copy(
+            waiting = false,
+            sessions = mergeSessions(snapshot.sessions.filterNot { it.id in ids || it.id in claims }, active.map { it.listing() }),
+            archivedSessions = records.filter { it.archived }.map { it.listing() },
+            pinnedSessionIDs = active.filter { it.pinned }.map { it.id }.toSet(),
+            currentSessionID = snapshot.currentSessionID?.takeUnless { id -> records.any { it.id == id && it.archived } },
+        ) }
+    }
+
+    private data class ChatResponder(
+        val request: com.phonedsh.dsh.turn.PendingRemoteRequest,
+        val answer: suspend (JsonValue) -> Unit,
+    )
+    private val chatResponders = java.util.concurrent.ConcurrentHashMap<String, ChatResponder>()
+    private val answeringRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val snapshotRefreshInFlight = AtomicBoolean(false)
+    private val snapshotFullRefreshQueued = AtomicBoolean(false)
+    private var chatSnapshotJob: kotlinx.coroutines.Job? = null
+    private var chatPreparationJob: kotlinx.coroutines.Job? = null
+    private val hostAutomation by lazy {
+        HostAutomation({ endpoint, args -> DshTurnClient(host.channel, ::logTurn).call(endpoint, args) },
+            { mutableChat.value.workerSessionId }, turnScope)
+    }
+    internal val automation: StateFlow<com.phonedsh.ui.page.AutomationFacts> get() = hostAutomation.facts
+    internal fun refreshAutomation() = hostAutomation.refresh()
+    internal fun handleAutomationAction(action: com.phonedsh.ui.nav.PdshHostAction): Boolean {
+        when (action) {
+            com.phonedsh.ui.nav.PdshHostAction.RefreshAutomation -> hostAutomation.refresh()
+            is com.phonedsh.ui.nav.PdshHostAction.SaveAutomationSchedule -> hostAutomation.save(action.draft, action.submissionID)
+            is com.phonedsh.ui.nav.PdshHostAction.DeleteAutomationSchedule -> hostAutomation.delete(action.id)
+            is com.phonedsh.ui.nav.PdshHostAction.LoadAutomationHistory -> hostAutomation.history(action.id, action.before)
+            else -> return false
+        }
+        return true
+    }
+
+    internal fun prepareChatSession() {
+        val current = mutableChat.value
+        if (current.chatId.isEmpty() || state.value !is EngineHostState.Running || host.state.value == com.phonedsh.controller.HostState.FAILED) return
+        if (current.workerSessionId != null) { refreshChatSession(); return }
+        if (chatPreparationJob?.isActive == true) return
+        chatPreparationJob = turnScope.launch(Dispatchers.IO) {
+            try {
+                withTimeout(HOST_READY_TIMEOUT_MILLIS) { host.ready.first { it } }
+                val worker = DshTurnClient(host.channel, ::logTurn).createSessionWhenReady(cwd = "/dsh/workspace")
+                if (mutableChat.value.chatId == current.chatId) claimWorkerSession(current.chatId, worker)
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) {
+                mutableChat.update { if (it.chatId != current.chatId) it else it.copy(
+                    notice = "会话还没准备好，发送时会重试。",
+                ) }
+            }
+        }
+    }
+
+    private fun receiveChatRequest(
+        chatId: String,
+        request: com.phonedsh.dsh.turn.PendingRemoteRequest,
+        responder: suspend (JsonValue) -> Unit,
+    ) {
+        if (mutableChat.value.chatId != chatId) return
+        chatResponders[request.eventID] = ChatResponder(request, responder)
+        val node = pendingRequestNode(chatId, request)
+        mutableChat.update { current ->
+            if (current.chatId != chatId) current else current.copy(
+                pendingNodes = current.pendingNodes.filterNot { it.nodeID == node.nodeID } + node,
+            )
+        }
+    }
+
+    private fun removeChatRequest(requestId: String) {
+        chatResponders.remove(requestId)
+        answeringRequests.remove(requestId)
+        mutableChat.update { current -> current.copy(pendingNodes = current.pendingNodes.filterNot {
+            (it.props["requestId"] as? JsonString)?.value == requestId
+        }) }
+    }
+
+    internal fun answerChatQuestion(pending: com.phonedsh.ui.state.PendingAnswer, answer: String) {
+        val responder = chatResponders[pending.requestId] ?: return
+        submitChatAnswer(pending.requestId, questionOutcome(responder.request, answer))
+    }
+
+    internal fun answerChatPermission(pending: com.phonedsh.ui.state.PendingAnswer, allowed: Boolean) {
+        submitChatAnswer(pending.requestId, JsonObject(mapOf(
+            "kind" to JsonString("result"),
+            "value" to JsonString(if (allowed) "allowed-once" else "rejected"),
+        )))
+    }
+
+    internal fun dismissChatQuestion(pending: com.phonedsh.ui.state.PendingAnswer) {
+        // iOS dismissQuestion only hides this seat; it never answers the waterfall.
+        // Keep the responder until the Worker resolves or re-delivers the request.
+        mutableChat.update { current -> current.copy(pendingNodes = current.pendingNodes.filterNot {
+            (it.props["requestId"] as? JsonString)?.value == pending.requestId
+        }) }
+    }
+
+    private fun submitChatAnswer(requestId: String, outcome: JsonValue) {
+        val responder = chatResponders[requestId] ?: return
+        if (!answeringRequests.add(requestId)) return
+        fun updateRequest(submitting: Boolean, error: String? = null) {
+            mutableChat.update { current -> current.copy(pendingNodes = current.pendingNodes.map { node ->
+                if ((node.props["requestId"] as? JsonString)?.value != requestId) node else node.copy(
+                    props = JsonObject(node.props.members + mapOf(
+                        "submitting" to com.phonedsh.agentcore.JsonBool(submitting),
+                        "submissionError" to (error?.let(::JsonString) ?: com.phonedsh.agentcore.JsonNull),
+                    )),
+                )
+            }) }
+        }
+        updateRequest(true)
+        turnScope.launch {
+            try {
+                responder.answer(outcome)
+                removeChatRequest(requestId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                updateRequest(false, "回答没有提交成功，请重试。")
+            } finally {
+                answeringRequests.remove(requestId)
+            }
+        }
+    }
+
+    /** Refresh the same live catalogs and projection used by the iOS dock. */
+    internal fun refreshChatSession(full: Boolean = true) {
+        val current = mutableChat.value
+        val worker = current.workerSessionId ?: return
+        if (!snapshotRefreshInFlight.compareAndSet(false, true)) {
+            if (full) snapshotFullRefreshQueued.set(true)
+            return
+        }
+        turnScope.launch(Dispatchers.IO) {
+            val client = DshTurnClient(host.channel, ::logTurn)
+            try {
+                val modes = if (full) runCatching { client.call("permissionPresets/catalog", timeoutMillis = 5_000) }.getOrNull() else null
+                val commands = if (full) runCatching { client.call("commands/list", JsonObject(mapOf(
+                    "agentId" to JsonString(worker),
+                )), timeoutMillis = 5_000) }.getOrNull() else null
+                val models = if (full) runCatching { client.call("session/modelCatalog", timeoutMillis = 5_000) }.getOrNull() else null
+                // Read the changing projection last. Slow catalog reads must not
+                // let an older goal/model/permission overwrite a later refresh.
+                val projections = client.call("session/projections", JsonObject(mapOf(
+                    "request" to JsonObject(mapOf("sessionId" to JsonString(worker))),
+                )), timeoutMillis = 5_000)
+                val measured = sessionSnapshotOf(projections, modes, commands, models)
+                mutableChat.update { live ->
+                    if (live.chatId != current.chatId || live.workerSessionId != worker) live else live.copy(
+                        sessionSnapshot = if (full) measured else live.sessionSnapshot.copy(
+                            goal = measured.goal, todos = measured.todos,
+                        ),
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                mutableChat.update { live -> if (live.chatId != current.chatId) live else live.copy(
+                    sessionSnapshot = live.sessionSnapshot.copy(
+                        accessError = "没读到权限,再试一次。", commandsError = "没读到命令,再试一次。",
+                    ),
+                ) }
+            } finally {
+                snapshotRefreshInFlight.set(false)
+                if (snapshotFullRefreshQueued.getAndSet(false)) refreshChatSession(full = true)
+            }
+        }
+    }
+
+    internal fun runChatCommand(line: String, showResult: Boolean = true) {
+        val current = mutableChat.value
+        val worker = current.workerSessionId ?: return
+        turnScope.launch(Dispatchers.IO) {
+            try {
+                val response = DshTurnClient(host.channel, ::logTurn).call("commands/execute", JsonObject(mapOf(
+                    "agentId" to JsonString(worker), "line" to JsonString(line),
+                    "submittedAttachments" to com.phonedsh.agentcore.JsonArray(emptyList()),
+                )))
+                val result = (response as? JsonObject)?.get("result") as? JsonObject
+                val kind = (result?.get("kind") as? JsonString)?.value
+                if (kind == null || kind == "error") throw IllegalStateException("command not accepted")
+                mutableChat.update { if (it.chatId != current.chatId) it else it.copy(
+                    draft = if (it.draft.trim() == line) "" else it.draft,
+                    notice = (result["text"] as? JsonString)?.value,
+                    commandExecution = if (!showResult) it.commandExecution else com.phonedsh.ui.page.ChatCommandExecution(
+                        id = (response["commandId"] as? JsonString)?.value ?: java.util.UUID.randomUUID().toString(),
+                        name = line.removePrefix("/").substringBefore(' '), line = line, kind = kind,
+                        text = (result["text"] as? JsonString)?.value,
+                    ),
+                ) }
+                refreshChatSession()
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) {
+                mutableChat.update { if (it.chatId != current.chatId) it else it.copy(
+                    notice = "命令没有执行成功，请重试。",
+                ) }
+            }
+        }
+    }
+
+    internal fun selectChatAccessMode(id: String) {
+        if (mutableChat.value.sessionSnapshot.accessModes.none { it.id == id }) return
+        runChatCommand("/permission $id", showResult = false)
+    }
+
+    internal fun selectChatModel(model: String, effort: String?) {
+        val current = mutableChat.value
+        val worker = current.workerSessionId ?: return
+        val route = current.sessionSnapshot.modelRoutes.firstOrNull {
+            it.model == model && it.provider == current.sessionSnapshot.currentProvider
+        } ?: current.sessionSnapshot.modelRoutes.firstOrNull { it.model == model } ?: return
+        val keptEffort = effort ?: current.sessionSnapshot.currentEffort?.takeIf { existing ->
+            model != current.sessionSnapshot.currentModel && route.efforts.any { it.id == existing }
+        }
+        if (keptEffort != null && route.efforts.none { it.id == keptEffort }) return
+        turnScope.launch(Dispatchers.IO) {
+            try {
+                val request = linkedMapOf<String, JsonValue>("sessionId" to JsonString(worker),
+                    "provider" to JsonString(route.provider), "model" to JsonString(route.model))
+                keptEffort?.let { request["reasoningEffort"] = JsonString(it) }
+                DshTurnClient(host.channel, ::logTurn).call("session/selectModel", JsonObject(mapOf("request" to JsonObject(request))))
+                refreshChatSession()
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (failure: Exception) {
+                mutableChat.update { if (it.chatId != current.chatId) it else it.copy(notice = "模型没有切换成功，请重试。") }
+            }
+        }
     }
 
     /** 新建会话: a real record the session list shows immediately. */
@@ -1302,10 +1627,11 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             snapshot.copy(
                 waiting = false,
                 currentSessionID = id,
-                sessions = mergeSessions(emptyList(), snapshot.sessions + HostSessionRecord(id, at)),
+                sessions = mergeSessions(emptyList(), snapshot.sessions + HostSessionRecord(id, at, workspaceID = "/dsh/workspace")),
             )
         }
         mutableChat.value = ChatUiState(chatId = id, updatedAtMs = at)
+        prepareChatSession()
         LogcatHostLog.info("chat: new session $id")
         return id
     }
@@ -1337,6 +1663,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             if (stored == null) chatIo.launch { chatStore.save(record) }
             chatWorkerClaims = chatWorkerClaims + record.workerSessionIds
             mutableChat.value = record.toUiState()
+            refreshChatSession()
             mutableSessions.update { it.copy(currentSessionID = chatId) }
             LogcatHostLog.info(
                 "chat: opened session=$chatId rows=${record.nodes.size} " +
@@ -1363,7 +1690,9 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             val workers = (existing?.workerSessionIds.orEmpty() +
                 listOfNotNull(mutableChat.value.takeIf { it.chatId == chatId }?.workerSessionId))
                 .distinct()
-            chatStore.save(ChatRecord(chatId, trimmed, at, workers, nodes))
+            chatStore.save(ChatRecord(chatId, trimmed, at, workers, nodes,
+                archived = existing?.archived ?: false, pinned = existing?.pinned ?: false,
+                workspaceID = existing?.workspaceID ?: "/dsh/workspace"))
         }
         mutableSessions.update { snapshot ->
             snapshot.copy(
@@ -1561,7 +1890,31 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         val typed = current.draft.trim()
         val attachments = current.attachments
         if (typed.isEmpty() && attachments.isEmpty()) return
-        if (state.value !is EngineHostState.Running) {
+        val commandName = typed.removePrefix("/").substringBefore(' ')
+        if (typed.startsWith('/') && attachments.isEmpty() &&
+            current.sessionSnapshot.commands.any { it.name == commandName }) {
+            runChatCommand(typed)
+            return
+        }
+        if (state.value !is EngineHostState.Running || host.state.value == com.phonedsh.controller.HostState.FAILED) {
+            if (nativeEngineLifecycle().canStartBySending && sendStartupInFlight.compareAndSet(false, true)) {
+                turnScope.launch {
+                    try {
+                        start()
+                        withTimeout(ENGINE_READY_TIMEOUT_MILLIS) {
+                            host.ready.first { it }
+                            engine.state.first { it is EngineHostState.Running }
+                        }
+                        sendStartupInFlight.set(false)
+                        if (mutableChat.value.draft == current.draft) sendChat()
+                        else mutableChat.update { it.copy(notice = "引擎已就绪，点发送继续。") }
+                    } catch (cancelled: CancellationException) { throw cancelled
+                    } catch (failure: Exception) {
+                        mutableChat.update { it.copy(error = "引擎没有启动成功，输入已保留。", bannerDismissed = false) }
+                    } finally { sendStartupInFlight.set(false) }
+                }
+                return
+            }
             mutableChat.update {
                 it.copy(error = "本地引擎还没就绪，消息没有发出", bannerDismissed = false)
             }
@@ -1598,9 +1951,12 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 chatId = chatId,
                 nodes = it.nodes + userNode,
                 draft = "",
+                lastSubmission = current.draft,
+                lastAttachments = attachments,
                 attachments = emptyList(),
                 running = true,
                 streaming = "",
+                reasoningStreaming = "",
                 error = null,
                 bannerDismissed = false,
                 notice = null,
@@ -1628,13 +1984,14 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 }
                 val runner = ChatTurnRunner(host.channel, DshTurnClient(host.channel, ::logTurn), ::logTurn)
                 chatRunner = runner
+                chatPreparationJob?.join()
                 outcome = runner.run(
                     // The conversation's own Worker session, persisted in the chat
                     // record. It survives a Worker page reload and a cold start:
                     // `session/prompt` resumes it from the Worker's JSONL log
                     // (`/dsh/home/sessions`, repacked into every boot overlay), so
                     // the model keeps the earlier turns instead of starting blind.
-                    workerSessionId = sending.workerSessionId,
+                    workerSessionId = mutableChat.value.takeIf { it.chatId == chatId }?.workerSessionId,
                     prompt = prompt,
                     onSession = { workerSessionId -> claimWorkerSession(chatId, workerSessionId) },
                     onEvent = { event -> onChatEvent(chatId, event) },
@@ -1644,6 +2001,11 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                         }
                     },
                     onContextLost = { message -> recordContextLost(chatId, message) },
+                    onInteractiveRequest = { request, responder -> receiveChatRequest(chatId, request, responder) },
+                    onInteractiveCancel = ::removeChatRequest,
+                    onReasoningDelta = { text -> mutableChat.update { live ->
+                        if (live.chatId != chatId) live else live.copy(reasoningStreaming = live.reasoningStreaming + text)
+                    } },
                 )
                 finishChatTurn(chatId, outcome)
             } catch (timeout: TimeoutCancellationException) {
@@ -1657,14 +2019,18 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 failChatTurn(chatId, reasonOf(failure))
             } finally {
                 chatRunner = null
+                chatSnapshotJob?.cancel()
+                chatResponders.clear()
+                answeringRequests.clear()
                 turnRunning.set(false)
                 // Close the measurement even on a failed or stopped turn: a file a
                 // tool really wrote is on disk whether or not the answer settled, and
                 // the page must list it rather than losing it with the error path.
                 sessionArtifacts.endTurn()
                 mutableChat.update {
-                    it.copy(running = false, streaming = "", activeTurnNodeId = null)
+                    it.copy(running = false, streaming = "", reasoningStreaming = "", activeTurnNodeId = null, pendingNodes = emptyList())
                 }
+                refreshChatSession()
                 persistChat(chatId)
             }
         }
@@ -1708,7 +2074,12 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 if (current.chatId != chatId) {
                     current
                 } else {
-                    current.copy(activeTurnNodeId = current.turnIdOf(event.turnId))
+                    val id = current.turnIdOf(event.turnId)
+                    val turn = turnNode(chatId, id).copy(props = JsonObject(mapOf(
+                        "startedAtMs" to (event.raw["time"] ?: com.phonedsh.agentcore.JsonNull),
+                    )))
+                    current.copy(activeTurnNodeId = id,
+                        nodes = current.nodes.filterNot { it.nodeID == turn.nodeID } + turn)
                 }
             }
 
@@ -1720,7 +2091,8 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     if (live.chatId != chatId || live.nodes.any { it.nodeID == node.nodeID }) {
                         live
                     } else {
-                        live.copy(nodes = live.nodes + node)
+                        live.copy(nodes = live.nodes + node,
+                            reasoningStreaming = if (event.kind == HostEventKind.ASSISTANT_MESSAGE) "" else live.reasoningStreaming)
                     }
                 }
             }
@@ -1735,6 +2107,14 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         chatWorkerClaims = chatWorkerClaims + workerSessionId
         mutableChat.update {
             if (it.chatId == chatId) it.copy(workerSessionId = workerSessionId) else it
+        }
+        refreshChatSession()
+        chatSnapshotJob?.cancel()
+        chatSnapshotJob = turnScope.launch {
+            while (mutableChat.value.chatId == chatId && mutableChat.value.running) {
+                delay(2_000)
+                refreshChatSession(full = false)
+            }
         }
         persistChat(chatId)
         mutableSessions.update { snapshot ->
@@ -1814,6 +2194,8 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 activeTurnNodeId = null,
                 error = "消息发送失败（$safe）",
                 bannerDismissed = false,
+                draft = it.draft.ifEmpty { it.lastSubmission },
+                attachments = if (it.attachments.isEmpty()) it.lastAttachments else it.attachments,
             )
         }
         persistChat(chatId)
@@ -1889,7 +2271,9 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             val existing = runCatching { chatStore.load(chatId) }.getOrNull()
             val workers = (existing?.workerSessionIds.orEmpty() + listOfNotNull(workerSessionId)).distinct()
             runCatching {
-                chatStore.save(ChatRecord(chatId, title, at, workers, nodes))
+                chatStore.save(ChatRecord(chatId, title, at, workers, nodes,
+                    archived = existing?.archived ?: false, pinned = existing?.pinned ?: false,
+                    workspaceID = existing?.workspaceID ?: "/dsh/workspace"))
             }.onFailure { LogcatHostLog.warn("chat: save refused session=$chatId (${reasonOf(it as? Exception ?: Exception(it))})") }
         }
     }
@@ -1914,19 +2298,20 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 return@launch
             }
             chatWorkerClaims = records.flatMap { it.workerSessionIds }.toSet()
+            applyChatRecords(records)
             mutableSessions.update { snapshot ->
                 snapshot.copy(
                     waiting = false,
                     sessions = mergeSessions(
                         emptyList(),
-                        snapshot.sessions + records.map {
-                            HostSessionRecord(it.id, it.updatedAtMs, it.title)
+                        snapshot.sessions + records.filterNot { it.archived }.map {
+                            HostSessionRecord(it.id, it.updatedAtMs, it.title, it.workspaceID, it.pinned)
                         },
                     ),
-                    currentSessionID = snapshot.currentSessionID ?: records.first().id,
+                    currentSessionID = snapshot.currentSessionID ?: records.firstOrNull { !it.archived }?.id,
                 )
             }
-            val newest = records.first()
+            val newest = records.firstOrNull { !it.archived } ?: return@launch
             if (!turnRunning.get() && mutableChat.value.chatId.isEmpty()) {
                 mutableChat.value = newest.toUiState()
             }

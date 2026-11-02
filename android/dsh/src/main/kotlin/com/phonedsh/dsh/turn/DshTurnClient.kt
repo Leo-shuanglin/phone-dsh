@@ -29,6 +29,7 @@ package com.phonedsh.dsh.turn
 import com.phonedsh.agentcore.JsonArray
 import com.phonedsh.agentcore.JsonBool
 import com.phonedsh.agentcore.JsonNull
+import com.phonedsh.agentcore.JsonNumber
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
 import com.phonedsh.agentcore.JsonValue
@@ -75,6 +76,68 @@ data class TurnRun(
         }
 }
 
+/** One live approval/question waterfall delivered on the `$events` stream. */
+data class PendingRemoteRequest(
+    val eventID: String,
+    val clientID: String,
+    val request: JsonValue,
+    val eventKind: String,
+)
+
+/** Parses a waterfall addressed to this active session; unknown event kinds can be passed to the next listener. */
+fun pendingRemoteRequest(
+    value: JsonObject,
+    sessionId: String,
+    clientId: String?,
+): PendingRemoteRequest? {
+    if (value.text("type") != "waterfall" || value.text("agentId") != sessionId) return null
+    val eventKind = value.text("event") ?: return null
+    val eventID = value.text("eventId") ?: return null
+    val clientID = clientId ?: return null
+    val request = value["request"] ?: return null
+    return PendingRemoteRequest(eventID, clientID, request, eventKind)
+}
+
+/** Exact mux-open frame for live permission/question events. */
+fun remoteEventsOpenFrame(): JsonObject = JsonObject(
+    linkedMapOf(
+        "type" to JsonString("open"),
+        "streamId" to JsonString("events"),
+        "endpoint" to JsonString("\$events"),
+        "payload" to JsonObject(linkedMapOf("args" to JsonObject(emptyMap()))),
+    ),
+)
+
+/** Exact mux-open frame for the session event/history stream. */
+fun sessionFollowOpenFrame(
+    sessionId: String,
+    maxMessages: Int = 64,
+    assistantStream: Boolean = false,
+): JsonObject {
+    val request = JsonObject(
+        linkedMapOf(
+            "address" to JsonObject(
+                linkedMapOf(
+                    "kind" to JsonString("session"),
+                    "sessionId" to JsonString(sessionId),
+                ),
+            ),
+            "maxMessages" to JsonNumber(maxMessages.toString()),
+            "assistantStream" to JsonBool(assistantStream),
+        ),
+    )
+    return JsonObject(
+        linkedMapOf(
+            "type" to JsonString("open"),
+            "streamId" to JsonString("follow"),
+            "endpoint" to JsonString("session/follow"),
+            "payload" to JsonObject(
+                linkedMapOf("args" to JsonObject(linkedMapOf("request" to request))),
+            ),
+        ),
+    )
+}
+
 /**
  * The host-side `/api` client for one connected worker.
  *
@@ -87,6 +150,20 @@ class DshTurnClient(
 ) {
     private val rpcIds = AtomicInteger(0)
     private val random = SecureRandom()
+
+    /** Answers the exact live waterfall request carried by the active mux. */
+    suspend fun answerRemoteRequest(request: PendingRemoteRequest, outcome: JsonValue) {
+        call(
+            endpoint = "\$events/result",
+            args = JsonObject(
+                linkedMapOf(
+                    "clientId" to JsonString(request.clientID),
+                    "eventId" to JsonString(request.eventID),
+                    "outcome" to outcome,
+                ),
+            ),
+        )
+    }
 
     /**
      * One unary remote-API call, unwrapping the `server-response`.
@@ -236,39 +313,11 @@ class DshTurnClient(
         val muxId = ByteArray(16).also(random::nextBytes).hex()
         sendMuxFrame(
             muxId,
-            JsonObject(
-                linkedMapOf(
-                    "type" to JsonString("open"),
-                    "streamId" to JsonString("events"),
-                    "endpoint" to JsonString("\$events"),
-                    "payload" to JsonObject(linkedMapOf("args" to JsonObject(emptyMap()))),
-                ),
-            ).toJsonString(),
-        )
-        val follow = JsonObject(
-            linkedMapOf(
-                "address" to JsonObject(
-                    linkedMapOf(
-                        "kind" to JsonString("session"),
-                        "sessionId" to JsonString(sessionId),
-                    ),
-                ),
-                "maxMessages" to com.phonedsh.agentcore.JsonNumber(maxMessages.toString()),
-                "assistantStream" to JsonBool(false),
-            ),
+            remoteEventsOpenFrame().toJsonString(),
         )
         sendMuxFrame(
             muxId,
-            JsonObject(
-                linkedMapOf(
-                    "type" to JsonString("open"),
-                    "streamId" to JsonString("follow"),
-                    "endpoint" to JsonString("session/follow"),
-                    "payload" to JsonObject(
-                        linkedMapOf("args" to JsonObject(linkedMapOf("request" to follow))),
-                    ),
-                ),
-            ).toJsonString(),
+            sessionFollowOpenFrame(sessionId, maxMessages, assistantStream = false).toJsonString(),
         )
         val stream = api.openApiStream(
             method = "POST",
@@ -475,6 +524,8 @@ class DshTurnClient(
         const val HEX = "0123456789abcdef"
     }
 }
+
+private fun JsonObject.text(name: String): String? = (this[name] as? JsonString)?.value
 
 /**
  * A fresh `session/prompt` identity for one submission.

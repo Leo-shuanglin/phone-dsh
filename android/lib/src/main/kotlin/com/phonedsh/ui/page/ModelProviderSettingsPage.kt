@@ -60,6 +60,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Switch
@@ -67,6 +68,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,6 +84,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
@@ -286,6 +289,30 @@ public data class ModelProviderFacts(
     public val failure: ProviderFailureReason? = null,
     public val engineStarted: FactState = FactState.UNKNOWN,
     public val writable: FactState = FactState.UNKNOWN,
+    /** Last test for the currently edited profile; contains no endpoint or key. */
+    public val connectionTest: ProviderConnectionTestFact? = null,
+    public val providerSave: ProviderSaveFact? = null,
+)
+
+/** A connection-test lifecycle/result, correlated by non-secret profile identity. */
+@Immutable
+public data class ProviderConnectionTestFact(
+    public val profileId: String,
+    public val isNew: Boolean,
+    public val isTesting: Boolean,
+    public val succeeded: Boolean? = null,
+    public val message: String? = null,
+)
+
+/** Save progress/result for a form submission; request ID prevents stale success from closing a new editor. */
+@Immutable
+public data class ProviderSaveFact(
+    public val requestId: String,
+    public val profileId: String,
+    public val isNew: Boolean,
+    public val isSaving: Boolean,
+    public val succeeded: Boolean? = null,
+    public val message: String? = null,
 )
 
 // ---------------------------------------------------------------------------
@@ -390,6 +417,8 @@ public data class ModelProviderScreenState(
     public val canWrite: Boolean = true,
     public val engineStarted: FactState = FactState.UNKNOWN,
     public val restartHint: String = UiStrings.PROVIDER_RESTART_HINT_IDLE,
+    public val connectionTest: ProviderConnectionTestFact? = null,
+    public val providerSave: ProviderSaveFact? = null,
 ) {
     /** The empty state: the host read the page and there is nothing in it. */
     public val isEmpty: Boolean get() = phase == SettingsDataPhase.READY && rows.isEmpty()
@@ -437,6 +466,8 @@ public data class ModelProviderScreenState(
                 } else {
                     UiStrings.PROVIDER_RESTART_HINT_IDLE
                 },
+                connectionTest = facts.connectionTest,
+                providerSave = facts.providerSave,
             )
         }
 
@@ -514,6 +545,9 @@ public data class ProviderModelDraft(
     public val imageInput: Boolean = false,
 )
 
+/** A picker row keeps the wire value separate from its localized title. */
+private data class ProviderPickerOption(val id: String, val label: String)
+
 /**
  * The editor's draft: the fields the user is editing, and the only place a typed
  * key ever lives.
@@ -541,7 +575,17 @@ public data class ProviderDraft(
      * service — a URL. An existing service's URL lives on the host, so an empty
      * field there means "keep the stored one".
      */
-    public val canSave: Boolean get() = name.isNotBlank() && (endpoint.isNotBlank() || !isNew)
+    public val modelValidationError: String?
+        get() {
+            if (models.isEmpty()) return "至少添加一个模型。"
+            val ids = models.map { it.id.trim() }
+            if (ids.any(String::isEmpty)) return "模型 ID 不能为空。"
+            if (ids.distinct().size != ids.size) return "模型 ID 不能重复。"
+            if (models.any { !it.textInput && !it.imageInput }) return "每个模型至少保留文本或图片一种输入类型。"
+            return null
+        }
+
+    public val canSave: Boolean get() = name.isNotBlank() && (endpoint.isNotBlank() || !isNew) && model.isNotBlank() && modelValidationError == null
 
     /** The protocol the URL selects, said out loud so nobody has to guess. */
     public val protocolHint: String get() = if (endpoint.lowercase().contains("/anthropic")) {
@@ -627,13 +671,25 @@ public fun ModelProviderSettingsPage(
     onRetry: (() -> Unit)? = null,
     embedded: Boolean = false,
     onStartEngine: () -> Unit = {},
-    onSave: (ProviderDraft) -> Unit = {},
+    onSave: (ProviderDraft, String) -> Unit = { _, _ -> },
     onTest: (ProviderDraft) -> Unit = {},
     onDelete: (String) -> Unit = {},
 ) {
     var draft by remember { mutableStateOf<ProviderDraft?>(null) }
     var pendingDelete by remember { mutableStateOf<ProviderRowView?>(null) }
+    var saveRequestId by remember { mutableStateOf<String?>(null) }
     val editing = draft
+    val saveFact = editing?.let { current ->
+        state.providerSave?.takeIf {
+            it.requestId == saveRequestId && it.profileId == current.id && it.isNew == current.isNew
+        }
+    }
+    LaunchedEffect(editing?.id, editing?.isNew, saveFact?.requestId, saveFact?.isSaving, saveFact?.succeeded) {
+        if (saveFact?.succeeded == true && !saveFact.isSaving) {
+            draft = null
+            saveRequestId = null
+        }
+    }
 
     SettingsSubPageFrame(
         backGlyph = SETTINGS_CLOSE_GLYPH,
@@ -663,12 +719,17 @@ public fun ModelProviderSettingsPage(
                     draft = editing,
                     keyStatus = state.rows.firstOrNull { it.id == editing.id }?.keyStatus
                         ?: ProviderKeyStatus.NOT_CONFIGURED,
+                    connectionTest = state.connectionTest?.takeIf {
+                        it.profileId == editing.id && it.isNew == editing.isNew
+                    },
+                    saveFact = saveFact,
                     onDraftChange = { draft = it },
                     onTest = { onTest(editing) },
-                    onCancel = { draft = null },
+                    onCancel = { draft = null; saveRequestId = null },
                     onSave = {
-                        onSave(editing)
-                        draft = null
+                        val requestId = java.util.UUID.randomUUID().toString()
+                        saveRequestId = requestId
+                        onSave(editing, requestId)
                     },
                 )
             } else if (state.isUnknown) {
@@ -1023,6 +1084,8 @@ private fun ProviderToggleRow(
 private fun ProviderEditor(
     draft: ProviderDraft,
     keyStatus: ProviderKeyStatus,
+    connectionTest: ProviderConnectionTestFact?,
+    saveFact: ProviderSaveFact?,
     onDraftChange: (ProviderDraft) -> Unit,
     onTest: () -> Unit,
     onCancel: () -> Unit,
@@ -1030,6 +1093,7 @@ private fun ProviderEditor(
 ) {
     val tokens = LocalUiTokens.current
     val clipboard = LocalClipboardManager.current
+    val saveInProgress = saveFact?.isSaving == true
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1046,12 +1110,45 @@ private fun ProviderEditor(
                 .padding(horizontal = tokens.geometry.pageOuterMarginH),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SessionTextAction(
-                label = UiStrings.PROVIDER_TEST,
-                onClick = onTest,
-                tone = SessionActionTone.ACCENT,
-                enabled = draft.canSave,
-            )
+            if (saveInProgress) {
+                Row(
+                    modifier = Modifier.defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+                        .padding(horizontal = tokens.spacing.iconText)
+                        .semantics { contentDescription = UiStrings.PROVIDER_SAVING },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(tokens.geometry.statusDotDiameter),
+                        color = tokens.colors.accent,
+                        strokeWidth = tokens.stroke.hairline,
+                    )
+                    BasicText(UiStrings.PROVIDER_SAVING, style = settingsLabelStyle().copy(color = tokens.colors.accent))
+                }
+            } else if (connectionTest?.isTesting == true) {
+                Row(
+                    modifier = Modifier.defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+                        .padding(horizontal = tokens.spacing.iconText)
+                        .semantics { contentDescription = "${UiStrings.PROVIDER_TEST}中" },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(tokens.geometry.statusDotDiameter),
+                        color = tokens.colors.accent,
+                        strokeWidth = tokens.stroke.hairline,
+                    )
+                    BasicText("${UiStrings.PROVIDER_TEST}中…", style = settingsLabelStyle().copy(color = tokens.colors.accent))
+                }
+            } else {
+                SessionTextAction(
+                    label = UiStrings.PROVIDER_TEST,
+                    onClick = onTest,
+                    tone = SessionActionTone.ACCENT,
+                    enabled = draft.canSave,
+                    modifier = Modifier.testTag(PROVIDER_TEST_TAG),
+                )
+            }
             Spacer(Modifier.weight(1f))
             SessionTextAction(
                 label = UiStrings.CANCEL,
@@ -1062,7 +1159,7 @@ private fun ProviderEditor(
                 label = UiStrings.SAVE,
                 onClick = onSave,
                 tone = SessionActionTone.ACCENT,
-                enabled = draft.canSave,
+                enabled = draft.canSave && !saveInProgress,
             )
         }
         SettingsHairline()
@@ -1085,20 +1182,24 @@ private fun ProviderEditor(
         ProviderPickerRow(
             label = UiStrings.PROVIDER_DEFAULT_MODEL,
             value = draft.model,
-            options = draft.models.map { it.id }.filter { it.isNotBlank() },
+            options = draft.models.map { it.id }.filter { it.isNotBlank() }
+                .map { ProviderPickerOption(it, it) },
             onSelect = { onDraftChange(draft.copy(model = it)) },
         )
         ProviderPickerRow(
             label = UiStrings.PROVIDER_REASONING_EFFORT,
-            value = draft.reasoningEffort ?: UiStrings.PROVIDER_DEFAULT,
+            value = draft.reasoningEffort?.let(::providerEffortLabel) ?: UiStrings.PROVIDER_DEFAULT,
             options = listOf(
-                UiStrings.PROVIDER_EFFORT_OFF,
-                UiStrings.PROVIDER_EFFORT_LOW,
-                UiStrings.PROVIDER_EFFORT_HIGH,
-                UiStrings.PROVIDER_EFFORT_MAX,
+                ProviderPickerOption("off", UiStrings.PROVIDER_EFFORT_OFF),
+                ProviderPickerOption("low", UiStrings.PROVIDER_EFFORT_LOW),
+                ProviderPickerOption("high", UiStrings.PROVIDER_EFFORT_HIGH),
+                ProviderPickerOption("max", UiStrings.PROVIDER_EFFORT_MAX),
             ),
             onSelect = { onDraftChange(draft.copy(reasoningEffort = it)) },
         )
+        draft.modelValidationError?.let { error ->
+            ProviderFooterLine(text = error)
+        }
         ProviderFooterLine(text = draft.protocolHint)
         SettingsSectionLabel(UiStrings.PROVIDER_MODEL_CATALOG)
         draft.models.forEachIndexed { index, model ->
@@ -1154,6 +1255,30 @@ private fun ProviderEditor(
             )
         }
         ProviderFooterLine(text = UiStrings.PROVIDER_KEY_STORE_HINT)
+        connectionTest?.message?.let { message ->
+            BasicText(
+                text = message,
+                style = settingsFootnoteStyle().copy(
+                    color = if (connectionTest.succeeded == true) tokens.colors.secondary else tokens.colors.danger,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(PROVIDER_TEST_RESULT_TAG)
+                    .padding(horizontal = tokens.geometry.pageOuterMarginH, vertical = tokens.spacing.badgeInsetV),
+            )
+        }
+        saveFact?.message?.let { message ->
+            BasicText(
+                text = message,
+                style = settingsFootnoteStyle().copy(
+                    color = if (saveFact.succeeded == true) tokens.colors.secondary else tokens.colors.danger,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(PROVIDER_SAVE_RESULT_TAG)
+                    .padding(horizontal = tokens.geometry.pageOuterMarginH, vertical = tokens.spacing.badgeInsetV),
+            )
+        }
     }
 }
 
@@ -1191,7 +1316,8 @@ private fun ProviderField(
             cursorBrush = SolidColor(tokens.colors.accent),
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = tokens.geometry.pageRowMinHeight),
+                .heightIn(min = tokens.geometry.pageRowMinHeight)
+                .testTag(PROVIDER_FIELD_TAG_PREFIX + label),
         )
     }
 }
@@ -1206,7 +1332,7 @@ private fun ProviderField(
 private fun ProviderPickerRow(
     label: String,
     value: String,
-    options: List<String>,
+    options: List<ProviderPickerOption>,
     onSelect: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -1237,15 +1363,24 @@ private fun ProviderPickerRow(
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { option ->
                 DropdownMenuItem(
-                    text = { Text(option) },
+                    text = { Text(option.label) },
                     onClick = {
                         expanded = false
-                        onSelect(option)
+                        onSelect(option.id)
                     },
                 )
             }
         }
     }
+}
+
+private fun providerEffortLabel(raw: String): String = when (raw.lowercase()) {
+    "off", "none", "minimal" -> UiStrings.PROVIDER_EFFORT_OFF
+    "low" -> UiStrings.PROVIDER_EFFORT_LOW
+    "medium", "mid" -> "中"
+    "high" -> UiStrings.PROVIDER_EFFORT_HIGH
+    "max", "maximum" -> UiStrings.PROVIDER_EFFORT_MAX
+    else -> raw
 }
 
 /** One 模型目录 entry: its id, its two input capabilities, and its delete row. */
@@ -1301,6 +1436,10 @@ private val HOST_PATTERN: Regex = Regex("""^[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z
 
 /** The retry affordance the failure line draws (a glyph, not a contract label). */
 private const val RETRY_GLYPH: String = "↻"
+private const val PROVIDER_TEST_TAG: String = "pdsh.provider.test"
+private const val PROVIDER_TEST_RESULT_TAG: String = "pdsh.provider.test-result"
+private const val PROVIDER_SAVE_RESULT_TAG: String = "pdsh.provider.save-result"
+private const val PROVIDER_FIELD_TAG_PREFIX: String = "pdsh.provider.field."
 
 /**
  * The token inventory of this page.

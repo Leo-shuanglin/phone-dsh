@@ -15,9 +15,10 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.page.UiPageTags
+import com.phonedsh.ui.page.AutomationFacts
+import com.phonedsh.ui.page.AutomationSnapshot
 import com.phonedsh.ui.theme.PdshTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -37,13 +38,14 @@ class PdshReachabilityTest {
         nav: PdshNavState,
         onNavigate: (PdshRoute) -> Unit = {},
         onHostAction: (PdshHostAction) -> Unit = {},
+        automation: AutomationFacts = AutomationFacts(),
         sessions: (@androidx.compose.runtime.Composable () -> Unit)? = null,
     ) {
         compose.setContent {
             PdshTheme(darkTheme = false) {
                 PdshNavHost(
                     nav = nav,
-                    facts = PdshNavFacts(),
+                    facts = PdshNavFacts(automation = automation),
                     onNavigate = onNavigate,
                     onBack = {},
                     onHome = {},
@@ -87,41 +89,28 @@ class PdshReachabilityTest {
     }
 
     @Test
-    fun `the automation bar controls reach the page's own editor and the host`() {
+    fun `the automation route is a sheet and exposes the catalog bar`() {
         // L11's page renders the ✕/刷新/新建 bar only when the callbacks are
         // non-null; leaving them out made the collected screenshots disagree
-        // with the app. 刷新 is a host read, while 新建 now presents the page's own
-        // `ScheduleEditorPage` (README §1: an embedded subpage ships with its
-        // parent) — and that form's 保存 is the handoff, so a tap here must still
-        // end at a host action rather than a dead control.
+        // with the app. The sheet editor's physical interactions run in the
+        // device-side modal test, where IME and Dialog semantics are real.
         val actions = mutableListOf<PdshHostAction>()
+        assertEquals(PdshPresentation.SHEET, PdshRoute.Automation.presentation)
         mount(
             nav = PdshNavState(listOf(PdshRoute.Home, PdshRoute.Automation)),
             onHostAction = { actions += it },
+            automation = AutomationFacts(
+                snapshot = AutomationSnapshot(schedules = emptyList()),
+                currentSessionID = "worker-session-1",
+            ),
         )
         compose.onNodeWithTag(UiPageTags.AUTOMATION_REFRESH).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.AUTOMATION_NEW).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.AUTOMATION_REFRESH).performClick()
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_NEW).performClick()
         compose.waitForIdle()
-        // 新建 opened the form instead of handing a "please edit" note to a host
-        // editor that does not exist.
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_ROOT).assertIsDisplayed()
-        assertEquals(listOf<PdshHostAction>(PdshHostAction.RefreshAutomation), actions)
-
-        // 保存 before the required fields carry text would be a no-op; fill them in
-        // and the same control hands the draft to the host.
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_NAME).performTextInput("周报")
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_PROMPT).performTextInput("总结这一周")
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_SAVE).performClick()
-        compose.waitForIdle()
-        assertEquals(
-            listOf<PdshHostAction>(
-                PdshHostAction.RefreshAutomation,
-                PdshHostAction.OpenAutomationEditor(null),
-            ),
-            actions,
-        )
+        compose.runOnIdle {
+            assertEquals(listOf<PdshHostAction>(PdshHostAction.RefreshAutomation), actions)
+        }
     }
 
     @Test

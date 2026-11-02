@@ -44,6 +44,8 @@ import androidx.compose.ui.unit.dp
  * pick the surface it is implementing.
  */
 public object ChatMetrics {
+    /** No additional inset; iOS ChatPage.spacing uses zero for the first row. */
+    public const val NO_GAP_PT: Int = 0
     // ------------------------------------------------------------------ header
 
     /** Page header height. Source: `NativeParityTokens.swift:99` (`headerHeight = 50`), drawn at `ChatPage.swift:195,303`. Confidence: exact. */
@@ -386,6 +388,208 @@ public object ChatMetrics {
 
     /** Subagent menu width. Source: `NativeParityTokens.swift:107`. Confidence: exact. */
     public const val SUBAGENT_MENU_WIDTH_PT: Int = 336
+
+    // ---------------------------------------------------------------- native header controls
+
+    /** ChatPage's drawer control width. Source: `ChatPage.swift:227`. Confidence: exact. */
+    public const val CHAT_DRAWER_WIDTH_PT: Int = 32
+    /** Device entry control width. Source: `ChatPage.swift:238`. Confidence: exact. */
+    public const val CHAT_DEVICE_ENTRY_WIDTH_PT: Int = 36
+    /** Overflow menu control width. Source: `ChatPage.swift:291`. Confidence: exact. */
+    public const val CHAT_HEADER_MENU_WIDTH_PT: Int = 44
+    /** Fixed side reserve around the centered session title. Source: `ChatPage.swift:219`. Confidence: exact. */
+    public const val CHAT_HEADER_TITLE_RESERVE_PT: Int = 104
+    /** Gap inside the device/menu group. Source: `ChatPage.swift:235`. Confidence: exact. */
+    public const val CHAT_HEADER_GROUP_GAP_PT: Int = 4
+    /** Drawer icon box. Source: `ChatPage.swift:225-227`. Confidence: exact. */
+    public const val CHAT_DRAWER_ICON_PT: Int = 20
+    /** Drawer icon stroke. Source: SF `sidebar.left` 20pt Android vector approximation. Confidence: approximated. */
+    public const val CHAT_DRAWER_ICON_STROKE_TENTH_PT: Float = 1.5f
+    /** Drawer icon inset and corner. Source: 20pt icon's interior stroke geometry. Confidence: approximated. */
+    public const val CHAT_DRAWER_ICON_INSET_PT: Int = 2
+    public const val CHAT_DRAWER_ICON_CORNER_TENTH_PT: Float = 1.5f
+    /** Online marker diameter. Source: `NativeDeviceConnectionPage.swift:16-19`. Confidence: exact. */
+    public const val CHAT_DEVICE_STATUS_DOT_PT: Int = 6
+    /** Online marker border. Source: `NativeDeviceConnectionPage.swift:19`. Confidence: exact. */
+    public const val CHAT_DEVICE_STATUS_BORDER_PT: Int = 1
+    /** Online marker top/right offsets in the 36x44 entry. Source: `NativeDeviceConnectionPage.swift:17-19`. Confidence: exact. */
+    public const val CHAT_DEVICE_STATUS_INSET_PT: Int = 9
+    /** Device glyph's source font size. Source: `NativeDeviceConnectionPage.swift:11`. Confidence: exact. */
+    public const val CHAT_DEVICE_ICON_SIZE_PT: Int = 18
+    /** The Android line drawing's 10x20 phone outline box approximates the SF symbol ink. Source: `NativeDeviceConnectionPage.swift:11`. Confidence: approximated. */
+    public const val CHAT_DEVICE_ICON_BOX_WIDTH_PT: Int = 12
+    public const val CHAT_DEVICE_ICON_BOX_HEIGHT_PT: Int = 20
+    public const val CHAT_DEVICE_BODY_WIDTH_PT: Int = 10
+    public const val CHAT_DEVICE_BODY_STROKE_TENTH_PT: Float = 1.35f
+    public const val CHAT_DEVICE_BODY_CORNER_PT: Int = 2
+    public const val CHAT_DEVICE_SPEAKER_LEFT_PT: Int = 4
+    public const val CHAT_DEVICE_SPEAKER_RIGHT_PT: Int = 6
+    public const val CHAT_DEVICE_SPEAKER_BOTTOM_PT: Int = 2
+
+    // ----------------------------------------------------------- question composer
+
+    /** Question takeover's card radius. Source: `NativeParityTokens.swift:112` (`radiusXL`). Confidence: exact. */
+    public const val QUESTION_CARD_RADIUS_PT: Int = 20
+    /** Bottom breathing room below the question footer. Source: `NativeQuestionComposer.swift:269`. Confidence: exact. */
+    public const val QUESTION_CARD_BOTTOM_PT: Int = 10
+    /** Composer-seat bottom inset around the takeover. Source: `ChatPage.swift:1718,1732`. Confidence: exact. */
+    public const val QUESTION_SEAT_BOTTOM_PT: Int = 8
+    /** Question header top inset. Source: `NativeQuestionComposer.swift:308`. Confidence: exact. */
+    public const val QUESTION_HEADER_TOP_PT: Int = 20
+    /** Question header leading inset. Source: `NativeQuestionComposer.swift:308`. Confidence: exact. */
+    public const val QUESTION_HEADER_LEADING_PT: Int = 24
+    /** Question header trailing inset. Source: `NativeQuestionComposer.swift:308`. Confidence: exact. */
+    public const val QUESTION_HEADER_TRAILING_PT: Int = 16
+    /** Minimized question header bottom inset. Source: `NativeQuestionComposer.swift:308`. Confidence: exact. */
+    public const val QUESTION_HEADER_MINIMIZED_BOTTOM_PT: Int = 14
+    /** Gap between question copy and header actions. Source: `NativeQuestionComposer.swift:290`. Confidence: exact. */
+    public const val QUESTION_HEADER_COPY_ACTION_GAP_PT: Int = 16
+    /** Question eyebrow-to-prompt stack gap. Source: `NativeQuestionComposer.swift:290`. Confidence: exact. */
+    public const val QUESTION_HEADER_STACK_GAP_PT: Int = 5
+    /** Question eyebrow size. Source: `NativeQuestionComposer.swift:293`. Confidence: exact. */
+    public const val QUESTION_EYEBROW_SIZE_PT: Int = 11
+    /** Question prompt size. Source: `NativeQuestionComposer.swift:299`. Confidence: exact. */
+    public const val QUESTION_PROMPT_SIZE_PT: Int = 16
+    /** Question minimize and close hit-area size. Source: `NativeQuestionComposer.swift:323-328`. Confidence: exact. */
+    public const val QUESTION_HEADER_ACTION_SIZE_PT: Int = 32
+    /** Gap between minimize and close controls. Source: `NativeQuestionComposer.swift:312`. Confidence: exact. */
+    public const val QUESTION_HEADER_ACTION_GAP_PT: Int = 4
+    /** Collapsed question header bottom inset is zero. Source: `NativeQuestionComposer.swift:308`. Confidence: exact. */
+    public const val QUESTION_HEADER_EXPANDED_BOTTOM_PT: Int = 0
+    /** Question choice-list top inset. Source: `NativeQuestionComposer.swift:397`. Confidence: exact. */
+    public const val QUESTION_OPTIONS_TOP_PT: Int = 12
+    /** Question choice-list horizontal inset. Source: `NativeQuestionComposer.swift:397`. Confidence: exact. */
+    public const val QUESTION_OPTIONS_INSET_H_PT: Int = 8
+    /** Question choice-list bottom inset. Source: `NativeQuestionComposer.swift:397`. Confidence: exact. */
+    public const val QUESTION_OPTIONS_BOTTOM_PT: Int = 4
+    /** Question option row gap. Source: `NativeQuestionComposer.swift:389`. Confidence: exact. */
+    public const val QUESTION_OPTION_GAP_PT: Int = 1
+    /** Question option row vertical inset. Source: `NativeQuestionComposer.swift:433`. Confidence: exact. */
+    public const val QUESTION_OPTION_PADDING_V_PT: Int = 8
+    /** Question option row horizontal inset. Source: `NativeQuestionComposer.swift:433`. Confidence: exact. */
+    public const val QUESTION_OPTION_PADDING_H_PT: Int = 6
+    /** Question option corner radius. Source: `NativeParityTokens.swift:113` (`radiusMD`). Confidence: exact. */
+    public const val QUESTION_OPTION_RADIUS_PT: Int = 12
+    /** Question option number/check box diameter. Source: `NativeQuestionOptionRow.swift:17`. Confidence: exact. */
+    public const val QUESTION_OPTION_MARK_SIZE_PT: Int = 24
+    /** Question no-options answer field minimum height. Source: `NativeQuestionComposer.swift:361`. Confidence: exact. */
+    public const val QUESTION_FREE_ANSWER_HEIGHT_PT: Int = 64
+    /** Question footer top inset. Source: `NativeQuestionComposer.swift:512`. Confidence: exact. */
+    public const val QUESTION_FOOTER_TOP_PT: Int = 12
+    /** Question footer horizontal inset. Source: `NativeQuestionComposer.swift:512`. Confidence: exact. */
+    public const val QUESTION_FOOTER_INSET_H_PT: Int = 10
+    /** Question pager/action gap. Source: `NativeQuestionComposer.swift:489,512`. Confidence: exact. */
+    public const val QUESTION_FOOTER_GAP_PT: Int = 12
+    /** Question pager icon target. Source: `NativeQuestionComposer.swift:517-525`. Confidence: exact. */
+    public const val QUESTION_PAGER_TARGET_PT: Int = 28
+    /** Question action button height. Source: `NativeQuestionComposer.swift:674`. Confidence: exact. */
+    public const val QUESTION_ACTION_HEIGHT_PT: Int = 36
+    /** Question action button corner radius. Source: `NativeParityTokens.swift:114` (`radiusMD`). Confidence: exact. */
+    public const val QUESTION_ACTION_RADIUS_PT: Int = 12
+    /** Question action horizontal inset. Source: `NativeQuestionComposer.swift:687`. Confidence: exact. */
+    public const val QUESTION_ACTION_PADDING_H_PT: Int = 14
+    /** Question option text size. Source: `NativeQuestionComposer.swift:418`. Confidence: exact. */
+    public const val QUESTION_OPTION_TEXT_SIZE_PT: Int = 14
+    /** Question details horizontal inset. Source: `NativeQuestionComposer.swift:355`. Confidence: exact. */
+    public const val QUESTION_DETAIL_INSET_H_PT: Int = 2
+    /** Question detail vertical padding. Source: `NativeQuestionComposer.swift:356`. Confidence: exact. */
+    public const val QUESTION_DETAIL_INSET_V_PT: Int = 8
+    /** Question answer row vertical inset. Source: `NativeQuestionComposer.swift:462`. Confidence: exact. */
+    public const val QUESTION_ANSWER_INSET_V_PT: Int = 8
+    /** Question answer row horizontal inset. Source: `NativeQuestionComposer.swift:464`. Confidence: exact. */
+    public const val QUESTION_ANSWER_INSET_H_PT: Int = 6
+    /** Question action text button horizontal inset. Source: `NativeQuestionComposer.swift:682`. Confidence: exact. */
+    public const val QUESTION_ACTION_TEXT_INSET_H_PT: Int = 10
+    /** Question action text button vertical inset. Source: `NativeQuestionComposer.swift:682`. Confidence: exact. */
+    public const val QUESTION_ACTION_TEXT_INSET_V_PT: Int = 8
+    /** Question option list member minimum. Source: `NativeParityTokens.swift:105` (`questionOptionMinHeight`). Confidence: exact. */
+    public const val QUESTION_OPTION_ROW_HEIGHT_PT: Int = 40
+    /** Question footer error slot minimum height. Source: `NativeQuestionComposer.swift:493`. Confidence: exact. */
+    public const val QUESTION_ERROR_SLOT_HEIGHT_PT: Int = 16
+    /** Question card outer shadow approximation. Source: `NativeQuestionComposer.swift:282-283`; Android elevation differs. Confidence: approximated. */
+    public const val QUESTION_CARD_SHADOW_PT: Int = 4
+    /** Question answer body horizontal inset. Source: `NativeQuestionComposer.swift:397`. Confidence: exact. */
+    public const val QUESTION_BODY_INSET_H_PT: Int = 8
+    /** Question footer pager gap. Source: `NativeQuestionComposer.swift:516`. Confidence: exact. */
+    public const val QUESTION_PAGER_GAP_PT: Int = 6
+    /** Question panel interior bottom inset. Source: `NativeQuestionComposer.swift:269`. Confidence: exact. */
+    public const val QUESTION_PANEL_BOTTOM_PT: Int = 10
+
+    // -------------------------------------------------------------- plan review
+
+    /** Plan-review card corner radius. Source: `NativeParityTokens.swift:110` (`radiusXL`). Confidence: exact. */
+    public const val PLAN_REVIEW_CARD_RADIUS_PT: Int = 20
+    /** Plan-review button height. Source: `NativePlanReviewCard.swift:200-210`. Confidence: exact. */
+    public const val PLAN_REVIEW_BUTTON_HEIGHT_PT: Int = 36
+    /** Plan-review button radius. Source: `NativeParityTokens.swift:111` (`radiusMD`). Confidence: exact. */
+    public const val PLAN_REVIEW_BUTTON_RADIUS_PT: Int = 12
+    /** Plan-review button horizontal inset. Source: `NativePlanReviewCard.swift:210`. Confidence: exact. */
+    public const val PLAN_REVIEW_BUTTON_INSET_H_PT: Int = 14
+    /** Gap between plan-review decision buttons. Source: `NativePlanReviewCard.swift:174`. Confidence: exact. */
+    public const val PLAN_REVIEW_BUTTON_GAP_PT: Int = 8
+    /** Plan-review section gap. Source: `NativePlanReviewCard.swift:141`. Confidence: exact. */
+    public const val PLAN_REVIEW_SECTION_GAP_PT: Int = 8
+    /** Plan-review card shadow approximation. Source: `NativePlanReviewCard.swift:97-98`; Android elevation differs. Confidence: approximated. */
+    public const val PLAN_REVIEW_SHADOW_PT: Int = 3
+
+    // ---------------------------------------------------------------- goal + todo dock
+
+    /** GoalBar row height. Source: `ChatPage.swift:1452`. Confidence: exact. */
+    public const val GOAL_BAR_HEIGHT_PT: Int = 40
+    /** GoalBar radius. Source: `ChatPage.swift:1454`. Confidence: exact. */
+    public const val GOAL_BAR_RADIUS_PT: Int = 10
+    /** GoalBar horizontal inset. Source: `ChatPage.swift:1451`. Confidence: exact. */
+    public const val GOAL_BAR_INSET_H_PT: Int = 10
+    /** GoalBar icon size. Source: `ChatPage.swift:1421`. Confidence: exact. */
+    public const val GOAL_BAR_ICON_SIZE_PT: Int = 14
+    /** GoalBar element gap. Source: `ChatPage.swift:1420`. Confidence: exact. */
+    public const val GOAL_BAR_GAP_PT: Int = 8
+    /** GoalBar phase text size. Source: `ChatPage.swift:1425`. Confidence: exact. */
+    public const val GOAL_BAR_PHASE_SIZE_PT: Int = 11
+    /** GoalBar objective text size. Source: `ChatPage.swift:1428`. Confidence: exact. */
+    public const val GOAL_BAR_OBJECTIVE_SIZE_PT: Int = 13
+    /** GoalBar action text size. Source: `ChatPage.swift:1437,1440`. Confidence: exact. */
+    public const val GOAL_BAR_ACTION_SIZE_PT: Int = 12
+    /** Android target icon stroke approximation for the iOS target symbol. Confidence: approximated. */
+    public const val GOAL_BAR_ICON_STROKE_TENTH_PT: Float = 1.4f
+    /** Todo dock horizontal inset. Source: `NativeTodoDock.swift:93`. Confidence: exact. */
+    public const val TODO_DOCK_INSET_H_PT: Int = 12
+    /** Todo dock vertical inset. Source: `NativeTodoDock.swift:94`. Confidence: exact. */
+    public const val TODO_DOCK_INSET_V_PT: Int = 6
+    /** Todo dock/list row gap. Source: `NativeTodoDock.swift:89,166`. Confidence: exact. */
+    public const val TODO_DOCK_GAP_PT: Int = 8
+    /** Todo dock header line box. Source: `NativeTodoDock.swift:138`. Confidence: exact. */
+    public const val TODO_DOCK_HEADER_LINE_PT: Int = 24
+    /** Todo item line box. Source: `NativeTodoDock.swift:196`. Confidence: exact. */
+    public const val TODO_ROW_HEIGHT_PT: Int = 20
+    /** Todo status slot size. Source: `NativeTodoDock.swift:187`. Confidence: exact. */
+    public const val TODO_STATUS_SLOT_PT: Int = 16
+    /** Todo checklist artwork size. Source: `NativeTodoDock.swift:118`. Confidence: exact. */
+    public const val TODO_CHECKLIST_ICON_PT: Int = 14
+    /** Todo status dot size. Source: `NativeTodoDock.swift:187-188`. Confidence: exact. */
+    public const val TODO_STATUS_DOT_PT: Int = 6
+    /** Todo card radius. Source: `NativeParityTokens.swift:101` (`radiusLG`). Confidence: exact. */
+    public const val TODO_DOCK_RADIUS_PT: Int = 16
+    /** Todo line font size. Source: `NativeTodoDock.swift:121,125,190`. Confidence: exact. */
+    public const val TODO_TEXT_SIZE_PT: Int = 13
+    /** Todo glyph stroke width. Source: `NativeTodoDock.swift:206`. Confidence: approximated. */
+    public const val TODO_GLYPH_STROKE_PT: Float = 0.875f
+    /** Todo glyph dot radius. Source: `NativeTodoDock.swift:218-220`. Confidence: exact. */
+    public const val TODO_GLYPH_DOT_RADIUS_PT: Float = 1.75f
+    /** Todo glyph circle y centers. Source: `NativeTodoDock.swift:217`. Confidence: exact. */
+    public const val TODO_GLYPH_ROW1_Y_PT: Float = 4.5f
+    public const val TODO_GLYPH_ROW2_Y_PT: Float = 11.5f
+    /** Todo glyph bullet center x. Source: `NativeTodoDock.swift:218`. Confidence: exact. */
+    public const val TODO_GLYPH_BULLET_X_PT: Float = 2.0f
+    /** Todo glyph text start and end. Source: `NativeTodoDock.swift:219-220`. Confidence: exact. */
+    public const val TODO_GLYPH_LINE_START_X_PT: Int = 6
+    public const val TODO_GLYPH_LINE_END_X_PT: Int = 13
+    /** Todo panel shadow approximation. Source: `NativeTodoDock.swift:99-100`; Android elevation differs. Confidence: approximated. */
+    public const val TODO_DOCK_SHADOW_PT: Int = 3
+    /** Todo status dot row spacing. Source: `NativeTodoDock.swift:186-196`. Confidence: exact. */
+    public const val TODO_STATUS_GAP_PT: Int = 10
+    /** Todo status dot dimensions. Source: `NativeTodoDock.swift:187-188`. Confidence: exact. */
+    public const val TODO_STATUS_DOT_CONTAINER_PT: Int = 16
 
     // ------------------------------------------------------------ dp accessors
 

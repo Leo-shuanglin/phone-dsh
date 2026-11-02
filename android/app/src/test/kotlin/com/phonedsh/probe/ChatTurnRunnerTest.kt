@@ -11,11 +11,41 @@
 // user, because the transcript still shows the earlier messages.
 package com.phonedsh.probe
 
+import com.phonedsh.agentcore.JsonObject
+import com.phonedsh.agentcore.JsonValue
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatTurnRunnerTest {
+    @Test
+    fun `only the events stream ready item yields a client id`() {
+        val ready = JsonValue.parse(
+            """{"type":"item","streamId":"events","value":{"type":"ready","clientId":"client-17"}}""",
+        ) as JsonObject
+        assertEquals("client-17", eventsReadyClientId(ready))
+
+        val followSnapshot = JsonValue.parse(
+            """{"type":"item","streamId":"follow","value":{"type":"snapshot","records":[]}}""",
+        ) as JsonObject
+        assertNull(eventsReadyClientId(followSnapshot))
+
+        val eventBeforeReady = JsonValue.parse(
+            """{"type":"item","streamId":"events","value":{"type":"waterfall","eventId":"event-1"}}""",
+        ) as JsonObject
+        assertNull(eventsReadyClientId(eventBeforeReady))
+    }
+
+    @Test
+    fun `live reasoning fragments are forwarded as content and never mistaken for answer deltas`() {
+        val reasoning = JsonValue.parse("""{"type":"reasoning-delta","text":"Checking the request."}""")
+        assertEquals("Checking the request.", reasoningDeltaOf(reasoning))
+        val answer = JsonValue.parse("""{"type":"text-delta","text":"The answer."}""")
+        assertNull(reasoningDeltaOf(answer))
+    }
+
     @Test
     fun onlyTheWorkersNotFoundVerdictRetiresTheSession() {
         assertTrue(

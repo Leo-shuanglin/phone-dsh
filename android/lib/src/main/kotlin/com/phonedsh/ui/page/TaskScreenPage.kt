@@ -41,6 +41,7 @@
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +50,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.text.BasicText
@@ -64,13 +67,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
@@ -362,28 +371,90 @@ private fun TaskScreenCover(statusLine: String, onClose: () -> Unit) {
             .fillMaxSize()
             .testTag(UiPageTags.TASK_SCREEN_ROOT + ".presented")
             .background(tokens.colors.taskScreen)
-            .clickable(role = Role.Button, onClick = onClose)
             .semantics { contentDescription = UiStrings.TASK_SCREEN_PRESENTED },
     ) {
-        BasicText(
-            text = statusLine,
-            style = type.secondary.copy(color = tokens.colors.onAccent),
-            modifier = Modifier.align(Alignment.Center),
-        )
-        BasicText(
-            text = TASK_SCREEN_CLOSE_GLYPH,
-            style = type.headline.copy(color = tokens.colors.onAccent),
+        Column(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .padding(TASK_SCREEN_CONTENT_INSET.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(TASK_SCREEN_CONTENT_GAP.dp),
+        ) {
+            // The baseline passes all three values to TaskScreen. The Android
+            // cover previously omitted its title and hint and dismissed when
+            // any part of the black surface was tapped.
+            BasicText(
+                text = TASK_SCREEN_COVER_TITLE,
+                style = type.headline.copy(color = Color.White.copy(alpha = 0.55f)),
+            )
+            BasicText(
+                text = statusLine,
+                style = type.caption.copy(
+                    fontSize = TASK_SCREEN_STATUS_SIZE.sp,
+                    color = Color.White.copy(alpha = 0.38f),
+                    textAlign = TextAlign.Center,
+                ),
+            )
+            BasicText(
+                text = TASK_SCREEN_COVER_HINT,
+                style = type.caption.copy(
+                    fontSize = TASK_SCREEN_HINT_SIZE.sp,
+                    color = Color.White.copy(alpha = 0.28f),
+                    textAlign = TextAlign.Center,
+                ),
+            )
+        }
+        Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
+                .padding(TASK_SCREEN_CLOSE_INSET.dp)
+                .sizeIn(minWidth = TASK_SCREEN_CLOSE_TARGET.dp, minHeight = TASK_SCREEN_CLOSE_TARGET.dp)
                 .clickable(role = Role.Button, onClick = onClose)
-                .semantics { contentDescription = UiStrings.TASK_SCREEN_CLOSE }
-                .padding(tokens.spacing.cardInset),
+                .semantics { contentDescription = UiStrings.TASK_SCREEN_CLOSE },
+            contentAlignment = Alignment.Center,
+        ) {
+            TaskScreenCloseGlyph()
+        }
+    }
+}
+
+/** A small vector rendition of iOS `xmark.circle.fill`. */
+@Composable
+private fun TaskScreenCloseGlyph() {
+    Canvas(Modifier.size(TASK_SCREEN_CLOSE_GLYPH.dp)) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val ink = Color.White.copy(alpha = 0.35f)
+        drawCircle(color = ink, radius = size.minDimension / 2f, center = center)
+        val inset = size.minDimension * 0.34f
+        val cross = Color.Black.copy(alpha = 0.7f)
+        drawLine(
+            color = cross,
+            start = Offset(inset, inset),
+            end = Offset(size.width - inset, size.height - inset),
+            strokeWidth = size.minDimension * 0.09f,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = cross,
+            start = Offset(size.width - inset, inset),
+            end = Offset(inset, size.height - inset),
+            strokeWidth = size.minDimension * 0.09f,
+            cap = StrokeCap.Round,
         )
     }
 }
 
-/** unverified glyph: the baseline's `xmark.circle.fill` at the cover's top-trailing. */
-private const val TASK_SCREEN_CLOSE_GLYPH: String = "✕"
+private const val TASK_SCREEN_COVER_TITLE: String = "phone DSH probe"
+private const val TASK_SCREEN_COVER_HINT: String =
+    "Screen dimmed for long tasks. The phone can still lock manually."
+private const val TASK_SCREEN_STATUS_SIZE: Int = 13
+private const val TASK_SCREEN_HINT_SIZE: Int = 11
+private const val TASK_SCREEN_CONTENT_INSET: Int = 28
+private const val TASK_SCREEN_CONTENT_GAP: Int = 14
+private const val TASK_SCREEN_CLOSE_INSET: Int = 16
+private const val TASK_SCREEN_CLOSE_TARGET: Int = 44
+private const val TASK_SCREEN_CLOSE_GLYPH: Int = 22
 
 /** The description, the status line, the brightness Slider and the show action. */
 private fun LazyListScope.formBlock(

@@ -26,6 +26,7 @@ struct NativeShortcutsPage: View {
                 .disabled(preferences.shortcutOverrides.isEmpty)
             }
         }
+        .homeGroupedList()
         .navigationTitle(NativeText("快捷键", "Shortcuts"))
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -76,6 +77,7 @@ private struct NativeShortcutEditor: View {
                 }
             }
         }
+        .homeGroupedList()
         .navigationTitle(nativeShortcutTitle(action))
         .navigationBarTitleDisplayMode(.inline)
     }

@@ -22,6 +22,9 @@ struct ChatPage: View {
     #endif
 
     @State private var model = ChatModel.shared
+    @State private var voice = ComposerVoiceInput()
+    @State private var showDeviceConnections = false
+    @State private var deviceCoordinator = DeviceSessionCoordinator.shared
     @Environment(\.colorScheme) private var colorScheme
     @State private var management = DSHManagementModel.shared
     @State private var draft = ""
@@ -83,8 +86,6 @@ struct ChatPage: View {
     @State private var showSubagentCatalog = false
     @State private var showJobList = false
     @State private var showArtifacts = false
-    @State private var showDeviceConnections = false
-    @State private var deviceCoordinator = DeviceSessionCoordinator.shared
     @State private var showScheduleList = false
     @State private var previewPlan: NativePlanPreview?
     @State private var foldedTurns: Set<Int> = []
@@ -124,6 +125,11 @@ struct ChatPage: View {
     /// without animation so history loading never leaves the view at the top.
     @State private var pendingInitialScroll = false
     @State private var userScrolledAway = false
+    /// The finger is on the transcript (or it is still coasting from a
+    /// flick). Only this may switch following off: content growth alone
+    /// never means the person scrolled away. iOS 18+ reports it.
+    @State private var userScrolling = false
+    @State private var tracksScrollPhase = false
     /// Last measured tail offset; logged with every follow scroll so a
     /// "keeps scrolling" report can be diagnosed from chat-status.log.
     @State private var tailOffsetY: CGFloat = 0
@@ -183,127 +189,155 @@ struct ChatPage: View {
         }
     }
 
-    /// Official `.runningDivider` is hidden when the preceding visible row is
-    /// an input/trigger; a status row never draws a line between input and state.
-    private var showsRunningDivider: Bool {
-        guard let last = visibleItems.last else { return false }
-        return last.kind != .user && last.kind != .context
-    }
     private var transcriptScrollSignature: String {
         "\(visibleItems.map(\.id).joined(separator: ","))|\(visibleItems.last?.text ?? "")"
     }
-    /// 自绘页头:左抽屉、中标题(可点改名)、右 gear。移动端不展示轨迹 tab。
+    /// 首页页头(HomeSpec):不画底条,浮在页面上。左边 44 圆按钮开会话列表,
+    /// 标题块从 x 76 起(16 + 44 + 16),右边 92×44 胶囊放新建对话和更多。
     private var chatHeader: some View {
-        chatHeaderTitleRow
-            .frame(height: NativeParityTokens.headerHeight)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(NativeParityTokens.borderL3)
-                    .frame(height: 0.5)
+        HStack(spacing: 0) {
+            Button {
+                openDrawer?()
+            } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    Capsule().frame(width: 18, height: 2.4)
+                    Capsule().frame(width: 12, height: 2.4)
+                }
+                .foregroundStyle(HomeSpec.primaryButton)
+                .frame(width: HomeSpec.navButton, height: HomeSpec.navButton)
+                .background(HomeSpec.surface, in: Circle())
+                .homeFloatingShadow()
+                .contentShape(Circle())
             }
-    }
+            .buttonStyle(.plain)
+            .accessibilityLabel("打开会话列表")
 
-    private var chatHeaderTitleRow: some View {
-        ZStack {
             Button { beginRename() } label: {
-                Text(sessionTitle)
-                    .font(.system(size: NativeParityTokens.headerTitleSize,
-                                  weight: NativeParityTokens.headerTitleWeight))
-                    .foregroundStyle(NativeChatTheme.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(sessionTitle)
+                        .font(.system(size: HomeSpec.navTitleSize, weight: .semibold))
+                        .foregroundStyle(HomeSpec.textPrimary)
+                        .frame(height: HomeSpec.navTitleLine)
+                    HStack(spacing: 6) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 13, weight: .regular))
+                            .frame(width: 16, height: 16)
+                        Text(projectSubtitle)
+                            .font(.system(size: HomeSpec.navSubtitleSize))
+                    }
+                    .foregroundStyle(HomeSpec.textSubtle)
+                    .frame(height: HomeSpec.navSubtitleLine)
+                }
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(model.currentSessionID == nil)
             .accessibilityHint("点按重命名会话")
-            .padding(.horizontal, 104)
+            .padding(.horizontal, 16)
 
             HStack(spacing: 0) {
                 Button {
-                    openDrawer?()
+                    showDeviceConnections = true
                 } label: {
-                    Image(systemName: "sidebar.left")
-                        .font(.system(size: 20, weight: .regular))
-                        .frame(width: 32, height: 44)
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(.system(size: 19, weight: .medium))
+                        .frame(width: 46, height: HomeSpec.navButton)
+                        .overlay(alignment: .topTrailing) {
+                            // A device is online: a 6pt success dot on the icon.
+                            if deviceCoordinator.hasOnlineDevices {
+                                Circle()
+                                    .fill(HomeSpec.success)
+                                    .frame(width: 6, height: 6)
+                                    .offset(x: -10, y: 11)
+                            }
+                        }
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("打开会话列表")
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: 4) {
-                    Button { showDeviceConnections = true } label: {
-                        NativeDeviceEntryIcon(online: deviceCoordinator.hasOnlineDevices)
-                            .frame(width: 36, height: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(deviceCoordinator.hasOnlineDevices ? "Device，有在线设备" : "Device")
-                    Menu {
-                        if !subagentEntries.isEmpty {
-                            Button("子智能体（\(subagentEntries.count)）", systemImage: "person.2") {
-                                showSubagentCatalog = true
-                            }
-                        }
-                        if !management.jobs.isEmpty {
-                            Button("后台任务（\(management.jobs.count)）", systemImage: "list.bullet") {
-                                showJobList = true
-                            }
-                        }
-                        if !management.scheduleRecords.isEmpty {
-                            Button("定时任务（\(management.scheduleRecords.count)）", systemImage: "calendar.badge.clock") {
-                                showScheduleList = true
-                            }
-                        }
-                        Button("产物", systemImage: "shippingbox") {
-                            showArtifacts = true
-                        }
-                        if model.currentSessionID != nil {
-                            Button("右侧边栏", systemImage: "sidebar.right") {
-                                showWorkbench = true
-                            }
-                        }
-                        Divider()
-                        ShareLink(item: historyExport,
-                                  subject: Text("对话记录"),
-                                  preview: SharePreview("对话记录")) {
-                            Label("导出对话记录", systemImage: "square.and.arrow.up")
-                        }
-                        Button("运行状态", systemImage: "waveform.path.ecg") { showRuntimeDetails = true }
-                        Button("本会话设置", systemImage: "slider.horizontal.3") { showSessionSettings = true }
-                        if let preset = model.agentPresetLabel {
-                            Divider()
-                            Text("Agent 预设：\(preset)")
-                        }
-                        Divider()
-                        // Official `On next message` collapse timing, as a menu
-                        // pair on the phone (no DSH settings page here).
-                        Picker("折叠时机", selection: collapseTimingBinding) {
-                            Text("完成时").tag(false)
-                            Text("下一条消息").tag(true)
-                        }
-                    } label: {
-                        ZStack(alignment: .topTrailing) {
-                            Image(systemName: "ellipsis")
-                                .font(.system(size: 20, weight: .regular))
-                                .foregroundStyle(NativeParityTokens.labelSecondary)
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
-                            if headerActivityRunning {
-                                ProgressView()
-                                    .controlSize(.mini)
-                                    .offset(x: -5, y: 8)
-                            }
-                        }
-                        .accessibilityLabel("更多")
-                    }
-                }
-                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityLabel(deviceCoordinator.hasOnlineDevices ? "连接设备，有在线设备" : "连接设备")
+                .accessibilityIdentifier("chat.connect-device")
+                chatHeaderMenu
             }
+            .foregroundStyle(HomeSpec.primaryButton)
+            .frame(width: HomeSpec.navPillWidth, height: HomeSpec.navButton)
+            .background(HomeSpec.surface, in: Capsule())
+            .homeFloatingShadow()
         }
-        .padding(.horizontal, 16)
-        .frame(height: NativeParityTokens.headerHeight)
+        .padding(.horizontal, HomeSpec.chromeInset)
+        .padding(.top, HomeSpec.navTop)
+        .frame(height: HomeSpec.navTop + HomeSpec.navButton)
+    }
+
+    /// 副标题是会话所属的文件夹。每个会话都有文件夹:不在任何文件夹里的就算在默认的「日常」。
+    private var projectSubtitle: String {
+        guard let id = model.currentSessionID,
+              let workspace = management.workspaces.first(where: { $0.sessionIDs.contains(id) })
+        else { return DrawerTitles.defaultFolderName }
+        return DrawerTitles.workspaceTitle(workspace.title, index: 1)
+    }
+
+    private var chatHeaderMenu: some View {
+        Menu {
+            if !subagentEntries.isEmpty {
+                Button("子智能体（\(subagentEntries.count)）", systemImage: "person.2") {
+                    showSubagentCatalog = true
+                }
+            }
+            if !management.jobs.isEmpty {
+                Button("后台任务（\(management.jobs.count)）", systemImage: "list.bullet") {
+                    showJobList = true
+                }
+            }
+            if !management.scheduleRecords.isEmpty {
+                Button("定时任务（\(management.scheduleRecords.count)）", systemImage: "calendar.badge.clock") {
+                    showScheduleList = true
+                }
+            }
+            Button("产物", systemImage: "shippingbox") {
+                showArtifacts = true
+            }
+            if model.currentSessionID != nil {
+                Button("工作区", systemImage: "folder") {
+                    showWorkbench = true
+                }
+            }
+            Divider()
+            ShareLink(item: historyExport,
+                      subject: Text("对话记录"),
+                      preview: SharePreview("对话记录")) {
+                Label("导出对话记录", systemImage: "square.and.arrow.up")
+            }
+            Button("运行状态", systemImage: "waveform.path.ecg") { showRuntimeDetails = true }
+            Button("插件与工具", systemImage: "puzzlepiece.extension") { showSessionSettings = true }
+            if let preset = model.agentPresetLabel {
+                Divider()
+                Text("Agent 预设：\(preset)")
+            }
+            Divider()
+            // Official `On next message` collapse timing, as a menu
+            // pair on the phone (no DSH settings page here).
+            Picker("折叠时机", selection: collapseTimingBinding) {
+                Text("完成时").tag(false)
+                Text("下一条消息").tag(true)
+            }
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 18, weight: .bold))
+                    .frame(width: 46, height: HomeSpec.navButton)
+                    .contentShape(Rectangle())
+                if headerActivityRunning {
+                    Circle()
+                        .fill(HomeSpec.textSecondary)
+                        .frame(width: 6, height: 6)
+                        .offset(x: -10, y: 11)
+                }
+            }
+            .accessibilityLabel("更多")
+        }
     }
 
     private var latestToolFailure: ChatItem? {
@@ -347,7 +381,7 @@ struct ChatPage: View {
             keyboardVisible = false
             cardsExpanded = false
         }
-        .background(Color(.systemBackground))
+        .background(HomeSpec.page)
         .navigationTitle({
             #if DEBUG
             return hitProbe
@@ -377,14 +411,18 @@ struct ChatPage: View {
                 Task { await management.rename(session, to: title) }
             }
         }
+        .sheet(isPresented: $showDeviceConnections) {
+            NavigationStack { NativeDeviceConnectionPage() }.homeSheetChrome()
+        }
+        .onDisappear { voice.cancel(); voice.stopSpeaking() }
         .sheet(isPresented: $showSessions) {
             SessionsPage { showSessions = false }
                 .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
+                .homeSheetChrome()
         }
         .sheet(isPresented: $showWorkbench) {
             NativeWorkbenchPage(sessionID: model.currentSessionID, initialPath: initialWorkbenchPath)
-                .presentationDragIndicator(.visible)
+                .homeSheetChrome()
         }
         .fullScreenCover(item: $previewTarget) { target in
             NavigationStack {
@@ -398,34 +436,38 @@ struct ChatPage: View {
         }
         .sheet(isPresented: $showProviderSettings) {
             NavigationStack { ModelProviderSettingsPage() }
-                .presentationDragIndicator(.visible)
+                .homeSheetChrome()
         }
         .sheet(isPresented: $showSettings) {
             NavigationStack { SettingsPage() }
-                .presentationDragIndicator(.visible)
+                .homeSheetChrome()
         }
         .sheet(isPresented: $showSessionSettings) {
             NavigationStack { NativeConfigurationPage() }
-                .presentationDragIndicator(.visible)
+                .homeSheetChrome()
         }
         .sheet(isPresented: $showConfiguration) {
-            NativeConfigurationPage()
-                .presentationDragIndicator(.visible)
+            NavigationStack { NativeConfigurationPage() }
+                .homeSheetChrome()
         }
         .sheet(isPresented: $showCommandResult) {
             if let commandExecution {
                 CommandExecutionResultPage(execution: commandExecution,
                                            onOpenFile: openWorkspaceResult)
-                    .presentationDragIndicator(.visible)
+                    .homeSheetChrome()
             }
         }
-        .sheet(isPresented: $showRuntimeDetails) { RuntimeDetailsPage(model: model) }
+        .sheet(isPresented: $showRuntimeDetails) {
+            NavigationStack { RuntimeDetailsPage(model: model) }
+                .homeSheetChrome()
+        }
         .sheet(isPresented: $showSubagentCatalog) {
             VStack(spacing: 0) {
                 NativeSubagentCatalogSheet(
                     entries: subagentEntries,
                     currentSessionID: model.currentSessionID,
-                    availableSize: CGSize(width: 402, height: 740),
+                    availableSize: CGSize(width: UIScreen.main.bounds.width,
+                                          height: UIScreen.main.bounds.height - 120),
                     onOpenSession: { entry in
                         showSubagentCatalog = false
                         Task { await model.selectSession(entry.id) }
@@ -434,13 +476,13 @@ struct ChatPage: View {
                         showSubagentCatalog = false
                         Task { await model.selectSession(entry.id) }
                     })
-                    .padding(.horizontal, 16)
-                    .padding(.top, 16)
+                    .padding(.horizontal, HomeSpec.chromeInset)
+                    .padding(.top, 20)
                 Spacer(minLength: 0)
             }
-            .background(NativeChatTheme.background)
+            .background(HomeSpec.page)
             .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
+            .homeSheetChrome()
         }
         .sheet(isPresented: $showJobList) {
             NativeJobListSheet(jobs: management.jobs) {
@@ -448,7 +490,7 @@ struct ChatPage: View {
                 Task { await management.refreshActivity(sessionID: id) }
             }
             .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+            .homeSheetChrome()
         }
         .sheet(isPresented: $showScheduleList) {
             NativeScheduleListSheet(schedules: management.scheduleRecords) {
@@ -456,19 +498,14 @@ struct ChatPage: View {
                 Task { await management.refreshActivity(sessionID: id) }
             }
             .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+            .homeSheetChrome()
         }
         .sheet(isPresented: $showArtifacts) {
             if let sessionID = model.currentSessionID {
                 NavigationStack { SessionArtifactsPage(sessionID: sessionID) }
                     .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
+                    .homeSheetChrome()
             }
-        }
-        .sheet(isPresented: $showDeviceConnections) {
-            NavigationStack { NativeDeviceConnectionPage() }
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
         }
         .sheet(item: $previewPlan) { plan in
             NavigationStack {
@@ -487,7 +524,7 @@ struct ChatPage: View {
                     }
                 }
             }
-            .presentationDragIndicator(.visible)
+            .homeSheetChrome()
         }
         // 「完全权限」是唯一会改掉未来的开关:点它不直接生效,先弹系统的确认窗。
         // 标题里的名字和菜单项一字不差;开着的时候点同一项不用再问。
@@ -510,7 +547,7 @@ struct ChatPage: View {
         .sheet(isPresented: $showActivity) {
             if let sessionID = model.currentSessionID {
                 NavigationStack { SessionActivityPage(sessionID: sessionID) }
-                    .presentationDragIndicator(.visible)
+                    .homeSheetChrome()
             }
         }
         .fileImporter(
@@ -548,12 +585,17 @@ struct ChatPage: View {
             #endif
             if model.isStarted { Task { await management.refresh() } }
             // The native surface owns the one host now, so a cold launch
-            // starts it directly instead of waiting for a tap.
+            // starts it directly instead of waiting for a tap. `autoRecover`
+            // lets a persisted `Failed` controller (D14) be acknowledged once
+            // at launch, so reopening the App is enough to get a working
+            // engine back.
             if !model.isStarted, !model.busy {
                 #if DEBUG
-                if previewItems == nil && PreviewScreen.requested == nil { Task { await model.start() } }
+                if previewItems == nil && PreviewScreen.requested == nil {
+                    Task { await model.start(autoRecover: true) }
+                }
                 #else
-                Task { await model.start() }
+                Task { await model.start(autoRecover: true) }
                 #endif
             }
             // Device-test automation (PDSH_CHAT_AUTOSTART / PDSH_CHAT_AUTOPROMPT).
@@ -668,24 +710,14 @@ struct ChatPage: View {
         }
     }
 
-    /// Official `--dsh-chat-flow-gap`: 6pt between process rows, 12pt around
-    /// an Assistant response (`ChatView.module.css`), 16pt around the turn
-    /// control row. The old 20/12/8 table diverged from the web flow.
+    /// Home rhythm (HomeSpec): 16pt after a user bubble, 20pt between every
+    /// other transcript block (process rows, answers, cards, the action row).
     static func spacing(before index: Int, in rows: [NativeTranscriptRow]) -> CGFloat {
         guard index > 0, index < rows.count else { return 0 }
-        if case .turnProcess = rows[index] { return 16 }
-        if case .turnProcess = rows[index - 1] { return 16 }
-        if case .turnTail = rows[index] {
-            if case .item(let previous) = rows[index - 1], previous.kind == .assistant {
-                return 12
-            }
-            return 6
+        if case .item(let previous) = rows[index - 1], previous.kind == .user {
+            return HomeSpec.paragraphGap
         }
-        func isAssistant(_ row: NativeTranscriptRow) -> Bool {
-            if case .item(let item) = row { return item.kind == .assistant }
-            return false
-        }
-        return isAssistant(rows[index]) || isAssistant(rows[index - 1]) ? 12 : 6
+        return HomeSpec.blockGap
     }
 
     /// Reasoning, tool calls and tool results share one process-group row.
@@ -710,6 +742,14 @@ struct ChatPage: View {
             return item.id == answerID
         }
         for item in rowItems {
+            // A new prompt closes the previous Turn's tail above itself. User
+            // rows often carry no turn number, so waiting for the next Turn's
+            // first answer row would drop that tail under the new bubble.
+            if item.kind == .user, let previous = lastTurn, item.turn != previous,
+               let state = model.turnProcessState(for: previous), state != .running {
+                rows.append(.turnTail(previous))
+                lastTurn = nil
+            }
             if let turn = item.turn, turn != lastTurn {
                 if let previous = lastTurn, previous != turn,
                    model.turnProcessState(for: previous) != nil {
@@ -990,6 +1030,14 @@ struct ChatPage: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(ChatPage.accent)
             }
+            // A host that failed loud stays down until the user acknowledges it
+            // (D14). Without this button that acknowledgement was unreachable,
+            // so one failure kept the engine from ever booting again.
+            if model.engineNeedsReset {
+                Button("重新启动引擎") { Task { await model.restartEngine() } }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ChatPage.accent)
+            }
             Button { model.clearError() } label: { Image(systemName: "xmark").font(.caption.weight(.bold)) }
                 .accessibilityLabel("关闭提示")
                 .foregroundStyle(ChatPage.inkSecondary)
@@ -1055,14 +1103,14 @@ struct ChatPage: View {
     }
 
     /// The design's fixed values, so the card does not drift page by page.
-    static let accent = Color(red: 0x2F / 255, green: 0x5B / 255, blue: 0xFF / 255)
-    static let surface = Color(red: 0xF2 / 255, green: 0xF3 / 255, blue: 0xF5 / 255)
+    static let accent = HomeSpec.primaryButton
+    static let surface = HomeSpec.surface
     /// #66666B — 5.13:1 on the card surface.
-    static let inkSecondary = Color(red: 0x66 / 255, green: 0x66 / 255, blue: 0x6B / 255)
+    static let inkSecondary = HomeSpec.textSecondary
     /// 停止类动作的红色,白底 4.89。
     static let danger = Color(red: 0xC0 / 255, green: 0x39 / 255, blue: 0x2B / 255)
     /// 分隔线。
-    static let hairline = Color(red: 0xDD / 255, green: 0xDC / 255, blue: 0xE2 / 255)
+    static let hairline = NativePagePalette.hairline
     /// 警告色 #B45309:只用于状态词和图标,不做整块底色。
     static let warning = Color(red: 0xB4 / 255, green: 0x53 / 255, blue: 0x09 / 255)
 
@@ -1156,8 +1204,8 @@ struct ChatPage: View {
                         }
                         if model.turnRunning, !visibleItems.isEmpty {
                             NativeRunningStatus(startedAt: model.activeTurnStartedAt,
-                                                showsDivider: showsRunningDivider)
-                                .padding(.top, NativeParityTokens.responseGap)
+                                                showsDivider: false)
+                                .padding(.top, HomeSpec.blockGap)
                                 .id("running-status")
                         }
                         GeometryReader { tail in
@@ -1167,10 +1215,9 @@ struct ChatPage: View {
                         .frame(height: 1)
                         .id("transcript-tail")
                     }
-                    // Official transcript column: 402 - 2 * (16 composer
-                    // clearance + 16) = 338; the inline card is 32pt wider.
-                    .padding(.horizontal, NativeParityTokens.transcriptSide)
-                    .padding(.top, 16)
+                    // Home content column: 20pt margins, screen width − 40.
+                    .padding(.horizontal, HomeSpec.contentInset)
+                    .padding(.top, HomeSpec.blockGap)
                     // Room for the "回到最新" pill (28pt tall) so it never sits
                     // on top of the last rows.
                     .padding(.bottom, 48)
@@ -1183,6 +1230,13 @@ struct ChatPage: View {
                 }
                 .coordinateSpace(name: "chat-transcript")
                 .scrollDismissesKeyboard(.interactively)
+                // A tap anywhere in the transcript hands the keyboard back;
+                // simultaneous, so rows and links still get their own taps.
+                .simultaneousGesture(TapGesture().onEnded {
+                    if inputFocused { inputFocused = false }
+                })
+                .modifier(ScrollInteractionObserver(isInteracting: $userScrolling,
+                                                    isSupported: $tracksScrollPhase))
                 .defaultScrollAnchor(.bottom)
                 .scrollBounceBehavior(.basedOnSize)
                 .onPreferenceChange(TranscriptContentHeightPreference.self) { height in
@@ -1193,9 +1247,16 @@ struct ChatPage: View {
                     // Past the content (a blank viewport) is not "near the
                     // bottom"; neither may a lazy estimate silently re-enable
                     // following while the reader is far above the tail.
-                    if tailY > viewport.size.height + 44 { userScrolledAway = true }
-                    nearBottom = tailY >= -1 && tailY <= viewport.size.height + 44
-                    if nearBottom && transcriptContentHeight <= viewport.size.height + 1 {
+                    let near = tailY >= -1 && tailY <= viewport.size.height + 44
+                    nearBottom = near
+                    if tracksScrollPhase {
+                        // Follow mode belongs to the person: drag away to stop
+                        // it, drag back to the tail to resume it.
+                        if userScrolling { userScrolledAway = !near }
+                    } else if tailY > viewport.size.height + 44 {
+                        userScrolledAway = true
+                    }
+                    if near && transcriptContentHeight <= viewport.size.height + 1 {
                         userScrolledAway = false
                     }
                 }
@@ -1210,7 +1271,7 @@ struct ChatPage: View {
                         scrollToTail(proxy, viewportHeight: viewport.size.height)
                         return
                     }
-                    guard nearBottom, !userScrolledAway, !loadingEarlierTranscript else { return }
+                    guard followsTail, !loadingEarlierTranscript else { return }
                     scheduleTailScroll(proxy, viewportHeight: viewport.size.height)
                 }
                 .onChange(of: model.isTranscriptReady) { _, ready in
@@ -1223,7 +1284,16 @@ struct ChatPage: View {
                 .onChange(of: transcriptContentHeight) { _, height in
                     // A freshly opened session measures its history after the
                     // first layout; the pending jump lands here.
-                    guard height > 0, pendingInitialScroll, !visibleItems.isEmpty else { return }
+                    guard height > 0, !visibleItems.isEmpty else { return }
+                    guard pendingInitialScroll else {
+                        // Rows that grow without changing the signature (a
+                        // list card opening, a tool finishing) keep the tail
+                        // in view while following.
+                        if followsTail, !loadingEarlierTranscript {
+                            scheduleTailScroll(proxy, viewportHeight: viewport.size.height)
+                        }
+                        return
+                    }
                     pendingInitialScroll = false
                     nearBottom = true
                     scrollToTail(proxy, viewportHeight: viewport.size.height)
@@ -1239,7 +1309,7 @@ struct ChatPage: View {
                     // The keyboard and the growing composer change the
                     // viewport. A transcript that was following re-anchors to
                     // the tail, so no blank strip is left below the content.
-                    guard new > old, nearBottom else { return }
+                    guard followsTail else { return }
                     scheduleTailScroll(proxy, viewportHeight: new)
                 }
             }
@@ -1262,6 +1332,13 @@ struct ChatPage: View {
                 .padding(.bottom, 12)
             }
         }
+    }
+
+    /// Whether new content should pull the view to the tail. With scroll
+    /// phases (iOS 18+) only an explicit drag away turns it off; before that
+    /// the geometric near-bottom test is all there is.
+    private var followsTail: Bool {
+        tracksScrollPhase ? !userScrolledAway : (nearBottom && !userScrolledAway)
     }
 
     /// Scrolls to the transcript's last row, and only when the content
@@ -1288,11 +1365,11 @@ struct ChatPage: View {
     /// Debouncing by one short turn lets the height preference and the row
     /// frames settle, and the coalesced follow still tracks streaming.
     private func scheduleTailScroll(_ proxy: ScrollViewProxy, viewportHeight: CGFloat) {
-        guard nearBottom, !userScrolledAway else { return }
+        guard followsTail else { return }
         tailScrollTask?.cancel()
         tailScrollTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(50))
-            guard !Task.isCancelled, nearBottom, !userScrolledAway else { return }
+            guard !Task.isCancelled, followsTail else { return }
             if Date().timeIntervalSince(lastScrollTrace) > 1 {
                 lastScrollTrace = Date()
                 ChatModel.appendDiagnostic(
@@ -1321,54 +1398,46 @@ struct ChatPage: View {
         }
     }
 
-    /// A:引擎还没启动。整块横向居中,文字左对齐在 338 宽的列里。
+    /// A:引擎还没启动。标题 + 说明 + 黑色主按钮,左右按内容边距 20 撑满。
     private var engineNotStartedState: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("引擎还没启动")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Color(red: 0x11 / 255, green: 0x11 / 255, blue: 0x14 / 255))
+                .font(.system(size: 17.5, weight: .semibold))
+                .foregroundStyle(HomeSpec.textPrimary)
             Text("启动之后就能开始。")
-                .font(.system(size: 13))
-                .foregroundStyle(Self.inkSecondary)
+                .font(.system(size: 14))
+                .foregroundStyle(HomeSpec.textPlaceholder)
                 .padding(.top, 8)
             Button {
                 guard !model.busy else { return }
                 Task { await model.start() }
             } label: {
                 Text(model.busy ? "正在启动…" : "启动本地引擎")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 338, height: 50)
-                    .background(Self.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(HomePrimaryButtonStyle())
             .disabled(model.busy)
             .padding(.top, 24)
         }
-        .frame(width: 338, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// B:引擎已启动,只差模型服务。保留原来的卡,版式不动。
+    /// B:引擎已启动,只差模型服务。和 A 同一个版式。
     private var providerSetupState: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("还差一步:配好模型服务")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.primary)
+                .font(.system(size: 17.5, weight: .semibold))
+                .foregroundStyle(HomeSpec.textPrimary)
             Text("选一个模型服务,就能开始。")
-                .font(.system(size: 13))
-                .foregroundStyle(ChatPage.inkSecondary)
+                .font(.system(size: 14))
+                .foregroundStyle(HomeSpec.textPlaceholder)
+                .padding(.top, 8)
             Button {
                 showProviderSettings = true
             } label: {
                 Text("去配置模型服务")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(ChatPage.accent, in: RoundedRectangle(cornerRadius: 12))
             }
-            .padding(.top, 8)
+            .buttonStyle(HomePrimaryButtonStyle())
+            .padding(.top, 24)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1397,14 +1466,14 @@ struct ChatPage: View {
                     .minimumScaleFactor(0.8)
                     .foregroundStyle(colorScheme == .dark
                         ? Color(red: 0xC9 / 255, green: 0xC9 / 255, blue: 0xCE / 255)
-                        : Color(red: 0x4B / 255, green: 0x4B / 255, blue: 0x52 / 255))
+                        : HomeSpec.textSecondary)
                 Text("运行在手机端的 DeepSeek Harness")
                     .font(.system(size: 13))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .foregroundStyle(colorScheme == .dark
                         ? Color(red: 0x8A / 255, green: 0x8A / 255, blue: 0x90 / 255)
-                        : Color(red: 0x71 / 255, green: 0x71 / 255, blue: 0x7A / 255))
+                        : HomeSpec.textPlaceholder)
             }
             .padding(.horizontal, 16)
         }
@@ -1450,7 +1519,7 @@ struct ChatPage: View {
         .foregroundStyle(ChatPage.inkSecondary)
         .padding(.horizontal, 10)
         .frame(height: 40)
-        .background(Color(red: 246 / 255, green: 246 / 255, blue: 248 / 255),
+        .background(HomeSpec.surface,
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
@@ -1717,7 +1786,7 @@ struct ChatPage: View {
                 onRequestChanges: { model.dismissQuestion() })
                 .padding(.horizontal, NativeParityTokens.composerSide)
                 .padding(.bottom, 8)
-                .background(NativeChatTheme.background)
+                .background(HomeSpec.page)
         } else {
             NativeQuestionComposer(
                 questions: nativeQuestionItems(question),
@@ -1730,7 +1799,7 @@ struct ChatPage: View {
                 onClose: { model.dismissQuestion() })
                 .padding(.horizontal, NativeParityTokens.composerSide)
                 .padding(.bottom, 8)
-                .background(NativeChatTheme.background)
+                .background(HomeSpec.page)
         }
     }
 
@@ -1788,12 +1857,31 @@ struct ChatPage: View {
         Task { await model.respondToQuestion(answer: encoded) }
     }
 
-    private var composer: some View {
-        VStack(spacing: NativeParityTokens.flowGap) {
+    /// Everything docked above the card (todos, goal, queue, notices, menus).
+    /// Type-erased with the card: inlined together they make `composer`'s
+    /// generic type deep enough to overflow the main-thread stack when a
+    /// Debug build instantiates it at launch.
+    private var composerDocks: AnyView {
+        AnyView(VStack(spacing: NativeParityTokens.flowGap) {
             if !model.todoDockItems.isEmpty {
                 NativeTodoDock(todos: model.todoDockItems, width: NativeParityTokens.contentWidth)
             }
             if let goal = model.goal { goalBar(goal) }
+            if voice.recognizing || !voice.status.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 13))
+                    Text(voice.status)
+                        .font(.system(size: 13))
+                        .lineLimit(2)
+                    Spacer(minLength: 8)
+                    Button("取消") { voice.cancel() }
+                        .font(.system(size: 13, weight: .medium))
+                        .buttonStyle(.borderless)
+                }
+                .foregroundStyle(HomeSpec.textSecondary)
+                .padding(.horizontal, 4)
+            }
             if !composerQueueRows.isEmpty { queueDock }
             // B1: the dispatching submission is its own row, not a label
             // under the user bubble.
@@ -1829,82 +1917,22 @@ struct ChatPage: View {
             // (or executes a command that declares no input).
             if slashMenuVisible { slashCommandMenu }
             if referenceToken != nil { referenceMenu }
-            // Official InputBar: one elevated card, a 14-line text scrollport,
-            // and the control row docked inside its lower edge.
-            VStack(spacing: 0) {
-                ZStack(alignment: .topLeading) {
-                    if draft.isEmpty {
-                        Text(composerPlaceholder)
-                            .font(.system(size: NativeParityTokens.composerFontSize))
-                            .foregroundStyle(NativeChatTheme.caption)
-                            .lineLimit(1)
-                            .padding(.leading, 5)
-                            .padding(.top, 8)
-                            .allowsHitTesting(false)
-                    }
-                    NativeComposerTextView(
-                        text: $draft,
-                        isFocused: $inputFocused,
-                        isEditable: composerEnabled,
-                        fontSize: NativeParityTokens.composerFontSize,
-                        lineSpacing: NativeParityTokens.composerLineSpacing,
-                        maxHeight: 336,
-                        menuOpen: slashMenuVisible,
-                        accessibilityLabel: composerPlaceholder,
-                        onReturn: { handleComposerReturn(accelerated: $0) },
-                        onMenuKey: { handleComposerMenuKey($0) },
-                        onHeightChange: { composerHeight = $0 })
-                        .frame(height: composerHeight)
-                }
-                .padding(.leading, 14)
-                .padding(.trailing, 8)
-                .frame(minHeight: 36)
-                .padding(.top, 8)
-                    .onChange(of: draft) { _, value in
-                        if value.count > 8_000 {
-                            draft = String(value.prefix(8_000))
-                            if !pasteLimitNoticed {
-                                pasteLimitNoticed = true
-                                attachmentError = "已截断到 8000 字。"
-                            }
-                        }
-                    }
+        })
+    }
 
-                composerControls
-                    .padding(.leading, 14)
-                    // 右侧给发送键留出 40(32 圆 + 8 间隙),工具行不钻到按钮下面。
-                    .padding(.trailing, 40)
-                    .frame(height: 32)
-                    .padding(.top, 10)
-                    .padding(.bottom, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .bottomTrailing) {
-                HStack(spacing: 8) {
-                    if model.turnRunning, canSubmit {
-                        stopButton(diameter: 24, icon: 9)
-                    }
-                    actionButton
-                }
-                .padding(.trailing, 2)
-                .padding(.bottom, 2)
-            }
-            .background(NativeChatTheme.input,
-                        in: RoundedRectangle(cornerRadius: NativeParityTokens.radiusPanel, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: NativeParityTokens.radiusPanel, style: .continuous)
-                .strokeBorder(NativeParityTokens.borderL2, lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.03), radius: 16, y: 4)
-            .shadow(color: .black.opacity(0.03), radius: 24, y: 0)
+    private var composer: some View {
+        VStack(spacing: NativeParityTokens.flowGap) {
+            composerDocks
+            AnyView(composerCard)
             NativeComposerStats(stats: model.sessionStats, usage: model.tokenUsage,
                                 pressure: model.contextPressure, breakdown: model.contextBreakdown)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
+        .padding(.horizontal, HomeSpec.chromeInset)
+        .padding(.top, 8)
         // Keep the stats line close to the home-indicator safe area instead of
         // stacking an 8pt card inset on top of it.
         .padding(.bottom, 0)
-        .background(NativeChatTheme.background)
+        .background(HomeSpec.page)
         // The command catalog is pulled the first time the trigger opens, the
         // same lazy load the DSH command directory does per session.
         .onChange(of: slashToken) { _, token in
@@ -1925,6 +1953,68 @@ struct ChatPage: View {
                 inputFocused = true
             }
         }
+    }
+
+    /// Home composer (HomeSpec): one 104pt+ white card, r24. The text area
+    /// sits on top; the full control row (+, 语音, 权限, 模型, 发送) is always
+    /// docked inside the lower edge, so no tool hides behind a focus state.
+    private var composerCard: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 0) {
+                ZStack(alignment: .topLeading) {
+                    if draft.isEmpty {
+                        Text(composerPlaceholder)
+                            .font(.system(size: HomeSpec.bodySize))
+                            .foregroundStyle(HomeSpec.inputPlaceholder)
+                            .lineLimit(2)
+                            .padding(.leading, 5)
+                            .padding(.top, 8)
+                            .allowsHitTesting(false)
+                    }
+                    NativeComposerTextView(
+                        text: $draft,
+                        isFocused: $inputFocused,
+                        isEditable: composerEnabled,
+                        fontSize: HomeSpec.bodySize,
+                        lineSpacing: HomeSpec.lineSpacing(size: HomeSpec.bodySize,
+                                                          lineHeight: HomeSpec.bodyLine),
+                        maxHeight: 336,
+                        menuOpen: slashMenuVisible,
+                        accessibilityLabel: composerPlaceholder,
+                        onReturn: { handleComposerReturn(accelerated: $0) },
+                        onMenuKey: { handleComposerMenuKey($0) },
+                        onHeightChange: { composerHeight = $0 })
+                        .frame(height: max(56, composerHeight))
+                }
+                .frame(minHeight: 36)
+            }
+            .padding(.leading, 11)
+            .padding(.trailing, 8)
+            .padding(.top, 8)
+            .onChange(of: draft) { _, value in
+                if value.count > 8_000 {
+                    draft = String(value.prefix(8_000))
+                    if !pasteLimitNoticed {
+                        pasteLimitNoticed = true
+                        attachmentError = "已截断到 8000 字。"
+                    }
+                }
+            }
+
+            composerControls
+                .padding(.leading, 8)
+                .padding(.trailing, 8)
+                .frame(height: 44)
+                .padding(.top, 4)
+                .padding(.bottom, 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: HomeSpec.composerOpenMinHeight)
+        .background(HomeSpec.surface,
+                    in: RoundedRectangle(cornerRadius: HomeSpec.composerOpenRadius, style: .continuous))
+        .homeComposerShadow()
+        .contentShape(Rectangle())
+        .onTapGesture { if composerEnabled { inputFocused = true } }
     }
 
     /// Official `InputBar` notice: one 12pt status line above the card, info or
@@ -1970,16 +2060,14 @@ struct ChatPage: View {
     @ViewBuilder
     private var actionButton: some View {
         if !canSubmit && model.turnRunning {
-            stopButton(diameter: 34, icon: 13)
+            stopButton
         } else {
             Button { submitDraft() } label: {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 34)
-                    .background(NativeChatTheme.accent, in: Circle())
-                    .opacity(canSubmit ? 1 : 0.4)
-                    .frame(width: 44, height: 44)
+                    .foregroundStyle(canSubmit ? HomeSpec.primaryButtonInk : HomeSpec.iconMuted)
+                    .frame(width: HomeSpec.sendButton, height: HomeSpec.sendButton)
+                    .background(canSubmit ? HomeSpec.primaryButton : HomeSpec.userBubble, in: Circle())
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -1990,7 +2078,8 @@ struct ChatPage: View {
         }
     }
 
-    private func stopButton(diameter: CGFloat, icon: CGFloat) -> some View {
+    /// 36pt black circle with a white rounded square (HomeSpec).
+    private var stopButton: some View {
         Button {
             guard !stopping else { return }
             stopping = true
@@ -2003,61 +2092,95 @@ struct ChatPage: View {
                 if stopping {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(.white)
-                        .frame(width: diameter, height: diameter)
-                        .background(ChatPage.inkSecondary.opacity(0.7), in: Circle())
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
+                        .tint(HomeSpec.primaryButtonInk)
                 } else {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: icon, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: diameter, height: diameter)
-                        .background(ChatPage.inkSecondary, in: Circle())
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(HomeSpec.primaryButtonInk)
+                        .frame(width: 12, height: 12)
                 }
             }
+            .frame(width: HomeSpec.sendButton, height: HomeSpec.sendButton)
+            .background(HomeSpec.primaryButton.opacity(stopping ? 0.6 : 1), in: Circle())
+            .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(stopping ? "正在停止" : "停止执行")
     }
 
+    /// The 语音 button is hidden for now; dictation stays wired up so turning
+    /// this back on restores it.
+    static let showsVoiceInput = false
+
+    /// Control row inside the card: + , 语音 (when shown), 权限 and the plan chip on the
+    /// left in 40×44 hit boxes, the model chip and the 36pt send/stop button
+    /// on the right, 8pt from the card edge.
     private var composerControls: some View {
-        HStack(spacing: 8) {
-            Menu {
-                Button("调用指令", systemImage: "slash.square") {
-                    draft = "/"
-                    inputFocused = true
+        HStack(spacing: 0) {
+            composerPlusMenu(tint: HomeSpec.primaryButton)
+            if Self.showsVoiceInput {
+                Button {
+                    if voice.recording { voice.finish() }
+                    else { voice.start { text in draft += (draft.isEmpty ? "" : "\n") + text } }
+                } label: {
+                    Image(systemName: voice.recording ? "stop.circle.fill" : "mic")
+                        .font(.system(size: 19, weight: .regular))
+                        .frame(width: 40, height: 44)
+                        .contentShape(Rectangle())
                 }
-                Button("引用文件或对话", systemImage: "at") {
-                    draft = "@"
-                    inputFocused = true
-                }
-                Button("添加图片", systemImage: "photo") { showAttachmentPicker = true }
-                Button("添加文件（写入工作区）", systemImage: "doc.badge.plus") {
-                    showFileImport = true
-                }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(NativeChatTheme.primary)
-                    .frame(width: 28, height: 28)
-                    .background(NativeChatTheme.selector, in: Circle())
-                    .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .foregroundStyle(voice.recording ? ChatPage.danger : HomeSpec.textSecondary)
+                .accessibilityLabel(voice.recording ? "结束语音输入" : "语音输入")
+                .disabled(voice.recognizing && !voice.recording)
             }
-            .buttonStyle(.plain)
-            .disabled(!composerEnabled)
-            .accessibilityLabel("添加指令、引用或附件")
             accessModeMenu
+                .frame(minWidth: 40)
             if let plan = model.planModeState, plan.isPlanTarget {
                 NativePlanChip(mode: plan,
                                isLocked: model.pendingQuestion != nil || model.pendingPermission != nil,
                                onExit: { Task { await model.exitPlanMode() } })
+                    .padding(.leading, 4)
             }
             Spacer(minLength: 8)
             modelMenu
+                .layoutPriority(-1)
+            HStack(spacing: 8) {
+                if model.turnRunning, canSubmit { stopButton }
+                actionButton
+            }
+            .padding(.leading, 8)
         }
+    }
+
+    private func composerPlusMenu(tint: Color) -> some View {
+        Menu {
+            Button("调用指令", systemImage: "slash.square") {
+                draft = "/"
+                inputFocused = true
+            }
+            Button("引用文件或对话", systemImage: "at") {
+                draft = "@"
+                inputFocused = true
+            }
+            Button("添加图片", systemImage: "photo") { showAttachmentPicker = true }
+            Button(voice.speaking ? "停止朗读" : "朗读最近回复", systemImage: "speaker.wave.2") {
+                if voice.speaking { voice.stopSpeaking() }
+                else if let text = model.items.last(where: { $0.kind == .assistant })?.text { voice.speak(text) }
+            }
+            .disabled(!voice.speaking && !model.items.contains(where: { $0.kind == .assistant && !$0.text.isEmpty }))
+            Button("添加文件（写入工作区）", systemImage: "doc.badge.plus") {
+                showFileImport = true
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 21, weight: .light))
+                .foregroundStyle(tint)
+                .frame(width: HomeSpec.composerIcon, height: HomeSpec.composerIcon)
+                .frame(minWidth: 40, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!composerEnabled)
+        .accessibilityLabel("添加指令、引用或附件")
     }
 
     /// 菜单照宿主的目录来:有几项列几项、顺序也照宿主的,我们只翻名字。
@@ -2128,13 +2251,13 @@ struct ChatPage: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
-                NativeChatIcon(name: .shield, size: 17)
-                NativeChatIcon(name: .chevronDown, size: 12)
+            HStack(spacing: 2) {
+                NativeChatIcon(name: .shield, size: 20)
+                NativeChatIcon(name: .chevronDown, size: 10)
             }
-            .foregroundStyle(NativeChatTheme.secondary)
-            .padding(.horizontal, 5)
-            .frame(height: 28)
+            .foregroundStyle(HomeSpec.iconMuted)
+            .frame(height: HomeSpec.sendButton)
+            .contentShape(Rectangle())
         }
         .disabled(!model.canSend || model.turnRunning || model.pendingQuestion != nil || model.pendingPermission != nil || isSelectingAccessMode)
         .accessibilityLabel("权限：\(accessModeTitle)")
@@ -2219,25 +2342,28 @@ struct ChatPage: View {
     }
 
     private var modelControlTint: Color {
-        model.canSend ? Color(red: 0x11/255, green: 0x11/255, blue: 0x14/255) : ChatPage.inkSecondary
+        model.canSend ? HomeSpec.textPrimary : HomeSpec.textPlaceholder
     }
 
+    /// The mode chip (HomeSpec "⚡ 快速 ⌄"): bolt, 16pt model name, chevron.
     private var modelNameBlock: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Text(modelDisplayName)
-                .font(NativeChatTheme.secondaryFont())
+                .font(.system(size: HomeSpec.bodySize))
                 .lineLimit(1)
                 .truncationMode(.tail)
             if let effort = reasoningEffortTitle {
                 Text(effort)
-                    .font(NativeChatTheme.secondaryFont())
+                    .font(.system(size: HomeSpec.bodySize))
                     .lineLimit(1)
             }
-            NativeChatIcon(name: .chevronDown, size: 12)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(HomeSpec.textSecondary)
         }
         .foregroundStyle(modelControlTint)
-        .padding(.horizontal, 5)
-        .frame(height: 28)
+        .frame(height: HomeSpec.sendButton)
+        .contentShape(Rectangle())
         .layoutPriority(1)
     }
 
@@ -2324,7 +2450,7 @@ struct ChatPage: View {
                     .font(.caption)
                     .padding(.leading, 10)
                     .padding(.trailing, 2)
-                    .background(Color(.secondarySystemBackground), in: Capsule())
+                    .background(HomeSpec.userBubble, in: Capsule())
                 }
             }
         }
@@ -2334,7 +2460,7 @@ struct ChatPage: View {
     private var composerEnabled: Bool {
         guard model.pendingQuestion == nil, model.pendingPermission == nil, !isSelectingAccessMode else { return false }
         if model.turnRunning { return busyEnterMode == "steer" ? model.canSteer : model.canSend }
-        return model.canSend
+        return model.canSend || model.canStartBySending
     }
 
     private var canSubmit: Bool {
@@ -2773,7 +2899,7 @@ struct ChatPage: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(red: 0xF2 / 255, green: 0xF3 / 255, blue: 0xF5 / 255),
+        .background(HomeSpec.surface,
                     in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("指令")
@@ -3390,6 +3516,25 @@ private final class ComposerUITextView: UITextView {
     }
 }
 
+/// Reports whether the person is driving the transcript scroll (dragging or
+/// coasting after a flick), as opposed to code scrolling it.
+private struct ScrollInteractionObserver: ViewModifier {
+    @Binding var isInteracting: Bool
+    @Binding var isSupported: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .onScrollPhaseChange { _, phase in
+                    isInteracting = phase == .interacting || phase == .decelerating
+                }
+                .onAppear { isSupported = true }
+        } else {
+            content
+        }
+    }
+}
+
 private struct TranscriptTailPreference: PreferenceKey {
     static var defaultValue: CGFloat = .greatestFiniteMagnitude
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
@@ -3486,7 +3631,7 @@ private struct QuestionCard: View {
             }
         }
         .padding(10)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(HomeSpec.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func binding(for id: String) -> Binding<String> {
@@ -3528,26 +3673,26 @@ private struct NativeScheduleListSheet: View {
                 }
                 ForEach(schedules) { schedule in
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack {
+                        HStack(spacing: 8) {
                             Text(schedule.title)
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(NativeChatTheme.primary)
+                                .font(.system(size: HomeSpec.bodySize, weight: .medium))
+                                .foregroundStyle(HomeSpec.textPrimary)
+                                .lineLimit(1)
                             Spacer(minLength: 8)
-                            Text(schedule.status)
-                                .font(.system(size: 12))
-                                .foregroundStyle(NativeChatTheme.secondary)
+                            HomeTag(text: schedule.status)
                         }
                         Text(schedule.detail)
-                            .font(.system(size: 12))
-                            .foregroundStyle(NativeChatTheme.tertiary)
-                        Text(schedule.prompt)
                             .font(.system(size: 13))
-                            .foregroundStyle(NativeChatTheme.secondary)
+                            .foregroundStyle(HomeSpec.textPlaceholder)
+                        Text(schedule.prompt)
+                            .font(.system(size: 14))
+                            .foregroundStyle(HomeSpec.textSecondary)
                             .lineLimit(2)
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 6)
                 }
             }
+            .homeGroupedList()
             .navigationTitle("定时任务")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -3577,26 +3722,26 @@ private struct NativeJobListSheet: View {
                         .listRowSeparator(.hidden)
                 }
                 ForEach(jobs) { job in
-                    HStack(alignment: .top, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
                             Text(job.title)
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(NativeChatTheme.primary)
+                                .font(.system(size: HomeSpec.bodySize, weight: .medium))
+                                .foregroundStyle(HomeSpec.textPrimary)
+                                .lineLimit(1)
                             Text(job.detail)
-                                .font(.system(size: 12))
-                                .foregroundStyle(NativeChatTheme.tertiary)
+                                .font(.system(size: 13))
+                                .foregroundStyle(HomeSpec.textPlaceholder)
                                 .lineLimit(1)
                         }
                         Spacer(minLength: 8)
                         if let status = job.status {
-                            Text(status)
-                                .font(.system(size: 12))
-                                .foregroundStyle(NativeChatTheme.secondary)
+                            HomeTag(text: status)
                         }
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 6)
                 }
             }
+            .homeGroupedList()
             .navigationTitle("后台任务")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -3651,13 +3796,19 @@ private struct ChatMessageRow: View {
                 ContextInjectionCard(item: item)
             }
         case .user:
-            VStack(alignment: .trailing, spacing: 4) {
-                HStack(alignment: .top, spacing: 0) {
-                    Spacer(minLength: 16)
-                    userBubble
-                }
+            // Home: the bubble alone, no action row under it; copying stays
+            // on the bubble's context menu.
+            VStack(alignment: .trailing, spacing: 8) {
+                userBubble
+                    .contextMenu {
+                        if !item.text.isEmpty {
+                            Button("复制", systemImage: "doc.on.doc") {
+                                UIPasteboard.general.string = item.text
+                            }
+                            ShareLink(item: item.text) { Label("分享", systemImage: "square.and.arrow.up") }
+                        }
+                    }
                 if !item.attachments.isEmpty { NativeAttachmentList(attachments: item.attachments, onOpenFile: onOpenFile) }
-                NativeMessageActions(text: item.text, timestamp: item.timestamp)
             }
         case .assistant:
             assistantBody
@@ -3736,21 +3887,24 @@ private struct ChatMessageRow: View {
         items.filter { $0.turn == turn && $0.kind == .assistant }.map(\.text).joined(separator: "\n\n")
     }
 
-    /// 贴字优先:能一行放下就用自然宽度,放不下才在官方 277pt 内换行。
+    /// 贴字优先:能一行放下就用自然宽度,放不下才在内容宽度的 80% 内换行。
+    /// 灰底 16/24,内边距 12·16,圆角 24、右上角直角(HomeSpec)。
     private var userBubble: some View {
         let body = Text(item.text.isEmpty ? "…" : item.text)
             .font(NativeChatTheme.bodyFont())
-            .lineSpacing(NativeParityTokens.userBubbleLineSpacing)
+            .lineSpacing(NativeChatTheme.bodyLineSpacing)
+            .foregroundStyle(HomeSpec.textPrimary)
             .textSelection(.enabled)
         return ViewThatFits(in: .horizontal) {
             body.fixedSize(horizontal: true, vertical: true)
             body
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 12)
         .padding(.horizontal, 16)
-        .background(NativeChatTheme.bubble,
-                    in: RoundedRectangle(cornerRadius: NativeParityTokens.radiusXL, style: .continuous))
-        .frame(maxWidth: NativeParityTokens.userBubbleMaxWidth, alignment: .trailing)
+        .background(HomeSpec.userBubble, in: HomeSpec.bubbleShape)
+        .containerRelativeFrame(.horizontal, alignment: .trailing) { width, _ in
+            (width - 2 * HomeSpec.contentInset) * 0.8
+        }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
@@ -3845,8 +3999,11 @@ private struct ToolRunRow: View {
         .onDisappear { titleTask?.cancel() }
     }
 
+    /// An opened group sits in the white list card (HomeSpec): rows 8pt
+    /// apart inside 8·12 padding. A lone call stays a bare row.
+    @ViewBuilder
     private var processRows: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let rows = VStack(alignment: .leading, spacing: 8) {
             ForEach(items) { item in
                 if item.kind == .reasoning {
                     NativeThinkingRow(item: item)
@@ -3855,11 +4012,16 @@ private struct ToolRunRow: View {
                 }
             }
         }
+        if items.count > 1 {
+            rows.homeListCard()
+        } else {
+            rows
+        }
     }
 
     private func processFade(top: Bool) -> some View {
         LinearGradient(
-            colors: [NativeChatTheme.background, NativeChatTheme.background.opacity(0)],
+            colors: [HomeSpec.page, HomeSpec.page.opacity(0)],
             startPoint: top ? .top : .bottom,
             endPoint: top ? .bottom : .top)
             .frame(height: 24)
@@ -3909,7 +4071,7 @@ private struct ContextInjectionCard: View {
             HStack(spacing: 9) {
                 Image(systemName: "info.circle")
                     .font(.system(size: 14))
-                    .foregroundStyle(Color(red: 154 / 255, green: 154 / 255, blue: 162 / 255))
+                    .foregroundStyle(HomeSpec.textPlaceholder)
                 Text("上下文注入 · \(sourceName)")
                     .font(.system(size: 13))
                     .foregroundStyle(ChatPage.inkSecondary)
@@ -3918,7 +4080,7 @@ private struct ContextInjectionCard: View {
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(red: 154 / 255, green: 154 / 255, blue: 162 / 255))
+                    .foregroundStyle(HomeSpec.textPlaceholder)
                     .rotationEffect(.degrees(expanded ? 90 : 0))
             }
             .frame(height: 28)
@@ -4124,35 +4286,16 @@ struct RuntimeDetailsPage: View {
 
     @State private var confirmingStop = false
 
-    /// 一行:左 16 起,值右缘 370,行高 44。
+    /// Label left, 15pt gray value right (HomeSpec list row).
     private func runtimeRow(_ title: String, _ value: String) -> some View {
-        HStack(spacing: 12) {
-            Text(title)
-                .font(.system(size: 17))
-                .foregroundStyle(.primary)
-            Spacer(minLength: 12)
+        LabeledContent {
             Text(value)
                 .font(.system(size: 15))
-                .foregroundStyle(ChatPage.inkSecondary)
+                .foregroundStyle(HomeSpec.textPlaceholder)
                 .monospacedDigit()
+        } label: {
+            Text(title)
         }
-        .frame(minHeight: 44)
-        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-        .listRowSeparator(.hidden)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(ChatPage.hairline)
-                .frame(height: 1 / UIScreen.main.scale)
-        }
-    }
-
-    /// 组标题和设置里同一套:13 号 #66666B、左 16、上 24 下 8。
-    private func groupHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 13, weight: .regular))
-            .foregroundStyle(ChatPage.inkSecondary)
-            .textCase(nil)
-            .listRowInsets(EdgeInsets(top: 24, leading: 16, bottom: 8, trailing: 16))
     }
 
     /// 状态词 + 已运行多久,两个都在第一行。
@@ -4178,70 +4321,41 @@ struct RuntimeDetailsPage: View {
 
     var body: some View {
         List {
-            if !model.isStarted {
+            Section {
                 // 停完留在这一页:顶上写「已停止」,下面就是重新启动的按钮。
-                runtimeRow("状态", "已停止")
-            } else {
-                runtimeRow("状态", statusValue)
+                runtimeRow("状态", model.isStarted ? statusValue : "已停止")
             }
 
             if hasCounts {
-                Section {
+                Section("本次运行") {
                     runtimeRow("模型调用", "\(model.modelRequests)")
                     runtimeRow("输入 Token", model.inputTokens.formatted())
                     runtimeRow("输出 Token", model.outputTokens.formatted())
-                } header: {
-                    groupHeader("本次运行")
                 }
             }
 
-            Section {
+            Section("最近出错") {
                 // 组标题已经说了「最近出错」,行里不再重复一个同名标签,只放那句话。
                 Text(model.userFacingError ?? "最近没有出错")
-                    .font(.system(size: 17))
-                    .foregroundStyle(model.userFacingError == nil ? NativePagePalette.inkSecondary : NativePagePalette.danger)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(minHeight: 44)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                    .listRowSeparator(.hidden)
-            } header: {
-                groupHeader("最近出错")
+                    .foregroundStyle(model.userFacingError == nil ? HomeSpec.textPlaceholder : ChatPage.danger)
             }
 
             Section {
                 if model.isStarted {
-                    Button("停止本地引擎") { confirmingStop = true }
-                        .font(.system(size: 17))
-                        .foregroundStyle(NativePagePalette.danger)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .frame(minHeight: 44)
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
+                    Button("停止本地引擎", role: .destructive) { confirmingStop = true }
                 } else {
                     Button("启动本地引擎") { Task { await model.start() } }
-                        .font(.system(size: 17))
-                        .foregroundStyle(NativePagePalette.accent)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .frame(minHeight: 44)
+                        .buttonStyle(HomePrimaryButtonStyle())
                         .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                 }
             } footer: {
                 Text("停止后,正在跑的任务会停下来,不会再接着做。")
-                    .font(.system(size: 13))
-                    .foregroundStyle(NativePagePalette.inkSecondary)
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        // 运行状态/支持页:浅色仍是纯白,深色跟系统底走,别在深色里留一张白纸。
-        .background(NativePagePalette.page)
-        .environment(\.defaultMinListRowHeight, 44)
+        .homeGroupedList()
         .navigationTitle("运行状态")
-        .navigationBarTitleDisplayMode(.large)
-        .tint(NativePagePalette.accent)
+        .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("停止本地引擎?", isPresented: $confirmingStop, titleVisibility: .visible) {
             Button("取消", role: .cancel) {}
             Button("停止", role: .destructive) { Task { await model.stop() } }
@@ -4270,7 +4384,7 @@ private struct CommandExecutionResultPage: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                        .background(HomeSpec.surface, in: RoundedRectangle(cornerRadius: 12))
                     if let text = execution.text, !text.isEmpty {
                         MarkdownContent(text: text, onOpenFile: onOpenFile)
                         WorkspaceOutputReferences(text: text, files: model.files, onOpenFile: onOpenFile)
@@ -4402,7 +4516,7 @@ private struct NativeTrajectoryRow: View {
         .tint(.secondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .background(HomeSpec.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
     }
 }
 

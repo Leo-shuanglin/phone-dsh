@@ -382,7 +382,7 @@ struct NativeDeviceSessionPage: View {
 
             if let error = model.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote)
+                    .font(.system(size: 13))
                     .foregroundStyle(ChatPage.danger)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
@@ -425,7 +425,7 @@ struct NativeDeviceSessionPage: View {
             }
             .defaultScrollAnchor(.bottom)
         }
-        .background(Color(.systemBackground))
+        .background(HomeSpec.page)
         .navigationTitle(model.mapping.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom, spacing: 0) {

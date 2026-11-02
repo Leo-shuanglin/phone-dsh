@@ -21,19 +21,11 @@ struct NativeAutomationPage: View {
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
                     Text("到点让它自己跑,结果回到原会话。")
-                        .font(.footnote)
+                        .font(.system(size: 13))
                         .foregroundStyle(NativePagePalette.inkSecondary)
                         .multilineTextAlignment(.center)
-                    Button {
-                        creating = true
-                    } label: {
-                        Text("新建任务")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(minHeight: primaryButtonHeight)
-                            .background(NativePagePalette.accentFill, in: RoundedRectangle(cornerRadius: 12))
-                    }
+                    Button("新建任务") { creating = true }
+                        .buttonStyle(HomePrimaryButtonStyle())
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
                 }
@@ -52,11 +44,11 @@ struct NativeAutomationPage: View {
                                 Text(schedule.title).font(.body.weight(.medium))
                                 Spacer()
                                 Text(schedule.status == "active" ? "活动" : "已停止")
-                                    .font(.caption).foregroundStyle(schedule.status == "active" ? .green : .secondary)
+                                    .font(.system(size: 13)).foregroundStyle(schedule.status == "active" ? .green : .secondary)
                             }
-                            Text(schedule.prompt).font(.subheadline).lineLimit(2)
+                            Text(schedule.prompt).font(.system(size: 15)).lineLimit(2)
                             Text("\(sessionTitle(schedule.sessionID)) · \(schedule.detail)")
-                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
                     .swipeActions(edge: .trailing) {
@@ -67,12 +59,10 @@ struct NativeAutomationPage: View {
             }
 
             if let error = management.error {
-                Section("需要处理") { Text(error).font(.footnote).foregroundStyle(.red).textSelection(.enabled) }
+                Section("需要处理") { Text(error).font(.system(size: 13)).foregroundStyle(.red).textSelection(.enabled) }
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(NativePagePalette.page)
+        .homeGroupedList()
         .navigationTitle("定时任务")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -141,7 +131,7 @@ private struct ScheduleDetailPage: View {
                     }
                     if let latestDeliveryAt = schedule.latestDeliveryAt {
                         Text("最近投递：\(latestDeliveryAt)")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
                     }
                 }
             } else {
@@ -149,6 +139,7 @@ private struct ScheduleDetailPage: View {
             }
             if let error = management.error { Section("错误") { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
         }
+        .homeGroupedList()
         .navigationTitle("定时任务")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -182,7 +173,7 @@ private struct ScheduleHistoryPage: View {
     var body: some View {
         List {
             if let notice = management.scheduleHistoryNotice {
-                Section { Text(notice).font(.footnote).foregroundStyle(.secondary) }
+                Section { Text(notice).font(.system(size: 13)).foregroundStyle(.secondary) }
             }
             if management.scheduleHistory.isEmpty {
                 ContentUnavailableView("没有投递记录", systemImage: "tray", description: Text("这次还没留下结果。"))
@@ -190,8 +181,8 @@ private struct ScheduleHistoryPage: View {
                 ForEach(management.scheduleHistory) { item in
                     VStack(alignment: .leading, spacing: 5) {
                         Text(item.deliveredAt).font(.subheadline.weight(.medium))
-                        Text("计划时间：\(item.scheduledAt)").font(.caption).foregroundStyle(.secondary)
-                        if let prompt = item.prompt { Text(prompt).font(.caption).textSelection(.enabled) }
+                        Text("计划时间：\(item.scheduledAt)").font(.system(size: 13)).foregroundStyle(.secondary)
+                        if let prompt = item.prompt { Text(prompt).font(.system(size: 13)).textSelection(.enabled) }
                     }
                 }
             }
@@ -202,6 +193,7 @@ private struct ScheduleHistoryPage: View {
             }
             if let error = management.error { Section("错误") { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
         }
+        .homeGroupedList()
         .navigationTitle("投递记录")
         .navigationBarTitleDisplayMode(.inline)
         .task { await management.loadScheduleHistory(schedule) }
@@ -275,6 +267,7 @@ private struct ScheduleEditorPage: View {
             }
             if let error = management.error { Section("错误") { Text(error).foregroundStyle(.red) } }
         }
+        .homeGroupedList()
         .navigationTitle(schedule == nil ? "新建自动化" : "编辑自动化")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -294,7 +287,7 @@ private struct ScheduleEditorPage: View {
             TextField(schedule == nil ? "延迟秒数" : "延迟到期秒数", text: $delaySeconds).keyboardType(.numberPad)
         case "at":
             Text("需要包含时区，例如 2026-10-26T09:00:00+08:00。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.system(size: 13)).foregroundStyle(.secondary)
             TextField("ISO-8601 日期时间", text: $targetAt).textInputAutocapitalization(.never).autocorrectionDisabled()
         case "every":
             TextField("间隔秒数（至少 60）", text: $intervalSeconds).keyboardType(.numberPad)

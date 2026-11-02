@@ -529,9 +529,20 @@ final class ChatModel {
     private var restartPolicyHighSamples = 0
     private var restartPolicySawTermination = false
     private var restartPolicyBudget: BudgetTable?
+    private var failedHost: PhoneDSHHost?
+    private(set) var engineNeedsReset = false
+    /// One automatic reset per process launch (see ``start(autoRecover:)``).
+    /// A fault that survives it keeps the manual button and stays fail-loud.
+    private var autoRecoveryAttempted = false
     private var foregroundResumeRequested = false
     private var backgroundParkRequested = false
     var canSend: Bool { harness != nil && sessionID != nil && transcriptReady && !busy && !parked && !hostLifecycleTransition }
+    var canStartBySending: Bool {
+        ChatEngineLifecycle.canStartBySending(hostIsStopped: host == nil,
+                                              busy: busy,
+                                              parked: parked,
+                                              hostLifecycleTransition: hostLifecycleTransition)
+    }
     private(set) var modelProviderIssue: String? = "请先配置模型服务和 API Key"
 
     func refreshModelProviderReadiness() {
@@ -890,32 +901,82 @@ final class ChatModel {
 
     // MARK: Lifecycle
 
-    func start() async {
+    private struct HostLaunch {
+        let host: PhoneDSHHost
+        let budgets: BudgetTable
+        let selectedProfile: ProviderProfile?
+        let egressHosts: Set<String>
+    }
+
+    /// Boots the host and adopts the persisted session. Launching and sending
+    /// may acknowledge one persisted `Failed` controller per process.
+    func start(autoRecover: Bool = false) async {
         guard host == nil, !busy else { return }
+        if engineNeedsReset, failedHost != nil {
+            await restartEngine()
+            return
+        }
         busy = true
         defer { busy = false }
+        guard let launch = makeHostLaunch() else { return }
+        // Show the last conversation from disk immediately; the engine boots
+        // in the background and replaces it when the host history arrives.
+        restoreCachedTranscriptIfAvailable()
+        statusLine = "Booting the Worker…"
+        appendStatus("Booting the host (Worker bundle + image)…")
+        observeHost(launch.host)
+        do {
+            try await launch.host.start()
+        } catch {
+            Self.appendDiagnostic("host start failed: \(error)")
+            reportError("引擎停了：\(Self.condensed(String(describing: error)))")
+            hostEventTask?.cancel(); hostEventTask = nil
+            let state = await launch.host.state
+            guard ChatEngineLifecycle.needsReset(afterStartIn: state) else {
+                failedHost = nil
+                engineNeedsReset = false
+                return
+            }
+            failedHost = launch.host
+            engineNeedsReset = true
+            if autoRecover, !autoRecoveryAttempted {
+                autoRecoveryAttempted = true
+                Task { @MainActor [weak self] in
+                    await self?.restartEngineWhenIdle()
+                }
+            }
+            return
+        }
+        await adoptRunningHost(launch.host,
+                               budgets: launch.budgets,
+                               selectedProfile: launch.selectedProfile,
+                               egressHosts: launch.egressHosts)
+    }
+
+    private func makeHostLaunch() -> HostLaunch? {
         guard let bundle = WorkerBundleLocator.bundle() else {
             reportError("引擎停了")
-            return
+            return nil
         }
         guard anchor.isInWindow else {
             reportError("The page anchor is not in a window yet; try again")
-            return
+            return nil
         }
         do {
             try FileManager.default.createDirectory(at: workspaceRoot, withIntermediateDirectories: true)
         } catch {
             reportError("Cannot create the workspace: \(error)")
-            return
+            return nil
         }
 
-        let egressHosts = Set(egressAllow.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
+        let egressHosts = Self.egressHosts(from: egressAllow)
         // The provider document is the only model configuration authority.
-        // It is read at every start, so deleting or switching a service can
-        // never leave the previous endpoint/key active in this process. A
-        // missing selection still boots the complete Web surface: model calls
-        // fail later with the host credential provider's unauthorized error,
-        // and Settings → 模型服务 stays reachable.
+        // It is read for every new host — including the rebuild a reset does —
+        // so deleting or switching a service can never leave the previous
+        // endpoint/key active in this process. A missing selection still boots
+        // the complete Web surface: model calls fail later with the host
+        // credential provider's unauthorized error, and Settings → 模型服务
+        // stays reachable.
         var selectedProfile: ProviderProfile?
         var allowedModelHosts = Set<String>()
         var credentialProvider: any CredentialProvider = PhoneModelProviderSettings.shared
@@ -1017,26 +1078,111 @@ final class ChatModel {
         configuration.engine.bootTimeout = ChatHostConfiguration.defaultBootTimeout
         configuration.engine.environment = environment
         let anchor = self.anchor
-        let newHost = PhoneDSHHost(configuration: configuration, engineFactory: { configuration in
+        let host = PhoneDSHHost(configuration: configuration, engineFactory: { configuration in
             await anchor.makeEngine(configuration)
         })
-        // Show the last conversation from disk immediately; the engine boots
-        // in the background and replaces it when the host history arrives.
-        restoreCachedTranscriptIfAvailable()
-        statusLine = "Booting the Worker…"
-        appendStatus("Booting the host (Worker bundle + image)…")
-        observeHost(newHost)
-        do {
-            try await newHost.start()
-        } catch {
-            Self.appendDiagnostic("host start failed: \(error)")
-            reportError("引擎停了：\(Self.condensed(String(describing: error)))")
-            hostEventTask?.cancel(); hostEventTask = nil
+        return HostLaunch(host: host,
+                          budgets: configuration.budgets,
+                          selectedProfile: selectedProfile,
+                          egressHosts: egressHosts)
+    }
+
+    private func restartEngineWhenIdle() async {
+        var waited = 0
+        while busy && waited < 40 {
+            try? await Task.sleep(for: .milliseconds(50))
+            waited += 1
+        }
+        await restartEngine()
+    }
+
+    private func ensureEngineRunning() async {
+        guard host == nil, !busy else { return }
+        await start(autoRecover: true)
+    }
+
+    /// The explicit user acknowledgement D14 requires before a persisted
+    /// `Failed` controller may boot again.
+    ///
+    /// It stops the failed host and builds a new one with the current settings
+    /// rather than reusing the failed instance: the host captures its provider
+    /// credential, search plan, MCP policy and budget at construction, so a
+    /// person who fixed an API key and retried would otherwise keep booting
+    /// with the stale document. The persisted `Failed` state is still acked
+    /// with `reset()` — the new host's first `start()` refuses it, so the
+    /// engine is rebuilt and then reset — and the session is adopted through
+    /// the same path a normal start uses.
+    ///
+    /// A failure that survives this stays fail-loud: the host is kept in
+    /// ``failedHost`` and ``engineNeedsReset`` stays true.
+    func restartEngine() async {
+        guard host == nil, !busy else { return }
+        guard let failed = failedHost else {
+            await start()
             return
         }
+        busy = true
+        defer { busy = false }
+        statusLine = "Restarting the engine…"
+        appendStatus("User reset: clearing the persisted failed controller")
+        do {
+            try await failed.stop()
+        } catch {
+            reportError("引擎无法重新启动：\(Self.condensed(String(describing: error)))")
+            return
+        }
+        // Build the replacement first: `makeHostLaunch` can refuse (bundle
+        // missing, anchor not in a window) and clearing the reset state before
+        // that would drop the only path back to a working engine.
+        guard let launch = makeHostLaunch() else { return }
+        failedHost = nil
+        engineNeedsReset = false
+        restoreCachedTranscriptIfAvailable()
+        observeHost(launch.host)
+        do {
+            do {
+                try await launch.host.start()
+            } catch {
+                let state = await launch.host.state
+                guard ChatEngineLifecycle.needsReset(afterStartIn: state) else { throw error }
+                try await launch.host.reset()
+            }
+        } catch {
+            Self.appendDiagnostic("host reset failed: \(error)")
+            reportError("引擎无法重新启动：\(Self.condensed(String(describing: error)))")
+            hostEventTask?.cancel(); hostEventTask = nil
+            let state = await launch.host.state
+            failedHost = ChatEngineLifecycle.needsReset(afterStartIn: state) ? launch.host : nil
+            engineNeedsReset = failedHost != nil
+            return
+        }
+        await adoptRunningHost(launch.host,
+                               budgets: launch.budgets,
+                               selectedProfile: launch.selectedProfile,
+                               egressHosts: launch.egressHosts)
+    }
+
+    /// Parses the comma-separated egress allow list the settings page stores.
+    static func egressHosts(from list: String) -> Set<String> {
+        Set(list.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty })
+    }
+
+    /// Adopts a host that has finished booting: opens the persisted (or a
+    /// fresh) session, loads its history and starts the pumps.
+    ///
+    /// Shared by ``start()`` and ``restartEngine()`` so the user-reset path
+    /// lands in exactly the state a normal boot produces.
+    private func adoptRunningHost(_ newHost: PhoneDSHHost,
+                                  budgets: BudgetTable,
+                                  selectedProfile: ProviderProfile?,
+                                  egressHosts: Set<String>) async {
         host = newHost
+        failedHost = nil
+        engineNeedsReset = false
         startedAt = Date()
-        restartPolicyBudget = configuration.budgets
+        restartPolicyBudget = budgets
         startRestartPolicyMonitor()
         do {
             let harness = try await newHost.harness()
@@ -1533,6 +1679,7 @@ final class ChatModel {
                 switch event {
                 case .stateChanged(_, let to):
                     self.hostState = "\(to)"
+                    if to == .failed { self.hostDidFail(host) }
                 case .error(let message):
                     // Keep the raw host text: the friendly summary alone made
                     // a WAL recovery failure look like a model-service error.
@@ -1553,21 +1700,61 @@ final class ChatModel {
         }
     }
 
+    private func hostDidFail(_ failed: PhoneDSHHost) {
+        guard host === failed else { return }
+        pumpTask?.cancel(); pumpTask = nil
+        hostEventTask?.cancel(); hostEventTask = nil
+        host = nil
+        failedHost = failed
+        engineNeedsReset = true
+        harness = nil
+        sessionID = nil
+        transcriptReady = false
+        pendingPermission = nil
+        pendingQuestion = nil
+        availableAccessModes = []
+        currentAccessMode = nil
+        accessModeError = nil
+        startedAt = nil
+        turnRunning = false
+        parked = false
+        foregroundResumeRequested = false
+        backgroundParkRequested = false
+        hostLifecycleTransition = false
+        if keepingAlive {
+            stopBackgroundHeartbeat()
+            keepAlive.stop()
+            keepingAlive = false
+            endBackgroundTask()
+        }
+        syncIdleTimer()
+    }
+
     // MARK: Unattended test hook
 
-    /// Launch-time automation for device tests driven from the Mac: with
-    /// `PDSH_CHAT_AUTOSTART=1` the page starts the host as soon as its anchor is
-    /// in a window and, when `PDSH_CHAT_AUTOPROMPT` is set, sends that prompt.
+    /// Launch-time automation for device tests driven from the Mac.
+    ///
+    /// - `PDSH_CHAT_AUTOSTART=1` starts the host as soon as its anchor is in a
+    ///   window and, when `PDSH_CHAT_AUTOPROMPT` is set, sends that prompt.
+    /// - `PDSH_CHAT_AUTOSTOP=1` stops the host first and then sends the
+    ///   prompt: that is the "typing boots the engine" path a person hits after
+    ///   stopping it by hand, and `devicectl` cannot tap the composer.
+    /// - `PDSH_CHAT_AUTORESTART=1` reports the launch-path acknowledgement of a
+    ///   persisted `Failed` controller (`start(autoRecover:)`).
+    ///
     /// `devicectl device process launch --environment-variables` supplies
-    /// both; the model key still comes from the provider settings.
+    /// these; the model key still comes from the provider settings.
     private var autostartDone = false
 
     func autostartIfRequested() {
         guard !autostartDone else { return }
         let environment = ProcessInfo.processInfo.environment
-        guard environment["PDSH_CHAT_AUTOSTART"] == "1" else { return }
+        let autostart = environment["PDSH_CHAT_AUTOSTART"] == "1"
+        let autostop = environment["PDSH_CHAT_AUTOSTOP"] == "1"
+        guard autostart || autostop else { return }
         autostartDone = true
         let prompt = environment["PDSH_CHAT_AUTOPROMPT"]
+        let autoRestart = environment["PDSH_CHAT_AUTORESTART"] == "1"
         Task { [weak self] in
             // The anchor view attaches to its window a moment after onAppear.
             for _ in 0..<20 {
@@ -1576,9 +1763,25 @@ final class ChatModel {
             }
             guard let self else { return }
             appendStatus("Autostart requested by the launch environment")
-            await start()
-            if let prompt, !prompt.isEmpty, isStarted {
-                await send(prompt)
+            // The page starts the host on appear too; wait for that start to
+            // release the gate so this hook judges a settled state.
+            for _ in 0..<40 {
+                if !busy { break }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            if autostart, !isStarted {
+                await start(autoRecover: true)
+            }
+            if autoRestart {
+                appendStatus("Auto restart: engineNeedsReset=\(engineNeedsReset) started=\(isStarted)")
+            }
+            if autostop, isStarted {
+                await stop()
+                appendStatus("Autostop requested by the launch environment; the send below must boot the engine")
+            }
+            if let prompt, !prompt.isEmpty {
+                let sent = await send(prompt)
+                appendStatus("Autostart prompt delivered=\(sent) started=\(isStarted)")
             }
         }
     }
@@ -1592,7 +1795,14 @@ final class ChatModel {
     /// 重发时把 `reusing` 传进来:仍用原来那条气泡,不再长出新的一行。
     func send(_ text: String, attachments: [HarnessAttachment], reusing itemID: String? = nil) async -> Bool {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (!prompt.isEmpty || !attachments.isEmpty), canSend, let harness, let sessionID else { return false }
+        guard !prompt.isEmpty || !attachments.isEmpty else { return false }
+        // Sending is the clearest signal that the engine is wanted. Boot it
+        // here (the transcript stays visible from the cache meanwhile) instead
+        // of silently dropping the message because nothing is running.
+        if !isStarted, !busy {
+            await ensureEngineRunning()
+        }
+        guard canSend, let harness, let sessionID else { return false }
         busy = true
         defer { busy = false }
         let (fingerprint, requestID) = Self.retryableRequest(operation: "prompt", text: prompt,

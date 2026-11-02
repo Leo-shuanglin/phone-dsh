@@ -23,6 +23,7 @@
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,14 +38,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import com.phonedsh.domain.connector.ConnectorStatus
 import com.phonedsh.domain.connector.DeviceConnectionEntry
 import com.phonedsh.domain.connector.DeviceConnectionSnapshot
@@ -214,35 +218,6 @@ public fun NativeDeviceConnectionPage(
             item(key = "devices-header") {
                 SessionSectionLabel(UiStrings.DEVICE_SECTION_DEVICES)
             }
-            item(key = "connector-source") {
-                // Not in the iOS page: that page can say "no connector" because its
-                // factory is nil. This host injects a connector, so the page names
-                // which one, and a reader can tell a double from a real transport.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag(UiPageTags.DEVICE_SOURCE)
-                        .defaultMinSize(minHeight = tokens.geometry.pageListRowMinHeight)
-                        .padding(
-                            horizontal = tokens.geometry.pageOuterMarginH,
-                            vertical = tokens.spacing.iconText,
-                        )
-                        .semantics(mergeDescendants = true) {},
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
-                ) {
-                    BasicText(
-                        text = UiStrings.DEVICE_SOURCE_LABEL,
-                        style = type.caption.copy(color = tokens.colors.tertiary),
-                        modifier = Modifier.weight(1f),
-                    )
-                    BasicText(
-                        text = state.connectorProtocol ?: UiStrings.DEVICE_SOURCE_NONE,
-                        style = type.caption.copy(color = tokens.colors.secondary),
-                    )
-                }
-            }
-
             when (state.list) {
                 DeviceListState.UNAVAILABLE -> item(key = "unavailable") {
                     DeviceUnavailable(
@@ -327,14 +302,7 @@ private fun DeviceRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
-        // The baseline's `iphone` glyph with its online dot; the dot's diameter is
-        // the token the status surfaces already use, so no size is re-typed.
-        Box(
-            modifier = Modifier
-                .size(tokens.geometry.statusDotDiameter)
-                .clip(CircleShape)
-                .background(tokens.colors.success),
-        )
+        DevicePhoneGlyph(online = true)
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
@@ -358,6 +326,48 @@ private fun DeviceRow(
                 color = if (opening) tokens.colors.accent else tokens.colors.tertiary,
             ),
         )
+    }
+}
+
+/** The baseline's `iphone` glyph and six-point online mark (`NativeDeviceEntryIcon`). */
+@Composable
+private fun DevicePhoneGlyph(online: Boolean) {
+    val tokens = LocalUiTokens.current
+    Canvas(
+        Modifier.size(
+            width = tokens.geometry.pageRowMinHeight * DEVICE_ICON_WIDTH_TO_ROW_RATIO,
+            height = tokens.geometry.pageRowMinHeight * DEVICE_ICON_HEIGHT_TO_ROW_RATIO,
+        ),
+    ) {
+        val phoneWidth = size.width * 0.55f
+        val phoneHeight = size.height * 0.86f
+        val phoneTopLeft = Offset((size.width - phoneWidth) / 2f, (size.height - phoneHeight) / 2f)
+        val line = size.minDimension * DEVICE_ICON_STROKE_RATIO
+        drawRoundRect(
+            color = tokens.colors.secondary,
+            topLeft = phoneTopLeft,
+            size = Size(phoneWidth, phoneHeight),
+            cornerRadius = CornerRadius(phoneWidth * 0.19f, phoneWidth * 0.19f),
+            style = Stroke(width = line),
+        )
+        drawLine(
+            color = tokens.colors.secondary,
+            start = Offset(size.width * 0.44f, phoneTopLeft.y + phoneHeight * 0.12f),
+            end = Offset(size.width * 0.56f, phoneTopLeft.y + phoneHeight * 0.12f),
+            strokeWidth = line,
+        )
+        drawLine(
+            color = tokens.colors.secondary,
+            start = Offset(size.width * 0.44f, phoneTopLeft.y + phoneHeight * 0.88f),
+            end = Offset(size.width * 0.56f, phoneTopLeft.y + phoneHeight * 0.88f),
+            strokeWidth = line,
+        )
+        if (online) {
+            val center = Offset(size.width * 0.85f, size.height * 0.19f)
+            val dotRadius = tokens.geometry.statusDotDiameter.toPx() / 2f
+            drawCircle(tokens.colors.input, radius = dotRadius + line / 2f, center = center)
+            drawCircle(tokens.colors.success, radius = dotRadius, center = center)
+        }
     }
 }
 
@@ -433,6 +443,7 @@ internal object DeviceConnectionPageTokens {
         UiTokenNames.COLORS_TERTIARY,
         UiTokenNames.COLORS_ACCENT,
         UiTokenNames.COLORS_SUCCESS,
+        UiTokenNames.COLORS_INPUT,
         UiTokenNames.TYPOGRAPHY_BODY,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
         UiTokenNames.TYPOGRAPHY_CAPTION,
@@ -440,7 +451,6 @@ internal object DeviceConnectionPageTokens {
         UiTokenNames.SPACING_BADGE_INSET_V,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_PAGE_LIST_ROW_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_STATUS_DOT_DIAMETER,
         UiTokenNames.GEOMETRY_CARD_OUTER_MARGIN_V,
     )
@@ -451,3 +461,6 @@ private const val CHEVRON_GLYPH: String = "›"
 
 /** The in-flight marker of the row whose session is opening. */
 private const val OPENING_GLYPH: String = "…"
+private const val DEVICE_ICON_WIDTH_TO_ROW_RATIO: Float = 0.5f
+private const val DEVICE_ICON_HEIGHT_TO_ROW_RATIO: Float = 0.54545f
+private const val DEVICE_ICON_STROKE_RATIO: Float = 0.0625f

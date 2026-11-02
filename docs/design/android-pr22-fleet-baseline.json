@@ -1,0 +1,9 @@
+{
+  "android_pr14": "8c2eeab7b29728ebd0a54b71b5deaab07e5ac6eb",
+  "ios_pr22": "edd687463cd24b9c969914a13fa1da268df016fe",
+  "shared_main": "45de1121ee8b6df4323609ae45e66caa0d0fe29a",
+  "status": "UNACCEPTED_BASELINE_CANDIDATE",
+  "draft_reuse": "Android changes and tests from stopped local alignment; requires fresh review and all relevant tests",
+  "ci_policy": "Do not recreate .github workflows; maintainer deleted them",
+  "ui_authority": "PR22 native iOS source and docs/design/ios-home-design-spec-no-overview.html; 430x932pt, not old 402pt DSH theme"
+}

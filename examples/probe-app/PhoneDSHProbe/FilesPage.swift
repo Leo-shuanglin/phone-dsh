@@ -49,10 +49,8 @@ struct FilesPage: View {
     var body: some View {
         fileList
             .navigationTitle(directory.isEmpty ? NativeText("手机工作区", "Phone Workspace") : String(directory.dropLast()).split(separator: "/").last.map(String.init) ?? NativeText("手机工作区", "Phone Workspace"))
-            .navigationBarTitleDisplayMode(.large)
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(NativePagePalette.page)
+            .navigationBarTitleDisplayMode(.inline)
+            .homeGroupedList()
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: NativeText("搜索文件", "Search files"))
             .refreshable { model.refreshFiles() }
             .task { await openInitialPathIfNeeded() }
@@ -71,7 +69,7 @@ struct FilesPage: View {
                             }
                         }
                 }
-                .presentationDragIndicator(.visible)
+                .homeSheetChrome()
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -99,7 +97,7 @@ struct FilesPage: View {
             if model.files.isEmpty {
                 VStack(spacing: 8) {
                     Text(NativeText("还没有文件", "No Files Yet"))
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                     Text(NativeText("智能体做的文件会出现在这里。", "Files created by the agent appear here."))
                         .font(.system(size: 13))
                         .foregroundStyle(ChatPage.inkSecondary)
@@ -133,6 +131,7 @@ struct FilesPage: View {
                 }
             }
         }
+        .homeGroupedList()
     }
 
     /// Opens the requested file once: lands in its folder and presents it.
@@ -187,22 +186,22 @@ private struct FileRow: View {
                 .frame(width: 34, height: 38)
             VStack(alignment: .leading, spacing: 3) {
                 Text(URL(fileURLWithPath: file.relativePath).lastPathComponent)
-                    .font(.body)
+                    .font(.system(size: HomeSpec.bodySize))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 if let folder = folderName {
                     Text(folder)
-                        .font(.caption)
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Text(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file))
-                    .font(.caption2)
+                    .font(.system(size: 13))
                     .foregroundStyle(.tertiary)
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())

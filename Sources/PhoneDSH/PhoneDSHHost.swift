@@ -173,6 +173,43 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     /// A host-side planned restart owns the `Running -> Recovering` edge; a
     /// WebContent termination observed meanwhile must not start a second boot.
     private var restarting = false
+    /// Whether the App is in the foreground (P6). Recovery boots WebContent,
+    /// replays the WAL and reopens an epoch, so they only run while the App can
+    /// actually be scheduled; a termination observed in the background records
+    /// ``pendingRecovery`` instead. Defaults to `true` so a caller that never
+    /// reports the scene phase keeps the pre-gate behaviour.
+    private var isForeground = true
+    /// A WebContent termination arrived while the App was in the background.
+    /// ``setForeground(_:)`` consumes it (the controller must still be in
+    /// `Recovering`); ``recoverAfterTermination(_:)`` never boots on its own
+    /// from the background.
+    private var pendingRecovery = false
+    /// A termination recovery boot owns the controller's `Recovering` state
+    /// until it opens admission or fails. A second termination observed during
+    /// that boot must not start a competing Worker.
+    private var recoveringTermination = false
+    /// The process-lifecycle observer this host installed itself (P1).
+    ///
+    /// The host observes the platform instead of trusting the App to forward
+    /// `scenePhase`: the build that lost that forwarding call (the App's only
+    /// `scenePhaseChanged` hook had no caller) froze the Worker without ever
+    /// draining, so no `pendingRecovery` gate could have helped. Observing here
+    /// makes "the App forgot" structurally unable to disable the gate.
+    private var processLifecycle: PhoneDSHProcessLifecycle?
+
+    /// Extra replacement-Worker boot attempts after a `.boot`-class failure.
+    ///
+    /// The incident's failure (`PROTO_MISMATCH` arriving as a bootstrap
+    /// failure) is process-scoped: a new page and new Worker clear it. Two
+    /// retries keep the total boot work bounded without turning one bad
+    /// handshake into a persisted `failed`.
+    private static let maximumBootRetries = 2
+    /// Short pause between two replacement-Worker boot attempts. Long enough
+    /// for a just-killed WebContent process to be reaped, short enough not to
+    /// dominate the boot budget.
+    private static let bootRetryBackoff: TimeInterval = 0.25
+    /// The smallest remaining HELLO window a retry is worth starting in.
+    private static let minimumRetryHelloBudget: TimeInterval = 0.25
     /// Boot ids of restarts already published as `.restarted`.
     ///
     /// A planned restart produces the same report twice — once as the engine's
@@ -188,6 +225,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     /// regression injects the sink mutation that reached the log in exactly
     /// that window, which is what opened the never-closed epoch.
     private var drainWindowProbe: (@Sendable (WorkspaceLog) async throws -> Void)?
+    private var failureSealProbeForTesting: (@Sendable () async throws -> Void)?
     /// Test seam: runs after the handoff operation gate is acquired and before
     /// the local runtime is suspended. Production leaves it `nil`; the facade
     /// regression uses it to inject a lifecycle call or a WebContent
@@ -242,6 +280,11 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     /// `Backoff` starts only after its D24 retry deadline and throws
     /// ``PhoneDSHError/backoffNotElapsed(_:)`` before it, leaving the persisted
     /// state untouched.
+    ///
+    /// A failure no longer refuses the next start: a persisted `failed` maps
+    /// into its retry window, and a transient boot failure leaves the live
+    /// controller in `Backoff` (see ``startWithoutGate()``). Only a `Failed`
+    /// controller from an earlier incarnation is rebuilt from disk.
     public func start() async throws {
         // The public contract keeps start() idempotent while a boot is in
         // progress. The in-flight call owns the gate; a second start returns
@@ -255,6 +298,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     }
 
     private func startWithoutGate() async throws {
+        installProcessLifecycleObservation()
         if state == .remote || remoteHandoff != nil {
             throw PhoneDSHError.invalidState(
                 "reclaim the remote workspace before starting locally")
@@ -263,16 +307,44 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             throw PhoneDSHError.invalidState(
                 "reclaim the remote workspace before starting locally")
         }
-        if state == .starting || state == .running { return }
-        if state == .draining {
-            throw PhoneDSHError.invalidState("wait for park() or resume() to finish draining")
-        }
         if let runtime, await runtime.machine.currentState() == .parked {
             try await resumeWithoutGate()
             return
         }
-        if state == .failed {
-            throw PhoneDSHError.hostFailed(lastError ?? "the host is in the failed state")
+        // A failure is a retryable state, not a dead end. A persisted `failed`
+        // now boots into its retry window (Backoff until `next_retry_at_ms`,
+        // Recovering after it), and a transient boot failure leaves the live
+        // controller in `Backoff`. `start()` used to refuse both up front;
+        // that refusal is exactly what made one bad handshake permanent (the
+        // App had no path back without `userReset()`).
+        if let runtime {
+            let controller = await runtime.machine.currentState()
+            if state == .failed {
+                // The controller's `Failed` is absorbing for its own
+                // incarnation, so rebuild it from `host-state.json`: the
+                // persisted retry window (not this facade) decides whether the
+                // boot may proceed. `prepareMachineForBoot` throws
+                // `backoffNotElapsed` while the window is still closed, and
+                // `beginStart` preserves the state instead of failing.
+                await releaseFailedRuntime(runtime)
+                setState(.stopped)
+                try await beginStart()
+                return
+            }
+            if state == .starting, controller == .backoff {
+                try await resumeFromFailedBoot(runtime)
+                return
+            }
+        } else if state == .failed {
+            // No live services: `beginStart` builds the controller from disk,
+            // so the same persisted retry window applies.
+            setState(.stopped)
+            try await beginStart()
+            return
+        }
+        if state == .starting || state == .running { return }
+        if state == .draining {
+            throw PhoneDSHError.invalidState("wait for park() or resume() to finish draining")
         }
         try await beginStart()
     }
@@ -306,6 +378,10 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             setState(.stopped)
             return
         }
+        // A deliberate park replaces any deferred termination recovery: the
+        // foreground return resumes the parked host instead of booting a
+        // replacement Worker.
+        pendingRecovery = false
         guard state != .stopped else { return }
         guard !restarting else {
             throw PhoneDSHError.invalidState("a planned restart is already draining")
@@ -366,7 +442,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             }
             try await closeRuntimeForPark(runtime)
         } catch {
-            await fail(error)
+            await failClassifying(error, context: "park")
             throw error
         }
     }
@@ -381,6 +457,11 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     internal func setDrainWindowProbeForTesting(
         _ probe: (@Sendable (WorkspaceLog) async throws -> Void)?) {
         drainWindowProbe = probe
+    }
+
+    internal func setFailureSealProbeForTesting(
+        _ probe: (@Sendable () async throws -> Void)?) {
+        failureSealProbeForTesting = probe
     }
 
     /// Installs the pre-suspension handoff probe used by the facade
@@ -422,6 +503,11 @@ public actor PhoneDSHHost: PhoneDSHHosting {
 
     /// Boots a parked host again (`Parked -> Recovering -> Running`). Admission
     /// stays closed until the Worker HELLO and the lease are verified.
+    ///
+    /// A boot that failed transiently leaves the live controller in `Backoff`;
+    /// a foreground `resume()` is the natural retry request for it, so it goes
+    /// through the same D24 deadline as a persisted Backoff instead of
+    /// refusing. Every other non-parked controller is still refused.
     public func resume() async throws {
         try beginExclusiveOperation(.resume)
         defer { endExclusiveOperation(.resume) }
@@ -435,7 +521,12 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             throw PhoneDSHError.invalidState(
                 "reclaim the remote workspace before resuming locally")
         }
-        guard await runtime.machine.currentState() == .parked else {
+        let controller = await runtime.machine.currentState()
+        if controller == .backoff {
+            try await resumeFromFailedBoot(runtime)
+            return
+        }
+        guard controller == .parked else {
             throw PhoneDSHError.invalidState("resume requires a parked controller")
         }
         setState(.starting)
@@ -443,7 +534,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             _ = try await runtime.machine.handle(.scenePhase(.active))
             try await bootRuntime(runtime)
         } catch {
-            await fail(error)
+            await failClassifying(error, context: "resume")
             throw error
         }
     }
@@ -477,6 +568,9 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         }
         restarting = true
         defer { restarting = false }
+        // A deliberate restart replaces any deferred termination recovery: its
+        // own replacement Worker serves the same purpose.
+        pendingRecovery = false
         // Close admission before the drain: once this returns no new side
         // effect can enter the host, while the in-flight responses may still
         // complete on the existing connection.
@@ -512,41 +606,27 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             // built at the same durable WAL tail.
             try await sealEpochAfterControllerClose(runtime)
             setState(.starting)
-            await runtime.coordinator.prepareForReboot()
-            // D24 step 4: rebuild the overlay (gzip, D21) and the Worker.
-            _ = try await runtime.log.overlay(bootID: bootID)
-            let report: WebEngineRestartReport?
-            if let requesting = runtime.engine as? WebEngineRestartRequesting {
-                report = try await requesting.restart(reason: .planned)
-            } else if let engine = runtime.engine {
-                try await engine.bootWorker(runtime.engineConfiguration)
-                report = nil
-            } else {
-                throw PhoneDSHError.notStarted
-            }
-            // G2-F01 epoch ordering: the old Worker channel was still connected
-            // through the seal above and can write a child journal in that
-            // shutdown window. Only now --- after the replacement Worker has
-            // actually booted --- is no child Activation from the old Worker
-            // resident. Moving the cutoff here keeps a child spawned during the
-            // shutdown window stale (its journal predates this instant), while
-            // a child the replacement Worker creates later remains current.
-            // Clearing the route-reported live set here also prevents an old
-            // Worker's late child from being mistaken for a replacement-Worker
-            // descendant.
-            beginWorkerIncarnation()
-            let hello = try await runtime.coordinator.waitForHello(
-                timeout: configuration.helloTimeout)
-            // D13/G2-C07: a planned Worker restart can interrupt a tool call
-            // exactly like an abnormal termination. DSH reconciles its tool
-            // journal only on a write-open of the stored session, so drive the
-            // same bounded write-open before reopening admission. A helper
-            // failure stays inside this restart's fail-loud path; admission
-            // therefore remains closed and `sendOpenFrames` is never reached.
-            try await waitForWorkerToCloseOrphanSteps(
-                runtime, reason: "planned-restart")
-            try await verifyLease(hello, runtime: runtime)
-            try await sendOpenFrames(hello.connection, runtime: runtime)
+            // D24 step 4: rebuild the overlay (gzip, D21) and the Worker. A
+            // `.boot`-class failure retries with a fresh channel barrier, a
+            // fresh page and a fresh Worker (see
+            // ``bootReplacementWorker(_:reason:orphanReason:incarnationCutoffAfterBoot:publishReportImmediately:)``);
+            // only an exhausted retry budget reaches `fail(_:)`.
+            let report = try await bootReplacementWorker(
+                runtime,
+                reason: .planned,
+                orphanReason: "planned-restart",
+                // G2-F01 epoch ordering: the old Worker channel was still
+                // connected through the seal above and can write a child
+                // journal in that shutdown window. Only after the replacement
+                // Worker has actually booted is no child Activation from the
+                // old Worker resident. Moving the cutoff there keeps a child
+                // spawned during the shutdown window stale (its journal
+                // predates that instant), while a child the replacement Worker
+                // creates later remains current. Clearing the route-reported
+                // live set here also prevents an old Worker's late child from
+                // being mistaken for a replacement-Worker descendant.
+                incarnationCutoffAfterBoot: true,
+                publishReportImmediately: false)
             setState(.running)
             if let report {
                 publishRestart(report)
@@ -567,7 +647,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             } catch {
                 // The restart failure below is the actionable error.
             }
-            await fail(error)
+            await failClassifying(error, context: "planned restart")
             throw error
         }
     }
@@ -601,6 +681,9 @@ public actor PhoneDSHHost: PhoneDSHHosting {
               await coordinator.phase == .idle else {
             throw PhoneDSHError.invalidState("handoff requires a running local host")
         }
+        // A handoff owns the Worker from here; a deferred termination recovery
+        // would only compete with its drain.
+        pendingRecovery = false
         do {
             if let handoffPreparationProbe {
                 try await handoffPreparationProbe()
@@ -644,7 +727,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
                 // Before the CAS the coordinator fails the controller. Any
                 // unexpected refusal still fails loud instead of leaving a
                 // running controller without its local Worker.
-                await fail(error)
+                await failClassifying(error, context: "handoff")
             }
             throw error
         }
@@ -726,7 +809,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         do {
             outcome = try await reclaimRemoteWorkspace(credential: credential)
         } catch {
-            if coldStart { await fail(error) }
+            if coldStart { await failClassifying(error, context: "cold reclaim") }
             throw error
         }
         // The applier rewrote the manifest/WAL while the old runtime was
@@ -861,7 +944,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             } catch {
                 let current = await coordinator.controllerState()
                 if current == .failed {
-                    await fail(error)
+                    await failClassifying(error, context: "reclaim")
                 } else {
                     // Stay Reclaiming: the token and the remote's cached
                     // response make another attempt idempotent.
@@ -889,7 +972,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
                     await context.machine.shutdown()
                     await drainMachineObserver()
                     remoteHandoff = nil
-                    await fail(error)
+                    await failClassifying(error, context: "reclaim")
                 } else {
                     setState(.starting)
                 }
@@ -1189,6 +1272,55 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         self.runtime = nil
     }
 
+    /// Releases the services of a failed incarnation before a cold rebuild.
+    ///
+    /// `fail(_:)` already closed admission, stopped the loopback and sealed the
+    /// WAL; the remaining observers and the model gateway are released here so
+    /// the rebuilt runtime owns the workspace alone. Called only by
+    /// ``startWithoutGate()`` when a `Failed` host is asked to start again.
+    private func releaseFailedRuntime(_ runtime: RuntimeServices) async {
+        engineObserver?.cancel()
+        engineObserver = nil
+        await runtime.loopback.stop()
+        _ = await runtime.coordinator.waitForInboundWritesToQuiesce()
+        await runtime.machine.shutdown()
+        await drainMachineObserver()
+        await runtime.gateway.shutdown()
+        self.runtime = nil
+    }
+
+    /// Retries the boot of a host whose transient failure left the live
+    /// controller in its persisted `Backoff`.
+    ///
+    /// The controller's own D24 deadline decides: a start before it throws
+    /// ``PhoneDSHError/backoffNotElapsed(_:)`` with the persisted window (and
+    /// the facade state) intact, exactly like the cold-boot path. Once the
+    /// window elapsed the machine enters `Recovering` and the live services are
+    /// booted again by ``bootRuntime(_:)``.
+    private func resumeFromFailedBoot(_ runtime: RuntimeServices) async throws {
+        do {
+            do {
+                _ = try await runtime.machine.resumeFromPersistedBackoff()
+            } catch let error as HostStateError {
+                if case .backoffDeadlineNotReached(let deadline) = error {
+                    throw PhoneDSHError.backoffNotElapsed(deadline)
+                }
+                throw error
+            }
+            setState(.starting)
+            try await bootRuntime(runtime, reconcileOrphans: true)
+        } catch {
+            if let phoneError = error as? PhoneDSHError,
+               case .backoffNotElapsed = phoneError {
+                // A healthy wait, not a failure: keep the persisted deadline
+                // and let the App retry with start() once it elapses.
+                throw error
+            }
+            await failClassifying(error, context: "start")
+            throw error
+        }
+    }
+
     /// Finishes the transition stream and waits for its observer to consume the
     /// buffered records. Callers must `await machine.shutdown()` first.
     private func drainMachineObserver() async {
@@ -1201,12 +1333,12 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     /// Clears the fail-loud state after the user acknowledged it (D14
     /// `Failed -> Recovering`) and boots the host again.
     ///
-    /// A failed host stays failed — and ``start()`` keeps throwing
-    /// ``PhoneDSHError/hostFailed(_:)`` — until the App calls this method, so a
-    /// crash loop cannot be hidden behind an automatic retry. A host that was
-    /// stopped after the failure (no runtime is left, only the remembered
-    /// error) re-assembles its services from scratch; one that is still failed
-    /// in memory reuses them.
+    /// A failed host is not a dead end any more. A persisted `failed` maps into
+    /// its retry window at the next boot (`Backoff` until `next_retry_at_ms`,
+    /// then `Recovering`), and this explicit reset clears that window and
+    /// starts a new retry budget. A host that was stopped after the failure (no
+    /// runtime is left, only the remembered error) re-assembles its services
+    /// from scratch; one that is still failed in memory reuses them.
     public func reset() async throws {
         try await userReset()
     }
@@ -1242,7 +1374,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
                 _ = try await runtime.machine.handle(.userReset)
                 try await bootRuntime(runtime)
             } catch {
-                await fail(error)
+                await failClassifying(error, context: "reset")
                 throw error
             }
             return
@@ -1254,7 +1386,13 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     /// Reboots the engine on an assembled runtime and opens admission after
     /// the Worker HELLO and the fence are verified. Shared by ``resume()`` and
     /// ``reset()``; both start from the controller's `Recovering` state.
-    private func bootRuntime(_ runtime: RuntimeServices) async throws {
+    /// - Parameter reconcileOrphans: `true` on a retry that reopens admission
+    ///   after an earlier failure. A retry must not open admission over a step
+    ///   this host already gave up on (D13), so it reconciles first. A normal
+    ///   boot keeps the historical behaviour: the scenario/kill contracts
+    ///   expect an interrupted step to stay open until the run reconciles it.
+    private func bootRuntime(_ runtime: RuntimeServices,
+                             reconcileOrphans: Bool = false) async throws {
         // `userReset()` and `resume()` reuse a live runtime, so the pre-start
         // guard in `beginStart()` alone is not enough: a persisted unresolved
         // CAS intent must also keep this path closed. A definite-rejection
@@ -1288,8 +1426,19 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         try await engine.bootWorker(engineConfiguration)
         let hello = try await runtime.coordinator.waitForHello(timeout: configuration.helloTimeout)
         try await verifyLease(hello, runtime: runtime)
+        // D13: never open admission over a step this host gave up on. The
+        // replacement-Worker paths already reconcile before `sendOpenFrames`;
+        // the boot path needs the same guarantee, otherwise a retry after a
+        // failed settlement can reopen admission while the step record is
+        // still `tool_dispatched`. A boot with no open step pays nothing here.
+        if reconcileOrphans {
+            try await waitForWorkerToCloseOrphanSteps(runtime, reason: "boot-retry")
+        }
         try await sendOpenFrames(hello.connection, runtime: runtime)
         setState(.running)
+        // This boot supersedes any deferred termination: a foreground return
+        // must not inject a second recovery into a healthy host.
+        pendingRecovery = false
         await evaluateBudget(runtime)
     }
 
@@ -2354,6 +2503,8 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     }
 
     private func stopWithoutGate() async throws {
+        // A teardown also discards any deferred termination recovery.
+        pendingRecovery = false
         if runtime == nil {
             setState(.stopped)
             // Consumers of the single event sequence observe the end of the
@@ -2747,6 +2898,9 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         // this instant belong to an earlier boot/crash, even when a cold resume
         // reuses the same root session id.
         beginWorkerIncarnation()
+        // A fresh host incarnation supersedes a WebContent termination observed
+        // before it; the deferred recovery must not fire into this boot.
+        pendingRecovery = false
         // ``stop()`` finishes every event subscription; a restarted host
         // publishes on a fresh bus.
         eventBus.reopen()
@@ -2847,7 +3001,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             // D24: resolve the restored state before any service is started, so
             // a Backoff refusal needs no teardown and leaves the persisted
             // deadline untouched.
-            try await prepareMachineForBoot(machine, userReset: userReset)
+            try await prepareMachineForBoot(machine)
             let stepMachine = try StepMachine(root: configuration.workspaceRoot)
             let ledger = try SideEffectLedger(root: configuration.workspaceRoot)
             let recoveredJournal = await log.recoveredJournalSnapshot()
@@ -2961,7 +3115,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
                 setState(.stopped)
                 throw error
             }
-            await fail(error)
+            await failClassifying(error, context: "start")
             throw error
         }
     }
@@ -3002,14 +3156,20 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     /// Recovering` (D14). A persisted `Backoff` host may start once its D24
     /// retry deadline has passed and then follows `Backoff -> Recovering`; a
     /// persisted `Remote`/`HandingOff` state needs the reclaim path first, so a
-    /// plain start refuses it.
-    ///
-    /// `userReset` is the explicit user acknowledgement of a persisted
-    /// `Failed` controller (D14 `Failed -> Recovering`); only ``reset()`` /
-    /// ``userReset()`` sets it, so a plain ``start()`` keeps failing loud.
-    private func prepareMachineForBoot(_ machine: HostStateMachine,
-                                       userReset: Bool = false) async throws {
-        if userReset, await machine.currentState() == .failed {
+    /// plain start refuses it. A persisted `Failed` no longer refuses the boot:
+    /// `HostStateMachine.bootState(for:)` maps it into the persisted retry
+    /// window (`Backoff`, or `Recovering` once it elapsed), and a start before
+    /// the window throws ``PhoneDSHError/backoffNotElapsed(_:)`` — a healthy
+    /// wait that keeps the persisted state instead of failing the host.
+    private func prepareMachineForBoot(_ machine: HostStateMachine) async throws {
+        // A `Failed` controller no longer blocks the boot. `bootState(for:)`
+        // maps a persisted failure into its retry window (`Backoff` until
+        // `next_retry_at_ms`, `Recovering` after it), so a controller that
+        // still reports `Failed` here was built in this process: the explicit
+        // `start()`/`reset()` that got us here is the retry request, and the
+        // reset edge is the controller's only way out of its absorbing state.
+        // The normal `Recovering -> Running` lease check still gates admission.
+        if await machine.currentState() == .failed {
             _ = try await machine.handle(.userReset)
         }
         switch await machine.currentState() {
@@ -3027,9 +3187,6 @@ public actor PhoneDSHHost: PhoneDSHHosting {
                 throw error
             }
             return
-        case .failed:
-            throw PhoneDSHError.hostFailed(
-                await machine.lastError ?? lastError ?? "the controller is failed")
         case .remote:
             throw PhoneDSHError.invalidState("reclaim the remote workspace before starting locally")
         default:
@@ -3354,15 +3511,22 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         let ack: WorkspaceLogAck
         do {
             ack = try await runtime.log.sealEpochCoveringTail()
+        } catch let logError as LogError {
+            // D18: the durable tail evidence cannot be repaired by trying
+            // again, so a failed seal is a workspace fault. Wrapping it in
+            // `PhoneDSHError.invalidState` (as this used to) classified it as a
+            // retryable boot failure and let the host park a fence that is
+            // below the WAL tail.
+            throw HostFault.workspace(.log(logError))
         } catch {
             throw PhoneDSHError.invalidState(
                 "the WAL epoch close after the drain failed: \(error)")
         }
         let positions = await runtime.log.positions()
         guard positions.durableMseq >= positions.ackedMseq else {
-            throw PhoneDSHError.invalidState(
+            throw HostFault.workspace(.log(.epochCoverageFailed(
                 "the WAL tail \(positions.ackedMseq) is above durable_upto "
-                    + "\(positions.durableMseq) after the epoch close")
+                    + "\(positions.durableMseq) after the epoch close")))
         }
         let target = max(ack.uptoMseq, positions.durableMseq)
         do {
@@ -3393,6 +3557,10 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         let ack: WorkspaceLogAck
         do {
             ack = try await runtime.log.sealEpochCoveringTail()
+        } catch let logError as LogError {
+            // Same D18 rule as `sealEpochAtTailAndRecordFence`: a failed seal
+            // is durable evidence that a retry cannot repair.
+            throw HostFault.workspace(.log(logError))
         } catch {
             throw PhoneDSHError.invalidState(
                 "the WAL epoch close for the planned restart failed: \(error)")
@@ -3408,21 +3576,33 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         }
     }
 
-    private func fail(_ error: Error) async {
-        let message: String
-        if let phone = error as? PhoneDSHError {
-            message = phone.description
-        } else {
-            message = String(describing: error)
-        }
+    // MARK: - Failure
+
+    /// Fails this incarnation with the blast radius of a typed ``HostFault``.
+    ///
+    /// - `.boot` sends `.failure(reason:class: .transient)`: the controller
+    ///   moves to its persisted `Backoff` and the host stays retryable. A
+    ///   killed WebContent, a replacement Worker that answered a non-HELLO
+    ///   first frame (`PROTO_MISMATCH`) or a lost channel can never persist
+    ///   `failed` again.
+    /// - `.workspace` sends `.terminal`: the condition holds across a process,
+    ///   so this incarnation fails loud (the persisted retry window still lets
+    ///   the next boot try again).
+    ///
+    /// Both classifications keep the existing abort teardown: admission
+    /// closes, the loopback stops, the channel drops its connections and the
+    /// WAL is sealed at the accepted tail.
+    private func fail(_ fault: HostFault) async {
+        let message = fault.description
         lastError = message
         eventBus.send(.error(message))
         if let runtime {
-            // Failed is not a recovery window: never serve a replay from a
-            // host that has given up on this incarnation.
+            // Failed/Backoff is not a recovery window: never serve a replay
+            // from a host that has given up on this incarnation.
             runtime.gateway.setReplayWindow(open: false)
             if await runtime.machine.currentState() != .failed {
-                _ = try? await runtime.machine.handle(.failure(reason: message))
+                _ = try? await runtime.machine.handle(
+                    .failure(reason: message, class: fault.failureClass))
             }
             engineObserver?.cancel()
             engineObserver = nil
@@ -3436,18 +3616,57 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             // classify as stale. A seal failure keeps the host Failed and is
             // reported, never swallowed.
             do {
+                if let failureSealProbeForTesting {
+                    try await failureSealProbeForTesting()
+                }
                 _ = try await runtime.log.sealForStop()
             } catch {
                 let sealMessage = "the WAL stop seal failed: \(error)"
-                lastError = (lastError.map { "\($0); " } ?? "") + sealMessage
+                let combined = (lastError.map { "\($0); " } ?? "") + sealMessage
+                lastError = combined
                 eventBus.send(.error(sealMessage))
+                if await runtime.machine.currentState() != .failed {
+                    await runtime.machine.escalateFailureToTerminal(reason: combined)
+                }
             }
             if var services = self.runtime {
                 services.engine = nil
                 self.runtime = services
             }
         }
-        setState(.failed)
+        // Mirror the controller instead of assuming `failed`: a transient
+        // failure left it in `Backoff`, whose facade state is `starting`.
+        if let runtime {
+            setState(Self.facadeState(for: await runtime.machine.currentState()))
+        } else {
+            // No controller to ask: keep `start()` able to retry a boot fault
+            // (`.stopped`) and surface a workspace fault as failed.
+            setState(fault.isBoot ? .stopped : .failed)
+        }
+    }
+
+    /// Routes one caught error through ``HostFault/classify(_:)``.
+    ///
+    /// A classified value becomes a typed ``HostFault`` and goes to
+    /// ``fail(_:)``. A `nil` classification is either a documented
+    /// non-failure (a superseded boot, a VFS resource refusal, a host that is
+    /// already failed or backing off) or an unknown defect: the former is
+    /// reported and leaves the host alone, the latter keeps the caller's
+    /// fail-loud teardown (`unknownIsFailure`) because an unexpected error must
+    /// not silently leave a half-booted host.
+    private func failClassifying(_ error: Error,
+                                 context: String,
+                                 unknownIsFailure: Bool = true) async {
+        if let fault = HostFault.classify(error) {
+            await fail(fault)
+            return
+        }
+        if HostFault.isBenign(error) {
+            eventBus.send(.error("\(context): \(error) (not a host failure)"))
+            return
+        }
+        guard unknownIsFailure else { return }
+        await fail(.boot(.unclassified("\(context): \(error)")))
     }
 
     /// Acquires the one exclusive lifecycle/handoff operation before the
@@ -3520,6 +3739,11 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         if record.to == .failed, let runtime {
             lastError = await runtime.machine.lastError
         }
+        // `Running` is the healthy state; a host that recovered on its own must
+        // not keep reporting the reason it failed earlier.
+        if record.to == .running {
+            lastError = nil
+        }
         setState(Self.facadeState(for: record.to))
     }
 
@@ -3550,50 +3774,132 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         eventBus.send(.restarted(report))
     }
 
+    /// Installs the host's own process-lifecycle observer (P1).
+    ///
+    /// Idempotent, and installed by ``start()`` rather than left to the App:
+    /// the safety rule "do not boot WebContent from the background" must not
+    /// depend on every App remembering to forward `scenePhase`. On iOS the
+    /// current phase is emitted at install time so a host created in the
+    /// background cannot inherit the foreground default.
+    private func installProcessLifecycleObservation() {
+        guard processLifecycle == nil else { return }
+        let observer = PhoneDSHProcessLifecycle()
+        #if canImport(UIKit) && os(iOS)
+        observer.start { [weak self] phase in
+            Task { await self?.setForeground(phase == .active) }
+        }
+        #else
+        observer.start(emitCurrentPhase: false) { [weak self] phase in
+            Task { await self?.setForeground(phase == .active) }
+        }
+        #endif
+        processLifecycle = observer
+    }
+
+    /// Tells the host whether the App is in the foreground.
+    ///
+    /// A WebContent termination observed in the background only records the
+    /// recovery intent (P6: a Worker boot, WAL replay and epoch reopen need the
+    /// App to be foreground and not about to be reclaimed). This is where that
+    /// intent is consumed: switching to the foreground re-drives the ordinary
+    /// termination recovery with the real phase. Every other state is a no-op,
+    /// so an App that never reports the phase keeps the old behaviour
+    /// (`isForeground` defaults to `true`).
+    public func setForeground(_ foreground: Bool) async {
+        isForeground = foreground
+        guard foreground, pendingRecovery else { return }
+        await consumePendingRecovery()
+    }
+
+    /// Consumes one deferred WebContent recovery.
+    ///
+    /// The intent survives an operation that owned the lifecycle when the App
+    /// returned to the foreground; it is dropped when the controller is no
+    /// longer bootable (a park/resume/reset/handoff took over) or when the host
+    /// has no live services (a stopped host has to be started again). A
+    /// background termination whose edge the controller refused (its table can
+    /// still require the foreground) is retried here with the real phase
+    /// through ``recoverAfterTermination(_:)``.
+    private func consumePendingRecovery() async {
+        guard pendingRecovery else { return }
+        guard exclusiveOperation == nil, !parking, !restarting,
+              !recoveringTermination else {
+            // Keep the intent for the next foreground call instead of racing
+            // the operation that owns the controller.
+            return
+        }
+        guard let runtime, state != .stopped else {
+            pendingRecovery = false
+            return
+        }
+        let controller = await runtime.machine.currentState()
+        guard controller == .recovering || controller == .running
+                || controller == .draining else {
+            pendingRecovery = false
+            return
+        }
+        pendingRecovery = false
+        await recoverAfterTermination(terminations)
+    }
+
     private func recoverAfterTermination(_ count: UInt64) async {
         // A terminated WebContent must not inject a recovery boot into a
         // handoff, park, restart or stop that already owns the lifecycle.
         guard exclusiveOperation == nil else { return }
         guard let runtime else { return }
-        guard !parking, !restarting else { return }
+        guard !parking, !restarting, !recoveringTermination else { return }
+        // Claim the recovery before the first suspension: a second termination
+        // delivered while this one awaits the controller must not start a
+        // competing Worker. Every early return below releases the claim.
+        recoveringTermination = true
+        defer { recoveringTermination = false }
         let current = await runtime.machine.currentState()
-        guard current == .running || current == .draining else { return }
-        _ = try? await runtime.machine.handle(
-            .webContentTerminated(WebContentTermination(wasForeground: true,
-                                                        terminationCount: count)))
-        guard await runtime.machine.currentState() == .recovering else { return }
+        guard current == .running || current == .draining || current == .recovering
+        else { return }
+        if current != .recovering {
+            // Pass the real phase instead of the hard-coded `true`: the
+            // controller owns whether a background termination may close
+            // admission for recovery.
+            _ = try? await runtime.machine.handle(
+                .webContentTerminated(WebContentTermination(
+                    wasForeground: isForeground, terminationCount: count)))
+        }
+        guard await runtime.machine.currentState() == .recovering else {
+            // The controller refused the edge for this phase. The intent to
+            // recover still has to survive until the App is foreground again.
+            if !isForeground { pendingRecovery = true }
+            return
+        }
+        guard isForeground else {
+            // P6: never boot a WebContent process, replay the WAL or reopen an
+            // epoch in the background. Record the intent; the foreground
+            // return consumes it.
+            pendingRecovery = true
+            return
+        }
+        pendingRecovery = false
+        await runTerminationRecovery(runtime)
+    }
+
+    /// Runs the replacement-Worker recovery for a controller in `Recovering`.
+    ///
+    /// A `.boot`-class failure is retried inside ``bootReplacementWorker``;
+    /// only an exhausted retry budget reaches ``fail(_:)``, and that failure is
+    /// `.boot` (transient → `Backoff`), never a persisted `failed`. The caller
+    /// owns ``recoveringTermination``.
+    private func runTerminationRecovery(_ runtime: RuntimeServices) async {
         setState(.starting)
         do {
             // The termination recovery boots a new Worker. A child Activation
             // from the terminated Worker cannot survive into it; an old child
-            // journal must not be treated as this Worker's live descendant.
-            beginWorkerIncarnation()
-            await runtime.coordinator.prepareForReboot()
-            // Pick up every acknowledged mutation since the last epoch before
-            // the page reloads; the overlay route serves this file.
-            _ = try await runtime.log.overlay(bootID: bootID)
-            if let requesting = runtime.engine as? WebEngineRestartRequesting {
-                let report = try await requesting.restart(reason: .webContentTerminated)
-                // The engine normally publishes the same report on its own
-                // stream; publishRestart drops the copy that arrives second,
-                // and an engine whose event is late still gets exactly one.
-                publishRestart(report)
-            } else if let engine = runtime.engine {
-                try await engine.bootWorker(runtime.engineConfiguration)
-            } else {
-                throw PhoneDSHError.notStarted
-            }
-            let hello = try await runtime.coordinator.waitForHello(
-                timeout: configuration.helloTimeout)
-            // G2-FIX-93: the replacement Worker gets a bounded chance to
-            // reconcile the interrupted step itself. DSH only reconciles the
-            // tool journal when a stored session is opened for writing, so the
-            // host first drives that write-open for each affected session and
-            // only the steps still open after that window are abandoned.
-            try await waitForWorkerToCloseOrphanSteps(
-                runtime, reason: "worker-terminated")
-            try await verifyLease(hello, runtime: runtime)
-            try await sendOpenFrames(hello.connection, runtime: runtime)
+            // journal must not be treated as this Worker's live descendant
+            // (cutoff before the new boot for a termination).
+            _ = try await bootReplacementWorker(
+                runtime,
+                reason: .webContentTerminated,
+                orphanReason: "worker-terminated",
+                incarnationCutoffAfterBoot: false,
+                publishReportImmediately: true)
             setState(.running)
             await evaluateBudget(runtime)
         } catch {
@@ -3607,8 +3913,151 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             } catch {
                 // The recovery failure below is the actionable error.
             }
-            await fail(error)
+            await failClassifying(error, context: "worker termination recovery")
         }
+    }
+
+    // MARK: - Replacement Worker boot (bounded retry)
+
+    /// One boot attempt's share of the host HELLO budget.
+    ///
+    /// A retry sequence may spend at most one `helloTimeout` waiting for HELLO
+    /// in total. The first attempt that actually reaches the wait arms the
+    /// deadline; a later attempt only gets what is left. A Worker that consumed
+    /// the whole budget by not answering therefore is not granted the same
+    /// budget twice, while a fast bootstrap failure (the `PROTO_MISMATCH` case,
+    /// which fails before HELLO) keeps both retries.
+    private final class BootHelloBudget {
+        private var deadline: Date?
+
+        /// Remaining wait for the next `waitForHello`, capped at
+        /// `helloTimeout`; the first call arms the shared deadline.
+        func timeout(helloTimeout: TimeInterval) -> TimeInterval {
+            let budget = max(0, helloTimeout)
+            if let deadline {
+                return max(0, min(budget, deadline.timeIntervalSinceNow))
+            }
+            deadline = Date().addingTimeInterval(budget)
+            return budget
+        }
+
+        /// Whether enough window is left to justify another boot attempt.
+        var allowsRetry: Bool {
+            guard let deadline else { return true }
+            return deadline.timeIntervalSinceNow
+                > PhoneDSHHost.minimumRetryHelloBudget
+        }
+    }
+
+    /// Boots a replacement Worker for the controller's `Recovering` state,
+    /// retrying a `.boot`-class failure up to ``maximumBootRetries`` times.
+    ///
+    /// Every attempt re-runs ``prepareForReboot()`` (so no connection or HELLO
+    /// from the failed attempt survives), rebuilds the overlay from the current
+    /// materialized tree and boots a fresh page/Worker. The engine's restart
+    /// lever issues a new page `boot_id` on every call; the `bootWorker`
+    /// fallback is the same cold boot the host performs on start, preceded by
+    /// the same channel barrier and overlay rebuild. The retries share one
+    /// HELLO budget (``BootHelloBudget``) and are separated by
+    /// ``bootRetryBackoff``; a workspace-class failure is rethrown immediately
+    /// because the next attempt would fail the same way.
+    ///
+    /// - Returns: the engine's restart report of the successful attempt, when
+    ///   the engine reports one.
+    private func bootReplacementWorker(
+        _ runtime: RuntimeServices,
+        reason: WebEngineRestartReason,
+        orphanReason: String,
+        incarnationCutoffAfterBoot: Bool,
+        publishReportImmediately: Bool
+    ) async throws -> WebEngineRestartReport? {
+        let budget = BootHelloBudget()
+        var lastError: Error?
+        var attempt = 0
+        while attempt <= Self.maximumBootRetries {
+            if attempt > 0 {
+                guard budget.allowsRetry else { break }
+                // Give a just-killed WebContent process a moment before the
+                // next page spawns; the sleep is part of the retry budget.
+                try? await Task.sleep(
+                    nanoseconds: UInt64(Self.bootRetryBackoff * 1_000_000_000))
+            }
+            do {
+                return try await bootReplacementWorkerOnce(
+                    runtime,
+                    reason: reason,
+                    orphanReason: orphanReason,
+                    incarnationCutoffAfterBoot: incarnationCutoffAfterBoot,
+                    publishReportImmediately: publishReportImmediately,
+                    helloBudget: budget)
+            } catch {
+                lastError = error
+                guard let fault = HostFault.classify(error), fault.isBoot else {
+                    // A workspace-scoped failure would fail identically on
+                    // every attempt: hand it to the caller's fail-loud path.
+                    throw error
+                }
+                attempt += 1
+                NSLog("phone-dsh: replacement Worker boot attempt %d failed (%@): %@",
+                      attempt, reason.rawValue, fault.description)
+            }
+        }
+        throw lastError ?? PhoneDSHError.startTimedOut(
+            "the replacement Worker did not boot inside the retry budget")
+    }
+
+    /// One replacement-Worker boot attempt.
+    private func bootReplacementWorkerOnce(
+        _ runtime: RuntimeServices,
+        reason: WebEngineRestartReason,
+        orphanReason: String,
+        incarnationCutoffAfterBoot: Bool,
+        publishReportImmediately: Bool,
+        helloBudget: BootHelloBudget
+    ) async throws -> WebEngineRestartReport? {
+        if !incarnationCutoffAfterBoot {
+            beginWorkerIncarnation()
+        }
+        await runtime.coordinator.prepareForReboot()
+        // Pick up every acknowledged mutation since the last epoch before the
+        // page reloads; the overlay route serves this file.
+        _ = try await runtime.log.overlay(bootID: bootID)
+        let report = try await bootEngine(runtime, reason: reason)
+        if incarnationCutoffAfterBoot {
+            beginWorkerIncarnation()
+        }
+        if publishReportImmediately, let report {
+            // The engine normally publishes the same report on its own stream;
+            // `publishRestart` drops the copy that arrives second, and an
+            // engine whose event is late still gets exactly one.
+            publishRestart(report)
+        }
+        let hello = try await runtime.coordinator.waitForHello(
+            timeout: helloBudget.timeout(helloTimeout: configuration.helloTimeout))
+        // D13/G2-C07/G2-FIX-93: a replacement Worker can interrupt a tool call
+        // exactly like an abnormal termination. DSH reconciles its tool journal
+        // only on a write-open of the stored session, so drive the same bounded
+        // write-open before reopening admission. A helper failure stays inside
+        // this boot's fail-loud path; admission therefore remains closed and
+        // `sendOpenFrames` is never reached.
+        try await waitForWorkerToCloseOrphanSteps(runtime, reason: orphanReason)
+        try await verifyLease(hello, runtime: runtime)
+        try await sendOpenFrames(hello.connection, runtime: runtime)
+        return report
+    }
+
+    /// Boots the Worker on the current engine, preferring the restart lever.
+    private func bootEngine(_ runtime: RuntimeServices,
+                            reason: WebEngineRestartReason) async throws
+        -> WebEngineRestartReport? {
+        if let requesting = runtime.engine as? WebEngineRestartRequesting {
+            return try await requesting.restart(reason: reason)
+        }
+        if let engine = runtime.engine {
+            try await engine.bootWorker(runtime.engineConfiguration)
+            return nil
+        }
+        throw PhoneDSHError.notStarted
     }
 
     /// Budget for one recovery write-open inside the host's remaining grace.

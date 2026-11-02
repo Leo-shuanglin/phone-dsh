@@ -672,6 +672,9 @@ public fun SessionsPage(
     onRetry: (() -> Unit)? = null,
     onDismissFailure: (() -> Unit)? = null,
     onBack: (() -> Unit)? = null,
+    onOpenDrawer: (() -> Unit)? = null,
+    /** Whether this host can really create or mutate a workspace root. */
+    workspaceActionsAvailable: Boolean = true,
     onToggleWorkspace: (SessionWorkspaceView) -> Unit = {},
     onWorkspaceMenuToggle: (SessionWorkspaceView) -> Unit = {},
     onNewSessionInWorkspace: (SessionWorkspaceView) -> Unit = {},
@@ -711,7 +714,7 @@ public fun SessionsPage(
             // both platforms; only the back control inside it is Android's own (a
             // drawer has nothing behind it, a route does), so it is drawn only when
             // the host routes this page.
-            SessionsNavBar(onBack = onBack)
+            SessionsNavBar(onBack = onBack, onOpenDrawer = onOpenDrawer)
             if (state.waiting) {
                 EmptyHint(
                     title = UiStrings.WAITING_ENGINE,
@@ -761,6 +764,7 @@ public fun SessionsPage(
                         onRestoreArchived = onRestoreArchived,
                         onSessionMenuToggle = onSessionMenuToggle,
                         onArchiveSession = onArchiveSession,
+                        workspaceActionsAvailable = workspaceActionsAvailable,
                     )
                 }
             }
@@ -821,7 +825,7 @@ public fun SessionsPage(
  * presentation — passes `null` and gets the empty band the baseline draws.
  */
 @Composable
-private fun SessionsNavBar(onBack: (() -> Unit)?) {
+private fun SessionsNavBar(onBack: (() -> Unit)?, onOpenDrawer: (() -> Unit)?) {
     val tokens = LocalUiTokens.current
     Row(
         modifier = Modifier
@@ -839,6 +843,30 @@ private fun SessionsNavBar(onBack: (() -> Unit)?) {
                     .semantics { contentDescription = UiStrings.BACK }
                     .padding(tokens.spacing.iconText),
             )
+        } else if (onOpenDrawer != null) {
+            Box(
+                modifier = Modifier
+                    .size(tokens.geometry.pageHeaderMinHeight)
+                    .clickable(role = Role.Button, onClick = onOpenDrawer)
+                    .semantics { contentDescription = UiStrings.HEADER_DRAWER }
+                    .testTag("sessions.drawer"),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Canvas(Modifier.size(DRAWER_GLYPH_WIDTH_PT.dp, DRAWER_GLYPH_HEIGHT_PT.dp)) {
+                    val xEnd = size.width
+                    val rows = 3
+                    repeat(rows) { index ->
+                        val y = size.height * (index + 0.5f) / rows
+                        drawLine(
+                            color = tokens.colors.secondary,
+                            start = Offset.Zero.copy(y = y),
+                            end = Offset(xEnd, y),
+                            strokeWidth = DRAWER_GLYPH_STROKE_PT.dp.toPx(),
+                            cap = StrokeCap.Round,
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -875,6 +903,12 @@ private fun SessionsSearchField(query: String, onQueryChange: (String) -> Unit) 
             .testTag(UiPageTags.SESSIONS_SEARCH),
         contentAlignment = Alignment.CenterStart,
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(SESSIONS_SEARCH_GLYPH_GAP_PT.dp),
+        ) {
+            SessionsSearchGlyph(ink = tokens.colors.secondary)
         BasicTextField(
             value = query,
             onValueChange = onQueryChange,
@@ -885,7 +919,7 @@ private fun SessionsSearchField(query: String, onQueryChange: (String) -> Unit) 
             ),
             cursorBrush = SolidColor(tokens.colors.accent),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            modifier = Modifier.fillMaxWidth().semantics {
+            modifier = Modifier.weight(1f).semantics {
                 contentDescription = UiStrings.SESSION_SEARCH
             },
             decorationBox = { inner ->
@@ -900,6 +934,29 @@ private fun SessionsSearchField(query: String, onQueryChange: (String) -> Unit) 
                 }
                 inner()
             },
+        )
+        }
+    }
+}
+
+/** The iOS search field's 16 pt `magnifyingglass` symbol. */
+@Composable
+private fun SessionsSearchGlyph(ink: Color) {
+    Canvas(Modifier.size(SESSIONS_SEARCH_GLYPH_SIZE_PT.dp)) {
+        val radius = size.minDimension * 0.31f
+        val center = Offset(size.width * 0.39f, size.height * 0.39f)
+        val stroke = size.minDimension * 0.11f
+        drawCircle(color = ink, radius = radius, center = center, style = Stroke(width = stroke))
+        val handleStart = Offset(
+            center.x + radius * 0.7f,
+            center.y + radius * 0.7f,
+        )
+        drawLine(
+            color = ink,
+            start = handleStart,
+            end = Offset(size.width * 0.88f, size.height * 0.88f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
         )
     }
 }
@@ -922,6 +979,7 @@ private fun SessionsList(
     onRestoreArchived: (ArchivedRowView) -> Unit,
     onSessionMenuToggle: (SessionRowView) -> Unit,
     onArchiveSession: (SessionRowView) -> Unit,
+    workspaceActionsAvailable: Boolean,
 ) {
     val tokens = LocalUiTokens.current
     LazyColumn(
@@ -931,7 +989,7 @@ private fun SessionsList(
         // row of air above; the group at `SessionsPage.swift:139` is untitled, so
         // the air stays and no header is invented for it.
         item(key = "section-air") {
-            Box(modifier = Modifier.fillMaxWidth().heightIn(min = tokens.geometry.pageListRowMinHeight))
+            Box(modifier = Modifier.fillMaxWidth().height(SESSIONS_SEARCH_TO_NEW_AIR_PT.dp))
         }
 
         // Section 1: new session, its blocked reason, the failure line and
@@ -961,7 +1019,7 @@ private fun SessionsList(
                                 // unverified geometry: the baseline leaves ~26 pt
                                 // between the hairline and this sentence; the
                                 // section gap token is the closest published inset.
-                                top = LocalUiTokens.current.spacing.cardInset,
+                                top = SESSIONS_BLOCK_REASON_TOP_PT.dp,
                                 end = LocalUiTokens.current.geometry.pageOuterMarginH,
                                 bottom = LocalUiTokens.current.spacing.badgeInsetV,
                             ),
@@ -987,7 +1045,10 @@ private fun SessionsList(
         // empty; a filter that hides every ungrouped row also counts.
         if (state.completelyEmpty) {
             item(key = "empty-drawer") {
-                CompletelyEmptyBlock(onCreateWorkspace = onAddWorkspace)
+                CompletelyEmptyBlock(
+                    onCreateWorkspace = onAddWorkspace,
+                    showCreateAction = workspaceActionsAvailable,
+                )
             }
         }
 
@@ -1010,6 +1071,8 @@ private fun SessionsList(
                     onNewSession = onNewSessionInWorkspace,
                     onRename = onRenameWorkspaceStart,
                     onDelete = onDeleteWorkspaceRequest,
+                    modifier = Modifier.padding(top = SESSIONS_WORKSPACE_SECTION_GAP_PT.dp),
+                    showMenu = workspaceActionsAvailable,
                 )
             }
             if (workspace.expanded) {
@@ -1046,7 +1109,7 @@ private fun SessionsList(
 
         // Section 4: add a workspace. The completely-empty block already
         // owns the entry point, so the row is hidden in that state.
-        if (!state.completelyEmpty) {
+        if (!state.completelyEmpty && workspaceActionsAvailable) {
             item(key = "add-workspace") {
                 AddWorkspaceRow(onAddWorkspace = onAddWorkspace)
             }
@@ -1349,7 +1412,7 @@ private fun SessionItem(
 
 /** The completely-empty drawer: title, one sentence and the full-width CTA. */
 @Composable
-private fun CompletelyEmptyBlock(onCreateWorkspace: () -> Unit) {
+private fun CompletelyEmptyBlock(onCreateWorkspace: () -> Unit, showCreateAction: Boolean) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     Column(
@@ -1361,12 +1424,12 @@ private fun CompletelyEmptyBlock(onCreateWorkspace: () -> Unit) {
             .padding(
                 start = tokens.geometry.pageOuterMarginH,
                 end = tokens.geometry.pageOuterMarginH,
-                top = tokens.spacing.cardInset,
+                top = SESSIONS_EMPTY_TOP_PT.dp,
                 bottom = SessionsMetrics.EMPTY_STATE_BOTTOM_PT.dp,
             )
             .semantics(mergeDescendants = true) {},
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
+        verticalArrangement = Arrangement.spacedBy(SESSIONS_EMPTY_STACK_GAP_PT.dp),
     ) {
         BasicText(
             text = UiStrings.WORKSPACE_EMPTY,
@@ -1378,10 +1441,10 @@ private fun CompletelyEmptyBlock(onCreateWorkspace: () -> Unit) {
             style = type.secondary.copy(color = tokens.colors.secondary, textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth(),
         )
-        Box(
+        if (showCreateAction) Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = SessionsMetrics.EMPTY_STATE_CTA_TOP_PT.dp)
+                .padding(top = SESSIONS_EMPTY_CTA_TOP_PT.dp)
                 .clip(RoundedCornerShape(SessionsMetrics.ctaRadius))
                 // The baseline's CTA fill is the page-layer blue
                 // (`NativePagePalette.accentFill` #2F5BFF), not the theme accent
@@ -1415,11 +1478,13 @@ private fun WorkspaceRow(
     onNewSession: (SessionWorkspaceView) -> Unit,
     onRename: (SessionWorkspaceView) -> Unit,
     onDelete: (SessionWorkspaceView) -> Unit,
+    modifier: Modifier = Modifier,
+    showMenu: Boolean = true,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = SessionsMetrics.workspaceRowHeight)
             .padding(horizontal = tokens.geometry.pageOuterMarginH),
@@ -1467,7 +1532,7 @@ private fun WorkspaceRow(
                 )
             }
         }
-        Box {
+        if (showMenu) Box {
             // The baseline's hit box is 32 x 44 with the mark centred in it
             // (`SessionsPage.swift:451-457`).
             Box(
@@ -1572,7 +1637,7 @@ private fun WorkspaceSessionsEmpty() {
                 // unverified geometry: the baseline's 24 pt lead-in is the spec's
                 // compact-list row floor; no gap token publishes 24.
                 start = tokens.geometry.pageOuterMarginH,
-                top = tokens.geometry.pageListRowMinHeight,
+                top = WORKSPACE_SESSIONS_EMPTY_TOP_PT.dp,
                 end = tokens.geometry.pageOuterMarginH,
                 bottom = tokens.geometry.cardOuterMarginV,
             )
@@ -1602,7 +1667,7 @@ private fun AddWorkspaceRow(onAddWorkspace: () -> Unit) {
             .clickable(role = Role.Button, onClick = onAddWorkspace)
             // Page-level geometry: a list action row.
             .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-            .padding(horizontal = tokens.geometry.pageOuterMarginH),
+            .padding(horizontal = SESSIONS_ADD_WORKSPACE_INSET_PT.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetH),
     ) {
@@ -2044,7 +2109,6 @@ internal object SessionsPageTokens {
         UiTokenNames.COLORS_TERTIARY,
         UiTokenNames.GEOMETRY_CARD_OUTER_MARGIN_V,
         UiTokenNames.GEOMETRY_PAGE_HEADER_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_PAGE_LIST_ROW_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
         UiTokenNames.RADIUS_CARD,
@@ -2292,6 +2356,27 @@ private const val WORKSPACE_MENU_GLYPH_H_PT: Float = 4f
 
 /** The baseline's row gap before the check mark: `Spacer(minLength: 4)` (`:572`). */
 private const val SESSIONS_CHECK_GAP_PT: Int = 4
+/** 402 pt capture: the new-session title was 12.4 pt too low after the search field. */
+private const val SESSIONS_SEARCH_TO_NEW_AIR_PT: Float = 31.6f
+/** 402 pt capture: restore the measured ~26.7 pt separator-to-blocked-copy gap. */
+private const val SESSIONS_BLOCK_REASON_TOP_PT: Float = 26.7f
+/** SwiftUI List's measured section lead-in before each workspace row. */
+private const val SESSIONS_WORKSPACE_SECTION_GAP_PT: Float = 13.4f
+/** Title alignment after the upstream list-air correction. */
+private const val SESSIONS_EMPTY_TOP_PT: Float = 24f
+/** Compensates for Android's 3.3 pt taller title-to-hint ink gap. */
+private const val SESSIONS_EMPTY_STACK_GAP_PT: Float = 4.7f
+/** Measured CTA top offset after title/hint line-box differences. */
+private const val SESSIONS_EMPTY_CTA_TOP_PT: Float = 13.4f
+/** iOS's default section/list spacing before the expanded-folder empty copy. */
+private const val WORKSPACE_SESSIONS_EMPTY_TOP_PT: Float = 61.3f
+/** iOS inset for the add-workspace section row. */
+private const val SESSIONS_ADD_WORKSPACE_INSET_PT: Float = 32.7f
+private const val SESSIONS_SEARCH_GLYPH_SIZE_PT: Float = 16f
+private const val SESSIONS_SEARCH_GLYPH_GAP_PT: Float = 6.4f
+private const val DRAWER_GLYPH_WIDTH_PT: Int = 20
+private const val DRAWER_GLYPH_HEIGHT_PT: Int = 16
+private const val DRAWER_GLYPH_STROKE_PT: Float = 1.7f
 
 /** The row's pressed fill: `.easeIn(duration: 0.15)` (`SessionsPage.swift:652`). */
 private const val ROW_PRESS_MS: Int = 150

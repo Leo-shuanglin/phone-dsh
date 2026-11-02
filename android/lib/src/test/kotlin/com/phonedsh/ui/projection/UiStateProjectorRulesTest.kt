@@ -12,12 +12,15 @@ import com.phonedsh.agentcore.HarnessEvent
 import com.phonedsh.agentcore.HarnessKind
 import com.phonedsh.agentcore.HarnessPermissionRequest
 import com.phonedsh.agentcore.HarnessQuestion
+import com.phonedsh.agentcore.HarnessQuestionItem
 import com.phonedsh.agentcore.HarnessToolRisk
 import com.phonedsh.agentcore.HarnessTurnEnd
+import com.phonedsh.agentcore.JsonArray
 import com.phonedsh.agentcore.JsonNumber
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -267,6 +270,39 @@ class UiStateProjectorRulesTest {
         val card = UiStateProjector.project(events).single { it.kind == UiStateKind.APPROVAL_CARD }
         assertEquals("question", (card.props["kind"] as JsonString).value)
         assertEquals("pick one", card.text)
+        val items = (card.props["questionItems"] as JsonArray).values
+        assertEquals(1, items.size)
+        assertEquals("answer", ((items.single() as JsonObject)["id"] as JsonString).value)
+    }
+
+    @Test
+    fun `a question row retains every host question item without inventing metadata`() {
+        val card = UiStateProjector.project(
+            listOf(
+                event(
+                    HarnessKind.QuestionRequested(
+                        HarnessQuestion(
+                            requestId = "q-multi",
+                            prompt = "fallback",
+                            questions = listOf(
+                                HarnessQuestionItem(
+                                    id = "color", prompt = "Pick a color", options = listOf("blue"), multiple = false,
+                                ),
+                                HarnessQuestionItem(
+                                    id = "days", prompt = "Which days?", options = listOf("Mon", "Tue"), multiple = true,
+                                ),
+                            ),
+                        ),
+                    ),
+                    seq = null,
+                ),
+            ),
+        ).single { it.kind == UiStateKind.APPROVAL_CARD }
+        val items = (card.props["questionItems"] as JsonArray).values.map { it as JsonObject }
+        assertEquals(listOf("color", "days"), items.map { (it["id"] as JsonString).value })
+        assertEquals("Which days?", (items.last()["prompt"] as JsonString).value)
+        assertFalse(items.last().members.containsKey("detail"))
+        assertFalse(items.last().members.containsKey("intentKind"))
     }
 
     @Test

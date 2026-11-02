@@ -50,11 +50,9 @@ struct WebSearchSettingsPage: View {
             restartSection
             footerSection
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Color.white)
+        .homeGroupedList()
         .navigationTitle("网页搜索")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .task { _ = reload() }
         // 离开这一页也提交:打完字直接返回是最常见的动作,不能把字丢了。
         // 提交失败不拦返回、不弹窗,内容留在编辑器里,下次进来还是那句红字。
@@ -92,18 +90,18 @@ struct WebSearchSettingsPage: View {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(modeTitle(value))
-                                .foregroundStyle(Color(red: 0x11 / 255, green: 0x11 / 255, blue: 0x14 / 255))
+                                .foregroundStyle(HomeSpec.textPrimary)
                             // 每个选项自己一句,只让选中那项看得见;两句都留位置,切换时下面的地址和密钥不跳。
                             Text(modeSubtitle(value))
                                 .font(.system(size: 13))
-                                .foregroundStyle(Color(red: 0x66 / 255, green: 0x66 / 255, blue: 0x6B / 255))
+                                .foregroundStyle(HomeSpec.textSecondary)
                                 .opacity(mode == value ? 1 : 0)
                         }
                         Spacer(minLength: 8)
                         if mode == value {
                             Image(systemName: "checkmark")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(Color(red: 0x2F / 255, green: 0x5B / 255, blue: 0xFF / 255))
+                                .font(.system(size: HomeSpec.bodySize, weight: .semibold))
+                                .foregroundStyle(HomeSpec.primaryButton)
                         }
                     }
                     .frame(height: 56)
@@ -483,22 +481,22 @@ struct WebSearchSettingsPage: View {
     }
 }
 
-/// 这一页唯一的主按钮:蓝底白字可按,灰底灰字按不动。圆角 12、高 50。
+/// 这一页唯一的主按钮:黑色胶囊白字可按,灰底灰字按不动。高 50。
 private struct SaveKeyButtonStyle: ButtonStyle {
     var enabled: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 17, weight: .semibold))
+            .font(.system(size: HomeSpec.bodySize, weight: .semibold))
             .foregroundStyle(enabled
                              ? Color.white
-                             : Color(red: 0x8A / 255, green: 0x8A / 255, blue: 0x90 / 255))
+                             : HomeSpec.textPlaceholder)
             .frame(maxWidth: .infinity, minHeight: 50)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                Capsule()
                     .fill(enabled
-                          ? Color(red: 0x2F / 255, green: 0x5B / 255, blue: 0xFF / 255)
-                          : Color(red: 0xE5 / 255, green: 0xE5 / 255, blue: 0xEA / 255))
+                          ? HomeSpec.primaryButton
+                          : HomeSpec.userBubble)
             )
             .opacity(configuration.isPressed ? 0.85 : 1)
     }

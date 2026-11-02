@@ -21,6 +21,7 @@ package com.phonedsh.ui.nav
 
 import androidx.compose.runtime.Immutable
 import com.phonedsh.ui.page.AutomationFacts
+import com.phonedsh.ui.page.AutomationScheduleDraft
 import com.phonedsh.ui.page.BackgroundFacts
 import com.phonedsh.ui.page.BusyEnterMode
 import com.phonedsh.ui.page.ConfigurationFacts
@@ -167,9 +168,30 @@ public sealed interface PdshHostAction {
         override val wire: String = "automation.history.more"
     }
 
+    /** Read one schedule's history page, carrying its opaque cursor when present. */
+    public data class LoadAutomationHistory(
+        public val id: String,
+        public val before: String? = null,
+    ) : PdshHostAction {
+        override val wire: String = "automation.history"
+    }
+
     /** Open the host's schedule editor; `null` means a new schedule. */
     public data class OpenAutomationEditor(public val id: String?) : PdshHostAction {
         override val wire: String = "automation.editor"
+    }
+
+    /** Save one validated schedule draft; the host reports a reread receipt. */
+    public data class SaveAutomationSchedule(
+        public val draft: AutomationScheduleDraft,
+        public val submissionID: String,
+    ) : PdshHostAction {
+        override val wire: String = "automation.save"
+    }
+
+    /** Delete one schedule after the confirmation the page displayed. */
+    public data class DeleteAutomationSchedule(public val id: String) : PdshHostAction {
+        override val wire: String = "automation.delete"
     }
 
     /** Re-read the session configuration. */
@@ -195,7 +217,11 @@ public sealed interface PdshHostAction {
      * the key to its device store and keeps nothing else. A host that cannot
      * persist the draft reports that instead of moving the facts.
      */
-    public data class SaveProvider(public val draft: ProviderDraft) : PdshHostAction {
+    public data class SaveProvider(
+        public val draft: ProviderDraft,
+        /** Non-secret UI correlation id; never included in the action wire/log. */
+        public val requestId: String = "",
+    ) : PdshHostAction {
         override val wire: String = "provider.save"
     }
 

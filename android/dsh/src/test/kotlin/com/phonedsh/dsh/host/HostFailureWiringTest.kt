@@ -20,6 +20,7 @@
 //   cd shell && cargo build -p pdsh-jni
 
 package com.phonedsh.dsh.host
+import org.junit.Assert.assertFalse
 
 import com.phonedsh.controller.Admission
 import com.phonedsh.controller.ControllerFailure
@@ -205,6 +206,59 @@ class HostFailureWiringTest {
         }
     }
 
+    @Test
+    fun resetFailureStartsTheHostBeforeFeedingUserResetAndRestartsTheWorker() {
+        FakePlatform().use { platform ->
+            val controller = ControllerStateMachine.boot(
+                persistedState = HostState.FAILED,
+                persistedFailure = ControllerFailure.HOST_DEFECT,
+                persistedFailureDetail = "a prior engine failure",
+            )
+            val host = newHost(platform, controller = controller)
+            try {
+                assertEquals(HostState.FAILED, host.state.value)
+                assertEquals(0, platform.engine.startCount)
+
+                assertTrue("the failed host accepts an explicit user reset", host.resetFailure())
+                assertEquals(
+                    "start preparation runs before the controller sees UserReset; " +
+                        "a fresh Worker start follows that transition",
+                    2,
+                    platform.engine.startCount,
+                )
+                assertEquals("user reset uses the host's serialized D14 handle path", "userReset", controller.transitions.single().signal)
+                assertEquals(HostState.RECOVERING, host.state.value)
+                assertEquals(Admission.CLOSED, controller.admission)
+                assertTrue("the host remains ready to receive the replacement Worker's HELLO", host.ready.value)
+                assertFalse("a second reset is rejected once Failed has been left", host.resetFailure())
+
+                platform.engine.setState(EngineHostState.Running("http://127.0.0.1:41234", 41234))
+                runBlocking {
+                    withTimeout(5_000) { host.state.first { it == HostState.RUNNING } }
+                }
+                assertEquals(Admission.OPEN, controller.admission)
+                assertNull(controller.lastFailure)
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    @Test
+    fun resetFailureIsRejectedOutsideFailedWithoutStartingTheHost() {
+        FakePlatform().use { platform ->
+            val host = newHost(platform)
+            try {
+                assertEquals(HostState.RECOVERING, host.state.value)
+                assertFalse(host.resetFailure())
+                assertEquals(0, platform.engine.startCount)
+                assertEquals(HostState.RECOVERING, host.state.value)
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
     // ---- the closed mapping itself -----------------------------------------
 
     @Test
@@ -251,11 +305,12 @@ class HostFailureWiringTest {
 
     private fun newHost(
         platform: FakePlatform,
+        controller: ControllerStateMachine = ControllerStateMachine.boot(persistedState = null),
         wal: HostWal? = null,
         journal: JournalStore? = null,
     ): DefaultPhoneDshHost = DefaultPhoneDshHost(
         engine = platform.engine,
-        controller = ControllerStateMachine.boot(persistedState = null),
+        controller = controller,
         clock = platform,
         signals = platform,
         notifier = platform,

@@ -6,9 +6,9 @@
 // [PdshPresentation] here:
 //
 //   * PUSH      — a page stack; the page header's back pops one level
-//                 (工作文件夹, 定时任务, 网页搜索, MCP 服务器, 出网白名单);
+//                 (工作文件夹, 网页搜索, MCP 服务器, 出网白名单);
 //   * SHEET     — a modal over the current page, closed by its own 完成/返回
-//                 (设置, 模型服务, 运行状态, 本会话设置, 工作面板);
+//                 (定时任务, 设置, 模型服务, 运行状态, 本会话设置, 工作面板);
 //   * FULLSCREEN — the Web surface: no header and no back stack.
 //
 // This file owns navigation state only. It never reads the engine, the clock or
@@ -85,9 +85,9 @@ public sealed interface PdshRoute {
         override val presentation: PdshPresentation = PdshPresentation.PUSH
     }
 
-    /** 抽屉「定时任务」; §1: push, child detail/history views are page-local. */
+    /** 抽屉「定时任务」; `SessionsPage.swift:345-347` presents the catalog as a sheet. */
     public data object Automation : PdshRoute {
-        override val presentation: PdshPresentation = PdshPresentation.PUSH
+        override val presentation: PdshPresentation = PdshPresentation.SHEET
     }
 
     /** 页头 `⋯`; §1: sheet, closed by 完成. Read-only on this host. */

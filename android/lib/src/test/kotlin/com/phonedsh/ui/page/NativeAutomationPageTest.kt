@@ -18,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -27,6 +28,8 @@ import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
@@ -116,7 +119,7 @@ class NativeAutomationPageTest {
     private fun showLive(
         facts: AutomationFacts,
         initial: AutomationLocalState = AutomationLocalState(),
-        onLoadMore: () -> Unit = {},
+        onLoadMore: (String, String?) -> Unit = { _, _ -> },
         onEdit: (String) -> Unit = {},
     ) {
         compose.setContent {
@@ -140,7 +143,10 @@ class NativeAutomationPageTest {
     @Test
     fun `an empty schedule list is the empty state, not the unknown state`() {
         val state = AutomationScreenState.from(
-            AutomationFacts(snapshot = AutomationSnapshot(schedules = emptyList())),
+            AutomationFacts(
+                snapshot = AutomationSnapshot(schedules = emptyList()),
+                currentSessionID = "worker-session-1",
+            ),
         )
         assertEquals(AutomationStatus.EMPTY, state.status)
         assertTrue(state.isEmpty)
@@ -255,7 +261,10 @@ class NativeAutomationPageTest {
     @Test
     fun `the catalog draws the iOS bar and the large title`() {
         val state = AutomationScreenState.from(
-            AutomationFacts(snapshot = AutomationSnapshot(schedules = emptyList())),
+            AutomationFacts(
+                snapshot = AutomationSnapshot(schedules = emptyList()),
+                currentSessionID = "worker-session-1",
+            ),
         )
         var refreshed = 0
         var created = 0
@@ -339,6 +348,36 @@ class NativeAutomationPageTest {
     }
 
     @Test
+    fun `history paging passes the selected schedule and the host cursor`() {
+        var requested: Pair<String, String?>? = null
+        val facts = fullFacts().copy(
+            snapshot = requireNotNull(fullFacts().snapshot).copy(
+                history = AutomationHistory(
+                    scheduleId = "daily",
+                    deliveries = listOf(
+                        AutomationDelivery("delivery-1", "10:00", "09:00"),
+                    ),
+                    hasMore = true,
+                    before = "opaque-cursor",
+                ),
+            ),
+        )
+        showLive(
+            facts = facts,
+            initial = AutomationLocalState(
+                route = AutomationRoute.HISTORY,
+                selectedScheduleId = "daily",
+            ),
+            onLoadMore = { id, before -> requested = id to before },
+        )
+
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_HISTORY_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_HISTORY_MORE))
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_HISTORY_MORE).performClick()
+        assertEquals("daily" to "opaque-cursor", requested)
+    }
+
+    @Test
     fun `the catalog opens the detail, hands editing to the host and then shows history`() {
         var edited: String? = null
         showLive(fullFacts(), onEdit = { edited = it })
@@ -363,9 +402,8 @@ class NativeAutomationPageTest {
             UiStrings.AUTOMATION_LATEST_DELIVERY_FORMAT.format("2026-10-31 09:00"),
         ).assertIsDisplayed()
 
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_DETAIL)
-            .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_EDIT))
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDIT).performClick()
+        compose.onNodeWithTag("automation.detail.menu").performClick()
+        compose.onNodeWithTag("automation.detail.menu.edit").performClick()
         assertEquals("daily", edited)
 
         compose.onNodeWithTag(UiPageTags.AUTOMATION_DETAIL)
@@ -407,18 +445,15 @@ class NativeAutomationPageTest {
         compose.onNodeWithTag(UiPageTags.AUTOMATION_LIST)
             .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_ROW_PREFIX + "daily"))
         compose.onNodeWithTag(UiPageTags.AUTOMATION_ROW_PREFIX + "daily").performClick()
-        // The 提醒 and 投递记录 groups now precede the two verb rows (`:129`–`:146`),
-        // so a 640 dp viewport scrolls to them first.
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_DETAIL)
-            .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_EDIT))
+        // Edit and delete live in the iOS detail page's trailing toolbar Menu.
+        compose.onNodeWithTag("automation.detail.menu").performClick()
         compose.onNodeWithText(UiStrings.AUTOMATION_EDIT_SHORT).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.AUTOMATION_EDIT_SHORT).performClick()
+        compose.onNodeWithTag("automation.detail.menu.edit").performClick()
         assertEquals(1, edited)
 
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_DETAIL)
-            .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_DELETE))
+        compose.onNodeWithTag("automation.detail.menu").performClick()
         compose.onNodeWithText(UiStrings.AUTOMATION_DELETE).assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_DELETE).performClick()
+        compose.onNodeWithTag("automation.detail.menu.delete").performClick()
         // `NativeAutomationPage.swift:102`–`:109`: the destructive verb and a cancel.
         compose.onNode(isDialog()).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.AUTOMATION_CONFIRM_DELETE).assertIsDisplayed()
@@ -428,6 +463,41 @@ class NativeAutomationPageTest {
         compose.onNodeWithTag(UiPageTags.AUTOMATION_DELETE_CANCEL).performClick()
         assertEquals(1, cancelled)
         compose.onNodeWithText(UiStrings.AUTOMATION_DELETE_TASK).assertDoesNotExist()
+    }
+
+    @Test
+    fun `weekly weekdays field accepts its comma separated iOS format`() {
+        val draft = AutomationScheduleDraft(
+            rule = AutomationRule.WEEKLY,
+            timeZone = "Etc/UTC",
+            weekdays = "",
+        )
+        val local = AutomationLocalState().apply(AutomationUiEvent.OpenEditor(draft))
+        compose.setContent {
+            var state by remember { mutableStateOf(local) }
+            PdshTheme {
+                NativeAutomationPage(
+                    state = AutomationScreenState.from(
+                        AutomationFacts(snapshot = AutomationSnapshot(schedules = emptyList())),
+                        state,
+                    ),
+                    onBack = {},
+                    onOpenDetail = {},
+                    onOpenHistory = {},
+                    onBackToCatalog = {},
+                    onDraftChange = { next ->
+                        state = state.apply(AutomationUiEvent.EditDraft(next))
+                    },
+                )
+            }
+        }
+
+        val weekdaysTag = UiPageTags.AUTOMATION_EDITOR_FIELD_PREFIX + "weekdays"
+        compose.onNodeWithTag(weekdaysTag).performScrollTo().performTextInput("1,2,3,4,5")
+        // A number-only keyboard rejects or makes punctuation unreachable on
+        // common Android IMEs; the iOS baseline explicitly uses
+        // numbersAndPunctuation for this comma-separated value.
+        compose.onNodeWithTag(weekdaysTag).assertTextEquals("1,2,3,4,5")
     }
 
     @Test

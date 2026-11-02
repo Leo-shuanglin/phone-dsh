@@ -11,6 +11,7 @@ package com.phonedsh.ui.page
 import androidx.compose.ui.test.assertAny
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
@@ -27,6 +28,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.input.key.Key
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.SpecFixtures
 import com.phonedsh.ui.UiStrings
@@ -38,14 +42,21 @@ import com.phonedsh.ui.state.ChatRow
 import com.phonedsh.ui.state.ChatScreenState
 import com.phonedsh.ui.state.ToolEntry
 import com.phonedsh.ui.state.ChatPhase
+import com.phonedsh.ui.state.EngineLifecycleFacts
+import com.phonedsh.ui.state.EngineLifecycleStatus
+import com.phonedsh.ui.state.BannerState
 import com.phonedsh.ui.state.ComposerCommand
 import com.phonedsh.ui.state.EffortOption
 import com.phonedsh.ui.state.EnterMode
 import com.phonedsh.ui.state.GoalBarState
 import com.phonedsh.ui.state.PendingAnswer
+import com.phonedsh.ui.state.PendingQuestionItem
+import com.phonedsh.ui.state.PendingQuestionOption
+import com.phonedsh.ui.state.PendingSlot
 import com.phonedsh.ui.state.RunStatus
 import com.phonedsh.ui.projection.UiStateKind
 import com.phonedsh.ui.state.TranscriptState
+import com.phonedsh.ui.state.TodoDockItem
 import com.phonedsh.ui.state.string
 import com.phonedsh.ui.theme.PdshTheme
 import org.junit.Assert.assertEquals
@@ -65,17 +76,28 @@ class ChatPageTest {
 
     @Test
     fun `the page head shows the session title and the run status word`() {
-        // ChatPage.swift `chatHeader` + NativeShell.swift `RunStatusDot`.
+        // ChatPage.swift `chatHeaderTitleRow` + NativeDeviceEntryIcon.
         show(state(case = "chat-basic"), title = "会话甲")
         compose.onNodeWithTag(UiPageTags.CHAT_HEADER_TITLE).assertIsDisplayed()
         compose.onNodeWithText("会话甲").assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.RUN_STATUS_STARTED).assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.chat.header.device").assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.RUN_STATUS_STARTED).assertDoesNotExist()
     }
 
     @Test
-    fun `a stopped engine reads 未启动 in the head`() {
+    fun `the device header icon opens the real device connections route`() {
+        var opened = 0
+        show(state(case = "chat-basic"), onOpenDeviceConnections = { opened += 1 })
+        compose.onNodeWithTag("pdsh.chat.header.device").performClick()
+        assertEquals(1, opened)
+    }
+
+    @Test
+    fun `a stopped engine status is reached from the header menu, not displayed as a header badge`() {
         show(ChatScreenState.from(SpecFixtures.projectCase("chat-basic")))
-        compose.onNodeWithText(UiStrings.RUN_STATUS_STOPPED).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.RUN_STATUS_STOPPED).assertDoesNotExist()
+        compose.onNodeWithTag(UiPageTags.CHAT_HEADER_MENU).performClick()
+        compose.onNodeWithText(UiStrings.HEADER_RUN_STATUS).assertIsDisplayed()
     }
 
     @Test
@@ -248,18 +270,16 @@ class ChatPageTest {
     }
 
     @Test
-    fun `two asks are both drawn as cards`() {
-        // ChatPage.swift `cardsRegion` at this HEAD (`:844-880`): the region holds
-        // the pending cards themselves; the older 「还有 1 个待确认」 fold line is
-        // gone from the baseline, so neither it nor its replacement row is drawn.
+    fun `permission stays in the card region while a question takes the composer seat`() {
+        // ChatPage.swift `questionTakeover` replaces the bottom composer seat.
         val nodes = SpecFixtures.projectCase("permission-flow") + listOf(
             questionNode("q-1"),
         )
         show(ChatScreenState.from(nodes))
         compose.onNodeWithTag(UiPageTags.CHAT_PENDING_MORE).assertDoesNotExist()
         compose.onNodeWithText(UiStrings.MORE_PENDING).assertDoesNotExist()
-        // Both asks are drawn as their own card (the card surface shares one tag).
-        compose.onAllNodesWithTag(UiTags.APPROVAL_CARD).assertCountEquals(2)
+        compose.onAllNodesWithTag(UiTags.APPROVAL_CARD).assertCountEquals(1)
+        compose.onNodeWithTag("pdsh.chat.question-takeover").assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.CHAT_QUESTION_SUBMIT).assertExists()
     }
 
@@ -276,14 +296,66 @@ class ChatPageTest {
                 answer = json
             },
         )
-        compose.onNodeWithTag(UiTags.APPROVAL_CARD).assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.chat.question-takeover").assertIsDisplayed()
         compose.onNodeWithText("改用表格").performClick()
         compose.onNodeWithTag(UiPageTags.CHAT_QUESTION_SUBMIT).performClick()
         if (answered == null) {
             println("TREE " + compose.onRoot().printToString(maxDepth = 100))
         }
         assertEquals("q-1", answered?.requestId)
-        assertEquals("""{"answer":"改用表格"}""", answer)
+        assertEquals("""{"answer":["改用表格"]}""", answer)
+    }
+
+    @Test
+    fun `the multi question takeover retains earlier answers and serializes skipped steps`() {
+        val base = ChatScreenState.from(listOf(questionNode("q-1")))
+        val pending = requireNotNull(base.pending.primary).copy(
+            questionItems = listOf(
+                PendingQuestionItem(
+                    id = "goal",
+                    prompt = "选择目标",
+                    options = listOf(PendingQuestionOption("目标 A"), PendingQuestionOption("目标 B")),
+                ),
+                PendingQuestionItem(id = "notes", prompt = "补充说明"),
+            ),
+        )
+        var answer: String? = null
+        show(base.copy(pending = PendingSlot(primary = pending)), onSubmitAnswer = { _, json -> answer = json })
+        compose.onNodeWithText("选择目标").assertIsDisplayed()
+        compose.onNodeWithText("目标 A").performClick()
+        compose.onNodeWithText("下一题").performClick()
+        compose.onNodeWithText("补充说明").assertIsDisplayed()
+        compose.onNodeWithText("跳过").performClick()
+        assertEquals("""{"goal":["目标 A"],"notes":[]}""", answer)
+    }
+
+    @Test
+    fun `plan review requires explicit plan metadata and routes its real choices`() {
+        val base = ChatScreenState.from(listOf(questionNode("q-plan")))
+        val pending = requireNotNull(base.pending.primary).copy(
+            questionItems = listOf(
+                PendingQuestionItem(
+                    id = "review",
+                    prompt = "请审阅计划",
+                    detail = "# 整理资料\n\n归档来源文件",
+                    intentKind = "plan-review",
+                    approveWireLabel = "approve",
+                ),
+            ),
+        )
+        var answer: String? = null
+        var dismissed: String? = null
+        show(
+            base.copy(pending = PendingSlot(primary = pending)),
+            onSubmitAnswer = { _, json -> answer = json },
+            onDismissQuestion = { dismissed = it.requestId },
+        )
+        compose.onNodeWithTag("pdsh.chat.plan-review-takeover").assertIsDisplayed()
+        compose.onNodeWithText("整理资料").assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.chat.plan-review-approve").performClick()
+        assertEquals("""{"review":["approve"]}""", answer)
+        compose.onNodeWithTag("pdsh.chat.plan-review-change").performClick()
+        assertEquals("q-plan", dismissed)
     }
 
     // ---------------------------------------------------------- transcript
@@ -298,6 +370,39 @@ class ChatPageTest {
         compose.onNodeWithText(UiStrings.ENGINE_NOT_STARTED).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.CHAT_START_ENGINE).performClick()
         assertEquals(1, started)
+    }
+
+    @Test
+    fun `a stopped engine can accept a first prompt when the host reports send-to-start`() {
+        val state = ChatScreenState.from(
+            emptyList(),
+            host = ChatHostFacts(
+                engineStarted = false,
+                lifecycle = EngineLifecycleFacts(
+                    status = EngineLifecycleStatus.STOPPED,
+                    canStartBySending = true,
+                ),
+            ),
+        )
+        assertTrue(state.composer.enabled)
+        show(state)
+        compose.onNodeWithTag(UiTags.COMPOSER_FIELD).assertIsDisplayed()
+        compose.onNodeWithTag(UiTags.COMPOSER_FIELD).assertIsEnabled()
+    }
+
+    @Test
+    fun `engine failure banner exposes the explicit restart acknowledgement`() {
+        var restarted = 0
+        val state = state(case = "chat-basic").copy(
+            userFacingError = "引擎启动失败",
+            failedItemID = null,
+            banners = listOf(BannerState("engine-failure", "引擎启动失败", "failed", false, true)),
+            lifecycle = EngineLifecycleFacts(status = EngineLifecycleStatus.FAILED, needsReset = true),
+        )
+        show(state, onRestartEngine = { restarted += 1 })
+        compose.onNodeWithTag("pdsh.chat.restart-engine").assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.chat.restart-engine").performClick()
+        assertEquals(1, restarted)
     }
 
     @Test
@@ -448,6 +553,27 @@ class ChatPageTest {
     }
 
     @Test
+    fun `the todo dock collapses and expands real host task rows`() {
+        val state = ChatScreenState.from(
+            emptyList(),
+            host = ChatHostFacts(
+                engineStarted = true,
+                todoItems = listOf(
+                    TodoDockItem(id = "todo-1", content = "整理会议记录", status = "in_progress"),
+                    TodoDockItem(id = "todo-2", content = "发送纪要", status = "pending"),
+                ),
+            ),
+        )
+        show(state)
+        compose.onNodeWithTag("pdsh.chat.todo-dock").assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.chat.todo-row.todo-1").assertDoesNotExist()
+        compose.onNodeWithTag("pdsh.chat.todo-dock").performClick()
+        compose.onNodeWithTag("pdsh.chat.todo-row.todo-1").assertIsDisplayed()
+        compose.onNodeWithText("整理会议记录").assertIsDisplayed()
+        compose.onNodeWithText("1 进行中\u2002·\u20021 待处理").assertIsDisplayed()
+    }
+
+    @Test
     fun `the pending attachments strip removes by index`() {
         // ChatPage.swift `attachmentStrip`.
         var removed: Int? = null
@@ -465,6 +591,60 @@ class ChatPageTest {
         compose.onNodeWithContentDescription(UiStrings.COMPOSER_REMOVE_IMAGE.format("b.png"))
             .performClick()
         assertEquals(1, removed ?: -1)
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun `slash menu supports arrow tab enter and escape while command picks update the draft`() {
+        var draft: String? = null
+        var selected: String? = null
+        show(
+            state(
+                case = "chat-basic",
+                draft = "/g",
+                commands = listOf(ComposerCommand("goal", "目标"), ComposerCommand("grep", "搜索")),
+            ),
+            onDraftChange = { draft = it },
+            onPickCommand = { selected = it },
+        )
+        val field = compose.onNodeWithTag(UiTags.COMPOSER_FIELD)
+        compose.onNodeWithTag(UiPageTags.COMPOSER_SLASH_MENU).assertIsDisplayed()
+        field.performClick()
+        field.performKeyInput {
+            keyDown(Key.DirectionDown)
+            keyUp(Key.DirectionDown)
+        }
+        compose.onNodeWithTag("pdsh.chat.slash-command.grep").assertIsSelected()
+        field.performKeyInput {
+            keyDown(Key.Tab)
+            keyUp(Key.Tab)
+        }
+        assertEquals("grep", selected)
+        assertEquals("/grep ", draft)
+        compose.onNodeWithTag(UiPageTags.COMPOSER_SLASH_MENU).assertDoesNotExist()
+
+        draft = null
+        show(
+            state(case = "chat-basic", draft = "/g", commands = listOf(ComposerCommand("goal", "目标"))),
+            onDraftChange = { draft = it },
+        )
+        compose.onNodeWithTag(UiTags.COMPOSER_FIELD).performKeyInput {
+            keyDown(Key.Escape)
+            keyUp(Key.Escape)
+        }
+        compose.onNodeWithTag(UiPageTags.COMPOSER_SLASH_MENU).assertDoesNotExist()
+        assertEquals(null, draft)
+    }
+
+    @Test
+    fun `reference selection inserts a path or an at-prefixed session without a host callback`() {
+        var draft: String? = null
+        show(
+            state(case = "chat-basic", draft = "@notes", files = listOf("notes/brief.md")),
+            onDraftChange = { draft = it },
+        )
+        compose.onNodeWithText("notes/brief.md").performClick()
+        assertEquals("notes/brief.md ", draft)
     }
 
     @Test
@@ -640,6 +820,7 @@ class ChatPageTest {
     private fun show(
         state: ChatScreenState,
         title: String = "",
+        onDraftChange: (String) -> Unit = {},
         onSend: () -> Unit = {},
         onStop: () -> Unit = {},
         onApprove: (PendingAnswer) -> Unit = {},
@@ -650,11 +831,15 @@ class ChatPageTest {
         onOpenArtifacts: (() -> Unit)? = null,
         onOpenWorkbench: (() -> Unit)? = null,
         onOpenRunStatus: () -> Unit = {},
+        onOpenDeviceConnections: () -> Unit = {},
         onOpenSessionSettings: () -> Unit = {},
         onStartEngine: () -> Unit = {},
+        onRestartEngine: () -> Unit = {},
         onConfigureProvider: () -> Unit = {},
         onLoadEarlier: () -> Unit = {},
         onSubmitAnswer: (PendingAnswer, String) -> Unit = { _, _ -> },
+        onDismissQuestion: (PendingAnswer) -> Unit = {},
+        onExecuteCommand: ((String) -> Unit)? = null,
         onRemoveAttachment: (Int) -> Unit = {},
         onPickCommand: (String) -> Unit = {},
         onPickReference: (String) -> Unit = {},
@@ -670,7 +855,7 @@ class ChatPageTest {
             PdshTheme {
                 ChatPage(
                     state = state,
-                    onDraftChange = {},
+                    onDraftChange = onDraftChange,
                     onSend = onSend,
                     onStop = onStop,
                     onToggleRow = {},
@@ -689,11 +874,15 @@ class ChatPageTest {
                     onOpenArtifacts = onOpenArtifacts,
                     onOpenWorkbench = onOpenWorkbench,
                     onOpenRunStatus = onOpenRunStatus,
+                    onOpenDeviceConnections = onOpenDeviceConnections,
                     onOpenSessionSettings = onOpenSessionSettings,
                     onStartEngine = onStartEngine,
+                    onRestartEngine = onRestartEngine,
                     onConfigureProvider = onConfigureProvider,
                     onLoadEarlier = onLoadEarlier,
                     onSubmitAnswer = onSubmitAnswer,
+                    onDismissQuestion = onDismissQuestion,
+                    onExecuteCommand = onExecuteCommand,
                     onRemoveAttachment = onRemoveAttachment,
                     onPickCommand = onPickCommand,
                     onPickReference = onPickReference,
@@ -782,13 +971,15 @@ class ChatPageTest {
     )
 
     @Test
-    fun `the run status dot announces its word`() {
+    fun `run status does not add a dot to the iOS page header`() {
         val state = ChatScreenState.from(
             SpecFixtures.projectCase("chat-basic"),
             host = ChatHostFacts(engineStarted = true, parked = true),
         )
         assertEquals(RunStatus.PARKED, state.runStatus)
         show(state)
-        compose.onNodeWithText(UiStrings.RUN_STATUS_PARKED).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.RUN_STATUS_PARKED).assertDoesNotExist()
+        compose.onNodeWithTag(UiPageTags.CHAT_HEADER_MENU).performClick()
+        compose.onNodeWithText(UiStrings.HEADER_RUN_STATUS).assertIsDisplayed()
     }
 }

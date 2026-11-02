@@ -27,6 +27,8 @@
 package com.phonedsh.probe
 
 import com.phonedsh.agentcore.JsonArray
+import com.phonedsh.agentcore.JsonBool
+import com.phonedsh.agentcore.JsonNull
 import com.phonedsh.agentcore.JsonNumber
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
@@ -59,6 +61,12 @@ internal data class ChatRecord(
     val updatedAtMs: Long,
     val workerSessionIds: List<String>,
     val nodes: List<UiStateNode>,
+    /** The real DSH working directory for this App-owned chat. */
+    val workspaceID: String? = ChatSessionStore.DEFAULT_WORKSPACE_ID,
+    /** Whether this chat is hidden in the recoverable archive section. */
+    val archived: Boolean = false,
+    /** Whether the user pinned this chat to the top of its group. */
+    val pinned: Boolean = false,
 ) {
     /** The Worker session the next turn should try first, or `null` before the first. */
     val workerSessionId: String? get() = workerSessionIds.lastOrNull()
@@ -89,8 +97,22 @@ internal class ChatSessionStore(private val store: DomainStore) {
             .sortedByDescending { it.updatedAtMs }
     }
 
+    /** Updates a stored chat's archive bit without replacing transcript content. */
+    fun setArchived(id: String, archived: Boolean): Boolean =
+        update(id) { record -> record.copy(archived = archived) }
+
+    /** Updates a stored chat's pin bit without replacing transcript content. */
+    fun setPinned(id: String, pinned: Boolean): Boolean =
+        update(id) { record -> record.copy(pinned = pinned) }
+
     /** Removes one record; `true` when a row existed. */
     fun delete(id: String): Boolean = store.delete(DOMAIN, key(id))
+
+    private fun update(id: String, transform: (ChatRecord) -> ChatRecord): Boolean {
+        val record = load(id) ?: return false
+        save(transform(record))
+        return true
+    }
 
     private fun key(id: String): String = PREFIX + id
 
@@ -103,6 +125,9 @@ internal class ChatSessionStore(private val store: DomainStore) {
             "workerSessionIds" to JsonArray(
                 record.workerSessionIds.map { JsonString(it) },
             ),
+            "workspaceID" to (record.workspaceID?.let(::JsonString) ?: JsonNull),
+            "archived" to JsonBool(record.archived),
+            "pinned" to JsonBool(record.pinned),
             // The node sequence is the `ui-state/1` canonical JSONL `:lib` writes,
             // carried as one string member so this envelope never re-implements the
             // node schema.
@@ -127,6 +152,13 @@ internal class ChatSessionStore(private val store: DomainStore) {
                     ?.mapNotNull { (it as? JsonString)?.value }
                     .orEmpty(),
                 nodes = nodes,
+                // Older chat snapshots predate these optional fields. Every
+                // chat/ row was created by this host in /dsh/workspace, so the
+                // persisted cwd is a safe backward-compatible default.
+                workspaceID = (root["workspaceID"] as? JsonString)?.value
+                    ?: DEFAULT_WORKSPACE_ID,
+                archived = (root["archived"] as? JsonBool)?.value ?: false,
+                pinned = (root["pinned"] as? JsonBool)?.value ?: false,
             )
         } catch (_: Exception) {
             // A damaged row is reported as absent; the next save for that chat
@@ -147,5 +179,8 @@ internal class ChatSessionStore(private val store: DomainStore) {
 
         /** A read bound, not a retention policy (the domain quota is the bound). */
         const val MAXIMUM_RECORDS: Int = 1000
+
+        /** The cwd all App-created chats pass to the DSH worker. */
+        const val DEFAULT_WORKSPACE_ID: String = "/dsh/workspace"
     }
 }

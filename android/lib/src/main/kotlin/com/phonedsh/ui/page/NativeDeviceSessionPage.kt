@@ -27,6 +27,7 @@
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,14 +36,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +62,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import com.phonedsh.domain.connector.DeviceAttachment
 import com.phonedsh.domain.connector.DeviceItemKind
 import com.phonedsh.domain.connector.DeviceSessionFailure
@@ -67,6 +75,7 @@ import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
+import com.phonedsh.ui.surface.MarkdownBody
 
 /** The session page's local UI state: which foldable rows the user opened. */
 public data class DeviceSessionLocalState(
@@ -165,14 +174,11 @@ public fun NativeDeviceSessionPage(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag(UiPageTags.DEVICE_SESSION_STRIP)
-                    .defaultMinSize(minHeight = tokens.geometry.pageListRowMinHeight)
-                    .padding(
-                        horizontal = tokens.geometry.pageOuterMarginH,
-                        vertical = tokens.spacing.iconText,
-                    )
+                    .height(DEVICE_SESSION_STRIP_HEIGHT_DP.dp)
+                    .padding(horizontal = tokens.geometry.pageOuterMarginH)
                     .semantics(mergeDescendants = true) {},
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+                horizontalArrangement = Arrangement.spacedBy(DEVICE_SESSION_LABEL_GAP_DP.dp),
             ) {
                 BasicText(
                     text = UiStrings.DEVICE_SESSION_TITLE,
@@ -198,10 +204,7 @@ public fun NativeDeviceSessionPage(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag(UiPageTags.DEVICE_SESSION_READ_ONLY)
-                    .padding(
-                        horizontal = tokens.geometry.pageOuterMarginH,
-                        vertical = tokens.spacing.badgeInsetV,
-                    )
+                    .padding(horizontal = tokens.geometry.pageOuterMarginH, vertical = READ_ONLY_BAR_INSET_DP.dp)
                     .semantics(mergeDescendants = true) {},
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -247,11 +250,22 @@ private fun DeviceTranscript(
         ) {
         if (state.loading) {
             item(key = "loading") {
-                DeviceSessionHint(
-                    title = UiStrings.DEVICE_SESSION_LOADING,
-                    hint = null,
-                    tag = UiPageTags.DEVICE_SESSION_EMPTY,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().testTag(UiPageTags.DEVICE_SESSION_EMPTY)
+                        .padding(top = DEVICE_SESSION_EMPTY_TOP_DP.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(DEVICE_SESSION_LOADING_MARK_SIZE_DP.dp),
+                        strokeWidth = DEVICE_SESSION_LOADING_MARK_STROKE_DP.dp,
+                    )
+                    BasicText(
+                        text = UiStrings.DEVICE_SESSION_LOADING,
+                        style = type.secondary.copy(color = tokens.colors.secondary),
+                        modifier = Modifier.padding(start = tokens.spacing.iconText),
+                    )
+                }
             }
         } else if (state.empty && state.failure == null) {
             item(key = "empty") {
@@ -259,6 +273,7 @@ private fun DeviceTranscript(
                     title = UiStrings.DEVICE_SESSION_EMPTY,
                     hint = UiStrings.DEVICE_SESSION_EMPTY_HINT,
                     tag = UiPageTags.DEVICE_SESSION_EMPTY,
+                    modifier = Modifier.padding(top = DEVICE_SESSION_EMPTY_TOP_DP.dp),
                 )
             }
         }
@@ -286,7 +301,10 @@ private fun DeviceTranscript(
                             onClick = onLoadEarlier,
                         )
                         .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-                        .padding(vertical = tokens.spacing.iconText),
+                            .clip(RoundedCornerShape(tokens.radius.card))
+                            .background(tokens.colors.input)
+                            .border(tokens.stroke.hairline, tokens.colors.border, RoundedCornerShape(tokens.radius.card))
+                            .padding(horizontal = tokens.spacing.cardInset, vertical = tokens.spacing.iconText),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
                 ) {
@@ -335,13 +353,12 @@ private fun DeviceReadOnlyRow(
     when (item.kind) {
         DeviceItemKind.USER, DeviceItemKind.DEVICE -> ParticipantBubble(item)
 
-        DeviceItemKind.ASSISTANT -> BasicText(
-            text = if (item.text.isEmpty() && item.streaming) {
+        DeviceItemKind.ASSISTANT -> MarkdownBody(
+            markdown = if (item.text.isEmpty() && item.streaming) {
                 DeviceTranscriptProjector.PLACEHOLDER
             } else {
                 item.text
             },
-            style = type.body.copy(color = tokens.colors.primary),
             modifier = Modifier.fillMaxWidth().padding(vertical = tokens.spacing.badgeInsetV),
         )
 
@@ -432,7 +449,9 @@ private fun Bubble(item: DeviceTranscriptItem, fromDevice: Boolean) {
             )
         }
         if (item.text.isNotEmpty()) {
-            BasicText(text = item.text, style = style.body.copy(color = tokens.colors.primary))
+            SelectionContainer {
+                BasicText(text = item.text, style = style.body.copy(color = tokens.colors.primary))
+            }
         }
         AttachmentLabels(item.attachments)
     }
@@ -578,15 +597,21 @@ private fun DeviceMonospaceCard(title: String, text: String, isError: Boolean) {
             style = type.caption.copy(color = tokens.colors.secondary),
             modifier = Modifier.semantics { heading() },
         )
-        BasicText(
-            text = text,
-            style = type.code.copy(
-                color = if (isError) tokens.colors.danger else tokens.colors.primary,
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = tokens.geometry.terminalCardMaxHeight),
-        )
+            SelectionContainer {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = tokens.geometry.terminalCardMaxHeight)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    BasicText(
+                        text = text,
+                        style = type.code.copy(
+                            color = if (isError) tokens.colors.danger else tokens.colors.primary,
+                        ),
+                    )
+                }
+            }
     }
 }
 
@@ -622,11 +647,11 @@ private fun DeviceSessionFailureLine(message: String) {
 
 /** A centred waiting/empty hint inside the transcript. */
 @Composable
-private fun DeviceSessionHint(title: String, hint: String?, tag: String) {
+private fun DeviceSessionHint(title: String, hint: String?, tag: String, modifier: Modifier = Modifier) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .testTag(tag)
             .padding(vertical = tokens.geometry.cardOuterMarginV)
@@ -662,6 +687,8 @@ internal object NativeDeviceSessionPageTokens {
     val refs: List<String> = listOf(
         UiTokenNames.COLORS_PRIMARY,
         UiTokenNames.COLORS_SECONDARY,
+        UiTokenNames.COLORS_INPUT,
+        UiTokenNames.COLORS_BORDER,
         UiTokenNames.COLORS_TERTIARY,
         UiTokenNames.COLORS_ACCENT,
         UiTokenNames.COLORS_DANGER,
@@ -673,6 +700,7 @@ internal object NativeDeviceSessionPageTokens {
         UiTokenNames.RADIUS_BUBBLE,
         UiTokenNames.RADIUS_CARD,
         UiTokenNames.SPACING_ICON_TEXT,
+        UiTokenNames.STROKE_HAIRLINE,
         UiTokenNames.SPACING_BADGE_INSET_V,
         UiTokenNames.SPACING_BADGE_INSET_H,
         UiTokenNames.SPACING_COPY_GAP,
@@ -703,3 +731,11 @@ private const val STREAMING_GLYPH: String = "…"
 private const val BUBBLE_TINT_ALPHA: Float = 0.09f
 private const val CARD_TINT_ALPHA: Float = 0.06f
 private const val FAILURE_TINT_ALPHA: Float = 0.06f
+private const val DEVICE_SESSION_STRIP_HEIGHT_DP: Float = 36f
+private const val DEVICE_SESSION_LABEL_GAP_DP: Float = 7f
+private const val READ_ONLY_BAR_INSET_DP: Float = 10f
+private const val DEVICE_SESSION_EMPTY_TOP_DP: Float = 60f
+// The platform loading glyph is a compact implementation mark rather than an
+// iOS parity measurement; keeping its dimensions named avoids inline geometry.
+private const val DEVICE_SESSION_LOADING_MARK_SIZE_DP: Float = 16f
+private const val DEVICE_SESSION_LOADING_MARK_STROKE_DP: Float = 2f

@@ -47,6 +47,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.defaultMinSize
@@ -63,6 +64,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -84,6 +86,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
@@ -91,7 +94,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -100,11 +111,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.phonedsh.agentcore.JsonArray
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
@@ -122,15 +135,19 @@ import com.phonedsh.ui.state.ChatScreenState
 import com.phonedsh.ui.state.ComposerCommand
 import com.phonedsh.ui.state.GoalBarState
 import com.phonedsh.ui.state.PendingAnswer
+import com.phonedsh.ui.state.PendingQuestionItem
+import com.phonedsh.ui.state.PendingQuestionOption
 import com.phonedsh.ui.state.PendingFold
 import com.phonedsh.ui.state.PendingSlot
 import com.phonedsh.ui.state.ReferenceMenu
 import com.phonedsh.ui.state.RunStatus
 import com.phonedsh.ui.state.SlashMenu
+import com.phonedsh.ui.state.TodoDockItem
 import com.phonedsh.ui.surface.ApprovalCard
 import com.phonedsh.ui.surface.Composer
 import com.phonedsh.ui.surface.ComposerMode
 import com.phonedsh.ui.surface.FoldedPendingRow
+import com.phonedsh.ui.surface.MarkdownBody
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
@@ -175,7 +192,9 @@ import kotlinx.coroutines.launch
  * @param onConfigureProvider the empty state's 去配置模型服务.
  * @param onLoadEarlier the transcript's 加载更早消息.
  * @param onSubmitAnswer submit a question card's answer as the JSON the iOS
- *   `QuestionCard` builds (`{"<item>": "value"}` or `{"<item>": ["a","b"]}`).
+ *   question composer builds (`{"<item>": ["a","b"]}`; skipped items use `[]`).
+ * @param onDismissQuestion discard/close the active question through its owning
+ *   host channel; the page does not infer a denial from this action.
  * @param onRemoveAttachment remove one pending attachment by index.
  * @param onAddImages the composer's 添加图片.
  * @param onAddFiles the composer's 添加文件（写入工作区）.
@@ -222,17 +241,21 @@ public fun ChatPage(
     onOpenArtifacts: (() -> Unit)? = null,
     onOpenWorkbench: (() -> Unit)? = null,
     onOpenRunStatus: () -> Unit = {},
+    onOpenDeviceConnections: () -> Unit = {},
     onOpenSessionSettings: () -> Unit = {},
     onStartEngine: () -> Unit = {},
+    onRestartEngine: () -> Unit = {},
     onConfigureProvider: () -> Unit = {},
     onLoadEarlier: () -> Unit = {},
     onSubmitAnswer: (PendingAnswer, String) -> Unit = { _, _ -> },
+    onDismissQuestion: (PendingAnswer) -> Unit = {},
     onRemoveAttachment: (Int) -> Unit = {},
     onAddImages: () -> Unit = {},
     onAddFiles: () -> Unit = {},
     onSelectAccessMode: (String) -> Unit = {},
     onSelectModel: (String, String?) -> Unit = { _, _ -> },
     onPickCommand: (String) -> Unit = {},
+    onExecuteCommand: ((String) -> Unit)? = null,
     onPickReference: (String) -> Unit = {},
     onDismissComposerNotice: () -> Unit = {},
     onRetryAccessModes: () -> Unit = {},
@@ -296,10 +319,11 @@ public fun ChatPage(
     ) {
         ChatHeader(
             title = headerTitle,
-            runStatus = state.runStatus,
             onOpenSessions = onOpenSessions,
             onStartRename = { renaming = true },
             onOpenRunStatus = onOpenRunStatus,
+            onOpenDeviceConnections = onOpenDeviceConnections,
+            hasOnlineDevices = state.hasOnlineDevices,
             onExportTranscript = onExportTranscript,
             onOpenArtifacts = onOpenArtifacts,
             onOpenWorkbench = onOpenWorkbench,
@@ -316,6 +340,7 @@ public fun ChatPage(
             TopFailureBanner(
                 message = state.userFacingError,
                 onRetry = if (retryable) onRetry else null,
+                onRestart = if (state.lifecycle?.needsReset == true) onRestartEngine else null,
                 onDismiss = { state.banners.firstOrNull()?.let { onDismissBanner(it.id) } },
             )
         }
@@ -354,7 +379,6 @@ public fun ChatPage(
                 onExpand = onExpandPendingSlot,
                 onApprove = onApprove,
                 onDeny = onDeny,
-                onSubmitAnswer = onSubmitAnswer,
                 maxHeight = screenHeight * tokens.geometry.cardAreaMaxHeightRatio,
             )
         }
@@ -376,7 +400,6 @@ public fun ChatPage(
                 onExpand = onExpandPendingSlot,
                 onApprove = onApprove,
                 onDeny = onDeny,
-                onSubmitAnswer = onSubmitAnswer,
                 maxHeight = screenHeight * tokens.geometry.cardAreaMaxHeightRatio,
             )
         }
@@ -396,12 +419,15 @@ public fun ChatPage(
                 onGoalResume = onGoalResume,
                 onGoalClear = onGoalClear,
                 onOpenGoalDetail = onOpenGoalDetail,
+                onSubmitAnswer = onSubmitAnswer,
+                onDismissQuestion = onDismissQuestion,
                 onRemoveAttachment = onRemoveAttachment,
                 onAddImages = onAddImages,
                 onAddFiles = onAddFiles,
                 onSelectAccessMode = onSelectAccessMode,
                 onSelectModel = onSelectModel,
                 onPickCommand = onPickCommand,
+                onExecuteCommand = onExecuteCommand,
                 onPickReference = onPickReference,
                 onDismissNotice = onDismissComposerNotice,
                 onReloadCommands = onReloadCommands,
@@ -516,17 +542,16 @@ private fun RenameSessionOverlay(
 // ---------------------------------------------------------------------------
 
 /**
- * The self-drawn page head: drawer on the left, the session title centred (a tap
- * renames it), then the run-status dot and the `⋯` menu on the right. 44 pt tall,
- * 16 pt side inset — the same numbers as every other native header.
+ * The iOS ChatPage header: drawer, centred title, device entry and menu.
  */
 @Composable
 private fun ChatHeader(
     title: String,
-    runStatus: RunStatus,
     onOpenSessions: () -> Unit,
     onStartRename: () -> Unit,
     onOpenRunStatus: () -> Unit,
+    onOpenDeviceConnections: () -> Unit,
+    hasOnlineDevices: Boolean?,
     onExportTranscript: () -> Unit,
     onOpenSessionSettings: () -> Unit,
     onOpenArtifacts: (() -> Unit)? = null,
@@ -540,62 +565,29 @@ private fun ChatHeader(
     val type = LocalUiType.current
     var menuOpen by remember { mutableStateOf(false) }
 
-    // The baseline centres a 17 pt semibold title between the two control groups
-    // and paints the `⋯` in the accent (`#2F5BFF`); the grey mark this header used
-    // to draw was the only blue-less part of the row.
-    // iOS centres the title in a ZStack and reserves 104 pt on each side so the
-    // buttons cannot push it off centre. Those 104 pt are the *result* of the two
-    // button groups' widths on the baseline device, not a design value, so the
-    // layout derives them here: one Row, the title takes the remaining weight and
-    // centres itself inside it. No literal is repeated.
-    // iOS `chatHeader` is `NativeParityTokens.headerHeight` = 50 pt with a 0.5 pt
-    // `borderL3` hairline under it (`ChatPage.swift:196-204`), not the 44 pt
-    // settings bar: the measured baseline puts the header in y 62..112 pt.
+    // iOS ChatPage centers the title with a 104pt reserve on each side. The
+    // control row is drawer 32x44, then device 36x44 + menu 44x44 with 4pt gap.
     Column(modifier = Modifier.fillMaxWidth()) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .height(UiMetrics.headerHeight)
-            .padding(horizontal = tokens.geometry.pageOuterMarginH),
-        verticalAlignment = Alignment.CenterVertically,
+    Box(
+        modifier = Modifier.fillMaxWidth().statusBarsPadding().height(UiMetrics.headerHeight),
     ) {
-        // Left slot: the drawer button.
-        HeaderAction(
-            glyph = MENU_GLYPH,
-            description = UiStrings.HEADER_DRAWER,
-            onClick = onOpenSessions,
-            modifier = Modifier.testTag(UiPageTags.CHAT_HEADER_DRAWER),
-        )
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
-                // The tap target is the title's slot, not the drawn word: the title is
-                // data (a session's name), so the control around it takes the click and
-                // the text only draws it — iOS
-                // `Button { beginRename() } label: { Text(sessionTitle) }`.
-                .clickable(role = Role.Button) {
-                    // iOS disables the rename for a session that is not open.
-                    if (title.isNotEmpty()) onStartRename()
-                }
-                .semantics { contentDescription = title }
-                .testTag(UiPageTags.CHAT_HEADER_TITLE),
-            contentAlignment = Alignment.Center,
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = tokens.geometry.pageOuterMarginH),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHAT_HEADER_GROUP_GAP_PT.dp),
         ) {
-            BasicText(
-                text = title,
-                style = type.headline.copy(color = tokens.colors.primary),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            HeaderAction(
+                description = UiStrings.HEADER_DRAWER,
+                onClick = onOpenSessions,
+                modifier = Modifier.size(width = ChatMetrics.CHAT_DRAWER_WIDTH_PT.dp, height = tokens.geometry.pageHeaderMinHeight)
+                    .testTag(UiPageTags.CHAT_HEADER_DRAWER),
             )
-        }
-        // Right slot: iOS `RunStatusDot` + the ⋯ menu, one 4 pt-spaced group.
-        RunStatusDot(
-            runStatus = runStatus,
-            onClick = onOpenRunStatus,
-            modifier = Modifier.testTag(UiPageTags.CHAT_HEADER_RUN_STATUS),
-        )
+            Spacer(Modifier.weight(1f))
+            DeviceHeaderAction(
+                hasOnlineDevices = hasOnlineDevices,
+                onClick = onOpenDeviceConnections,
+                modifier = Modifier.testTag(CHAT_HEADER_DEVICE_TAG),
+            )
         // The menu's rows are the baseline's (`ChatPage.swift:240-286`), in its
         // order: 产物, 右侧边栏, 导出对话记录, 运行状态, 本会话设置. The three
         // conditional rows are session-scoped destinations; `null` keeps them off
@@ -607,6 +599,7 @@ private fun ChatHeader(
                 glyph = MORE_GLYPH,
                 onClick = { menuOpen = true },
                 modifier = Modifier
+                    .size(width = ChatMetrics.CHAT_HEADER_MENU_WIDTH_PT.dp, height = tokens.geometry.pageHeaderMinHeight)
                     .testTag(UiPageTags.CHAT_HEADER_MENU)
                     // `ChatPage.swift:296`: the `⋯` carries an `.accessibilityLabel`
                     // and draws a mark; the baseline's menu has no visible word. The
@@ -683,6 +676,22 @@ private fun ChatHeader(
                 )
             }
         }
+        }
+        Box(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = ChatMetrics.CHAT_HEADER_TITLE_RESERVE_PT.dp)
+                .height(tokens.geometry.pageHeaderMinHeight).align(Alignment.Center)
+                .clickable(role = Role.Button) { if (title.isNotEmpty()) onStartRename() }
+                .semantics { contentDescription = title }
+                .testTag(UiPageTags.CHAT_HEADER_TITLE),
+            contentAlignment = Alignment.Center,
+        ) {
+            BasicText(
+                text = title,
+                style = type.headline.copy(color = tokens.colors.primary),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
     Box(
         modifier = Modifier
@@ -701,7 +710,6 @@ private fun ChatHeader(
  */
 @Composable
 private fun HeaderAction(
-    glyph: String,
     description: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -710,16 +718,13 @@ private fun HeaderAction(
     val type = LocalUiType.current
     Box(
         modifier = modifier
-            .defaultMinSize(minHeight = UiMetrics.headerHeight)
+            .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = description }
             .padding(horizontal = tokens.spacing.iconText),
         contentAlignment = Alignment.Center,
     ) {
-        BasicText(
-            text = glyph,
-            style = type.secondary.copy(color = tokens.colors.secondary),
-        )
+        DrawerGlyph()
     }
 }
 
@@ -747,15 +752,90 @@ private fun HeaderMenuAction(
     val type = LocalUiType.current
     Box(
         modifier = modifier
-            .defaultMinSize(minHeight = UiMetrics.headerHeight)
+            .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = tokens.spacing.iconText),
         contentAlignment = Alignment.Center,
     ) {
         BasicText(
             text = glyph,
-            // iOS paints the `⋯` in the accent; the drawer mark stays grey.
-            style = type.secondary.copy(color = tokens.colors.accent),
+            style = type.secondary.copy(color = tokens.colors.secondary),
+        )
+    }
+}
+
+@Composable
+private fun DeviceHeaderAction(
+    hasOnlineDevices: Boolean?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = LocalUiTokens.current
+    Box(
+        modifier = modifier.size(width = ChatMetrics.CHAT_DEVICE_ENTRY_WIDTH_PT.dp, height = tokens.geometry.pageHeaderMinHeight)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics {
+                contentDescription = if (hasOnlineDevices == true) "Device，有在线设备" else "Device"
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        DevicePhoneGlyph()
+        if (hasOnlineDevices == true) {
+            Box(
+                modifier = Modifier.align(Alignment.TopEnd).padding(
+                    top = ChatMetrics.CHAT_DEVICE_STATUS_INSET_PT.dp,
+                    end = ChatMetrics.CHAT_DEVICE_STATUS_INSET_PT.dp,
+                ).size(ChatMetrics.CHAT_DEVICE_STATUS_DOT_PT.dp).clip(CircleShape)
+                    .background(tokens.colors.success)
+                    .border(ChatMetrics.CHAT_DEVICE_STATUS_BORDER_PT.dp, tokens.colors.page, CircleShape),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DrawerGlyph() {
+    val tokens = LocalUiTokens.current
+    androidx.compose.foundation.Canvas(Modifier.size(ChatMetrics.CHAT_DRAWER_ICON_PT.dp)) {
+        val stroke = ChatMetrics.CHAT_DRAWER_ICON_STROKE_TENTH_PT.dp.toPx()
+        val left = ChatMetrics.CHAT_DRAWER_ICON_INSET_PT.dp.toPx()
+        val right = size.width - ChatMetrics.CHAT_DRAWER_ICON_INSET_PT.dp.toPx()
+        val top = ChatMetrics.CHAT_DRAWER_ICON_INSET_PT.dp.toPx()
+        val bottom = size.height - ChatMetrics.CHAT_DRAWER_ICON_INSET_PT.dp.toPx()
+        drawRoundRect(
+            color = tokens.colors.secondary,
+            topLeft = androidx.compose.ui.geometry.Offset(left, top),
+            size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(ChatMetrics.CHAT_DRAWER_ICON_CORNER_TENTH_PT.dp.toPx()),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(stroke),
+        )
+        drawLine(
+            tokens.colors.secondary,
+            androidx.compose.ui.geometry.Offset(size.width * 0.38f, top),
+            androidx.compose.ui.geometry.Offset(size.width * 0.38f, bottom),
+            stroke,
+        )
+    }
+}
+
+@Composable
+private fun DevicePhoneGlyph() {
+    val tokens = LocalUiTokens.current
+    androidx.compose.foundation.Canvas(Modifier.size(width = ChatMetrics.CHAT_DEVICE_ICON_BOX_WIDTH_PT.dp, height = ChatMetrics.CHAT_DEVICE_ICON_BOX_HEIGHT_PT.dp)) {
+        val stroke = ChatMetrics.CHAT_DEVICE_BODY_STROKE_TENTH_PT.dp.toPx()
+        val left = (size.width - ChatMetrics.CHAT_DEVICE_BODY_WIDTH_PT.dp.toPx()) / 2f
+        drawRoundRect(
+            color = tokens.colors.secondary,
+            topLeft = androidx.compose.ui.geometry.Offset(left, 0f),
+            size = androidx.compose.ui.geometry.Size(ChatMetrics.CHAT_DEVICE_BODY_WIDTH_PT.dp.toPx(), size.height),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(ChatMetrics.CHAT_DEVICE_BODY_CORNER_PT.dp.toPx()),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(stroke),
+        )
+        drawLine(
+            tokens.colors.secondary,
+            androidx.compose.ui.geometry.Offset(left + ChatMetrics.CHAT_DEVICE_SPEAKER_LEFT_PT.dp.toPx(), size.height - ChatMetrics.CHAT_DEVICE_SPEAKER_BOTTOM_PT.dp.toPx()),
+            androidx.compose.ui.geometry.Offset(left + ChatMetrics.CHAT_DEVICE_SPEAKER_RIGHT_PT.dp.toPx(), size.height - ChatMetrics.CHAT_DEVICE_SPEAKER_BOTTOM_PT.dp.toPx()),
+            stroke,
         )
     }
 }
@@ -815,6 +895,7 @@ private fun RunStatusDot(
 private fun TopFailureBanner(
     message: String,
     onRetry: (() -> Unit)?,
+    onRestart: (() -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
@@ -842,6 +923,16 @@ private fun TopFailureBanner(
                 modifier = Modifier
                     .clickable(role = Role.Button, onClick = onRetry)
                     .testTag(UiTags.BANNER_RETRY)
+                    .padding(tokens.spacing.iconText),
+            )
+        }
+        if (onRestart != null) {
+            BasicText(
+                text = UiStrings.ENGINE_RESTART,
+                style = type.secondary.copy(color = tokens.colors.accent),
+                modifier = Modifier
+                    .clickable(role = Role.Button, onClick = onRestart)
+                    .testTag(CHAT_RESTART_ENGINE_TAG)
                     .padding(tokens.spacing.iconText),
             )
         }
@@ -900,12 +991,8 @@ private fun NoticeBanner(
 // ---------------------------------------------------------------------------
 
 /**
- * The pending-answer region.
- *
- * Two states, exactly as iOS at this HEAD: the keyboard up folds the whole region
- * into one "N 项需要处理" line (`ChatPage.swift:846-865`); otherwise every pending
- * ask is drawn as its own card. The region never takes more than 40% of the screen
- * and scrolls inside itself when it has more.
+ * The pending-permission region. Questions are routed to the composer seat, as in
+ * iOS `questionTakeover`; this region holds only permission approvals.
  *
  * The older "还有 1 个待确认" fold line is gone on purpose: the baseline's
  * `cardsRegion` now holds the cards themselves (`pendingCardCount` counts the one
@@ -921,11 +1008,14 @@ private fun PendingCardsRegion(
     onExpand: () -> Unit,
     onApprove: (PendingAnswer) -> Unit,
     onDeny: (PendingAnswer) -> Unit,
-    onSubmitAnswer: (PendingAnswer, String) -> Unit,
     maxHeight: Dp,
 ) {
-    if (slot.isEmpty) return
-    val primary = slot.primary
+    // Questions own the composer seat (ChatPage.swift `questionTakeover`); only
+    // permissions remain in the page card region.
+    val approvals = (listOfNotNull(slot.primary) + slot.folded).filter { it.kind != QUESTION }
+    if (approvals.isEmpty()) return
+    val primary = approvals.firstOrNull()
+    val count = approvals.size + slot.hidden
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -933,7 +1023,7 @@ private fun PendingCardsRegion(
     ) {
         if (fold == PendingFold.FOLDED) {
             FoldedPendingRow(
-                label = UiStrings.PENDING_SLOT.format(slot.count),
+                label = UiStrings.PENDING_SLOT.format(count),
                 onExpand = onExpand,
                 modifier = Modifier.testTag(UiPageTags.CHAT_PENDING_FOLD),
             )
@@ -944,50 +1034,30 @@ private fun PendingCardsRegion(
             // second card in half.
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (primary != null) {
-                    if (primary.kind == QUESTION) {
-                        QuestionCard(
-                            question = primary,
-                            maxHeight = maxHeight,
-                            onSubmit = { answer -> onSubmitAnswer(primary, answer) },
-                        )
-                    } else {
-                        ApprovalCard(
-                            title = primary.title,
-                            subtitle = primary.subtitle,
-                            primaryLabel = UiStrings.ALLOW_ONCE,
-                            onPrimary = { onApprove(primary) },
-                            secondaryLabel = UiStrings.DENY,
-                            onSecondary = { onDeny(primary) },
-                            maxHeight = maxHeight,
-                        )
-                    }
+                    ApprovalCard(
+                        title = primary.title,
+                        subtitle = primary.subtitle,
+                        primaryLabel = UiStrings.ALLOW_ONCE,
+                        onPrimary = { onApprove(primary) },
+                        secondaryLabel = UiStrings.DENY,
+                        onSecondary = { onDeny(primary) },
+                        maxHeight = maxHeight,
+                    )
                 }
-                // Every remaining ask is a card: the baseline no longer folds one
-                // ask into a one-line summary, so neither does this page.
-                slot.folded.forEach { ask ->
-                    if (ask.kind == QUESTION) {
-                        QuestionCard(
-                            question = ask,
-                            maxHeight = maxHeight,
-                            onSubmit = { answer -> onSubmitAnswer(ask, answer) },
-                        )
-                    } else {
-                        ApprovalCard(
-                            title = ask.title,
-                            subtitle = ask.subtitle,
-                            primaryLabel = UiStrings.ALLOW_ONCE,
-                            onPrimary = { onApprove(ask) },
-                            secondaryLabel = UiStrings.DENY,
-                            onSecondary = { onDeny(ask) },
-                            maxHeight = maxHeight,
-                        )
-                    }
+                approvals.drop(1).forEach { ask ->
+                    ApprovalCard(
+                        title = ask.title,
+                        subtitle = ask.subtitle,
+                        primaryLabel = UiStrings.ALLOW_ONCE,
+                        onPrimary = { onApprove(ask) },
+                        secondaryLabel = UiStrings.DENY,
+                        onSecondary = { onDeny(ask) },
+                        maxHeight = maxHeight,
+                    )
                 }
             }
         }
     }
-    // The slot never hides the composer: `state.composer.enabled` is already false
-    // while an ask is pending (spec §2).
 }
 
 /**
@@ -1129,6 +1199,411 @@ private fun QuestionCard(
                     color = if (canSubmit) tokens.colors.onAccent else tokens.colors.tertiary,
                 ),
             )
+        }
+    }
+}
+
+/**
+ * The question composer takes the bottom seat while a real question is pending,
+ * matching ChatPage.swift `questionTakeover`. It only renders fields present in
+ * the host projection; absent progress/availability facts remain unknown.
+ */
+@Composable
+private fun QuestionTakeover(
+    question: PendingAnswer,
+    onSubmit: (String) -> Unit,
+    onDismiss: () -> Unit,
+    maxHeight: Dp,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val items = remember(question.requestId, question.questionItems, question.options, question.subtitle) {
+        question.questionItems.ifEmpty {
+            listOf(
+                PendingQuestionItem(
+                    id = ANSWER_KEY,
+                    prompt = question.subtitle,
+                    options = question.options.map { PendingQuestionOption(it) },
+                    multiple = question.multiple,
+                ),
+            )
+        }
+    }
+    val recommendedDrafts = remember(items) {
+        items.mapNotNull { q ->
+            val first = q.options.firstOrNull()?.label
+            val recommendation = q.recommendedWireLabel ?: first?.takeIf(::hasRecommendedSuffix)
+            recommendation?.let { q.id to QuestionDraft(selected = listOf(it)) }
+        }.toMap()
+    }
+    var index by remember(question.requestId) {
+        mutableStateOf(question.initialProgress?.index?.coerceIn(0, (items.size - 1).coerceAtLeast(0)) ?: 0)
+    }
+    var drafts by remember(question.requestId) {
+        mutableStateOf(
+            question.initialProgress?.drafts?.mapValues { (_, selected) -> QuestionDraft(selected = selected) }
+                ?: recommendedDrafts,
+        )
+    }
+    var minimized by remember(question.requestId) { mutableStateOf(false) }
+    var validationError by remember(question.requestId) { mutableStateOf<String?>(null) }
+    val item = items.getOrNull(index) ?: return
+    val draft = drafts[item.id] ?: QuestionDraft()
+    val busy = question.submitting == true
+    val last = index == items.lastIndex
+    val answered = draft.selected.isNotEmpty() || draft.custom.trim().isNotEmpty()
+    val canRespond = question.channelAvailable != false
+
+    fun update(next: QuestionDraft) {
+        drafts = drafts + (item.id to next)
+        validationError = null
+    }
+    fun submit(sourceDrafts: Map<String, QuestionDraft> = drafts) {
+        if (busy) return
+        val missing = items.indexOfFirst { q ->
+            val answer = sourceDrafts[q.id] ?: QuestionDraft()
+            !answer.skipped && answer.selected.isEmpty() && answer.custom.trim().isEmpty()
+        }
+        if (missing >= 0) {
+            index = missing
+            validationError = "请先完成这道问题。"
+            return
+        }
+        val values = items.associate { q ->
+            val answer = sourceDrafts[q.id] ?: QuestionDraft()
+            val selected = if (answer.skipped) emptyList() else {
+                val custom = answer.custom.trim()
+                val choices = if (custom.isNotEmpty() && !q.multiple) emptyList() else answer.selected
+                choices + listOfNotNull(custom.takeIf(String::isNotEmpty))
+            }
+            q.id to JsonArray(selected.map(::JsonString))
+        }
+        onSubmit(CanonicalJson.write(JsonObject(values)))
+    }
+    fun skip() {
+        if (busy) return
+        val skippedDrafts = drafts + (item.id to QuestionDraft(skipped = true))
+        drafts = skippedDrafts
+        validationError = null
+        if (!last) index += 1 else submit(skippedDrafts)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = tokens.geometry.composerOuterMarginH)
+            .padding(bottom = ChatMetrics.COMPOSER_CONTROL_BOTTOM_PT.dp)
+            .testTag(QUESTION_TAKEOVER_TAG)
+            .shadow(ChatMetrics.QUESTION_CARD_SHADOW_PT.dp, RoundedCornerShape(ChatMetrics.QUESTION_CARD_RADIUS_PT.dp))
+            .background(tokens.colors.selector, RoundedCornerShape(ChatMetrics.QUESTION_CARD_RADIUS_PT.dp))
+            .border(tokens.stroke.hairline, tokens.colors.borderLight, RoundedCornerShape(ChatMetrics.QUESTION_CARD_RADIUS_PT.dp)),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(
+                start = ChatMetrics.QUESTION_HEADER_LEADING_PT.dp,
+                top = ChatMetrics.QUESTION_HEADER_TOP_PT.dp,
+                end = ChatMetrics.QUESTION_HEADER_TRAILING_PT.dp,
+                bottom = if (minimized) ChatMetrics.QUESTION_HEADER_MINIMIZED_BOTTOM_PT.dp
+                else ChatMetrics.QUESTION_HEADER_EXPANDED_BOTTOM_PT.dp,
+            ),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(ChatMetrics.QUESTION_HEADER_COPY_ACTION_GAP_PT.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(ChatMetrics.QUESTION_HEADER_STACK_GAP_PT.dp),
+            ) {
+                item.header?.takeIf(String::isNotBlank)?.let {
+                    BasicText(text = it, style = type.caption.copy(fontSize = ChatMetrics.QUESTION_EYEBROW_SIZE_PT.sp, color = tokens.colors.tertiary))
+                }
+                BasicText(
+                    text = item.prompt,
+                    style = type.secondary.copy(fontSize = ChatMetrics.QUESTION_PROMPT_SIZE_PT.sp, color = tokens.colors.primary),
+                    modifier = Modifier.semantics { heading() },
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHAT_HEADER_GROUP_GAP_PT.dp)) {
+                BasicText(
+                    text = if (minimized) "⌃" else "⌄",
+                    style = type.secondary.copy(color = tokens.colors.secondary),
+                    modifier = Modifier.size(ChatMetrics.QUESTION_HEADER_ACTION_SIZE_PT.dp, ChatMetrics.QUESTION_HEADER_ACTION_SIZE_PT.dp)
+                        .clickable(enabled = !busy, role = Role.Button) { minimized = !minimized }
+                        .semantics {
+                            contentDescription = if (minimized) "展开问题卡片" else "收起问题卡片"
+                        },
+                )
+                BasicText(
+                    text = "×",
+                    style = type.secondary.copy(color = tokens.colors.secondary),
+                    modifier = Modifier.size(ChatMetrics.QUESTION_HEADER_ACTION_SIZE_PT.dp, ChatMetrics.QUESTION_HEADER_ACTION_SIZE_PT.dp)
+                        .clickable(enabled = !busy, role = Role.Button) {
+                            if (canRespond) onDismiss() else validationError = "当前无法提交，请稍候再试。"
+                        }
+                        .semantics { contentDescription = "放弃整组问题" },
+                )
+            }
+        }
+        if (!minimized) {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = maxHeight).verticalScroll(rememberScrollState())
+                    .padding(horizontal = ChatMetrics.QUESTION_BODY_INSET_H_PT.dp),
+                verticalArrangement = Arrangement.spacedBy(tokens.geometry.bannerGap),
+            ) {
+                item.detail?.takeIf(String::isNotBlank)?.let {
+                    MarkdownBody(markdown = it, modifier = Modifier
+                        .padding(horizontal = ChatMetrics.QUESTION_DETAIL_INSET_H_PT.dp)
+                        .padding(vertical = ChatMetrics.QUESTION_DETAIL_INSET_V_PT.dp))
+                }
+                if (item.options.isNotEmpty()) {
+                    Spacer(Modifier.height(ChatMetrics.QUESTION_OPTIONS_TOP_PT.dp))
+                }
+                item.options.forEachIndexed { optionIndex, option ->
+                val selected = option.label in draft.selected
+                val displayLabel = option.label.replace(
+                    Regex("""\s*(?:\((?:recommended|推荐)\)|（(?:recommended|推荐)）)\s*$""", RegexOption.IGNORE_CASE),
+                    "",
+                )
+                val recommended = option.label == item.recommendedWireLabel || displayLabel != option.label
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = ChatMetrics.QUESTION_OPTION_ROW_HEIGHT_PT.dp)
+                        .background(
+                            if (selected && !item.multiple) tokens.colors.selector else Color.Transparent,
+                            RoundedCornerShape(ChatMetrics.QUESTION_OPTION_RADIUS_PT.dp),
+                        )
+                        .clickable(enabled = !busy, role = Role.Button) {
+                            val next = if (item.multiple) {
+                                if (selected) draft.selected - option.label else draft.selected + option.label
+                            } else listOf(option.label)
+                            update(draft.copy(selected = next, custom = "", skipped = false))
+                        }
+                        .padding(
+                            horizontal = ChatMetrics.QUESTION_OPTION_PADDING_H_PT.dp,
+                            vertical = ChatMetrics.QUESTION_OPTION_PADDING_V_PT.dp,
+                        )
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = if (recommended) "$displayLabel，推荐" else displayLabel
+                            this.selected = selected
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+                ) {
+                    if (item.multiple) {
+                        BasicText(text = if (selected) "☑" else "□", style = type.secondary.copy(color = tokens.colors.accent))
+                    } else {
+                        Box(Modifier.size(ChatMetrics.QUESTION_OPTION_MARK_SIZE_PT.dp).background(tokens.colors.selector, CircleShape), contentAlignment = Alignment.Center) {
+                            BasicText(text = (optionIndex + 1).toString(), style = type.caption.copy(color = tokens.colors.secondary))
+                        }
+                    }
+                    Column {
+                        BasicText(
+                            text = displayLabel,
+                            style = type.secondary.copy(fontSize = ChatMetrics.QUESTION_OPTION_TEXT_SIZE_PT.sp, color = tokens.colors.primary),
+                        )
+                        option.description?.takeIf(String::isNotBlank)?.let {
+                            BasicText(text = it, style = type.secondary.copy(fontSize = ChatMetrics.QUESTION_OPTION_TEXT_SIZE_PT.sp, color = tokens.colors.tertiary))
+                        }
+                        if (recommended) {
+                            BasicText("推荐", style = type.caption.copy(color = tokens.colors.accent))
+                        }
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = if (item.options.isEmpty()) ChatMetrics.QUESTION_FREE_ANSWER_HEIGHT_PT.dp else ChatMetrics.QUESTION_OPTION_ROW_HEIGHT_PT.dp)
+                    .padding(
+                        horizontal = ChatMetrics.QUESTION_ANSWER_INSET_H_PT.dp,
+                        vertical = ChatMetrics.QUESTION_ANSWER_INSET_V_PT.dp,
+                    ),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(ChatMetrics.QUESTION_HEADER_STACK_GAP_PT.dp),
+            ) {
+                if (item.options.isNotEmpty()) {
+                    BasicText("＋", style = type.secondary.copy(color = tokens.colors.secondary))
+                }
+                Box(Modifier.weight(1f)) {
+                    BasicTextField(
+                        value = draft.custom,
+                        onValueChange = { value ->
+                            update(draft.copy(custom = value, selected = if (item.multiple) draft.selected else emptyList(), skipped = false))
+                        },
+                        textStyle = type.secondary.copy(color = tokens.colors.primary),
+                        cursorBrush = SolidColor(tokens.colors.accent),
+                        modifier = Modifier.fillMaxWidth().testTag(UiPageTags.CHAT_QUESTION_ANSWER),
+                        decorationBox = { inner ->
+                            if (draft.custom.isEmpty()) BasicText(
+                                text = if (item.options.isEmpty()) "输入你的答案" else UiStrings.QUESTION_CUSTOM_ANSWER,
+                                style = type.secondary.copy(color = tokens.colors.tertiary),
+                            )
+                            inner()
+                        },
+                    )
+                }
+            }
+            if (item.options.isNotEmpty()) {
+                Spacer(Modifier.height(ChatMetrics.QUESTION_OPTIONS_BOTTOM_PT.dp))
+            }
+            }
+            (question.submissionError ?: validationError)?.let { error ->
+                BasicText(text = error, style = type.caption.copy(color = tokens.colors.warning))
+            }
+            Column(modifier = Modifier.padding(
+                top = ChatMetrics.QUESTION_FOOTER_TOP_PT.dp,
+                start = ChatMetrics.QUESTION_FOOTER_INSET_H_PT.dp,
+                end = ChatMetrics.QUESTION_FOOTER_INSET_H_PT.dp,
+                bottom = ChatMetrics.QUESTION_PANEL_BOTTOM_PT.dp,
+            )) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ChatMetrics.QUESTION_PAGER_GAP_PT.dp)) {
+                    QuestionPagerButton("‹", "上一题", enabled = index > 0 && !busy) { index -= 1 }
+                    BasicText(
+                        text = "${index + 1} / ${items.size}",
+                        style = type.secondary.copy(fontSize = ChatMetrics.QUESTION_OPTION_TEXT_SIZE_PT.sp, color = tokens.colors.secondary),
+                        modifier = Modifier.semantics { contentDescription = "第 ${index + 1} 题，共 ${items.size} 题" },
+                    )
+                    QuestionPagerButton("›", "下一题", enabled = !last && !busy) { index += 1 }
+                    Spacer(Modifier.weight(1f))
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = ChatMetrics.QUESTION_FOOTER_GAP_PT.dp),
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(ChatMetrics.QUESTION_FOOTER_GAP_PT.dp),
+                ) {
+                    QuestionActionText("跳过", enabled = !busy) { skip() }
+                    Spacer(Modifier.weight(1f))
+                    Box(
+                        modifier = Modifier.defaultMinSize(minHeight = ChatMetrics.QUESTION_ACTION_HEIGHT_PT.dp)
+                            .background(if (!busy && canRespond && answered) tokens.colors.ctaOverride else tokens.colors.border, RoundedCornerShape(ChatMetrics.QUESTION_ACTION_RADIUS_PT.dp))
+                            .clickable(enabled = !busy && canRespond && answered, role = Role.Button) {
+                                if (!last) index += 1 else submit()
+                            }
+                            .testTag(UiPageTags.CHAT_QUESTION_SUBMIT)
+                            .padding(horizontal = ChatMetrics.QUESTION_ACTION_PADDING_H_PT.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        BasicText(
+                            text = if (busy) "正在提交…" else if (last) "提交" else "下一题",
+                            style = type.secondary.copy(fontSize = ChatMetrics.QUESTION_OPTION_TEXT_SIZE_PT.sp, color = if (!busy && canRespond && answered) tokens.colors.onAccent else tokens.colors.tertiary),
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(ChatMetrics.QUESTION_CARD_BOTTOM_PT.dp))
+    }
+}
+
+private fun hasRecommendedSuffix(label: String): Boolean = Regex(
+    """\s*(?:\((?:recommended|推荐)\)|（(?:recommended|推荐)）)\s*$""",
+    RegexOption.IGNORE_CASE,
+).containsMatchIn(label)
+
+@Composable
+private fun QuestionPagerButton(text: String, label: String, enabled: Boolean, onClick: () -> Unit) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    BasicText(
+        text = text,
+        style = type.secondary.copy(color = if (enabled) tokens.colors.secondary else tokens.colors.tertiary),
+        modifier = Modifier.size(ChatMetrics.QUESTION_PAGER_TARGET_PT.dp).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = label },
+    )
+}
+
+@Composable
+private fun QuestionActionText(label: String, enabled: Boolean, onClick: () -> Unit) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    BasicText(
+        text = label,
+        style = type.secondary.copy(color = if (enabled) tokens.colors.secondary else tokens.colors.tertiary),
+        modifier = Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(
+                horizontal = ChatMetrics.QUESTION_ACTION_TEXT_INSET_H_PT.dp,
+                vertical = ChatMetrics.QUESTION_ACTION_TEXT_INSET_V_PT.dp,
+            ),
+    )
+}
+
+private data class QuestionDraft(
+    val selected: List<String> = emptyList(),
+    val custom: String = "",
+    val skipped: Boolean = false,
+)
+
+/** Plan-review variant is selected only from the explicit source intent. */
+@Composable
+private fun PlanReviewTakeover(
+    question: PendingAnswer,
+    item: PendingQuestionItem,
+    onApprove: (String) -> Unit,
+    onRequestChanges: () -> Unit,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val markdown = item.detail.orEmpty().trim()
+    val firstLine = markdown.lineSequence().firstOrNull().orEmpty().trimStart('#').trim()
+    val body = markdown.lineSequence().drop(1).dropWhile { it.isBlank() }.takeWhile { it.isNotBlank() }
+        .joinToString(" ").trim()
+    val title = firstLine.ifEmpty { item.prompt }
+    val summary = body.takeIf { it.isNotEmpty() && it != title }
+    val busy = question.submitting == true
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = tokens.geometry.composerOuterMarginH)
+            .testTag(PLAN_REVIEW_TAKEOVER_TAG)
+            .background(tokens.colors.input, RoundedCornerShape(tokens.radius.card))
+            .border(tokens.stroke.hairline, tokens.colors.borderLight, RoundedCornerShape(tokens.radius.card)),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .background(tokens.colors.warning.copy(alpha = 0.12f))
+                .padding(horizontal = tokens.spacing.cardInset, vertical = tokens.spacing.iconText),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+        ) {
+            Box(Modifier.size(tokens.geometry.statusDotDiameter).clip(CircleShape).background(tokens.colors.warning))
+            BasicText("计划待审", style = type.secondary.copy(color = tokens.colors.warning))
+            Spacer(Modifier.weight(1f))
+            if (busy) BasicText("正在提交…", style = type.caption.copy(color = tokens.colors.secondary))
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(tokens.spacing.cardInset),
+            verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+        ) {
+            BasicText(title, style = type.subheadline.copy(color = tokens.colors.primary), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (summary != null) {
+                BasicText(summary, style = type.secondary.copy(color = tokens.colors.secondary), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            if (question.submissionError != null) {
+                BasicText(question.submissionError, style = type.caption.copy(color = tokens.colors.warning))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.clickable(enabled = !busy, role = Role.Button, onClick = onRequestChanges)
+                        .border(tokens.stroke.hairline, tokens.colors.borderLight, RoundedCornerShape(ChatMetrics.PLAN_REVIEW_BUTTON_RADIUS_PT.dp))
+                        .padding(horizontal = tokens.spacing.cardInset, vertical = tokens.spacing.iconText)
+                        .testTag(PLAN_REVIEW_CHANGE_TAG),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(ChatMetrics.PLAN_REVIEW_BUTTON_GAP_PT.dp),
+                ) {
+                    BasicText("✎", style = type.caption.copy(color = tokens.colors.secondary))
+                    BasicText("要求修改", style = type.secondary.copy(color = tokens.colors.primary))
+                }
+                Box(
+                    modifier = Modifier.weight(1f).defaultMinSize(minHeight = ChatMetrics.PLAN_REVIEW_BUTTON_HEIGHT_PT.dp)
+                        .background(if (busy) tokens.colors.border else tokens.colors.ctaOverride, RoundedCornerShape(ChatMetrics.PLAN_REVIEW_BUTTON_RADIUS_PT.dp))
+                        .clickable(enabled = !busy, role = Role.Button) {
+                            val value = JsonArray(listOf(JsonString(item.approveWireLabel.orEmpty())))
+                            onApprove(CanonicalJson.write(JsonObject(mapOf(item.id to value))))
+                        }
+                        .testTag(PLAN_REVIEW_APPROVE_TAG),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    BasicText("同意执行", style = type.secondary.copy(color = tokens.colors.onAccent))
+                }
+            }
         }
     }
 }
@@ -1678,12 +2153,15 @@ private fun ComposerDock(
     onGoalResume: (() -> Unit)?,
     onGoalClear: (() -> Unit)?,
     onOpenGoalDetail: (() -> Unit)?,
+    onSubmitAnswer: (PendingAnswer, String) -> Unit,
+    onDismissQuestion: (PendingAnswer) -> Unit,
     onRemoveAttachment: (Int) -> Unit,
     onAddImages: () -> Unit,
     onAddFiles: () -> Unit,
     onSelectAccessMode: (String) -> Unit,
     onSelectModel: (String, String?) -> Unit,
     onPickCommand: (String) -> Unit,
+    onExecuteCommand: ((String) -> Unit)?,
     onPickReference: (String) -> Unit,
     onDismissNotice: () -> Unit,
     onReloadCommands: () -> Unit,
@@ -1691,9 +2169,65 @@ private fun ComposerDock(
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     val composer = state.composer
+    val pendingQuestion = (listOfNotNull(state.pending.primary) + state.pending.folded)
+        .firstOrNull { it.kind == QUESTION }
     // iOS keeps the truncation notice in the same slot as the attachment error.
     var truncated by remember { mutableStateOf(false) }
-    Column(modifier = Modifier.fillMaxWidth()) {
+    var slashMenuDismissed by remember { mutableStateOf(false) }
+    var slashHighlight by remember { mutableIntStateOf(0) }
+    val slashMenu = state.composer.slash.takeUnless { slashMenuDismissed }
+    val slashCommands = (slashMenu as? SlashMenu.Matches)?.commands.orEmpty()
+
+    fun chooseCommand(name: String) {
+        val command = slashCommands.firstOrNull { it.name == name }
+        if (command?.hasInput == false && onExecuteCommand != null) {
+            onDraftChange("")
+            onExecuteCommand(name)
+        } else {
+            // This local update is essential for screen hosts that only supply a
+            // catalog: selecting a menu row must never be a no-op.
+            onDraftChange("/$name ")
+        }
+        onPickCommand(name)
+        slashMenuDismissed = true
+    }
+
+    fun handleSlashKey(event: KeyEvent): Boolean {
+        if (slashMenu == null || event.type != KeyEventType.KeyDown) return false
+        if (slashCommands.isEmpty()) {
+            if (event.key == Key.Escape) {
+                slashMenuDismissed = true
+                return true
+            }
+            if (event.key == Key.Enter) return true
+            return false
+        }
+        return when (event.key) {
+            Key.DirectionDown -> {
+                slashHighlight = (slashHighlight + 1).coerceAtMost(slashCommands.lastIndex)
+                true
+            }
+            Key.DirectionUp -> {
+                slashHighlight = (slashHighlight - 1).coerceAtLeast(0)
+                true
+            }
+            Key.Tab, Key.Enter -> {
+                slashCommands.getOrNull(slashHighlight)?.let { chooseCommand(it.name) }
+                true
+            }
+            Key.Escape -> {
+                slashMenuDismissed = true
+                true
+            }
+            else -> false
+        }
+    }
+
+    LaunchedEffect(composer.draft) {
+        slashMenuDismissed = false
+        slashHighlight = 0
+    }
+    Column(modifier = Modifier.fillMaxWidth().onPreviewKeyEvent(::handleSlashKey)) {
         // iOS puts the 16 pt horizontal inset on the dock's VStack; the input card
         // is that same surface and applies it itself (`Composer`), so the inset is
         // applied here only to the pieces around the card.
@@ -1707,6 +2241,13 @@ private fun ComposerDock(
             // for the send key, which pushed the queue strip 28 pt too high.
             verticalArrangement = Arrangement.spacedBy(UiMetrics.flowGap),
         ) {
+            if (state.todoItems.isNotEmpty()) {
+                TodoDock(
+                    items = state.todoItems,
+                    modifier = Modifier.widthIn(max = ChatMetrics.CONTENT_COLUMN_WIDTH_PT.dp)
+                        .fillMaxWidth().align(Alignment.CenterHorizontally),
+                )
+            }
             val goal = state.goal
             if (goal is GoalBarState.Visible) {
                 GoalBarView(
@@ -1742,18 +2283,47 @@ private fun ComposerDock(
             if (truncated) {
                 NoticeLine(text = UiStrings.COMPOSER_TRUNCATED, onClose = { truncated = false })
             }
-            composer.slash?.let { menu ->
+            slashMenu?.let { menu ->
                 SlashMenuView(
                     menu = menu,
-                    onPick = onPickCommand,
+                    highlightedIndex = slashHighlight,
+                    onHighlight = { slashHighlight = it },
+                    onPick = ::chooseCommand,
                     onRetry = onReloadCommands,
                 )
             }
             composer.reference?.let { menu ->
-                ReferenceMenuView(menu = menu, onPick = onPickReference)
+                ReferenceMenuView(menu = menu, onPick = { value ->
+                    val selected = if (value in menu.sessions) "@$value " else "$value "
+                    onDraftChange(selected)
+                    onPickReference(value)
+                })
             }
         }
-        Composer(
+        if (pendingQuestion != null) {
+            val plan = pendingQuestion.questionItems.singleOrNull()?.takeIf {
+                it.intentKind == PLAN_REVIEW_INTENT && !it.detail.isNullOrBlank() &&
+                    !it.approveWireLabel.isNullOrBlank()
+            }
+            if (plan != null) {
+                PlanReviewTakeover(
+                    question = pendingQuestion,
+                    item = plan,
+                    onApprove = { json -> onSubmitAnswer(pendingQuestion, json) },
+                    onRequestChanges = { onDismissQuestion(pendingQuestion) },
+                )
+            } else {
+                QuestionTakeover(
+                    question = pendingQuestion,
+                    onSubmit = { json -> onSubmitAnswer(pendingQuestion, json) },
+                    onDismiss = { onDismissQuestion(pendingQuestion) },
+                    maxHeight = minOf(
+                        LocalConfiguration.current.screenHeightDp.dp * 0.6f,
+                        ChatMetrics.QUESTION_MAX_HEIGHT_PT.dp,
+                    ),
+                )
+            }
+        } else Composer(
                 // The dock is floored at the iOS-measured collapsed composer height
                 // (94 pt since commit `86a39aac`; `ChatMetrics.COMPOSER_HEIGHT_PT`
                 // carries the commit reference, not a guess). The card's own padding
@@ -1776,6 +2346,15 @@ private fun ComposerDock(
                 contextPercent = state.contextPercent,
                 sendLabel = composer.sendLabel,
                 onTruncated = { truncated = true },
+                onMenuKey = ::handleSlashKey,
+                onMenuSubmit = {
+                    if (slashMenu == null) {
+                        false
+                    } else {
+                        slashCommands.getOrNull(slashHighlight)?.let { chooseCommand(it.name) }
+                        true
+                    }
+                },
                 controls = {
                     ComposerControls(
                         state = state,
@@ -1807,9 +2386,9 @@ private fun GoalBarView(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .height(ChatMetrics.GOAL_BAR_HEIGHT_PT.dp)
             .testTag(UiTags.GOAL_BAR)
-            .defaultMinSize(minHeight = tokens.geometry.composerTrailingReserve)
-            .background(tokens.colors.code, RoundedCornerShape(tokens.radius.card))
+            .background(tokens.colors.selector, RoundedCornerShape(ChatMetrics.GOAL_BAR_RADIUS_PT.dp))
             .then(
                 if (onOpenDetail != null) {
                     Modifier.clickable(role = Role.Button, onClick = onOpenDetail)
@@ -1817,19 +2396,20 @@ private fun GoalBarView(
                     Modifier
                 },
             )
-            .padding(horizontal = tokens.spacing.badgeInsetH),
+            .padding(horizontal = ChatMetrics.GOAL_BAR_INSET_H_PT.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
+        horizontalArrangement = Arrangement.spacedBy(ChatMetrics.GOAL_BAR_GAP_PT.dp),
     ) {
+        GoalTargetGlyph()
         Column(modifier = Modifier.weight(1f)) {
             BasicText(
                 text = goalBarPhaseLabel(goal.phase),
-                style = type.caption.copy(color = tokens.colors.secondary),
+                style = type.caption.copy(fontSize = ChatMetrics.GOAL_BAR_PHASE_SIZE_PT.sp, color = tokens.colors.secondary),
                 maxLines = 1,
             )
             BasicText(
                 text = goal.objective,
-                style = type.secondary.copy(color = tokens.colors.secondary),
+                style = type.secondary.copy(fontSize = ChatMetrics.GOAL_BAR_OBJECTIVE_SIZE_PT.sp, color = tokens.colors.secondary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1837,7 +2417,7 @@ private fun GoalBarView(
         if (goal.phase == PHASE_ACTIVE && onPause != null) {
             BasicText(
                 text = UiStrings.GOAL_PAUSE,
-                style = type.caption.copy(color = tokens.colors.secondary),
+                style = type.caption.copy(fontSize = ChatMetrics.GOAL_BAR_ACTION_SIZE_PT.sp, color = tokens.colors.secondary),
                 modifier = Modifier
                     .clickable(role = Role.Button, onClick = onPause)
                     .testTag(UiPageTags.GOAL_PAUSE)
@@ -1846,23 +2426,129 @@ private fun GoalBarView(
         } else if ((goal.phase == PHASE_PAUSED || goal.phase == PHASE_BLOCKED) && onResume != null) {
             BasicText(
                 text = UiStrings.GOAL_RESUME,
-                style = type.caption.copy(color = tokens.colors.secondary),
+                style = type.caption.copy(fontSize = ChatMetrics.GOAL_BAR_ACTION_SIZE_PT.sp, color = tokens.colors.secondary),
                 modifier = Modifier
                     .clickable(role = Role.Button, onClick = onResume)
                     .testTag(UiPageTags.GOAL_RESUME)
                     .padding(tokens.spacing.iconText),
             )
         }
-        if (onClear != null) {
-            BasicText(
+        BasicText(
                 text = DISMISS_GLYPH,
                 style = type.caption.copy(color = tokens.colors.secondary),
                 modifier = Modifier
-                    .clickable(role = Role.Button, onClick = onClear)
+                    .clickable(enabled = onClear != null, role = Role.Button, onClick = { onClear?.invoke() })
                     .semantics { contentDescription = UiStrings.GOAL_CLEAR_TARGET }
                     .testTag(UiPageTags.GOAL_CLEAR)
                     .padding(tokens.spacing.iconText),
+        )
+    }
+}
+
+@Composable
+private fun GoalTargetGlyph() {
+    val tokens = LocalUiTokens.current
+    androidx.compose.foundation.Canvas(Modifier.size(ChatMetrics.GOAL_BAR_ICON_SIZE_PT.dp)) {
+        val stroke = ChatMetrics.GOAL_BAR_ICON_STROKE_TENTH_PT.dp.toPx()
+        drawCircle(tokens.colors.secondary, radius = size.minDimension * 0.36f, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+        drawCircle(tokens.colors.secondary, radius = size.minDimension * 0.1f)
+        drawLine(tokens.colors.secondary, androidx.compose.ui.geometry.Offset(size.width * 0.7f, size.height * 0.3f), androidx.compose.ui.geometry.Offset(size.width * 0.98f, size.height * 0.02f), stroke)
+    }
+}
+
+/** Structured task projection at the top of the iOS composer dock. */
+@Composable
+private fun TodoDock(items: List<TodoDockItem>, modifier: Modifier = Modifier) {
+    val todos = items.filter { it.status in setOf(TODO_COMPLETED, TODO_IN_PROGRESS, TODO_PENDING) }
+    if (todos.isEmpty()) return
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    var collapsed by remember(items) { mutableStateOf(true) }
+    val completed = todos.count { it.status == TODO_COMPLETED }
+    val active = todos.count { it.status == TODO_IN_PROGRESS }
+    val pending = todos.count { it.status == TODO_PENDING }
+    val progress = buildList {
+        if (completed > 0) add("$completed 已完成")
+        if (active > 0) add("$active 进行中")
+        if (pending > 0) add("$pending 待处理")
+    }.joinToString("\u2002·\u2002")
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .shadow(ChatMetrics.TODO_DOCK_SHADOW_PT.dp, RoundedCornerShape(ChatMetrics.TODO_DOCK_RADIUS_PT.dp))
+            .background(tokens.colors.selector, RoundedCornerShape(ChatMetrics.TODO_DOCK_RADIUS_PT.dp))
+            .border(tokens.stroke.hairline, tokens.colors.borderLight, RoundedCornerShape(ChatMetrics.TODO_DOCK_RADIUS_PT.dp))
+            .padding(
+                horizontal = ChatMetrics.TODO_DOCK_INSET_H_PT.dp,
+                vertical = ChatMetrics.TODO_DOCK_INSET_V_PT.dp,
+            ),
+        verticalArrangement = Arrangement.spacedBy(ChatMetrics.TODO_DOCK_GAP_PT.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = ChatMetrics.TODO_DOCK_HEADER_LINE_PT.dp)
+                .clickable(role = Role.Button) { collapsed = !collapsed }
+                .semantics {
+                    contentDescription = "任务 $progress"
+                    stateDescription = if (collapsed) "已折叠" else "已展开"
+                }
+                .testTag(TODO_DOCK_TAG),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+        ) {
+            TodoChecklistIcon()
+            BasicText("任务", style = type.secondary.copy(fontSize = ChatMetrics.TODO_TEXT_SIZE_PT.sp, color = tokens.colors.primary))
+            BasicText(
+                progress,
+                style = type.secondary.copy(fontSize = ChatMetrics.TODO_TEXT_SIZE_PT.sp, color = tokens.colors.tertiary),
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
+            BasicText(
+                if (collapsed) "⌃" else "⌄",
+                style = type.secondary.copy(color = tokens.colors.tertiary),
+            )
+        }
+        if (!collapsed) {
+            Column(
+                modifier = Modifier.heightIn(max = ChatMetrics.TODO_LIST_MAX_HEIGHT_PT.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(ChatMetrics.TODO_DOCK_GAP_PT.dp),
+            ) {
+                todos.forEach { item ->
+                    val status = when (item.status) {
+                        TODO_COMPLETED -> "已完成" to tokens.colors.success
+                        TODO_IN_PROGRESS -> "进行中" to tokens.colors.accent
+                        else -> "待处理" to tokens.colors.tertiary
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = ChatMetrics.TODO_ROW_HEIGHT_PT.dp)
+                            .testTag(TODO_DOCK_ROW_TAG + item.id)
+                            .semantics(mergeDescendants = true) {
+                                contentDescription = "${status.first}，${item.content}"
+                            },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(ChatMetrics.TODO_STATUS_GAP_PT.dp),
+                    ) {
+                        Box(Modifier.size(ChatMetrics.TODO_STATUS_DOT_PT.dp).clip(CircleShape).background(status.second))
+                        BasicText(item.content, style = type.secondary.copy(fontSize = ChatMetrics.TODO_TEXT_SIZE_PT.sp, color = tokens.colors.secondary), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TodoChecklistIcon() {
+    val tokens = LocalUiTokens.current
+    androidx.compose.foundation.Canvas(Modifier.size(ChatMetrics.TODO_CHECKLIST_ICON_PT.dp)) {
+        val stroke = ChatMetrics.TODO_GLYPH_STROKE_PT.dp.toPx()
+        val dot = ChatMetrics.TODO_GLYPH_DOT_RADIUS_PT.dp.toPx()
+        listOf(ChatMetrics.TODO_GLYPH_ROW1_Y_PT, ChatMetrics.TODO_GLYPH_ROW2_Y_PT).forEach { y ->
+            drawCircle(tokens.colors.tertiary, radius = dot, center = androidx.compose.ui.geometry.Offset(ChatMetrics.TODO_GLYPH_BULLET_X_PT.dp.toPx(), y.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+            drawLine(tokens.colors.tertiary, start = androidx.compose.ui.geometry.Offset(ChatMetrics.TODO_GLYPH_LINE_START_X_PT.dp.toPx(), y.dp.toPx()), end = androidx.compose.ui.geometry.Offset(ChatMetrics.TODO_GLYPH_LINE_END_X_PT.dp.toPx(), y.dp.toPx()), strokeWidth = stroke)
         }
     }
 }
@@ -1994,6 +2680,8 @@ private fun NoticeLine(
 @Composable
 private fun SlashMenuView(
     menu: SlashMenu,
+    highlightedIndex: Int,
+    onHighlight: (Int) -> Unit,
     onPick: (String) -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -2045,8 +2733,13 @@ private fun SlashMenuView(
                 )
             }
 
-            is SlashMenu.Matches -> menu.commands.forEach { command ->
-                SlashCommandRow(command = command, onPick = onPick)
+            is SlashMenu.Matches -> menu.commands.forEachIndexed { index, command ->
+                SlashCommandRow(
+                    command = command,
+                    highlighted = index == highlightedIndex,
+                    onHighlight = { onHighlight(index) },
+                    onPick = onPick,
+                )
             }
 
             is SlashMenu.Empty -> BasicText(
@@ -2062,6 +2755,8 @@ private fun SlashMenuView(
 @Composable
 private fun SlashCommandRow(
     command: ComposerCommand,
+    highlighted: Boolean,
+    onHighlight: () -> Unit,
     onPick: (String) -> Unit,
 ) {
     val tokens = LocalUiTokens.current
@@ -2069,7 +2764,10 @@ private fun SlashCommandRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(role = Role.Button) { onPick(command.name) }
+            .background(if (highlighted) tokens.colors.selector else Color.Transparent, RoundedCornerShape(tokens.radius.card))
+            .clickable(role = Role.Button) { onHighlight(); onPick(command.name) }
+            .semantics { selected = highlighted }
+            .testTag(SLASH_COMMAND_TAG_PREFIX + command.name)
             .padding(
                 horizontal = tokens.spacing.cardInset,
                 vertical = tokens.spacing.codeToolbar,
@@ -2509,12 +3207,14 @@ internal object ChatPageTokens {
         UiTokenNames.COLORS_ACCENT,
         UiTokenNames.COLORS_BACKGROUND,
         UiTokenNames.COLORS_BORDER,
+        UiTokenNames.COLORS_BORDER_LIGHT,
         UiTokenNames.COLORS_CODE,
         UiTokenNames.COLORS_CTA_OVERRIDE,
         UiTokenNames.COLORS_PAGE_ACCENT,
         UiTokenNames.COLORS_DANGER,
         UiTokenNames.COLORS_INPUT,
         UiTokenNames.COLORS_ON_ACCENT,
+        UiTokenNames.COLORS_PAGE,
         UiTokenNames.COLORS_PRIMARY,
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_SELECTOR,
@@ -2531,7 +3231,6 @@ internal object ChatPageTokens {
         UiTokenNames.GEOMETRY_COMPOSER_CONTROL_SIZE,
         UiTokenNames.GEOMETRY_COMPOSER_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_COMPOSER_OUTER_MARGIN_TOP,
-        UiTokenNames.GEOMETRY_COMPOSER_TRAILING_RESERVE,
         UiTokenNames.GEOMETRY_DISCLOSURE_ROW_HEIGHT,
         UiTokenNames.GEOMETRY_PAGE_HEADER_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_PAGE_LIST_ROW_MIN_HEIGHT,
@@ -2565,7 +3264,6 @@ internal object ChatPageTokens {
 
 /** The `kind` of ask that submits an answer instead of allowing an action. */
 private const val QUESTION: String = "question"
-private const val MENU_GLYPH: String = "☰"
 private const val MORE_GLYPH: String = "⋯"
 private const val LOCK_GLYPH: String = "⛨"
 private const val COMMAND_GLYPH: String = "⌘"
@@ -3134,3 +3832,16 @@ private fun ChatScheduleRowView(row: ChatScheduleRow) {
 
 /** The kind word that means "the command ran" (`ChatPage.swift:2516`). */
 private const val KIND_SUCCESS: String = "success"
+private const val TODO_COMPLETED: String = "completed"
+private const val TODO_IN_PROGRESS: String = "in_progress"
+private const val TODO_PENDING: String = "pending"
+private const val TODO_DOCK_TAG: String = "pdsh.chat.todo-dock"
+private const val TODO_DOCK_ROW_TAG: String = "pdsh.chat.todo-row."
+private const val QUESTION_TAKEOVER_TAG: String = "pdsh.chat.question-takeover"
+private const val PLAN_REVIEW_TAKEOVER_TAG: String = "pdsh.chat.plan-review-takeover"
+private const val PLAN_REVIEW_APPROVE_TAG: String = "pdsh.chat.plan-review-approve"
+private const val PLAN_REVIEW_CHANGE_TAG: String = "pdsh.chat.plan-review-change"
+private const val PLAN_REVIEW_INTENT: String = "plan-review"
+private const val SLASH_COMMAND_TAG_PREFIX: String = "pdsh.chat.slash-command."
+private const val CHAT_HEADER_DEVICE_TAG: String = "pdsh.chat.header.device"
+private const val CHAT_RESTART_ENGINE_TAG: String = "pdsh.chat.restart-engine"

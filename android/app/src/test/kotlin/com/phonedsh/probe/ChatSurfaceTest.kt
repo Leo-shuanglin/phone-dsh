@@ -48,11 +48,12 @@ class ChatSurfaceTest {
     }
 
     @Test
-    fun `a completed turn end is not a visible row`() {
+    fun `a completed turn end remains available for process and tail projection`() {
         val event = project(
             """{"type":"turn/end","seq":4,"data":{"turn":1,"reason":{"kind":"completed"}}}""",
         )
-        assertNull(chatNodeOf("chat-1", "", event, 1))
+        val node = requireNotNull(chatNodeOf("chat-1", "", event, 1))
+        assertEquals(JsonString("completed"), node.props["reason"])
     }
 
     @Test
@@ -83,7 +84,8 @@ class ChatSurfaceTest {
             providerNeedsKey = false,
             canSend = true,
         )
-        val run = state.rows.single() as ChatRow.ToolRun
+        val group = state.rows.single() as ChatRow.ProcessGroup
+        val run = group.entries.single() as ChatRow.ToolRun
         assertEquals("bash", run.title)
         assertEquals("a,b", run.summary)
         assertEquals(1, run.entries.size)
@@ -175,6 +177,36 @@ class ChatSurfaceTest {
         assertEquals("CSV 统计", loaded.title)
         assertEquals(listOf("sess-a", "sess-b"), loaded.workerSessionIds)
         assertEquals(nodes, loaded.nodes)
+        assertEquals(ChatSessionStore.DEFAULT_WORKSPACE_ID, loaded.workspaceID)
+        assertFalse(loaded.archived)
+        assertFalse(loaded.pinned)
+    }
+
+    @Test
+    fun `archive and pin metadata survives a store update without changing the transcript`() {
+        val store = MemoryDomainStore()
+        val chatStore = ChatSessionStore(store)
+        val nodes = listOf(sessionNode("chat-1"), userNodeOf("chat-1", "t1", "hello", 1))
+        chatStore.save(
+            ChatRecord(
+                id = "chat-1",
+                title = "hello",
+                updatedAtMs = 10L,
+                workerSessionIds = listOf("worker-1"),
+                nodes = nodes,
+            ),
+        )
+
+        assertTrue(chatStore.setArchived("chat-1", true))
+        assertTrue(chatStore.setPinned("chat-1", true))
+        val loaded = requireNotNull(chatStore.load("chat-1"))
+        assertTrue(loaded.archived)
+        assertTrue(loaded.pinned)
+        assertEquals(ChatSessionStore.DEFAULT_WORKSPACE_ID, loaded.workspaceID)
+        assertEquals("hello", loaded.title)
+        assertEquals(listOf("worker-1"), loaded.workerSessionIds)
+        assertEquals(nodes, loaded.nodes)
+        assertFalse(chatStore.setArchived("missing", true))
     }
 
     @Test

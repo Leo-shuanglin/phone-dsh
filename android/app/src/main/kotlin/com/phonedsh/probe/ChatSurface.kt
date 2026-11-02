@@ -95,11 +95,20 @@ internal data class ChatUiState(
     val running: Boolean = false,
     val activeTurnNodeId: String? = null,
     val streaming: String = "",
+    val reasoningStreaming: String = "",
     val notice: String? = null,
     val error: String? = null,
     val attachmentError: String? = null,
     val updatedAtMs: Long = 0L,
     val bannerDismissed: Boolean = false,
+    val sessionSnapshot: ChatSessionSnapshot = ChatSessionSnapshot(),
+    val pendingNodes: List<UiStateNode> = emptyList(),
+    val lastSubmission: String = "",
+    val lastAttachments: List<ChatAttachment> = emptyList(),
+    val imeVisible: Boolean = false,
+    val pendingExpanded: Boolean = false,
+    val expandedRowIds: Set<String> = emptySet(),
+    val commandExecution: com.phonedsh.ui.page.ChatCommandExecution? = null,
 ) {
     /** True when this state names a conversation the session list can show. */
     val hasConversation: Boolean get() = chatId.isNotEmpty()
@@ -118,6 +127,7 @@ internal fun chatScreenState(
     engineStarted: Boolean,
     providerNeedsKey: Boolean,
     canSend: Boolean,
+    lifecycle: com.phonedsh.ui.state.EngineLifecycleFacts? = null,
 ): ChatScreenState {
     val chatId = ui.chatId.ifEmpty { PENDING_CHAT_ID }
     val nodes = ArrayList<UiStateNode>(ui.nodes.size + 2)
@@ -125,7 +135,23 @@ internal fun chatScreenState(
     // A stored row that repeats a nodeID would be a duplicate list key in the page;
     // the first occurrence is the row the person saw.
     nodes += ui.nodes.distinctBy { it.nodeID }
-    ui.activeTurnNodeId?.let { nodes += turnNode(chatId, it) }
+    nodes += ui.pendingNodes
+    if (ui.running && ui.reasoningStreaming.isNotEmpty()) {
+        val turn = ui.activeTurnNodeId ?: "live"
+        val thinking = UiStateNode(
+            kind = UiStateKind.THINKING_PILL,
+            nodeID = "session/$chatId/turn/$turn/event/0/thinking-live",
+            parentID = "session/$chatId/turn/$turn", sessionID = chatId, turnID = turn, seq = 0,
+            text = ui.reasoningStreaming, surface = UiStateSurface.THINKING_PILL,
+            props = JsonObject(mapOf("streaming" to JsonBool(true))),
+        )
+        val insertion = nodes.indexOfFirst { it.kind == UiStateKind.TOOL_ROW && it.turnID == turn }
+        if (insertion >= 0) nodes.add(insertion, thinking) else nodes += thinking
+    }
+    ui.activeTurnNodeId?.let { active ->
+        val turn = turnNode(chatId, active)
+        if (nodes.none { it.nodeID == turn.nodeID }) nodes += turn
+    }
     if (ui.error != null && !ui.bannerDismissed) {
         nodes += bannerNode(chatId, ui.error)
     }
@@ -135,6 +161,9 @@ internal fun chatScreenState(
         attachmentError = ui.attachmentError,
         fileImportNotice = ui.notice,
         dismissedBannerIds = if (ui.bannerDismissed) setOf(bannerId(chatId)) else emptySet(),
+        imeVisible = ui.imeVisible,
+        pendingSlotExpanded = ui.pendingExpanded,
+        expandedRowIds = ui.expandedRowIds,
     )
     val host = ChatHostFacts(
         engineStarted = engineStarted,
@@ -142,8 +171,23 @@ internal fun chatScreenState(
         // and pretending it did would make the send key throw the draft away.
         canSend = canSend && !ui.running,
         providerNeedsKey = providerNeedsKey,
+        canSteer = false,
+        lifecycle = lifecycle,
+        todoItems = ui.sessionSnapshot.todos,
+        accessModes = ui.sessionSnapshot.accessModes,
+        currentAccessMode = ui.sessionSnapshot.currentAccessMode,
+        commands = ui.sessionSnapshot.commands,
+        accessModeError = ui.sessionSnapshot.accessError,
+        commandsError = ui.sessionSnapshot.commandsError,
+        models = ui.sessionSnapshot.modelRoutes.map { it.model }.distinct(),
+        currentModel = ui.sessionSnapshot.currentModel,
+        currentEffort = ui.sessionSnapshot.currentEffort,
+        efforts = ui.sessionSnapshot.modelRoutes.firstOrNull { it.model == ui.sessionSnapshot.currentModel }?.efforts.orEmpty(),
+        effortTitle = ui.sessionSnapshot.currentEffort?.let { effortTitle(it) },
+        defaultEffortTitle = ui.sessionSnapshot.modelRoutes.firstOrNull { it.model == ui.sessionSnapshot.currentModel }
+            ?.defaultEffort?.let { "默认强度 · ${effortTitle(it)}" } ?: com.phonedsh.ui.UiStrings.MODEL_DEFAULT_EFFORT,
     )
-    val base = ChatScreenState.from(nodes = nodes, local = local, host = host)
+    val base = ChatScreenState.from(nodes = nodes, local = local, host = host, goal = ui.sessionSnapshot.goal)
     val rows = if (ui.running && ui.streaming.isNotEmpty()) {
         base.rows + ChatRow.Assistant(
             id = "streaming/$chatId",
@@ -262,6 +306,15 @@ internal fun chatNodeOf(
                     linkedMapOf(
                         "role" to JsonString("assistant"),
                         "truncated" to JsonBool(text.length > TEXT_LIMIT),
+                        "usage" to (event.data?.get("usage")
+                            ?: (event.data?.get("message") as? JsonObject)?.get("usage")
+                            ?: com.phonedsh.agentcore.JsonNull),
+                        "reasoning" to JsonString(
+                            ((event.data?.get("message") as? JsonObject)?.get("content") as? JsonArray)?.values.orEmpty()
+                                .mapNotNull { raw -> (raw as? JsonObject)?.let { block ->
+                                    if ((block["type"] as? JsonString)?.value == "reasoning") (block["text"] as? JsonString)?.value else null
+                                } }.joinToString("\n"),
+                        ),
                     ),
                 ),
             )
@@ -296,10 +349,15 @@ internal fun chatNodeOf(
 
         HostEventKind.TOOL_RESULT -> {
             val data = event.data ?: return null
+            val message = data["message"] as? JsonObject
             val callId = (data["callId"] as? JsonString)?.value
                 ?: (data["call_id"] as? JsonString)?.value
+                ?: (message?.get("toolCallId") as? JsonString)?.value
+                ?: ((message?.get("source") as? JsonObject)?.get("callId") as? JsonString)?.value
                 ?: nodeID("tool-result")
-            val isError = (data["isError"] as? JsonBool)?.value ?: false
+            val isError = (data["isError"] as? JsonBool)?.value
+                ?: (message?.get("isError") as? JsonBool)?.value
+                ?: (data["error"] != null && data["error"] != com.phonedsh.agentcore.JsonNull)
             val summary = toolResultTextOf(event)
             UiStateNode(
                 kind = UiStateKind.TOOL_ROW,
@@ -317,6 +375,8 @@ internal fun chatNodeOf(
                         "isError" to JsonBool(isError),
                         "phase" to JsonString("result"),
                         "state" to JsonString(if (isError) "error" else "ok"),
+                        "body" to JsonString(bounded(summary)),
+                        "meta" to (data["meta"] ?: com.phonedsh.agentcore.JsonNull),
                     ),
                 ),
             )
@@ -324,7 +384,6 @@ internal fun chatNodeOf(
 
         HostEventKind.TURN_ENDED -> {
             val reason = event.turnEndReason ?: return null
-            if (reason == COMPLETED) return null
             UiStateNode(
                 kind = UiStateKind.STATUS,
                 nodeID = nodeID("turn-end"),
@@ -337,6 +396,7 @@ internal fun chatNodeOf(
                     linkedMapOf(
                         "reason" to JsonString(reason),
                         "detail" to JsonString(turnEndDetail(event).orEmpty()),
+                        "endedAtMs" to (event.raw["time"] ?: com.phonedsh.agentcore.JsonNull),
                     ),
                 ),
             )
@@ -402,6 +462,13 @@ internal fun userNodeOf(chatId: String, turnToken: String, text: String, ordinal
 /** The text of one `tool_result` event: the Worker's own result, never a guess. */
 internal fun toolResultTextOf(event: HostEvent): String {
     val data = event.data ?: return ""
+    val message = data["message"] as? JsonObject
+    val content = (message?.get("content") as? JsonArray)?.values.orEmpty()
+        .mapNotNull { block -> (block as? JsonObject)?.let { entry ->
+            if ((entry["type"] as? JsonString)?.value == "text") (entry["text"] as? JsonString)?.value else null
+        } }.joinToString("\n")
+    if (content.isNotEmpty()) return content
+    ((data["error"] as? JsonObject)?.get("reason") as? JsonString)?.value?.let { return it }
     for (member in listOf("text", "result", "output", "summary")) {
         when (val value = data[member]) {
             is JsonString -> return value.value

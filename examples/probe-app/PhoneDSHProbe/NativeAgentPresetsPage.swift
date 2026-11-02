@@ -113,7 +113,7 @@ struct NativeAgentPresetsPage: View {
                     Label(NativeText("让 Agent 创建预设", "Create a preset with Agent"), systemImage: "plus")
                 }
                 Text(NativeText("进入创造模式但不自动发送任务，现有草稿会保留。", "Opens creator mode without sending a prompt. Your draft is preserved."))
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Section {
                 if model.isLoading && model.presets.isEmpty {
@@ -122,23 +122,20 @@ struct NativeAgentPresetsPage: View {
                 ForEach(model.presets) { preset in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text(preset.title).font(.headline)
+                            Text(preset.title).font(.system(size: HomeSpec.bodySize, weight: .semibold))
                             if preset.isDefault {
-                                Text(NativeText("默认", "Default"))
-                                    .font(.caption2)
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(Color.accentColor.opacity(0.12), in: Capsule())
+                                HomeTag(text: NativeText("默认", "Default"))
                             }
                             if preset.custom {
-                                Text(NativeText("自定义", "Custom")).font(.caption2).foregroundStyle(.secondary)
+                                HomeTag(text: NativeText("自定义", "Custom"))
                             }
                         }
-                        Text(preset.id).font(.caption.monospaced()).foregroundStyle(.secondary)
+                        Text(preset.id).font(.system(size: 13).monospaced()).foregroundStyle(.secondary)
                         if !preset.detail.isEmpty {
-                            Text(preset.detail).font(.footnote).foregroundStyle(.secondary)
+                            Text(preset.detail).font(.system(size: 13)).foregroundStyle(.secondary)
                         }
                         if let broken = preset.broken {
-                            Text(broken).font(.caption).foregroundStyle(.orange)
+                            Text(broken).font(.system(size: 13)).foregroundStyle(.orange)
                         }
                         HStack {
                             Button(NativeText("查看配置", "View configuration")) {
@@ -159,6 +156,7 @@ struct NativeAgentPresetsPage: View {
                 Section { Text(error).foregroundStyle(.red) }
             }
         }
+        .homeGroupedList()
         .navigationTitle(NativeText("Agent 预设", "Agent Presets"))
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await model.refresh() }

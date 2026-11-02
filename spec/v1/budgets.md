@@ -20,14 +20,14 @@ The host is always in exactly one of these states. Admission is `open` only in `
 | `HandingOff` | closed | Fence CAS, snapshot and segments are being transferred to the remote. |
 | `Remote` | closed | The remote holds execution authority; the phone only observes. |
 | `Reclaiming` | closed | Reclaim in flight; the returned fence and segments are being applied. |
-| `Failed` | closed | Fail loud; the user must act. No automatic exit from this state. |
+| `Failed` | closed | Terminal for this incarnation; no automatic in-process exit. A new process follows the persisted failure retry window. |
 
 - `Recovering` keeps admission closed until the lease is verified and the recovered workspace is
   consistent with the WAL (wal.md §10). A worker HELLO before verification does not open admission.
 - Every side effect needs the last LIFECYCLE and the last FENCE admission to be `open`
   (channel.md §4.5, handoff.md §1); during `Recovering` both are `closed`.
-- `Failed` is entered on an unrecoverable condition; a boot that finds a persisted `Failed` starts in
-  `Failed`, and only an explicit user reset moves it to `Recovering`.
+- A typed transient fault enters `Backoff`; a terminal workspace fault enters `Failed`. In the same
+  incarnation only an explicit user reset leaves `Failed`; new-process retry never skips WAL/fence verification.
 
 ## 2. Transition table (D14)
 
@@ -37,15 +37,15 @@ before the transition.
 | From | To | Signal / guard | Actions |
 |---|---|---|---|
 | boot: persisted `Running`, `Draining` or `Recovering` | `Recovering` | process start | Cold recovery: WAL scan, replay, overlay, worker boot; admission closed. |
-| boot: persisted `Failed` | `Failed` | process start | Keep admission closed; report the user action needed. |
+| boot: persisted `Failed` | `Backoff` or `Recovering` | process start | A future `next_retry_at_ms` restores closed Backoff; an elapsed or absent deadline starts Recovering, never open admission. |
 | boot: no persisted state | `Recovering` | process start | New workspace; WAL starts at mseq 1. |
-| `Running` | `Draining` | scenePhase background, and no background window is in place (plan §7.9: with a window the host stays `Running`) | Close admission; start the background task and the 20 s timer. |
+| `Running` | `Draining` | scenePhase background | Close admission; start the background task and the 20 s timer. |
 | `Draining` | `Parked` | background drain complete, or 20 s deadline | Close the epoch (wal.md §5.2), fsync, stop the worker. A deadline ends the wait and aborts in-flight channel requests; the epoch close still runs. |
 | `Draining` | `Recovering` | restart path: planned WebContent restart, WebContent termination, or boot | Close the epoch, restart the worker, verify the lease. |
 | `Parked` | `Recovering` | scenePhase active | Boot the worker and verify the lease; admission stays closed. |
 | `Running` | `Recovering` | planned restart (policy, §4) or WebContent termination, still foreground | Close admission, close the epoch, restart WebContent at a tool-call boundary. |
 | `Recovering` | `Running` | lease verified and admission opened | Send FENCE/LIFECYCLE `open`; resume work. |
-| `Running` | `Backoff` | 429/5xx response or NWPath unsatisfied | Close admission; start the retry schedule. |
+| `Running` | `Backoff` | 429/5xx response, NWPath unsatisfied, or typed transient boot/transport fault | Close admission; persist the retry schedule. |
 | `Backoff` | `Running` | Retry-After elapsed, network path satisfied, one probe succeeded | Reopen admission after a lease check. |
 | `Running` | `HandingOff` | handoff decision while foreground | Close admission, close the epoch, freeze `wal_seq`, start handoff.md §2. |
 | `Draining` | `HandingOff` | handoff decision while draining | Finish the epoch close, then start handoff.md §2. |
@@ -54,7 +54,7 @@ before the transition.
 | `Remote` | `Reclaiming` | reclaim requested (user or foreground return) | POST the reclaim token (handoff.md §5). |
 | `Reclaiming` | `Recovering` | response applied, new fence persisted, epoch closed | Verify the lease; admission stays closed until `Recovering → Running`. |
 | any state | `Failed` | `WAL_CORRUPT`, unrepaired base mismatch at an epoch close, materialization I/O failure, quota still exceeded after compaction, or an unrecoverable host defect | Close admission, record the condition, keep every durable WAL and journal byte. |
-| `Failed` | `Recovering` | explicit user reset only | Re-run recovery; the WAL may still fail the same condition. |
+| `Failed` | `Recovering` | explicit user reset only, within this process | Clear the retry window and re-run recovery; the WAL may still fail the same condition. |
 
 No other edge exists. In particular, `Parked` never opens admission directly, `Remote` is never left
 without `Reclaiming`, and a drain deadline never reopens admission.
@@ -63,7 +63,7 @@ without `Reclaiming`, and a drain deadline never reopens admission.
 
 | Signal | Source | Effect |
 |---|---|---|
-| scenePhase | App lifecycle | `background` → `Draining` when no background window is in place (plan §7.9); `active` → `Parked`/`Recovering` and lease verification. |
+| scenePhase | App lifecycle | `background` → `Draining`; `active` → `Parked`/`Recovering` and lease verification. |
 | background task expiry | iOS background task | Force the `Draining` deadline (20 s), abort in-flight requests, continue to the pending target. |
 | WebContent termination | WKWebView delegate | Count it; in the foreground `Running`/`Draining` → `Recovering`. |
 | planned restart timer | controller | Restart at a tool-call boundary when engine heap > 75% for 3 samples, after a WebContent termination, or after 24 h of continuous running; never mid-turn (§4). |
@@ -76,10 +76,11 @@ without `Reclaiming`, and a drain deadline never reopens admission.
 **Boot mapping for the rows above.** §2 lists the four persisted states it decided; these four were
 left implicit and the port had to infer them, so they are written down here: persisted `Parked` →
 `Parked` (the resume waits for an active scene), persisted `Backoff` → `Backoff`, persisted `Remote` →
-`Remote`, persisted `HandingOff` → `Failed` (a half-finished handoff cannot be replayed) and persisted
+`Remote`, persisted `HandingOff` follows the same closed retry-window boot mapping as `Failed`, and persisted
 `Reclaiming` → `Recovering`. Only the `Parked` row has fixture evidence today
 (`cold-start-after-reboot`); the other four are exercised by the transition matrix, not by a
-perturbation fixture, and are marked accordingly.
+perturbation fixture, and are marked accordingly. Classified failures persist optional `retry_count`,
+`next_retry_at_ms`, and `failure_class`: delay is min(60 s, 5 s × 2^(retry_count − 1)), not a limit on process restarts; successful verified recovery resets it.
 
 **Single-file limit versus the aggregate columns.** The aggregate columns (`workspace`, `VFS`, `heap`)
 are budgeted for **that row's own** `single file` value. Raising `single file` is permitted up to the

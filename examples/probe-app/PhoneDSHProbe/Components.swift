@@ -125,7 +125,7 @@ struct PageSection<Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color(.secondarySystemBackground)))
+            .fill(HomeSpec.surface))
     }
 }
 
@@ -241,30 +241,30 @@ enum NativePagePalette {
     /// lists that draw their own 16pt rows set `listRowBackground(.clear)` so
     /// dark stays one flat sheet with separators, exactly like the light
     /// design's "layering by spacing and separators, not by background".
-    static let page = NativeParityTokens.color(light: 0xFFFFFF, dark: 0x000000)
-    static let ink = NativeParityTokens.color(light: 0x111114, dark: 0xF9FAFB)
+    static let page = NativeParityTokens.color(light: 0xF7F7F7, dark: 0x000000)
+    static let ink = NativeParityTokens.color(light: 0x1A1A1A, dark: 0xF9FAFB)
     /// Same value as `ChatPage.inkSecondary` in light, legible in dark.
-    static let inkSecondary = NativeParityTokens.color(light: 0x66666B, dark: 0xCFD3D6)
+    static let inkSecondary = NativeParityTokens.color(light: 0x555555, dark: 0xCFD3D6)
 
-    static let accent = NativeParityTokens.color(light: 0x2F5BFF, dark: 0x679EFE)
+    static let accent = NativeParityTokens.color(light: 0x1A1A1A, dark: 0xF2F2F2)
     /// Solid fill under white text. The same blue in both appearances: the
     /// lightened dark-mode accent leaves white text at roughly 2.5:1.
-    static let accentFill = NativeParityTokens.color(light: 0x2F5BFF, dark: 0x2F5BFF)
-    static let success = NativeParityTokens.color(light: 0x0E9F6E, dark: 0x22C55E)
+    static let accentFill = NativeParityTokens.color(light: 0x191919, dark: 0x3A3A3C)
+    static let success = NativeParityTokens.color(light: 0x3DC979, dark: 0x3DC979)
     static let warning = NativeParityTokens.color(light: 0xB45309, dark: 0xF5B45A)
     static let danger = NativeParityTokens.color(light: 0xC0392B, dark: 0xF25A5A)
 
     /// 1px row separator: identical to the old #DDDCE2 in light, and white 12%
     /// (what `UIColor.separator` resolves to) in dark.
-    static let hairline = NativeParityTokens.rgba(light: 0xDDDCE2, lightAlpha: 1,
+    static let hairline = NativeParityTokens.rgba(light: 0xEDEDED, lightAlpha: 1,
                                                  dark: 0xFFFFFF, darkAlpha: 0.12)
 
     /// Hand-drawn surfaces that float over the page.
     static let raised = NativeParityTokens.color(light: 0xFFFFFF, dark: 0x1C1C1E)
-    static let toast = NativeParityTokens.color(light: 0xF2F3F5, dark: 0x2C2C2E)
+    static let toast = NativeParityTokens.color(light: 0xE8E8E8, dark: 0x2C2C2E)
 
-    static let disabledFill = NativeParityTokens.color(light: 0xE5E5EA, dark: 0x2C2C2E)
-    static let disabledInk = NativeParityTokens.color(light: 0x8A8A90, dark: 0x8E8E93)
+    static let disabledFill = NativeParityTokens.color(light: 0xE8E8E8, dark: 0x2C2C2E)
+    static let disabledInk = NativeParityTokens.color(light: 0xA9A9A9, dark: 0x8E8E93)
 
     /// The scrim behind a hand-drawn dialog. Black on a black page separates
     /// nothing, so dark gets a deeper scrim instead of a lighter one.

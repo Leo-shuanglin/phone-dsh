@@ -875,13 +875,20 @@ public fun MCPEditorPage(
                 // The untitled save/delete block (`:238`): save first, then the
                 // destructive verb, exactly as the baseline orders them.
                 item(key = "save") {
-                    SessionTextAction(
-                        label = UiStrings.MCP_SAVE,
+                    if (state.isNew) SessionTextAction(
+                        label = UiStrings.MCP_SAVE_CONNECT,
                         onClick = { onSubmit(state.draft) },
                         tone = SessionActionTone.ACCENT,
                         enabled = state.canSubmit,
                         modifier = Modifier.testTag(UiPageTags.MCP_EDITOR_SAVE),
-                        description = UiStrings.MCP_SAVE,
+                        description = UiStrings.MCP_SAVE_CONNECT,
+                    ) else SessionTextAction(
+                        label = UiStrings.MCP_SAVE_RECONNECT,
+                        onClick = { onSubmit(state.draft) },
+                        tone = SessionActionTone.ACCENT,
+                        enabled = state.canSubmit,
+                        modifier = Modifier.testTag(UiPageTags.MCP_EDITOR_SAVE),
+                        description = UiStrings.MCP_SAVE_RECONNECT,
                     )
                 }
                 if (state.canDelete) {

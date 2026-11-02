@@ -52,6 +52,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -88,6 +89,7 @@ import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.domain.connector.DeviceToolState
 import com.phonedsh.domain.connector.DeviceTranscriptItem
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.ShellFilesMetrics
 import com.phonedsh.ui.surface.preview.PreviewFileSource
 import com.phonedsh.ui.surface.preview.PreviewPathResolver
 import com.phonedsh.ui.surface.preview.PreviewResolution
@@ -1181,24 +1183,29 @@ private fun FileGlyph(name: String) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     val extension = name.substringAfterLast('.', "").uppercase().take(GLYPH_MAX_CHARS)
-    // The glyph card is sized by its own label plus the two published insets: the
-    // baseline draws a 34x38 pt icon, and this token set declares no file-glyph box,
-    // so the card takes the text's size rather than a number invented here.
     Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(tokens.radius.card))
-            .background(tokens.colors.secondary.copy(alpha = GLYPH_TINT_ALPHA))
-            .padding(
-                horizontal = tokens.spacing.badgeInsetH,
-                vertical = tokens.spacing.badgeInsetV,
-            ),
+        modifier = Modifier.size(
+            width = ShellFilesMetrics.fileRowGlyphSlotWidth,
+            height = ShellFilesMetrics.fileRowGlyphSlotHeight,
+        ),
         contentAlignment = Alignment.Center,
     ) {
-        BasicText(
-            text = extension,
-            style = type.caption.copy(color = tokens.colors.secondary),
-            maxLines = 1,
-        )
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(tokens.radius.card))
+                .background(tokens.colors.secondary.copy(alpha = GLYPH_TINT_ALPHA))
+                .padding(
+                    horizontal = tokens.spacing.badgeInsetH,
+                    vertical = tokens.spacing.badgeInsetV,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            BasicText(
+                text = extension,
+                style = type.caption.copy(color = tokens.colors.secondary),
+                maxLines = 1,
+            )
+        }
     }
 }
 

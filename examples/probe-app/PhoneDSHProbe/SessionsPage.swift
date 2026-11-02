@@ -38,10 +38,19 @@ enum DrawerTitles {
         return trimmed
     }
 
+    /// The host's default workspace on a phone: no desktop exists here, so the
+    /// folder is named for what lands in it — everyday, unfiled asks.
+    static let defaultFolderName = "日常"
+
+    static func isDefaultWorkspace(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || defaultWorkspaces.contains(trimmed.lowercased())
+    }
+
     static func workspaceTitle(_ raw: String, index: Int) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty || defaultWorkspaces.contains(trimmed.lowercased()) {
-            return index > 1 ? "工作文件夹 \(index)" : "工作文件夹"
+        if isDefaultWorkspace(trimmed) {
+            return index > 1 ? "\(defaultFolderName) \(index)" : defaultFolderName
         }
         return lastSegmentName(trimmed, fallback: "未命名文件夹")
     }
@@ -143,7 +152,7 @@ struct SessionsPage: View {
                         HStack(spacing: 8) {
                             Image(systemName: "plus")
                                 .font(.system(size: 20, weight: .regular))
-                            Text("新建会话").font(.system(size: 17))
+                            Text("新建会话").font(.system(size: HomeSpec.bodySize))
                             Spacer(minLength: 0)
                         }
                         .foregroundStyle(newSessionBlocked == nil
@@ -188,7 +197,7 @@ struct SessionsPage: View {
                                     await management.refresh()
                                 }
                             }
-                            .font(.system(size: 17))
+                            .font(.system(size: HomeSpec.bodySize))
                             .foregroundStyle(NativePagePalette.accent)
                         }
                         .frame(height: 44)
@@ -207,7 +216,7 @@ struct SessionsPage: View {
                         VStack(alignment: .center, spacing: 0) {
                             // 空态:文字落在这一栏的中线上;按钮仍是满宽,和列表同宽。
                             Text("还没有工作文件夹")
-                                .font(.system(size: 17, weight: .semibold))
+                                .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                                 .foregroundStyle(SessionsPage.dark)
                                 .multilineTextAlignment(.center)
                             Text("选一个文件夹,会话和文件都放在里面。")
@@ -217,7 +226,7 @@ struct SessionsPage: View {
                                 .padding(.top, 8)
                             Button { showingNewWorkspace = true } label: {
                                 Text("新建工作文件夹")
-                                    .font(.system(size: 17, weight: .semibold))
+                                    .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                                     .foregroundStyle(.white)
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 50)
@@ -245,7 +254,7 @@ struct SessionsPage: View {
                             if rows.isEmpty {
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("还没有会话")
-                                        .font(.system(size: 17, weight: .semibold))
+                                        .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                                         .foregroundStyle(SessionsPage.dark)
                                     Text("点上面的「新建会话」开始。")
                                         .font(.system(size: 13))
@@ -270,7 +279,7 @@ struct SessionsPage: View {
                                 Image(systemName: "plus")
                                     .font(.system(size: 16, weight: .medium))
                                 Text("添加工作文件夹")
-                                    .font(.system(size: 17))
+                                    .font(.system(size: HomeSpec.bodySize))
                                 Spacer(minLength: 8)
                             }
                             .foregroundStyle(NativePagePalette.accent)
@@ -291,9 +300,9 @@ struct SessionsPage: View {
                             EmptyView()
                         } else if management.archivedSessions.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("没有已归档的会话").font(.body)
+                                Text("没有已归档的会话").font(.system(size: HomeSpec.bodySize))
                                 Text("归档的会话会留在这里，随时可以恢复。")
-                                    .font(.footnote)
+                                    .font(.system(size: 13))
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.vertical, 4)
@@ -344,12 +353,12 @@ struct SessionsPage: View {
 
             .sheet(isPresented: $showSchedules) {
                 NavigationStack { NativeAutomationPage() }
-                    .presentationDragIndicator(.visible)
+                    .homeSheetChrome()
             }
 
             .task { await management.refresh() }
             .refreshable { await management.refresh() }
-            .sheet(isPresented: $showingConfiguration) { NativeConfigurationPage() }
+            .sheet(isPresented: $showingConfiguration) { NavigationStack { NativeConfigurationPage() } }
             .navigationDestination(item: $selectedQueueSession) { session in
                 SessionQueuePage(session: session, management: management)
             }
@@ -424,7 +433,7 @@ struct SessionsPage: View {
                         .foregroundStyle(SessionsPage.ink)
                         .frame(width: 12, alignment: .leading)
                     Text(displayWorkspaceTitle(workspace))
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                         .foregroundStyle(SessionsPage.dark)
                         .lineLimit(1)
                         .padding(.leading, 7)
@@ -466,11 +475,11 @@ struct SessionsPage: View {
             Button { toggleWorkspace(workspace.id) } label: {
                 HStack(spacing: 7) {
                     Image(systemName: isWorkspaceExpanded(workspace.id) ? "chevron.down" : "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(.system(size: 13, weight: .semibold))
                     Image(systemName: "folder")
-                    Text(displayWorkspaceTitle(workspace)).font(.subheadline.weight(.semibold))
+                    Text(displayWorkspaceTitle(workspace)).font(.system(size: 15, weight: .semibold))
                     if count > 0 {
-                        Text("·").font(.caption).foregroundStyle(.tertiary)
+                        Text("·").font(.system(size: 13)).foregroundStyle(.tertiary)
                         Text("\(count) 个会话").font(.system(size: 13)).foregroundStyle(.secondary)
                     }
                 }
@@ -549,7 +558,7 @@ struct SessionsPage: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 17, height: 17)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(displaySessionTitle(session)).font(.body).lineLimit(1)
+                    Text(displaySessionTitle(session)).font(.system(size: HomeSpec.bodySize)).lineLimit(1)
                     HStack(spacing: 5) {
                         Text(SessionTime.relative(session.updatedAt))
                         if session.running {
@@ -565,7 +574,7 @@ struct SessionsPage: View {
                             .foregroundStyle(SessionsPage.runningInk)
                         }
                     }
-                    .font(.caption)
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 }
@@ -601,7 +610,7 @@ struct SessionsPage: View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
                 Text(displaySessionTitle(session)).lineLimit(1)
-                Text(SessionTime.relative(session.updatedAt)).font(.caption).foregroundStyle(.secondary)
+                Text(SessionTime.relative(session.updatedAt)).font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Spacer()
             Button("恢复") { Task { await management.unarchive(session) } }
@@ -670,7 +679,7 @@ private struct SessionQueuePage: View {
                 ForEach(management.queueItems) { item in
                     Section(item.lane == "next-turn" ? "下一轮" : "当前步骤") {
                         Text(item.text.isEmpty ? "（没有文本内容）" : item.text)
-                            .font(.body).textSelection(.enabled)
+                            .font(.system(size: HomeSpec.bodySize)).textSelection(.enabled)
                         HStack {
                             Button("编辑") { editingItem = item; replacement = item.text }
                             Spacer()
@@ -683,12 +692,10 @@ private struct SessionQueuePage: View {
                 }
             }
             if let error = management.error {
-                Section("错误") { Text(error).font(.footnote).foregroundStyle(.red).textSelection(.enabled) }
+                Section("错误") { Text(error).font(.system(size: 13)).foregroundStyle(.red).textSelection(.enabled) }
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(NativePagePalette.page)
+        .homeGroupedList()
         .navigationTitle("待处理队列")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await management.refreshQueue(for: session.id) }

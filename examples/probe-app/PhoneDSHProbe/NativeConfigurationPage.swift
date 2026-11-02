@@ -9,163 +9,148 @@ struct NativeConfigurationPage: View {
     @State private var showInformation = false
 
     var body: some View {
-        NavigationStack {
-            List {
-                pageHeader
-                if let error = model.error {
-                    Section {
-                        Label(nativeConfigurationError(error), systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
+        // Pushed from 设置 › 插件与工具, or wrapped in a NavigationStack by
+        // the sheets that present it: no stack of its own, so it never nests.
+        List {
+            if model.isLoading && model.pluginEntries.isEmpty && model.settingsGroups.isEmpty {
+                Section {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text(NativeText("正在读取插件与设置…", "Loading plugins and settings…"))
+                            .foregroundStyle(HomeSpec.textPlaceholder)
                     }
                 }
-                builtInSettings
-                experimentalPlugins
-                installedPlugins
             }
-            .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Color.white)
-            .navigationTitle(NativeText("插件", "Plugins"))
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(NativeText("完成", "Done")) { dismiss() }.trailingBarText()
+            if let error = model.error {
+                Section {
+                    Label(nativeConfigurationError(error), systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(NativeParityTokens.warning)
                 }
             }
-            .sheet(isPresented: $showInformation) {
-                NavigationStack {
-                    List {
-                        Section(NativeText("本机管理范围", "Local management scope")) {
-                            Text(NativeText("这一页显示引擎里真正装着的插件。保存后马上生效。", "This page shows the plugins actually installed in the engine. Saved changes take effect immediately."))
-                        }
-                        Section(NativeText("iPhone Worker 限制", "iPhone Worker limitations")) {
-                            Text(nativePluginManagementMessage("This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH."))
-                            Text(NativeText("只有真正加载起来的插件才会显示为已启用。没装的,这里不会假装它在跑。", "Only plugins that are actually loaded appear as enabled. Plugins that are not installed are never shown as running."))
-                        }
-                    }
-                    .navigationTitle(NativeText("插件说明", "About Plugins"))
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button(NativeText("完成", "Done")) { showInformation = false }.trailingBarText()
-                        }
-                    }
-                }
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-            }
-            .task { await model.refresh() }
+            builtInSettings
+            experimentalPlugins
+            installedPlugins
         }
+        .homeGroupedList()
+        .navigationTitle(NativeText("插件与工具", "Plugins and Tools"))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    showInformation = true
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .accessibilityLabel(NativeText("插件说明", "About Plugins"))
+                Button {
+                    Task { await model.refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(model.isLoading || model.hasDrafts)
+                .accessibilityLabel(NativeText("刷新", "Refresh"))
+            }
+        }
+        .sheet(isPresented: $showInformation) {
+            NavigationStack {
+                List {
+                    Section(NativeText("本机管理范围", "Local management scope")) {
+                        Text(NativeText("这一页显示引擎里真正装着的插件。保存后马上生效。", "This page shows the plugins actually installed in the engine. Saved changes take effect immediately."))
+                    }
+                    Section(NativeText("iPhone Worker 限制", "iPhone Worker limitations")) {
+                        Text(nativePluginManagementMessage("This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH."))
+                        Text(NativeText("只有真正加载起来的插件才会显示为已启用。没装的,这里不会假装它在跑。", "Only plugins that are actually loaded appear as enabled. Plugins that are not installed are never shown as running."))
+                    }
+                }
+                .homeGroupedList()
+                .navigationTitle(NativeText("插件说明", "About Plugins"))
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(NativeText("完成", "Done")) { showInformation = false }.trailingBarText()
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .homeSheetChrome()
+        }
+        .task { await model.refresh() }
+
     }
 
-    private var pageHeader: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(NativeText("安装、启用和配置插件", "Install, enable and configure plugins"))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 10) {
-                    Button {
-                        showInformation = true
-                    } label: {
-                        Label(NativeText("插件说明", "About Plugins"), systemImage: "info.circle")
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityHint(NativeText("查看 DSH 插件管理在 iPhone 上的支持范围", "View DSH plugin management support on iPhone"))
+    // MARK: - Built-in settings: one section per group
 
-                    Button {
-                        Task { await model.refresh() }
-                    } label: {
-                        Label(NativeText("刷新", "Refresh"), systemImage: model.isLoading ? "arrow.trianglehead.2.clockwise.rotate.90" : "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(model.isLoading || model.hasDrafts)
-
-                    Menu {
-                        Button(NativeText("安装第三方插件", "Install Third-party Plugin")) {}
-                            .disabled(true)
-                        Button(NativeText("让 Agent 创建插件", "Create a Plugin with Agent")) {}
-                            .disabled(true)
-                    } label: {
-                        Label(NativeText("添加插件", "Add Plugin"), systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(true)
-                    .accessibilityHint(nativePluginManagementMessage("This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH."))
-                }
-                if model.isLoading && model.pluginEntries.isEmpty && model.settingsGroups.isEmpty {
-                    ProgressView(NativeText("读取 DSH 插件与设置…", "Loading DSH plugins and settings…"))
-                        .font(.footnote)
-                }
-            }
-            .padding(.vertical, 4)
-        }
-    }
-
+    @ViewBuilder
     private var builtInSettings: some View {
-        Section(NativeText("内置插件设置", "Built-in Plugin Settings")) {
-            if let group = model.group("subagent") {
-                settingsGroup(group)
-            } else {
-                unavailableRow(NativeText("子 Agent", "Subagents"), detail: model.settingsError ?? NativeText("这台主机不支持调整子代理。", "This host does not support changing subagent settings."))
-            }
+        if let group = model.group("subagent") {
+            settingsGroup(group)
+        } else {
+            unavailableSection(NativeText("子 Agent", "Subagents"), detail: model.settingsError ?? NativeText("这台主机不支持调整子代理。", "This host does not support changing subagent settings."))
+        }
 
-            if let group = model.group("subagent-model-selection-settings") {
-                subagentModelGroup(group)
-            } else {
-                unavailableRow(NativeText("子 Agent 模型", "Subagent Models"), detail: model.settingsError ?? NativeText("这台主机不支持为子代理指定模型。", "This host does not support selecting models for subagents."))
-            }
+        if let group = model.group("subagent-model-selection-settings") {
+            subagentModelGroup(group)
+        } else {
+            unavailableSection(NativeText("子 Agent 模型", "Subagent Models"), detail: model.settingsError ?? NativeText("这台主机不支持为子代理指定模型。", "This host does not support selecting models for subagents."))
+        }
 
-            if let group = model.group("agent-loop") {
-                settingsGroup(group)
-            } else {
-                unavailableRow(NativeText("自动执行轮次", "Automatic Execution"), detail: model.settingsError ?? NativeText("这台主机不支持调整自动执行的轮次。", "This host does not support changing automatic execution limits."))
-            }
+        if let group = model.group("agent-loop") {
+            settingsGroup(group)
+        } else {
+            unavailableSection(NativeText("自动执行轮次", "Automatic Execution"), detail: model.settingsError ?? NativeText("这台主机不支持调整自动执行的轮次。", "This host does not support changing automatic execution limits."))
+        }
 
-            if let group = model.group("bash-sandbox") {
-                settingsGroup(group)
-            } else {
-                unavailableRow(NativeText("终端", "Terminal"), detail: model.settingsError ?? NativeText("这台主机不支持调整终端设置。", "This host does not support changing terminal settings."))
-            }
+        if let group = model.group("bash-sandbox") {
+            settingsGroup(group)
+        } else {
+            unavailableSection(NativeText("终端", "Terminal"), detail: model.settingsError ?? NativeText("这台主机不支持调整终端设置。", "This host does not support changing terminal settings."))
+        }
 
+        Section {
             NavigationLink {
                 WebSearchSettingsPage()
             } label: {
-                Label(NativeText("网页搜索与抓取", "Web Search and Fetch"), systemImage: "globe")
+                SettingsRowLabel(title: NativeText("网页搜索与抓取", "Web Search and Fetch"), icon: "globe")
             }
-            defaultPermissionSetting
+        } header: {
+            Text(NativeText("工具", "Tools"))
         }
+
+        defaultPermissionSetting
     }
 
+    /// A settings group as its own section: one row per field, the group's
+    /// description and any save error in the footer, 保存 / 撤销 only once
+    /// something changed.
     private func settingsGroup(_ group: NativeSettingsGroup) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(nativeSettingsGroupTitle(group)).font(.headline)
-            Text(nativeSettingsGroupDetail(group)).font(.caption).foregroundStyle(.secondary)
+        Section {
             ForEach(group.fields.filter { $0.id != "allowedModels" }) { field in
                 settingField(field, namespace: group.namespace, writable: group.writable)
             }
-            saveActions(namespace: group.namespace, writable: group.writable)
+            if model.isDirty(group.namespace) {
+                saveRow(save: { Task { _ = await model.save(group.namespace) } },
+                        discard: { model.discard(group.namespace) },
+                        canSave: group.writable)
+            }
+        } header: {
+            Text(nativeSettingsGroupTitle(group))
+        } footer: {
+            groupFooter(nativeSettingsGroupDetail(group), error: model.namespaceErrors[group.namespace])
         }
-        .padding(.vertical, 6)
     }
 
     private func subagentModelGroup(_ group: NativeSettingsGroup) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(nativeSettingsGroupTitle(group)).font(.headline)
-            Text(NativeText("只影响之后新开的子任务,已经在跑的不变。", "Only new subtasks are affected; running subtasks are unchanged."))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        Section {
             if let enabled = group.fields.first(where: { $0.id == "enabled" }) {
                 settingField(enabled, namespace: group.namespace, writable: group.writable)
             }
             if model.modelCatalogError != nil {
                 Text(NativeText("暂时读不到模型列表。", "The model list is temporarily unavailable."))
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(NativeParityTokens.warning)
             } else if model.modelRoutes.isEmpty {
                 Text(NativeText("没有可给子任务用的模型。", "No models are available for subtasks."))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HomeSpec.textPlaceholder)
             } else {
                 ForEach(model.modelRoutes) { route in
                     Toggle(isOn: Binding(
@@ -175,16 +160,24 @@ struct NativeConfigurationPage: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(route.available ? route.modelName : String(format: NativeText("%@ · 当前不可用", "%@ · Currently unavailable"), route.modelName))
                             Text("\(route.providerName) · \(route.model)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.system(size: 13))
+                                .foregroundStyle(HomeSpec.textPlaceholder)
                         }
                     }
                     .disabled(!group.writable)
                 }
             }
-            saveActions(namespace: group.namespace, writable: group.writable)
+            if model.isDirty(group.namespace) {
+                saveRow(save: { Task { _ = await model.save(group.namespace) } },
+                        discard: { model.discard(group.namespace) },
+                        canSave: group.writable)
+            }
+        } header: {
+            Text(nativeSettingsGroupTitle(group))
+        } footer: {
+            groupFooter(NativeText("只影响之后新开的子任务,已经在跑的不变。", "Only new subtasks are affected; running subtasks are unchanged."),
+                        error: model.namespaceErrors[group.namespace])
         }
-        .padding(.vertical, 6)
     }
 
     @ViewBuilder
@@ -199,25 +192,31 @@ struct NativeConfigurationPage: View {
             }
             .disabled(!writable)
         case .number, .text:
-            TextField(nativeSettingsFieldTitle(field), text: Binding(
-                get: { model.fields(in: namespace).first(where: { $0.id == field.id })?.inputText ?? field.inputText },
-                set: { model.edit(field, in: namespace, text: $0) }
-            ))
-            .keyboardType(field.kind == .number ? .numberPad : .default)
-            .disabled(!writable)
-            .textFieldStyle(.roundedBorder)
-            if let detail = field.detail {
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                fieldLabel(field)
+                Spacer(minLength: 8)
+                TextField("", text: Binding(
+                    get: { model.fields(in: namespace).first(where: { $0.id == field.id })?.inputText ?? field.inputText },
+                    set: { model.edit(field, in: namespace, text: $0) }
+                ))
+                .keyboardType(field.kind == .number ? .numberPad : .default)
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(HomeSpec.textSecondary)
+                .frame(maxWidth: 120)
+                .disabled(!writable)
             }
         case .readOnly:
             LabeledContent(nativeSettingsFieldTitle(field), value: field.inputText)
         }
         if field.overridden {
             HStack {
-                Text(NativeText("已改成你自己的值", "Using your custom value")).font(.caption).foregroundStyle(.secondary)
+                Text(NativeText("已改成你自己的值", "Using your custom value"))
+                    .font(.system(size: 14))
+                    .foregroundStyle(HomeSpec.textPlaceholder)
                 Spacer()
                 Button(NativeText("恢复默认", "Reset")) { Task { _ = await model.reset(field, in: namespace) } }
-                    .font(.caption)
+                    .font(.system(size: 14, weight: .medium))
+                    .buttonStyle(.borderless)
                     .disabled(!writable || model.isDirty(namespace))
             }
         }
@@ -227,38 +226,44 @@ struct NativeConfigurationPage: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(nativeSettingsFieldTitle(field))
             if let detail = field.detail {
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(detail)
+                    .font(.system(size: 13))
+                    .foregroundStyle(HomeSpec.textPlaceholder)
             }
         }
     }
 
-    private func saveActions(namespace: String, writable: Bool) -> some View {
+    /// 撤销 on the left in gray, 保存 on the right in semibold ink.
+    private func saveRow(save: @escaping () -> Void, discard: @escaping () -> Void, canSave: Bool) -> some View {
         HStack {
-            Button(NativeText("保存", "Save")) { Task { _ = await model.save(namespace) } }
-                .buttonStyle(.borderedProminent)
-                .disabled(!writable || !model.isDirty(namespace))
-            Button(NativeText("撤销", "Discard")) { model.discard(namespace) }
-                .disabled(!model.isDirty(namespace))
-            if let error = model.namespaceErrors[namespace] {
-                Text(nativeConfigurationError(error)).font(.caption).foregroundStyle(.red)
+            Button(NativeText("撤销", "Discard"), action: discard)
+                .foregroundStyle(HomeSpec.textSecondary)
+            Spacer()
+            Button(NativeText("保存", "Save"), action: save)
+                .fontWeight(.semibold)
+                .disabled(!canSave)
+        }
+        .buttonStyle(.borderless)
+    }
+
+    @ViewBuilder
+    private func groupFooter(_ detail: String, error: String?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(detail)
+            if let error {
+                Text(nativeConfigurationError(error)).foregroundStyle(ChatPage.danger)
             }
         }
     }
 
     private var defaultPermissionSetting: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(NativeText("新会话默认权限", "Default Permission for New Sessions")).font(.headline)
-            Text(NativeText("只影响之后新开的会话。正在聊的这个,权限在输入框上方那个菜单里改。", "Only new sessions are affected. Change the current session's permission in the menu above the composer."))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        Section {
             if model.permissionCatalogError != nil {
                 Text(NativeText("没能读到权限列表。", "The permission list could not be loaded."))
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(NativeParityTokens.warning)
             } else if model.defaultPermissionModes.isEmpty {
                 Text(NativeText("没有可选的权限预设。", "No permission presets are available."))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HomeSpec.textPlaceholder)
             } else {
                 Picker(NativeText("默认权限", "Default permission"), selection: Binding(
                     get: { model.stagedDefaultPermissionMode },
@@ -269,93 +274,80 @@ struct NativeConfigurationPage: View {
                     }
                 }
                 .disabled(!model.settingsWritable || !model.canEditDefaultPermission)
+                if model.hasDefaultPermissionDraft {
+                    saveRow(save: { Task { _ = await model.saveDefaultPermissionMode() } },
+                            discard: { model.discardDefaultPermissionMode() },
+                            canSave: model.settingsWritable)
+                }
+            }
+        } header: {
+            Text(NativeText("新会话默认权限", "Default Permission for New Sessions"))
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
                 if let current = model.defaultPermissionMode,
                    let detail = model.defaultPermissionDescription(current) {
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                    Text(detail)
                 }
-                HStack {
-                    Button(NativeText("保存默认", "Save Default")) { Task { _ = await model.saveDefaultPermissionMode() } }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!model.settingsWritable || !model.hasDefaultPermissionDraft)
-                    Button(NativeText("撤销", "Discard")) { model.discardDefaultPermissionMode() }
-                        .disabled(!model.hasDefaultPermissionDraft)
-                    if let error = model.namespaceErrors["permission"] {
-                        Text(nativeConfigurationError(error)).font(.caption).foregroundStyle(.red)
-                    }
+                Text(NativeText("只影响之后新开的会话。正在聊的这个,权限在输入框里的盾牌菜单里改。", "Only new sessions are affected. Change the current session's permission from the shield menu in the composer."))
+                if let error = model.namespaceErrors["permission"] {
+                    Text(nativeConfigurationError(error)).foregroundStyle(ChatPage.danger)
                 }
             }
         }
-        .padding(.vertical, 6)
     }
+
+    // MARK: - Plugins
 
     private var experimentalPlugins: some View {
         Section {
             ForEach(model.experimentalPlugins) { plugin in
                 let title = nativeExperimentalPluginTitle(plugin)
-                let status = nativeExperimentalPluginStatus(plugin)
                 HStack(spacing: 12) {
-                    Image(systemName: plugin.loaded ? "checkmark.circle.fill" : "circle.dashed")
-                        .foregroundStyle(plugin.loaded ? Color.green : Color.secondary)
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(title)
-                        Text(status)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Text(nativeExperimentalPluginStatus(plugin))
+                            .font(.system(size: 13))
+                            .foregroundStyle(HomeSpec.textPlaceholder)
                     }
-                    Spacer()
-                    Toggle(title, isOn: .constant(plugin.loaded))
-                        .labelsHidden()
-                        .disabled(true)
-                        .accessibilityLabel(title)
-                        .accessibilityHint(status)
+                    Spacer(minLength: 8)
+                    HomeTag(text: plugin.loaded ? NativeText("已加载", "Loaded") : NativeText("未加载", "Not loaded"))
                 }
+                .accessibilityElement(children: .combine)
             }
-            Text(nativePluginManagementMessage("This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH."))
-                .font(.caption)
-                .foregroundStyle(.secondary)
         } header: {
             Text(NativeText("实验插件", "Experimental Plugins"))
         } footer: {
-            Text(NativeText("这里的开关显示的是引擎里的真实状态,手机上不会另外记一份。", "These switches show the engine's actual state; no separate state is stored on the phone."))
+            Text(nativePluginManagementMessage("This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH."))
         }
     }
 
     private var installedPlugins: some View {
-        Section(NativeText("已加载插件", "Loaded Plugins")) {
+        Section {
             if model.inventoryError != nil {
                 Text(NativeText("暂时读不到插件状态。", "Plugin status is temporarily unavailable."))
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            } else if model.pluginEntries.isEmpty {
-                Text(NativeText("引擎还没给出插件列表。", "The engine has not provided a plugin list yet."))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(NativeParityTokens.warning)
             } else {
-                DisclosureGroup(String(format: NativeText("查看 %d 个 DSH Loader 条目", "View %d DSH Loader entries"), model.pluginEntries.count)) {
-                    ForEach(model.pluginEntries) { plugin in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(plugin.module).font(.subheadline)
-                            HStack {
-                                Text(plugin.id).font(.caption2).foregroundStyle(.secondary)
-                                Spacer()
-                                Text(plugin.enabled ? (plugin.phase ?? "enabled") : "disabled")
-                                    .font(.caption2)
-                                    .foregroundStyle(plugin.enabled ? Color.green : Color.secondary)
-                            }
-                        }
-                        .padding(.vertical, 3)
-                    }
+                NavigationLink {
+                    NativePluginInventoryPage()
+                } label: {
+                    SettingsRowLabel(title: NativeText("已加载插件", "Loaded Plugins"), icon: "puzzlepiece.extension",
+                                     value: model.pluginEntries.isEmpty ? nil : "\(model.pluginEntries.count)")
                 }
             }
+        } footer: {
+            Text(NativeText("显示的是引擎里真实加载的插件,手机上不会另外记一份。", "Shows the plugins the engine actually loaded; nothing is stored separately on the phone."))
         }
     }
 
-    private func unavailableRow(_ title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label(title, systemImage: "exclamationmark.circle")
-            Text(detail).font(.caption).foregroundStyle(.secondary)
+    private func unavailableSection(_ title: String, detail: String) -> some View {
+        Section {
+            Text(NativeText("暂不可用", "Unavailable"))
+                .foregroundStyle(HomeSpec.textPlaceholder)
+        } header: {
+            Text(title)
+        } footer: {
+            Text(detail)
         }
-        .padding(.vertical, 4)
     }
 }
 

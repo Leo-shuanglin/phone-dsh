@@ -48,3 +48,74 @@ docs/receipts/office-2026-10-30\.json:.*PhoneDSHProbe\.app
 # the URL cannot be rewritten by hand. Scoped to the two generated files.
 android/gradlew:.*www\.apache\.org
 android/gradlew\.bat:.*www\.apache\.org
+
+# Protocol namespaces: Android's XML namespace on every manifest/vector root
+# (`xmlns:android`) and the SVG/XML namespace in the page-scheme XSS fixture.
+# They are URIs that name no service.
+schemas\.android\.com
+www\.w3\.org
+
+# WHATWG specification documents: the Streams/Web IDL algorithm sections cited
+# by the JSC compatibility notes (plugins/worker-entry/src/jsc-compat.ts) and by
+# the android-port receipt. The host is the standards body's spec server.
+\.whatwg\.org$
+
+# Dotted package names that DOMAIN_RE reads as hostnames: Ktor's IO module in
+# android/net, and the JDK's `com.sun.net.httpserver` that the JVM
+# MiniHttpServer fixture and its credential test use.
+^io\.ktor\.
+^com\.sun\.
+
+# macOS app-bundle names, not domains. `.app` is also a TLD, so only these
+# bundle names are allowed (never a bare `.app` host): the absolute Chrome path
+# recorded in the iOS session-audit receipts, and the probe app's own bundle in
+# android/tools/ios-baseline-capture.sh.
+Chrome\.app
+Probe\.app
+
+# Test-fixture hosts in RFC 2606 reserved documentation space: the RSS feed
+# fixture and the "userinfo is not a host" egress case. Kept to the exact two
+# shapes so an internal-looking `*.corp.example.net` is still a finding (the
+# checker's own selftest uses that spelling as its negative case).
+^feeds\.example\.org$
+@api\.example\.com$
+# The egress editor test feeds an upper-case provider host on purpose, to prove
+# that host normalization is case-insensitive.
+(?i)api\.deepseek\.com
+# RFC 1918 private literals: non-routable gateway-rule fixtures
+# (http://10.1.2.3/x) and the LAN-IP example in the preview research note.
+^(?:10|192\.168)\.[0-9x]
+
+# A build image asset name (`running-whale@2x.png`), read as an e-mail address.
+running-whale@2x\.png
+
+# Kotlin's labeled `this` (`this@drawWithContent.drawContent` inside a
+# Modifier.drawWithContent lambda), read as user@host.tld.
+^this@[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_]
+
+# Placeholders, not home directories: `/home/a` is the second and third
+# component of the relative VFS path in the VfsPath.kt KDoc and in
+# structure_check.py's comment (`/dsh/home/a` becomes `<root>/home/a`), while
+# `/Users/...` and the ellipsis (U+2026, `\u2026`) are elided URLs/paths in the
+# preview research notes.
+^/home/a$
+^/Users/\.\.\.$
+^\u2026$
+
+# Public vendor pages cited as evidence in
+# docs/research-office-conversion-2026-10-29.md: the compared products' product,
+# licence, pricing and API documentation sites.
+getlocalcode\.app
+www\.libreoffice\.org
+www\.collaboraonline\.com
+en\.wikipedia\.org
+www\.gnu\.org
+cloudconvert\.com
+developers\.google\.com
+purchase\.aspose\.com
+learn\.microsoft\.com
+
+# Golden vector content, not a host: `gw-fail-003` is the "a URL with no host is
+# invalid_request" vector, so its input really is `https://:443/v1/models` and
+# URL_RE yields an empty host for it. Scoped to that file and that URL.
+spec/v1/golden/gateway/fail-003\.json:.*https://:443

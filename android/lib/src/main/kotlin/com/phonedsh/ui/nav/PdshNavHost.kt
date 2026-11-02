@@ -155,18 +155,14 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
-import com.phonedsh.domain.connector.DeviceConnectionEntry
 import com.phonedsh.domain.connector.DeviceConnectionSource
+import com.phonedsh.domain.connector.DeviceConnectionSnapshot
+import com.phonedsh.domain.connector.DeviceSessionFailure
 import com.phonedsh.domain.connector.DeviceSessionSource
-import com.phonedsh.domain.connector.Endpoint
-import com.phonedsh.domain.connector.InMemoryConnector
-import com.phonedsh.domain.connector.InMemoryDeviceSessionProvider
+import com.phonedsh.domain.connector.DeviceSessionSnapshot
+import com.phonedsh.domain.connector.DeviceSessionStatus
+import com.phonedsh.domain.connector.ConnectorStatus
 import com.phonedsh.domain.connector.InMemoryDeviceSessionTransport
-import com.phonedsh.domain.device.CapabilityValue
-import com.phonedsh.domain.device.DeviceAuth
-import com.phonedsh.domain.device.DeviceLimits
-import com.phonedsh.domain.device.DeviceManifest
-import com.phonedsh.domain.device.DeviceProtocol
 import com.phonedsh.ui.page.DeviceConnectionLocalState
 import com.phonedsh.ui.page.DeviceConnectionScreenState
 import com.phonedsh.ui.page.DeviceSessionLocalState
@@ -388,6 +384,11 @@ public fun PdshNavHost(
     onChatAddImages: () -> Unit = {},
     onChatRemoveAttachment: (Int) -> Unit = {},
     onChatDismissNotice: () -> Unit = {},
+    chatActions: ChatInteractionActions = ChatInteractionActions(),
+    /** A host-supplied connector; `null` renders the honest no-connector state. */
+    deviceConnectionSource: DeviceConnectionSource? = null,
+    /** Host-supplied fixed session monitors keyed by device id; no demo is implicit. */
+    deviceSessionSources: Map<String, DeviceSessionSource> = emptyMap(),
 ) {
     val route = nav.current
     if (route == PdshRoute.Home) {
@@ -412,6 +413,7 @@ public fun PdshNavHost(
                 onAddImages = onChatAddImages,
                 onRemoveAttachment = onChatRemoveAttachment,
                 onDismissNotice = onChatDismissNotice,
+                actions = chatActions,
             )
             PdshRoute.WorkspaceFolders -> WorkspaceFoldersRoute(facts, onBack, onHostAction, onNavigate)
             is PdshRoute.Files -> FilesRoute(onBack, onNavigate, workspaceRoot, backLevel)
@@ -441,8 +443,12 @@ public fun PdshNavHost(
             is PdshRoute.Workbench ->
                 WorkbenchRoute(route, facts, onBack, onHostAction, onNavigate, backLevel)
             PdshRoute.WebSurface -> WebSurfaceRoute(facts, onNavigate, onHome, onHostAction, webSurface)
-            PdshRoute.DeviceConnection -> DeviceConnectionRoute(onNavigate, onBack)
-            is PdshRoute.DeviceSession -> DeviceSessionRoute(route.deviceId, onBack)
+            PdshRoute.DeviceConnection -> DeviceConnectionRoute(deviceConnectionSource, onNavigate, onBack)
+            is PdshRoute.DeviceSession -> DeviceSessionRoute(
+                route.deviceId,
+                deviceSessionSources[route.deviceId],
+                onBack,
+            )
             is PdshRoute.SessionArtifacts ->
                 SessionArtifactsRoute(route.sessionId, artifacts, workspaceRoot, onBack, backLevel)
             PdshRoute.AgentPresets -> AgentPresetsRoute(onBack)
@@ -554,15 +560,32 @@ private fun ChatRoute(
     onAddImages: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
     onDismissNotice: () -> Unit,
+    actions: ChatInteractionActions,
 ) {
     ChatPage(
         state = state ?: ChatScreenState.from(nodes = emptyList(), local = ChatLocalState()),
         onDraftChange = onDraftChange,
         onSend = onSend,
         onStop = onStop,
-        onToggleRow = {},
-        onApprove = {},
-        onDeny = {},
+        onToggleRow = actions.toggleRow,
+        onApprove = actions.approve,
+        onDeny = actions.deny,
+        onSubmitAnswer = actions.answer,
+        onDismissQuestion = actions.dismissQuestion,
+        onGoalPause = actions.goalCommand?.let { command -> { command("pause") } },
+        onGoalResume = actions.goalCommand?.let { command -> { command("resume") } },
+        onGoalClear = actions.goalCommand?.let { command -> { command("clear") } },
+        onSelectAccessMode = actions.selectAccessMode,
+        onRetryAccessModes = actions.refreshCatalogs,
+        onReloadCommands = actions.refreshCatalogs,
+        onExecuteCommand = actions.executeCommand,
+        onSelectModel = actions.selectModel,
+        onOpenDeviceConnections = { onNavigate(PdshRoute.DeviceConnection) },
+        onImeVisibleChange = actions.imeChanged,
+        onExpandPendingSlot = actions.expandPending,
+        onStartEngine = actions.startEngine,
+        onRestartEngine = actions.restartEngine,
+        onConfigureProvider = { onNavigate(PdshRoute.ModelProvider) },
         // One host line serves both the failure banner's 关闭 and the import notice:
         // both are the App's own sentence about what just happened.
         onDismissBanner = { _: String -> onDismissNotice() },
@@ -581,7 +604,7 @@ private fun ChatRoute(
         // real produced files are the workspace, reached by the 文件 route), so the
         // row keeps naming the session that transport knows.
         onOpenArtifacts = {
-            onNavigate(PdshRoute.SessionArtifacts(InMemoryDeviceSessionTransport.DEMO_SESSION_ID))
+            onNavigate(PdshRoute.SessionArtifacts(state?.sessionID.orEmpty()))
         },
         // The menu's 运行状态 and 本会话设置 rows were drawn with the page's default
         // empty callbacks, so they closed the menu and did nothing. Both pages are
@@ -753,7 +776,10 @@ private fun AutomationRoute(
         state = AutomationScreenState.from(automationFacts, local),
         onBack = onBack,
         onOpenDetail = { id -> local = local.apply(AutomationUiEvent.OpenDetail(id)) },
-        onOpenHistory = { id -> local = local.apply(AutomationUiEvent.OpenHistory(id)) },
+        onOpenHistory = { id ->
+            local = local.apply(AutomationUiEvent.OpenHistory(id))
+            onHostAction(PdshHostAction.LoadAutomationHistory(id))
+        },
         onBackToCatalog = { local = local.apply(AutomationUiEvent.Back) },
         // §1's 定时任务 bar: ✕ (back, above), 刷新, 新建. The history tail is still a
         // host read.
@@ -764,21 +790,25 @@ private fun AutomationRoute(
         // implementation of the two gestures.
         onNewSchedule = { local = local.apply(AutomationUiEvent.OpenEditor(draftFor(null))) },
         onEditSchedule = { id -> local = local.apply(AutomationUiEvent.OpenEditor(draftFor(id))) },
-        onLoadMoreHistory = { onHostAction(PdshHostAction.LoadMoreAutomationHistory) },
+        onLoadMoreHistory = { id, before ->
+            onHostAction(PdshHostAction.LoadAutomationHistory(id, before))
+        },
+        onRequestDelete = { id -> local = local.apply(AutomationUiEvent.RequestDelete(id)) },
+        onConfirmDelete = { id ->
+            local = local.apply(AutomationUiEvent.CancelDelete)
+            onHostAction(PdshHostAction.DeleteAutomationSchedule(id))
+        },
+        onCancelDelete = { local = local.apply(AutomationUiEvent.CancelDelete) },
         onDraftChange = { draft -> local = local.apply(AutomationUiEvent.EditDraft(draft)) },
         onCancelEditor = { local = local.apply(AutomationUiEvent.CancelEditor) },
-        onSubmitDraft = {
+        onEditorSaved = { local = local.apply(AutomationUiEvent.CancelEditor) },
+        onSubmitDraft = { draft, submissionID ->
             // The page's contract: record the attempt first, then hand the draft
-            // over only when the re-projected form validates. The form keeps its
-            // values either way — this page never claims a write it did not see.
-            local = local.apply(AutomationUiEvent.SubmitDraft)
-            val draft = local.editor?.draft
-            if (draft != null && draft.canSubmit && draft.timingError() == null) {
-                // `PdshHostAction`'s vocabulary has one automation write channel:
-                // `automation.editor`. A dedicated `automation.save` would be a new
-                // sealed subtype in `PdshNavFacts.kt`, whose exhaustive `when` in the
-                // app's `HostShell` is outside this lane's edge.
-                onHostAction(PdshHostAction.OpenAutomationEditor(draft.id))
+            // over only when the re-projected form validates. The host replies by
+            // returning the reread schedule in `AutomationFacts.writeReceipt`.
+            local = local.apply(AutomationUiEvent.SubmitDraft(submissionID))
+            if (draft.canSubmit && draft.timingError() == null) {
+                onHostAction(PdshHostAction.SaveAutomationSchedule(draft, submissionID))
             }
         },
     )
@@ -1016,6 +1046,7 @@ private fun SettingsRoute(
     } else {
         SettingsPage(
             state = SettingsScreenState.from(settings),
+            onRestartEngine = { onHostAction(PdshHostAction.RestartRuntime) },
             onNavigate = { destination ->
                 when (destination) {
                     SettingsDestination.PERMISSION_DEFAULTS -> permissionDefaults = true
@@ -1089,7 +1120,7 @@ private fun ModelProviderRoute(
         // page still never mutates its facts: the host re-reads them after a save,
         // so a row can only change because the device store changed.
         onStartEngine = { onHostAction(PdshHostAction.RestartRuntime) },
-        onSave = { draft -> onHostAction(PdshHostAction.SaveProvider(draft)) },
+        onSave = { draft, requestId -> onHostAction(PdshHostAction.SaveProvider(draft, requestId)) },
         onTest = { draft -> onHostAction(PdshHostAction.TestProvider(draft)) },
         onDelete = { id -> onHostAction(PdshHostAction.DeleteProvider(id)) },
     )
@@ -1301,60 +1332,75 @@ private fun WebSurfaceRoute(
 // ------------------------------------------------------- device connector (L5)
 
 /**
- * 设备连接: the injected connector's devices, and the session each one opens.
+ * 设备连接: a host-supplied connector's published devices, if one exists.
  *
- * The connector is the `:domain` in-memory double. iOS ships a `nil` factory
- * (`NativeDeviceDependencies.swift`) and renders 未接入设备连接器; this host has no
- * real device transport either, but it does have the connector seam, so the seam is
- * wired to the double and the page names the source it is reading ("注入的连接器").
- * Nothing here scans, pairs or invents a device: the published list is constructed
- * once, and [DeviceConnectionSource] projects the connector's own state.
+ * There is no Android OS discovery/connector implementation in this repository;
+ * `:domain` supplies the connector/discoverer contracts and in-memory test doubles
+ * only. The production default is therefore `null`, which the page renders as
+ * 未接入设备连接器. A test or explicit demo must inject its source as a parameter.
+ * This route never scans, pairs or fabricates an online device.
  */
 @Composable
 private fun DeviceConnectionRoute(
+    source: DeviceConnectionSource?,
     onNavigate: (PdshRoute) -> Unit,
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val source = demoDeviceConnectionSource
     var local by remember { mutableStateOf(DeviceConnectionLocalState()) }
-    LaunchedEffect(source) { source.start(scope) }
-    DisposableEffect(source) { onDispose { source.stop() } }
-    val snapshot by source.snapshot.collectAsState()
+    LaunchedEffect(source) { source?.start(scope) }
+    DisposableEffect(source) { onDispose { source?.stop() } }
+    val snapshot = source?.snapshot?.collectAsState()?.value ?: DeviceConnectionSnapshot(
+        connectorAvailable = false,
+        connectorProtocol = null,
+        status = ConnectorStatus.UNKNOWN,
+    )
     NativeDeviceConnectionPage(
         state = DeviceConnectionScreenState.from(snapshot, local),
         onOpen = { device ->
-            local = DeviceConnectionLocalState(openingDeviceId = device.deviceId)
-            scope.launch {
-                val selection = source.open(device.deviceId)
-                local = DeviceConnectionLocalState()
-                if (selection != null) onNavigate(PdshRoute.DeviceSession(selection.deviceId))
+            if (source != null) {
+                local = DeviceConnectionLocalState(openingDeviceId = device.deviceId)
+                scope.launch {
+                    val selection = source.open(device.deviceId)
+                    local = DeviceConnectionLocalState()
+                    if (selection != null) onNavigate(PdshRoute.DeviceSession(selection.deviceId))
+                }
             }
         },
-        onForgetMapping = { deviceId -> source.forgetMapping(deviceId) },
+        onForgetMapping = { deviceId -> source?.forgetMapping(deviceId) },
         onDone = onBack,
     )
 }
 
 /**
- * 设备会话: the device's fixed session, read-only.
+ * 设备会话: a host-supplied device's fixed session, read-only.
  *
- * The monitor reads one history window and follows the live stream in the same
- * scope the page lives in; leaving the page cancels the follow. The paging gesture
- * only forwards [DeviceSessionSource.loadEarlier], which owns the `beforeSeq` window
- * and the stall guard.
+ * When the host supplies a monitor, it reads one history window and follows the
+ * live stream in this page scope; leaving cancels the follow. A route without a
+ * source shows a read failure instead of a fixture transcript. Paging forwards
+ * [DeviceSessionSource.loadEarlier], which owns the `beforeSeq` window and stall
+ * guard.
  */
 @Composable
-private fun DeviceSessionRoute(deviceId: String, onBack: () -> Unit) {
+private fun DeviceSessionRoute(
+    deviceId: String,
+    source: DeviceSessionSource?,
+    onBack: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
-    val source = remember(deviceId) { demoDeviceSessionSource(deviceId) }
     var local by remember(deviceId) { mutableStateOf(DeviceSessionLocalState()) }
-    LaunchedEffect(source) { source.start(scope) }
-    DisposableEffect(source) { onDispose { source.stop() } }
-    val snapshot by source.snapshot.collectAsState()
+    LaunchedEffect(source) { source?.start(scope) }
+    DisposableEffect(source) { onDispose { source?.stop() } }
+    val snapshot = source?.snapshot?.collectAsState()?.value ?: DeviceSessionSnapshot(
+        deviceId = deviceId,
+        sessionId = "",
+        displayName = UiStrings.UNKNOWN,
+        status = DeviceSessionStatus.FAILED,
+        failure = DeviceSessionFailure.Read(UiStrings.DEVICE_CONNECTOR_UNAVAILABLE),
+    )
     NativeDeviceSessionPage(
         state = DeviceSessionScreenState.from(snapshot, local),
-        onLoadEarlier = { scope.launch { source.loadEarlier() } },
+        onLoadEarlier = { source?.let { session -> scope.launch { session.loadEarlier() } } },
         onToggleRow = { rowId -> local = local.toggle(rowId) },
         onBack = onBack,
     )
@@ -1489,65 +1535,6 @@ private fun SessionArtifactsRoute(
         },
     )
 }
-
-/**
- * The demo wiring, one instance per process so a device's saved mapping survives a
- * page swap (the baseline keeps its mapping in the coordinator, not in the page).
- */
-private val demoDeviceConnectionSource: DeviceConnectionSource by lazy {
-    val endpoint = Endpoint(DEMO_PROTOCOL, DEMO_ADDRESS)
-    val manifest = demoDeviceManifest
-    DeviceConnectionSource(
-        connector = InMemoryConnector(mapOf(endpoint to manifest)),
-        publishedDevices = listOf(
-            DeviceConnectionEntry(
-                deviceId = manifest.deviceId,
-                displayName = DEMO_DISPLAY_NAME,
-                endpoint = endpoint,
-                capabilityCount = manifest.capabilities.size,
-            ),
-        ),
-        provider = InMemoryDeviceSessionProvider(
-            assignments = mapOf(manifest.deviceId to InMemoryDeviceSessionTransport.DEMO_SESSION_ID),
-        ),
-    )
-}
-
-/**
- * The manifest the demo device publishes: the fixtures' devicews ESP32, so the
- * connector seam is exercised with a schema-valid document rather than a stub.
- */
-private val demoDeviceManifest: DeviceManifest by lazy {
-    DeviceManifest(
-        deviceId = DEMO_DEVICE_ID,
-        protocol = DeviceProtocol(DEMO_PROTOCOL, "1.0"),
-        capabilities = linkedMapOf(
-            "audio.tts" to CapabilityValue.of("codec" to "opus", "rate" to 24_000),
-            "render.pixel" to CapabilityValue.of("w" to 64, "h" to 64, "format" to "rgb565"),
-        ),
-        limits = DeviceLimits(maxFrameBytes = 65_536, audioKbps = 32),
-        auth = DeviceAuth(DeviceAuth.Pairing.BLE_PASSKEY),
-    )
-}
-
-/** One monitor per page visit; the transport double is shared because it is fixed. */
-private fun demoDeviceSessionSource(deviceId: String): DeviceSessionSource = DeviceSessionSource(
-    deviceId = deviceId,
-    sessionId = InMemoryDeviceSessionTransport.DEMO_SESSION_ID,
-    displayName = DEMO_DISPLAY_NAME,
-    transport = demoSessionTransport,
-)
-
-/** The scripted transcript and its live tail, built once. */
-private val demoSessionTransport: InMemoryDeviceSessionTransport by lazy {
-    InMemoryDeviceSessionTransport.demo()
-}
-
-/** The fixtures' device id, protocol and address: the demo devices' own values. */
-private const val DEMO_DEVICE_ID: String = "esp32-8c4f01"
-private const val DEMO_PROTOCOL: String = "devicews"
-private const val DEMO_ADDRESS: String = "wss://device.invalid:443/channel"
-private const val DEMO_DISPLAY_NAME: String = "客厅网关"
 
 /** The artifact read's page size; the store double caps it as well. */
 private const val ARTIFACT_PAGE_SIZE: Int = 50

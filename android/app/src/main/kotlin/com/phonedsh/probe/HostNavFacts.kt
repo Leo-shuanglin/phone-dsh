@@ -430,6 +430,10 @@ internal data class HostSessionRecord(
     val id: String,
     val lastActivityMs: Long?,
     val title: String = "",
+    /** Non-null only for app-owned chats whose cwd the host recorded. */
+    val workspaceID: String? = null,
+    /** True only when the host's persistent chat record reports a pin. */
+    val pinned: Boolean = false,
 )
 
 /**
@@ -447,6 +451,10 @@ internal data class HostSessionSnapshot(
     val sessions: List<HostSessionRecord> = emptyList(),
     val failure: String? = null,
     val currentSessionID: String? = null,
+    /** Archived rows measured by the app's persistent chat store. */
+    val archivedSessions: List<HostSessionRecord> = emptyList(),
+    /** IDs explicitly marked pinned by the persistent chat store. */
+    val pinnedSessionIDs: Set<String> = emptySet(),
     /**
      * True while a journal scan is running, so the page's pull-to-refresh can
      * show its own spinner. It is a fact about the host (a read is in flight),
@@ -459,26 +467,23 @@ internal data class HostSessionSnapshot(
  * The sessions page's host facts: one field per input of
  * `SessionsScreenState.from`.
  *
- * Every field here is either measured or `null`. [workspaces] and
- * [archivedSessions] are `null` because this host has no workspace registry and
- * no archive store, so the page renders 未知 rather than claiming "none"; the
- * session list is empty only after a successful scan, never before one. The two
- * ordering fields are empty lists because they are not facts about the host: this
- * host has no pinned-order or folder-order store, which is a gap reported with
- * the contract, not a "nothing is pinned" measurement.
+ * Every field here is either measured or `null`. [workspaces] is reported only
+ * when the one materialized `/dsh/workspace` directory exists; it is not a
+ * fabricated workspace catalog. [archivedSessions] comes from persisted App
+ * chat metadata. The session list is empty only after a successful scan, never
+ * before one. Pin and folder order reflect the fields the host actually stores.
  *
  * @param sessions the host's session rows in host order.
  * @param waiting true before the first completed scan.
  * @param failure the last scan's token-free failure, or `null`.
- * @param workspaces the host's folders; always `null` here.
- * @param archivedSessions the host's archived sessions; always `null` here.
+ * @param workspaces the one measured workspace, or `null` when its existence
+ *   was not established.
+ * @param archivedSessions the archived App chats, or `null` if not measured.
  * @param currentSessionID the session this app opened, or `null`.
  * @param newSessionBlock why 新建会话 is blocked, or `null` when it is not.
- * @param pinnedSessionIDs the host's pinned order; `null` here, because this
- *   host has no pin store. `null` means "not reported" (the page keeps the
- *   natural order without claiming nothing is pinned); `emptyList()` would mean
- *   "reported, and nothing is pinned", which is a fact this host cannot assert.
- * @param workspaceOrder the host's folder order; `null` for the same reason.
+ * @param pinnedSessionIDs the stored pinned chat IDs in display order.
+ * @param workspaceOrder the host's one-folder order when its materialized root
+ *   exists, or `null` when it does not.
  */
 internal data class HostSessionsFacts(
     val sessions: List<SessionListing> = emptyList(),
@@ -509,6 +514,8 @@ internal fun buildSessionsFacts(
     state: EngineState,
     turn: AppTurnState,
     snapshot: HostSessionSnapshot,
+    workspacePresent: Boolean? = null,
+    workspacePath: String? = null,
 ): HostSessionsFacts = HostSessionsFacts(
     // This host has no title store: an empty title is the page's own untitled
     // policy (新会话), not a name this file invented. The row still carries the
@@ -523,17 +530,46 @@ internal fun buildSessionsFacts(
     },
     waiting = snapshot.waiting,
     failure = snapshot.failure,
-    workspaces = null,
-    archivedSessions = null,
+    // The only folder exposed here is one the host actually measured on disk.
+    // App-created chats carry their real cwd; older journal-only rows have no
+    // folder association and stay in the ungrouped section.
+    workspaces = if (workspacePresent == true && !workspacePath.isNullOrBlank()) {
+        listOf(
+            SessionWorkspace(
+                id = DEFAULT_WORKSPACE_ID,
+                title = workspacePath,
+                sessionIDs = snapshot.sessions
+                    .filter { it.workspaceID == DEFAULT_WORKSPACE_ID }
+                    .map { it.id },
+            ),
+        )
+    } else {
+        null
+    },
+    archivedSessions = snapshot.archivedSessions.map { record ->
+        SessionListing(
+            id = record.id,
+            title = record.title,
+            updatedAtMs = record.lastActivityMs,
+            status = SessionRunStatus.IDLE,
+        )
+    },
     currentSessionID = snapshot.currentSessionID,
     newSessionBlock = when {
         state !is EngineHostState.Running -> NewSessionBlock.ENGINE_NOT_STARTED
         turn is AppTurnState.Running -> NewSessionBlock.TURN_RUNNING
         else -> null
     },
-    pinnedSessionIDs = null,
-    workspaceOrder = null,
+    pinnedSessionIDs = snapshot.pinnedSessionIDs.toList(),
+    workspaceOrder = if (workspacePresent == true && !workspacePath.isNullOrBlank()) {
+        listOf(DEFAULT_WORKSPACE_ID)
+    } else {
+        null
+    },
 )
+
+/** Stable id of the one host-owned DSH workspace (`/dsh/workspace`). */
+internal const val DEFAULT_WORKSPACE_ID: String = "/dsh/workspace"
 
 /**
  * Folds the host facts and the page's local UI events into the page state.

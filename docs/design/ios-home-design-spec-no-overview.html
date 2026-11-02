@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Phone DSH 首页设计规范</title>
+<style>
+/* Layout: sticky section index on the left, spec sections on the right; the live 430×932pt mockup is the anchor, 1pt = 1 CSS px. */
+:root {
+  /* Document chrome */
+  --bg: #F3F3F2;
+  --panel: #FFFFFF;
+  --fg: #18181A;
+  --muted: #66666C;
+  --line: #E2E2E5;
+  --soft: #EBEBEC;
+  --redline: #E0337A;
+  --frame: #0A8FCC;
+  --cols: #23A060;
+  --code-bg: #F7F7F6;
+
+  /* The spec itself (light only, measured from the reference) */
+  --m-page: #F7F7F7;
+  --m-surface: #FFFFFF;
+  --m-bubble: #E8E8E8;
+  --m-card-header: #EFEFEF;
+  --m-table-toolbar: #EEEEEE;
+  --m-btn: #191919;
+  --m-text: #1A1A1A;
+  --m-text-2: #555555;
+  --m-text-3: #717171;
+  --m-subtle: #7D7D7D;
+  --m-card-ph: #7F7E83;
+  --m-ph: #888888;
+  --m-ph-input: #8B8B8B;
+  --m-icon-muted: #A9A9A9;
+  --m-card-action: #3B3B3B;
+  --m-play: #616267;
+  --m-table-head: #585858;
+  --m-success: #3DC979;
+  --m-border-card: #E6E9ED;
+  --m-border-list: #E2E2E2;
+  --m-border-table: #E8E8E8;
+  --m-divider-row: #F3F3F3;
+
+  --sys: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111113; --panel: #1A1A1D; --fg: #EDEDEF; --muted: #9D9DA5;
+    --line: #2B2B30; --soft: #232327; --redline: #FF5E9C; --frame: #3DB5EE;
+    --cols: #4CCB86; --code-bg: #151518; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111113; --panel: #1A1A1D; --fg: #EDEDEF; --muted: #9D9DA5;
+  --line: #2B2B30; --soft: #232327; --redline: #FF5E9C; --frame: #3DB5EE;
+  --cols: #4CCB86; --code-bg: #151518; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.65 var(--sys);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 64px;
+}
+a { color: inherit; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+p { margin: 0; }
+:focus-visible { outline: 2px solid var(--frame); outline-offset: 2px; }
+
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 48px; }
+.index { position: sticky; top: env(safe-area-inset-top, 0px); align-self: start; padding-top: 40px; }
+.index ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s; }
+.index a { display: flex; gap: 10px; padding: 6px 10px; border-radius: 8px; text-decoration: none; color: var(--muted); font-size: 14px; }
+.index a::before { counter-increment: s; content: counter(s); font: 12px/22px var(--mono); color: var(--muted); opacity: .6; width: 14px; }
+.index a:hover { background: var(--soft); color: var(--fg); }
+.index .brand { font-weight: 600; font-size: 13px; color: var(--muted); padding: 0 10px 12px; letter-spacing: .02em; }
+
+main { min-width: 0; display: grid; gap: 72px; padding-top: 40px; }
+section { min-width: 0; scroll-margin-top: 24px; }
+.sec-head { display: grid; gap: 6px; margin-bottom: 24px; max-width: 68ch; }
+.sec-head h2 { font-size: 24px; line-height: 1.3; font-weight: 650; }
+.sec-head p { color: var(--muted); }
+.eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .08em; color: var(--redline); text-transform: uppercase; }
+
+/* Hero */
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 40px; align-items: start; }
+.hero h1 { font-size: 34px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
+.hero .lede { margin-top: 12px; color: var(--muted); max-width: 60ch; }
+.facts { margin-top: 24px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.facts div { background: var(--panel); padding: 12px 14px; }
+.facts dt { font-size: 12px; color: var(--muted); }
+.facts dd { margin: 2px 0 0; font: 600 15px/1.4 var(--mono); }
+.controls { margin-top: 28px; display: grid; gap: 14px; }
+.seg { display: inline-flex; background: var(--soft); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: transparent; color: var(--muted); font: 500 14px/1 var(--sys); padding: 9px 14px; border-radius: 8px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--panel); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.toggles { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.toggles label { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+.toggles input { width: 16px; height: 16px; accent-color: var(--fg); }
+.key { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; }
+.legend { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+.legend span.key { margin-right: 8px; }
+
+/* Phone mockup container */
+.phone-wrap { width: 430px; max-width: 100%; }
+.phone-scale { width: 430px; height: 932px; transform-origin: top left; transform: scale(var(--s, 1)); }
+.phone {
+  position: relative; width: 430px; height: 932px; overflow: hidden;
+  border-radius: 54px; background: var(--m-page); color: var(--m-text);
+  font-family: var(--sys); box-shadow: 0 0 0 10px #0E0E10, 0 0 0 11px #2A2A2E, 0 24px 60px rgba(0,0,0,.18);
+  -webkit-font-smoothing: antialiased;
+}
+.hero .phone-wrap { margin: 11px; }
+
+/* ---------- Spec components (1pt = 1px) ---------- */
+.m { font-family: var(--sys); color: var(--m-text); -webkit-font-smoothing: antialiased; }
+.ic { width: 24px; height: 24px; flex: none; display: block; }
+.status { position: absolute; inset: 0 0 auto; height: 59px; }
+.status .time { position: absolute; left: 44px; top: 17px; font: 600 17px/22px var(--sys); letter-spacing: -0.2px; }
+.status .island { position: absolute; left: 50%; top: 11px; width: 126px; height: 37px; margin-left: -63px; background: #000; border-radius: 20px; }
+.status .right { position: absolute; right: 30px; top: 21px; display: flex; gap: 6px; align-items: center; }
+.home-ind { position: absolute; left: 50%; bottom: 8px; width: 140px; height: 5px; margin-left: -70px; border-radius: 3px; background: #111; z-index: 6; }
+
+.nav { position: absolute; top: 67px; left: 16px; right: 16px; height: 44px; display: flex; align-items: center; z-index: 3; }
+.navbtn { width: 44px; height: 44px; border-radius: 22px; background: var(--m-surface); box-shadow: 0 2px 10px rgba(0,0,0,.05); display: grid; place-items: center; color: #191919; position: relative; }
+.navbtn .ic { width: 22px; height: 22px; }
+.navtitle { margin-left: 16px; min-width: 0; flex: 1; display: grid; position: relative; }
+.navtitle b { font: 600 17.5px/22px var(--sys); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.navtitle span { display: flex; align-items: center; gap: 6px; font: 400 14.5px/20px var(--sys); color: var(--m-subtle); }
+.navtitle span .ic { width: 16px; height: 16px; }
+.navpill { width: 92px; height: 44px; border-radius: 22px; background: var(--m-surface); box-shadow: 0 2px 10px rgba(0,0,0,.05); display: flex; color: #191919; position: relative; }
+.navpill i { width: 46px; display: grid; place-items: center; }
+.navpill .ic { width: 22px; height: 22px; }
+
+.transcript { position: absolute; top: 111px; left: 20px; right: 20px; display: flex; flex-direction: column; }
+.g8 { margin-top: 8px; } .g16 { margin-top: 16px; } .g20 { margin-top: 20px; }
+.ts { text-align: center; font: 400 12.5px/18px var(--sys); color: var(--m-ph); font-variant-numeric: tabular-nums; }
+.bubble { align-self: flex-end; max-width: 80%; background: var(--m-bubble); border-radius: 24px 0 24px 24px; padding: 12px 16px; font: 400 16px/24px var(--sys); position: relative; }
+.body { font: 400 16px/24px var(--sys); position: relative; }
+.body strong { font-weight: 600; }
+.heading { font: 600 16px/24px var(--sys); position: relative; }
+.proc { display: flex; align-items: center; gap: 6px; height: 24px; font: 400 15px/24px var(--sys); color: var(--m-text-2); position: relative; }
+.proc .ic { width: 18px; height: 18px; }
+.proc .chev { width: 14px; height: 14px; margin-left: -2px; }
+.spin { animation: spin 1s steps(8) infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+.listcard { background: var(--m-surface); border: 1px solid var(--m-border-list); border-radius: 18px; padding: 8px 12px; display: grid; gap: 8px; position: relative; }
+.listcard div { display: flex; align-items: center; gap: 8px; height: 22px; font: 400 14px/22px var(--sys); color: var(--m-text-3); white-space: nowrap; overflow: hidden; }
+.listcard .ic { width: 16px; height: 16px; }
+.ok { color: var(--m-success); }
+.pending { color: var(--m-icon-muted); }
+
+.artcard { border: 1px solid var(--m-border-card); border-radius: 16px; overflow: hidden; position: relative; }
+.artcard header { height: 44px; background: var(--m-card-header); border-bottom: 1px solid var(--m-border-card); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
+.artcard header b { font: 600 17px/22px var(--sys); }
+.artcard header span { display: flex; align-items: center; gap: 8px; font: 400 14.5px/20px var(--sys); color: var(--m-card-action); }
+.artcard header span .ic { width: 16px; height: 16px; color: var(--m-play); }
+.artcard .art-body { height: 88px; display: flex; align-items: center; justify-content: center; gap: 8px; font: 400 14.5px/20px var(--sys); color: var(--m-card-ph); }
+.artcard .art-body .ic { width: 18px; height: 18px; }
+
+.tablecard { border: 1px solid var(--m-border-table); border-radius: 12px; overflow: hidden; background: var(--m-surface); position: relative; }
+.tablecard header { height: 44px; background: var(--m-table-toolbar); border-bottom: 1px solid var(--m-border-table); display: flex; align-items: center; padding: 0 16px; font: 400 14.5px/20px var(--sys); color: var(--m-text-2); }
+.tablecard header .tools { margin-left: auto; display: flex; gap: 24px; }
+.tablecard header .ic { width: 16px; height: 16px; }
+.tablecard table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.tablecard th, .tablecard td { padding: 0 16px; text-align: left; font: 400 14px/20px var(--sys); white-space: nowrap; border-left: 1px solid var(--m-border-table); }
+.tablecard th:first-child, .tablecard td:first-child { border-left: 0; }
+.tablecard th { height: 36px; color: var(--m-table-head); }
+.tablecard td { height: 46px; color: var(--m-text); border-top: 1px solid var(--m-divider-row); font-variant-numeric: tabular-nums; }
+
+.actions { display: flex; gap: 12px; color: var(--m-text-2); position: relative; }
+.actions .ic { width: 24px; height: 24px; padding: 2px; }
+
+.composer { position: absolute; left: 16px; right: 16px; bottom: 84px; background: var(--m-surface); box-shadow: 0 4px 16px rgba(0,0,0,.08); z-index: 4; }
+.composer.open { height: 104px; border-radius: 24px; }
+.composer.open .ph { position: absolute; left: 16px; top: 16px; font: 400 16px/24px var(--sys); color: var(--m-ph-input); }
+.composer.open .row { position: absolute; left: 16px; right: 8px; bottom: 8px; height: 36px; display: flex; align-items: center; }
+.composer .voice { color: var(--m-icon-muted); }
+.composer .mode { margin-left: 22px; display: flex; align-items: center; gap: 8px; font: 400 16px/24px var(--sys); color: var(--m-text); }
+.composer .mode .chev { width: 16px; height: 16px; color: var(--m-text-2); margin-left: -1px; }
+.composer .plus { margin-left: auto; color: var(--m-icon-muted); }
+.composer .stop { margin-left: 12px; width: 36px; height: 36px; border-radius: 18px; background: var(--m-btn); display: grid; place-items: center; }
+.composer .stop i { width: 12px; height: 12px; border-radius: 3px; background: #fff; display: block; }
+.composer.closed { height: 56px; border-radius: 28px; display: flex; align-items: center; padding: 0 16px; }
+.composer.closed .ph { margin-left: 8px; font: 400 16px/24px var(--sys); color: var(--m-ph-input); flex: 1; white-space: nowrap; }
+.composer.closed .plus { color: var(--m-btn); }
+
+.tabbar { position: absolute; left: 0; right: 0; bottom: 0; height: 84px; display: grid; grid-template-columns: repeat(4, 1fr); z-index: 2; }
+.tabbar div { display: flex; flex-direction: column; align-items: center; padding-top: 14px; gap: 1px; font: 500 10.5px/14px var(--sys); color: var(--m-ph); }
+.tabbar .ic { width: 28px; height: 28px; }
+.tabbar .on { color: var(--m-text); }
+
+/* Overlays */
+.ov { position: absolute; inset: 0; pointer-events: none; z-index: 20; display: none; }
+.show-grid .ov.grid, .show-rhythm .ov.rhythm { display: block; }
+.ov.grid { background-image: repeating-linear-gradient(to bottom, rgba(224,51,122,.07) 0 1px, transparent 1px 4px); }
+.ov .vl { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed; }
+.ov .vl.c { border-color: #0A8FCC; } .ov .vl.r { border-color: #E0337A; } .ov .vl.g { border-color: #23A060; top: 848px; border-left-style: solid; }
+.ov .tag { position: absolute; font: 600 10px/14px var(--mono); padding: 0 4px; border-radius: 3px; color: #fff; }
+.band { position: absolute; left: 0; width: 20px; background: rgba(224,51,122,.28); border-top: 1px solid #E0337A; border-bottom: 1px solid #E0337A; }
+.band b { position: absolute; left: 22px; top: 50%; transform: translateY(-50%); font: 600 10px/14px var(--mono); color: #fff; background: #E0337A; padding: 0 4px; border-radius: 3px; }
+.show-boxes [data-spec] { outline: 1px solid #0A8FCC; outline-offset: 0; }
+.show-boxes [data-spec]::after { content: attr(data-spec); position: absolute; right: 0; top: 0; font: 600 9.5px/13px var(--mono); color: #fff; background: #0A8FCC; padding: 0 4px; border-radius: 0 0 0 4px; z-index: 30; white-space: nowrap; letter-spacing: 0; }
+.show-boxes .navbtn[data-spec]::after, .show-boxes .composer [data-spec]::after { top: auto; bottom: -14px; border-radius: 3px; }
+
+/* Panels, tables, swatches */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+.scroll { overflow-x: auto; }
+table.spec { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.spec th { text-align: left; font-weight: 600; font-size: 12px; color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.spec td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+table.spec tr:last-child td { border-bottom: 0; }
+table.spec .num { font-family: var(--mono); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tok { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+.dim { color: var(--muted); }
+.specimen { background: var(--m-page); border-radius: 8px; padding: 6px 10px; display: inline-block; white-space: nowrap; }
+
+.grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+.sw { display: grid; grid-template-rows: 72px auto; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); text-align: left; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.sw .chip { border-bottom: 1px solid var(--line); }
+.sw .meta { padding: 10px 12px; display: grid; gap: 2px; }
+.sw .hex { font: 600 14px/1.3 var(--mono); }
+.sw .use { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.sw:hover .hex::after { content: "  点按复制"; font: 400 11px var(--sys); color: var(--muted); }
+.subhead { font-size: 16px; font-weight: 600; margin: 28px 0 12px; }
+.subhead:first-child { margin-top: 0; }
+
+.callout { border-left: 3px solid var(--redline); background: var(--panel); padding: 14px 18px; border-radius: 0 10px 10px 0; max-width: 78ch; }
+.callout + .callout { margin-top: 12px; }
+
+.scale { display: grid; gap: 10px; }
+.scale div { display: grid; grid-template-columns: 74px 1fr; gap: 14px; align-items: center; }
+.scale .bar { height: 14px; background: var(--redline); opacity: .85; border-radius: 2px; }
+.scale .lbl { font: 600 13px var(--mono); }
+.scale p { grid-column: 2; font-size: 13px; color: var(--muted); margin-top: -4px; }
+
+.shapes { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; }
+.shape { display: grid; gap: 10px; }
+.shape .box { height: 92px; background: var(--m-page); border-radius: 12px; display: grid; place-items: center; }
+.shape .box i { display: block; background: var(--m-surface); }
+.shape b { font-size: 14px; } .shape span { font-size: 12.5px; color: var(--muted); }
+
+.comp { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 330px); gap: 0; overflow: hidden; }
+.comp + .comp { margin-top: 16px; }
+.comp .stage { background: var(--m-page); padding: 28px 20px; display: grid; place-items: center; overflow-x: auto; min-width: 0; }
+.comp .stage > .m { width: 390px; flex: none; }
+.comp .notes { padding: 20px 22px; border-left: 1px solid var(--line); min-width: 0; }
+.comp .notes h3 { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+.comp dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13.5px; }
+.comp dt { color: var(--muted); white-space: nowrap; }
+.comp dd { margin: 0; }
+.stage.rel { position: relative; }
+.stage .composer, .stage .nav, .stage .tabbar { position: relative; inset: auto; left: auto; right: auto; top: auto; bottom: auto; }
+
+pre.code { background: var(--code-bg); border: 1px solid var(--line); border-radius: 12px; padding: 18px; overflow-x: auto; font: 12.5px/1.65 var(--mono); margin: 0; }
+.codebar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 12px; flex-wrap: wrap; }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--fg); font: 500 13px/1 var(--sys); padding: 9px 12px; border-radius: 8px; cursor: pointer; }
+.btn:hover { background: var(--soft); }
+.toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); font-size: 13px; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 50; }
+.toast.on { opacity: 1; }
+
+ul.plain { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 72ch; }
+
+@media (max-width: 1080px) {
+  .hero { grid-template-columns: minmax(0, 1fr); }
+  .comp { grid-template-columns: minmax(0, 1fr); }
+  .comp .notes { border-left: 0; border-top: 1px solid var(--line); }
+}
+@media (max-width: 860px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .index { position: static; padding-top: 20px; }
+  .index ol { display: flex; overflow-x: auto; gap: 4px; padding-bottom: 4px; }
+  .index a { white-space: nowrap; background: var(--soft); }
+  .index .brand { display: none; }
+  main { padding-top: 24px; gap: 56px; }
+  .hero h1 { font-size: 28px; }
+}
+@media (max-width: 520px) {
+  .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 8.5h16M4 15.5h11"/></symbol>
+    <symbol id="i-device" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none"/><path d="M8.6 8.6a4.8 4.8 0 0 0 0 6.8M15.4 8.6a4.8 4.8 0 0 1 0 6.8M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 3.5v3.2" opacity="1"/><path d="M18 6l-2.3 2.3" opacity=".88"/><path d="M20.5 12h-3.2" opacity=".76"/><path d="M18 18l-2.3-2.3" opacity=".64"/><path d="M12 20.5v-3.2" opacity=".52"/><path d="M6 18l2.3-2.3" opacity=".4"/><path d="M3.5 12h3.2" opacity=".3"/><path d="M6 6l2.3 2.3" opacity=".22"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5l6 6 6-6"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 6l6 6-6 6"/></symbol>
+    <symbol id="i-skill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19 9.5V8a4.5 4.5 0 0 0-4.5-4.5h-6A4.5 4.5 0 0 0 4 8v8a4.5 4.5 0 0 0 4.5 4.5H15"/><path d="M9.5 10l-2 2 2 2M15 10l2 2-2 2M13.2 9l-1.9 6"/></symbol>
+    <symbol id="i-think" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="12" rx="9" ry="4.6" transform="rotate(45 12 12)"/><ellipse cx="12" cy="12" rx="9" ry="4.6" transform="rotate(-45 12 12)"/></symbol>
+    <symbol id="i-checkc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M8.3 12.3l2.5 2.4 4.9-5"/></symbol>
+    <symbol id="i-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7.5 5v14l11-7z"/></symbol>
+    <symbol id="i-docimg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="3" width="15" height="18" rx="2.5"/><path d="M8 7.5h3M13 7.5h3M13 10h3M8 17.5l2.5-3 2 2 1.5-1.5 2 2.5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6.5A2.5 2.5 0 0 0 13.5 4h-7A2.5 2.5 0 0 0 4 6.5v7A2.5 2.5 0 0 0 6.5 16H8"/></symbol>
+    <symbol id="i-imgsave" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="3"/><path d="M7 15.5l3-3 2.5 2.5 2-2 2.5 2.5"/><path d="M6.5 3v4M4.5 5h4"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-6.5 6.5M4 20l6.5-6.5"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4.5l6 6-6 6"/><path d="M20 10.5h-6.5A8.5 8.5 0 0 0 5 19v1"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M7.5 10.5v9H5a1.5 1.5 0 0 1-1.5-1.5v-6A1.5 1.5 0 0 1 5 10.5zM7.5 10.5l3.6-6.3a1.9 1.9 0 0 1 3.4 1.5L13.7 9.5h4.9a2 2 0 0 1 2 2.4l-1.3 6a2 2 0 0 1-2 1.6H7.5"/></symbol>
+    <symbol id="i-dn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><g transform="rotate(180 12 12)"><path d="M7.5 10.5v9H5a1.5 1.5 0 0 1-1.5-1.5v-6A1.5 1.5 0 0 1 5 10.5zM7.5 10.5l3.6-6.3a1.9 1.9 0 0 1 3.4 1.5L13.7 9.5h4.9a2 2 0 0 1 2 2.4l-1.3 6a2 2 0 0 1-2 1.6H7.5"/></g></symbol>
+    <symbol id="i-speak" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.8 7.8 0 0 1 0 11"/></symbol>
+    <symbol id="i-voice" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><path d="M10 8.5a5 5 0 0 1 0 7M14 5.5a9.2 9.2 0 0 1 0 13"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13.5 3L5.5 13.5h6l-1 7.5 8-10.5h-6z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4.5v15M4.5 12h15"/></symbol>
+    <symbol id="i-tab-task" viewBox="0 0 28 28"><path fill="currentColor" d="M14 4.5c6 0 10 3.4 10 8.3s-4 8.3-10 8.3h-.6l-3.8 3.3c-.7.6-1.6.1-1.6-.7v-3.2C5.6 19.1 4 16.3 4 12.8 4 7.9 8 4.5 14 4.5z"/><path d="M10.5 10.6v4M17.6 10.4l-2.6 2 2.6 2" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-tab-clock" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="14" cy="15" r="8.5"/><path d="M10.6 15.2l2.4 2.3 4.4-4.5M5.5 7.5l2.5-2.3M22.5 7.5L20 5.2M8 23l-1.5 1.8M20 23l1.5 1.8"/></symbol>
+    <symbol id="i-tab-find" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><circle cx="14" cy="14" r="9.5"/><path d="M17.8 10.2l-2.3 5.3-5.3 2.3 2.3-5.3z"/></symbol>
+    <symbol id="i-tab-me" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="14" cy="9.5" r="4.5"/><path d="M5.5 23.5v-1A4.5 4.5 0 0 1 10 18h8a4.5 4.5 0 0 1 4.5 4.5v1z"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 18 13" fill="currentColor"><path d="M9 12.5l2.4-2.9a3.6 3.6 0 0 0-4.8 0zM4.7 7.4l1.2 1.4a4.8 4.8 0 0 1 6.2 0l1.2-1.4a6.6 6.6 0 0 0-8.6 0zM1.6 4.2l1.3 1.4a9.4 9.4 0 0 1 12.2 0l1.3-1.4a11.3 11.3 0 0 0-14.8 0z"/></symbol>
+  </defs>
+</svg>
+
+<div class="wrap">
+  <nav class="index" aria-label="规范目录">
+    <div class="brand">Phone DSH · iOS</div>
+    <ol>
+      <li><a href="#grid">画布与网格</a></li>
+      <li><a href="#color">颜色</a></li>
+      <li><a href="#type">字体</a></li>
+      <li><a href="#space">间距</a></li>
+      <li><a href="#shape">圆角与阴影</a></li>
+      <li><a href="#components">组件</a></li>
+      <li><a href="#diff">与现状差异</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <!-- 1. Overview -->
+    <section id="intro">
+      <div class="eyebrow">v0.1 草案 · 2026-11-02</div>
+      <h1 style="margin-top:10px;font-size:34px;line-height:1.2;font-weight:700;letter-spacing:-0.01em">首页（任务 Tab）设计规范</h1>
+      <p class="lede" style="margin-top:12px;color:var(--muted);max-width:60ch">Phone DSH iOS 首页的视觉规范：以 430×932 pt 画布为基准，其他屏宽边距不变、内容宽度自适应。</p>
+        <dl class="facts">
+          <div><dt>设计画布</dt><dd>430 × 932 pt</dd></div>
+          <div><dt>基础网格</dt><dd>4 pt</dd></div>
+          <div><dt>外框 / 内容边距</dt><dd>16 / 20 pt</dd></div>
+          <div><dt>正文</dt><dd>16 / 24 pt</dd></div>
+          <div><dt>块间距</dt><dd>20 pt</dd></div>
+          <div><dt>内容宽度</dt><dd>屏宽 − 40</dd></div>
+        </dl>
+    </section>
+
+    <!-- 2. Canvas & grid -->
+    <section id="grid">
+      <div class="sec-head">
+        <div class="eyebrow">Canvas &amp; Grid</div>
+        <h2>画布与网格</h2>
+        <p>两套左右边距是有意的：浮起来的控件贴外侧 16 pt，阅读内容收进 20 pt。换成其他屏宽时，边距不变，内容宽度跟着屏宽走。</p>
+      </div>
+      <div class="panel scroll">
+        <table class="spec">
+          <tr><th>项</th><th>值</th><th>说明</th></tr>
+          <tr><td>设计画布</td><td class="num">430 × 932 pt @3x</td><td>iPhone Pro Max / Plus 尺寸</td></tr>
+          <tr><td>顶部安全区</td><td class="num">59 pt</td><td>灵动岛机型；导航栏从安全区下 8 pt 开始</td></tr>
+          <tr><td>底部安全区</td><td class="num">34 pt</td><td>Home 指示条；输入框在它上方</td></tr>
+          <tr><td>基础网格</td><td class="num">4 pt</td><td>所有间距都是 4 的倍数</td></tr>
+          <tr><td>外框边距</td><td class="num">16 pt</td><td>导航按钮、输入框</td></tr>
+          <tr><td>内容边距</td><td class="num">20 pt</td><td>消息、卡片、表格；内容宽度 = 屏宽 − 40（430 → 390）</td></tr>
+          <tr><td>最小点击区</td><td class="num">44 × 44 pt</td><td>导航按钮、胶囊里的每个按钮（46 × 44）</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <!-- 3. Color -->
+    <section id="color">
+      <div class="sec-head">
+        <div class="eyebrow">Color · Light</div>
+        <h2>颜色</h2>
+        <p>整体只有黑白灰，没有品牌强调色，唯一的彩色是完成状态的绿色。目前只定义了浅色模式。点按色块可复制色值。</p>
+      </div>
+      <h3 class="subhead">背景与表面</h3>
+      <div class="grid-cards" id="sw-surface"></div>
+      <h3 class="subhead">文字与图标</h3>
+      <div class="grid-cards" id="sw-text"></div>
+      <h3 class="subhead">描边（均为 1 pt）</h3>
+      <div class="grid-cards" id="sw-border"></div>
+    </section>
+
+    <!-- 4. Type -->
+    <section id="type">
+      <div class="sec-head">
+        <div class="eyebrow">Typography</div>
+        <h2>字体</h2>
+        <p>使用 iOS 系统字体：中文是苹方（PingFang SC），英文和数字是 SF Pro，不引入自定义字体。17.5、14.5 这类半磅值是规范值，按原值使用。下面的样例按实际字号绘制。</p>
+      </div>
+      <div class="panel scroll">
+        <table class="spec" id="type-table">
+          <tr><th>Token</th><th>样例</th><th>字号 / 行高</th><th>字重</th><th>颜色</th><th>用在</th></tr>
+        </table>
+      </div>
+      <div class="callout" style="margin-top:20px">字号规律：正文都是 16/24；过程信息降一级到 15 号灰色；卡片里再降到 14–14.5。字重只用 Regular、Medium、Semibold 三种。段落之间隔 16 pt，即上一段末行行框底到下一段首行行框顶。</div>
+    </section>
+
+    <!-- 5. Spacing -->
+    <section id="space">
+      <div class="sec-head">
+        <div class="eyebrow">Spacing</div>
+        <h2>间距</h2>
+        <p>间距只用 5 个值。消息流里块和块之间隔 20，段落和紧跟的卡片之间隔 16，过程行和它展开的卡片之间隔 8。</p>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;align-items:start">
+        <div class="panel" style="padding:22px">
+          <div class="scale">
+            <div><span class="lbl">4</span><span class="bar" style="width:4px"></span><p>图标和文字之间的微调</p></div>
+            <div><span class="lbl">8</span><span class="bar" style="width:8px"></span><p>过程行到展开卡片；列表卡上下内边距、行间隙；图标和文字</p></div>
+            <div><span class="lbl">12</span><span class="bar" style="width:12px"></span><p>气泡上下内边距；列表卡左右内边距</p></div>
+            <div><span class="lbl">16</span><span class="bar" style="width:16px"></span><p>外框边距；气泡左右内边距；段落间距；卡片左右内边距</p></div>
+            <div><span class="lbl">20</span><span class="bar" style="width:20px"></span><p>内容边距；消息流块间距</p></div>
+          </div>
+        </div>
+        <div class="panel scroll">
+          <table class="spec">
+            <tr><th>前一个 → 后一个</th><th>间距</th></tr>
+            <tr><td>导航栏底 → 时间戳</td><td class="num">20</td></tr>
+            <tr><td>时间戳 → 用户气泡</td><td class="num">16</td></tr>
+            <tr><td>用户气泡 → 第一个助手块</td><td class="num">16</td></tr>
+            <tr><td>助手块 → 助手块（过程行、正文、卡片）</td><td class="num">20</td></tr>
+            <tr><td>过程行 → 它展开的列表卡</td><td class="num">8</td></tr>
+            <tr><td>段落 → 段落 / 小标题 / 紧跟的卡片或表格</td><td class="num">16</td></tr>
+            <tr><td>最后一块 → 消息操作栏</td><td class="num">20</td></tr>
+            <tr><td>消息列表底部留白</td><td class="num">输入框高度 + 16</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. Radius & shadow -->
+    <section id="shape">
+      <div class="sec-head">
+        <div class="eyebrow">Radius &amp; Elevation</div>
+        <h2>圆角与阴影</h2>
+        <p>只有导航按钮和输入框带阴影，表示它们浮在内容上；卡片只用 1 pt 描边。</p>
+      </div>
+      <div class="shapes">
+        <div class="shape"><div class="box"><i style="width:44px;height:44px;border-radius:22px;box-shadow:0 2px 10px rgba(0,0,0,.05)"></i></div><b>导航按钮 r22</b><span>44×44，黑 5%，模糊 10，y 2</span></div>
+        <div class="shape"><div class="box"><i style="width:92px;height:48px;background:var(--m-bubble);border-radius:24px 0 24px 24px"></i></div><b>用户气泡 r24</b><span>右上角为直角</span></div>
+        <div class="shape"><div class="box"><i style="width:120px;height:56px;border-radius:18px;border:1px solid var(--m-border-list)"></i></div><b>步骤列表卡 r18</b><span>1 pt #E2E2E2</span></div>
+        <div class="shape"><div class="box"><i style="width:120px;height:56px;border-radius:16px;border:1px solid var(--m-border-card);background:var(--m-page)"></i></div><b>产物卡 r16</b><span>1 pt #E6E9ED，卡身透明</span></div>
+        <div class="shape"><div class="box"><i style="width:120px;height:56px;border-radius:12px;border:1px solid var(--m-border-table)"></i></div><b>表格卡 r12</b><span>1 pt #E8E8E8</span></div>
+        <div class="shape"><div class="box"><i style="width:120px;height:56px;border-radius:24px;box-shadow:0 4px 16px rgba(0,0,0,.08)"></i></div><b>输入框 r24 / r28</b><span>展开 r24，收起 r28；黑 8%，模糊 16，y 4</span></div>
+        <div class="shape"><div class="box"><i style="width:36px;height:36px;border-radius:18px;background:var(--m-btn)"></i></div><b>发送 / 停止 r18</b><span>36 圆，#191919</span></div>
+      </div>
+    </section>
+
+    <!-- 7. Components -->
+    <section id="components">
+      <div class="sec-head">
+        <div class="eyebrow">Components</div>
+        <h2>组件</h2>
+        <p>每个组件都按内容宽度 390 pt 绘制。坐标单位为 pt，x 从屏幕左边算，y 从屏幕顶部算。</p>
+      </div>
+
+      <div class="panel comp">
+        <div class="stage"><div class="m" style="width:398px"><div class="nav"><div class="navbtn"><svg class="ic"><use href="#i-menu"/></svg></div><div class="navtitle"><b>查询深圳天气</b><span><svg class="ic"><use href="#i-folder"/></svg>日常</span></div><div class="navpill"><i><svg class="ic"><use href="#i-device"/></svg></i><i><svg class="ic"><use href="#i-dots"/></svg></i></div></div></div></div>
+        <div class="notes"><h3>导航栏</h3><dl>
+          <dt>位置</dt><dd>y 67–111，高 44；浮在页面上，没有底色条</dd>
+          <dt>左边</dt><dd>菜单圆按钮 44×44，x 16，图标约 22，#191919</dd>
+          <dt>标题块</dt><dd>x 76（16 + 44 + 16）；17.5 半粗 / 14.5 常规两行；标题单行，超出显示省略号</dd>
+          <dt>副标题</dt><dd>会话所属文件夹：16 pt 文件夹图标，间隔 6，再接文件夹名；不在任何文件夹里的会话显示默认文件夹「日常」</dd>
+          <dt>右边</dt><dd>92×44 胶囊，右边对齐 x 414；里面是两个 46 宽的按钮：设备连接（有设备在线时右上角带绿点）、更多。新会话在左侧抽屉里</dd>
+        </dl></div>
+      </div>
+
+      <div class="panel comp">
+        <div class="stage"><div class="m" style="display:flex;flex-direction:column"><div class="ts">15:53</div><div class="bubble g16">帮我查一下深圳天气</div></div></div>
+        <div class="notes"><h3>时间戳与用户气泡</h3><dl>
+          <dt>时间戳</dt><dd>12.5 / 18，#888888，居中</dd>
+          <dt>气泡</dt><dd>右边对齐到内容边距 x 410；16 / 24 常规</dd>
+          <dt>内边距</dt><dd>上下 12，左右 16；单行高 48</dd>
+          <dt>圆角</dt><dd>24，右上角直角</dd>
+          <dt>最大宽度</dt><dd>内容宽度的 80%（约 312，待定）</dd>
+        </dl></div>
+      </div>
+
+      <div class="panel comp">
+        <div class="stage"><div class="m" style="display:flex;flex-direction:column">
+          <div class="proc"><svg class="ic spin"><use href="#i-spin"/></svg>4 次任务进程<svg class="ic chev"><use href="#i-down"/></svg></div>
+          <div class="proc g20"><svg class="ic"><use href="#i-skill"/></svg>使用技能 weather<svg class="ic chev"><use href="#i-down"/></svg></div>
+          <div class="listcard g8">
+            <div><svg class="ic ok"><use href="#i-checkc"/></svg>已使用技能 weather</div>
+            <div><svg class="ic ok"><use href="#i-checkc"/></svg>已执行命令 查询深圳当前天气</div>
+            <div><svg class="ic pending"><use href="#i-circle"/></svg>正在执行命令 Terminal</div>
+          </div>
+          <div class="proc g20">已完成<svg class="ic chev"><use href="#i-right"/></svg></div>
+        </div></div>
+        <div class="notes"><h3>过程行与步骤列表卡</h3><dl>
+          <dt>过程行</dt><dd>高 24；图标 18，间隔 6，文字 15 号 #555555，后面跟 14 的箭头（可展开用 ⌄，可跳转用 ›）</dd>
+          <dt>图标</dt><dd>进行中是转圈，思考是原子，技能是 &lt;/&gt;；完成后整组收成“已完成 ›”，没有图标</dd>
+          <dt>列表卡</dt><dd>宽 390，白底，1 pt #E2E2E2，圆角 18</dd>
+          <dt>内边距</dt><dd>上下 8，左右 12</dd>
+          <dt>行</dt><dd>高 22，间隙 8（步进 30）；状态图标 16，间隔 8，文字 14 号 #717171</dd>
+          <dt>状态</dt><dd>完成为绿色对勾 #3DC979；进行中为空心圆</dd>
+        </dl></div>
+      </div>
+
+      <div class="panel comp">
+        <div class="stage"><div class="m"><div class="artcard"><header><b>shenzhen weather now</b><span><svg class="ic"><use href="#i-play"/></svg>预览</span></header><div class="art-body"><svg class="ic"><use href="#i-docimg"/></svg>点击预览</div></div></div></div>
+        <div class="notes"><h3>产物卡</h3><dl>
+          <dt>外框</dt><dd>宽 390，圆角 16，1 pt #E6E9ED；卡身透明，透出页面底色</dd>
+          <dt>标题栏</dt><dd>高 44，#EFEFEF，下方有 1 pt 分隔线；左右内边距 16</dd>
+          <dt>标题</dt><dd>17 半粗，#1A1A1A</dd>
+          <dt>操作</dt><dd>播放图标 16，间隔 8，“预览”14.5 号 #3B3B3B</dd>
+          <dt>内容区</dt><dd>未加载时高约 88，显示“图标 + 点击预览”；加载后显示网页缩略图，左右内边距 8</dd>
+        </dl></div>
+      </div>
+
+      <div class="panel comp">
+        <div class="stage"><div class="m"><div class="tablecard">
+          <header>表格<span class="tools"><svg class="ic"><use href="#i-copy"/></svg><svg class="ic"><use href="#i-imgsave"/></svg><svg class="ic"><use href="#i-expand"/></svg><svg class="ic"><use href="#i-share"/></svg></span></header>
+          <table><colgroup><col style="width:24%"><col style="width:26%"><col style="width:26%"><col style="width:24%"></colgroup>
+            <tr><th>日期</th><th>天气</th><th>温度</th><th>降水概率</th></tr>
+            <tr><td>今天 11/2</td><td>毛毛雨</td><td>23° ~ 32°</td><td>98%</td></tr>
+            <tr><td>明天 11/3</td><td>小雨</td><td>23° ~ 29°</td><td>31%</td></tr>
+          </table></div></div></div>
+        <div class="notes"><h3>表格卡</h3><dl>
+          <dt>外框</dt><dd>宽 390，圆角 12，1 pt #E8E8E8</dd>
+          <dt>工具栏</dt><dd>高 44，#EEEEEE；左边“表格”14.5 号 #555555；右边 4 个 16 的图标，步进 40，右内边距 16</dd>
+          <dt>行高</dt><dd>表头 36，数据行 46</dd>
+          <dt>单元格</dt><dd>左右内边距 16；表头 14 号 #585858，内容 14 号 #1A1A1A</dd>
+          <dt>分隔线</dt><dd>列 #E8E8E8，行 #F3F3F3</dd>
+        </dl></div>
+      </div>
+
+      <div class="panel comp">
+        <div class="stage"><div class="m"><div class="actions"><svg class="ic"><use href="#i-copy"/></svg><svg class="ic"><use href="#i-up"/></svg><svg class="ic"><use href="#i-dn"/></svg><svg class="ic"><use href="#i-speak"/></svg></div></div></div>
+        <div class="notes"><h3>消息操作栏</h3><dl>
+          <dt>位置</dt><dd>回答完成后出现，在最后一块下面 20，左边对齐 x 20</dd>
+          <dt>按钮</dt><dd>复制、赞、踩、朗读；点击框 24（图标约 18），步进 36</dd>
+          <dt>颜色</dt><dd>#555555</dd>
+        </dl></div>
+      </div>
+
+      <div class="panel comp">
+        <div class="stage" style="gap:20px">
+          <div class="m" style="width:398px"><div class="composer open" style="box-shadow:0 4px 16px rgba(0,0,0,.08)"><div class="ph">发消息...</div><div class="row"><svg class="ic voice"><use href="#i-voice"/></svg><div class="mode"><svg class="ic"><use href="#i-bolt"/></svg>快速<svg class="ic chev"><use href="#i-down"/></svg></div><svg class="ic plus"><use href="#i-plus"/></svg><div class="stop"><i></i></div></div></div></div>
+          <div class="m" style="width:398px"><div class="composer closed"><svg class="ic voice" style="color:var(--m-btn)"><use href="#i-voice"/></svg><div class="ph">发消息或按住说话...</div><svg class="ic plus"><use href="#i-plus"/></svg></div></div>
+        </div>
+        <div class="notes"><h3>输入框</h3><dl>
+          <dt>位置</dt><dd>浮在底部安全区上方；左右边距 16，宽 398</dd>
+          <dt>展开</dt><dd>398×104，圆角 24；任务进行中或获得焦点时使用</dd>
+          <dt>输入区</dt><dd>内边距 16，16 / 24，占位 #8B8B8B</dd>
+          <dt>工具行</dt><dd>中心离底边 26；语音（24 框，#A9A9A9）→ 间隔约 22 → “⚡ 快速 ⌄”（16 号）；右边 + → 间隔 12 → 停止按钮 36 圆，离右边和底边各 8</dd>
+          <dt>收起</dt><dd>398×56 胶囊，空闲时使用；语音离左边 16，占位文字 x 48，+ 离右边 16（#191919）</dd>
+          <dt>阴影</dt><dd>黑 8%，模糊 16，y 4</dd>
+        </dl></div>
+      </div>
+
+    </section>
+
+    <!-- 8. Diff -->
+    <section id="diff">
+      <div class="sec-head">
+        <div class="eyebrow">Gap Analysis</div>
+        <h2>与现有 iOS 实现的差异</h2>
+        <p>现有 token 在 <code>NativeParityTokens.swift</code>，对齐的是官方 DSH 网页版在 402 pt 宽下的数值，有 <code>spec/ui/v1</code> 和 <code>scripts/ios-parity</code> 两道检查守着，Android 也跟着同一份界面规范。</p>
+      </div>
+      <div class="panel scroll">
+        <table class="spec">
+          <tr><th>项</th><th>现在</th><th>本规范</th></tr>
+          <tr><td>屏宽</td><td>固定 402（<code>contentWidth</code> 338 等写死）</td><td>按 430 设计；边距固定，内容宽度 = 屏宽 − 40</td></tr>
+          <tr><td>正文字号</td><td class="num">14 / 24</td><td class="num">16 / 24</td></tr>
+          <tr><td>内容左右边距</td><td class="num">32（transcriptSide）</td><td class="num">20</td></tr>
+          <tr><td>用户气泡</td><td>浅蓝 #EDF3FE，行高 22</td><td>灰 #E8E8E8，16 / 24，圆角 24，右上角直角</td></tr>
+          <tr><td>强调色</td><td>蓝 #3964FE</td><td>无，只用黑白灰</td></tr>
+          <tr><td>主文字色</td><td class="num">#0F1115</td><td class="num">#1A1A1A</td></tr>
+          <tr><td>页面底色</td><td>白色</td><td>#F7F7F7，控件是白底浮在上面</td></tr>
+          <tr><td>导航栏</td><td>50 pt 顶栏</td><td>44 pt 浮动圆按钮和胶囊</td></tr>
+          <tr><td>成功色</td><td class="num">#22C55E</td><td class="num">#3DC979</td></tr>
+        </table>
+      </div>
+      <div class="callout" style="margin-top:20px"><b>需要先决定：</b>按本规范改，现有的对齐检查会失败。可以直接替换对齐基线，也可以把本规范做成一套新主题，保留原来的对齐版本。</div>
+    </section>
+
+
+  </main>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  var swatches = {
+    "sw-surface": [
+      ["bg.page", "#F7F7F7", "页面底色"],
+      ["bg.surface", "#FFFFFF", "导航按钮、输入框、列表卡、表格内容区"],
+      ["bg.userBubble", "#E8E8E8", "用户消息气泡"],
+      ["bg.cardHeader", "#EFEFEF", "产物卡标题栏"],
+      ["bg.tableToolbar", "#EEEEEE", "表格卡工具栏"],
+      ["fill.primaryButton", "#191919", "发送 / 停止按钮"]
+    ],
+    "sw-text": [
+      ["text.primary", "#1A1A1A", "标题、正文、气泡、表格内容"],
+      ["text.secondary", "#555555", "过程行、表格工具栏、操作图标；表头 #585858"],
+      ["text.tertiary", "#717171", "步骤列表卡的每一行"],
+      ["text.subtle", "#7D7D7D", "导航副标题；卡片占位文字 #7F7E83"],
+      ["text.placeholder", "#888888", "时间戳；输入框占位 #8B8B8B"],
+      ["icon.muted", "#A9A9A9", "输入框里的语音和 + 图标"],
+      ["text.cardAction", "#3B3B3B", "“预览”；播放图标 #616267"],
+      ["status.success", "#3DC979", "步骤完成的对勾"]
+    ],
+    "sw-border": [
+      ["border.card", "#E6E9ED", "产物卡（偏冷灰）"],
+      ["border.list", "#E2E2E2", "步骤列表卡"],
+      ["border.table", "#E8E8E8", "表格外框、列分隔线"],
+      ["divider.tableRow", "#F3F3F3", "表格行分隔线"]
+    ]
+  };
+  Object.keys(swatches).forEach(function (id) {
+    var host = document.getElementById(id);
+    swatches[id].forEach(function (s) {
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "sw"; b.setAttribute("data-hex", s[1]);
+      b.innerHTML = '<span class="chip" style="background:' + s[1] + '"></span><span class="meta"><span class="hex">' + s[1] + '</span><span class="tok">' + s[0] + '</span><span class="use">' + s[2] + '</span></span>';
+      host.appendChild(b);
+    });
+  });
+
+  var types = [
+    ["nav.title", "查询深圳天气", 17.5, 600, 22, "#1A1A1A", "会话标题"],
+    ["nav.subtitle", "日常", 14.5, 400, 20, "#7D7D7D", "导航副标题：会话所属文件夹"],
+    ["meta.timestamp", "15:53", 12.5, 400, 18, "#888888", "居中时间戳"],
+    ["body", "深圳天气已查到,给你做个实时看板:", 16, 400, 24, "#1A1A1A", "助手正文"],
+    ["body.strong", "深圳当前 28°C", 16, 600, 24, "#1A1A1A", "正文加粗"],
+    ["body.heading", "未来四天预报", 16, 600, 24, "#1A1A1A", "回答里的小标题"],
+    ["bubble", "帮我查一下深圳天气", 16, 400, 24, "#1A1A1A", "用户气泡"],
+    ["process", "4 次任务进程", 15, 400, 24, "#555555", "过程行、已完成、深度思考"],
+    ["list.item", "已执行命令 查询深圳当前天气", 14, 400, 22, "#717171", "步骤列表卡"],
+    ["card.title", "shenzhen weather now", 17, 600, 22, "#1A1A1A", "产物卡标题"],
+    ["card.action", "预览 · 点击预览", 14.5, 400, 20, "#3B3B3B", "卡片操作、占位"],
+    ["table.toolbar", "表格", 14.5, 400, 20, "#555555", "表格工具栏"],
+    ["table.cell", "今天 11/2 · 23° ~ 32°", 14, 400, 20, "#1A1A1A", "表格内容；表头 #585858"],
+    ["composer.input", "发消息...", 16, 400, 24, "#8B8B8B", "输入框文字和占位"]
+  ];
+  var wn = { 400: "Regular", 500: "Medium", 600: "Semibold" };
+  var tt = document.getElementById("type-table");
+  types.forEach(function (t) {
+    var tr = document.createElement("tr");
+    tr.innerHTML = '<td class="tok">' + t[0] + '</td>' +
+      '<td><span class="specimen m" style="font:' + t[3] + ' ' + t[2] + 'px/' + t[4] + 'px var(--sys);color:' + t[5] + '">' + t[1] + '</span></td>' +
+      '<td class="num">' + t[2] + ' / ' + t[4] + '</td><td>' + wn[t[3]] + '</td>' +
+      '<td class="num"><span class="key" style="width:10px;height:10px;border-radius:3px;background:' + t[5] + ';margin-right:6px"></span>' + t[5] + '</td>' +
+      '<td class="dim">' + t[6] + '</td>';
+    tt.appendChild(tr);
+  });
+
+  var toast = document.getElementById("toast"), tId;
+  function say(msg) { toast.textContent = msg; toast.classList.add("on"); clearTimeout(tId); tId = setTimeout(function () { toast.classList.remove("on"); }, 1400); }
+  function copy(text, done, fallbackEl) {
+    var p = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text) : Promise.reject();
+    p.then(function () { say(done); }, function () {
+      if (fallbackEl) { var r = document.createRange(); r.selectNodeContents(fallbackEl); var sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+      say("已选中，按 ⌘C 复制");
+    });
+  }
+  document.addEventListener("click", function (e) {
+    var sw = e.target.closest(".sw");
+    if (sw) copy(sw.getAttribute("data-hex"), "已复制 " + sw.getAttribute("data-hex"), sw.querySelector(".hex"));
+  });
+
+})();
+</script>
+</body>
+</html>

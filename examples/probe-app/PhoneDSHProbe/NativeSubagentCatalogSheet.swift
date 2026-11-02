@@ -102,18 +102,14 @@ struct NativeSubagentCatalogSheet: View {
         }
         .scrollIndicators(.visible)
         .frame(width: width, height: cardHeight, alignment: .top)
-        // Official mobile menu: rgba(248,249,250,.58) over a 40pt backdrop blur.
-        .background(NativeParityTokens.menu.opacity(0.58),
-                    in: RoundedRectangle(cornerRadius: NativeParityTokens.radiusLG, style: .continuous))
-        .background(.ultraThinMaterial,
-                    in: RoundedRectangle(cornerRadius: NativeParityTokens.radiusLG, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: NativeParityTokens.radiusLG, style: .continuous))
+        // HomeSpec list card: white, 1pt #E2E2E2, r18.
+        .background(HomeSpec.surface,
+                    in: RoundedRectangle(cornerRadius: HomeSpec.listCardRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: HomeSpec.listCardRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: NativeParityTokens.radiusLG, style: .continuous)
-                .strokeBorder(NativeParityTokens.borderL1, lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: HomeSpec.listCardRadius, style: .continuous)
+                .strokeBorder(HomeSpec.borderList, lineWidth: 1)
         }
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
-        .shadow(color: Color.black.opacity(0.05), radius: 20, x: 0, y: 0)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("子智能体会话"))
     }
@@ -190,7 +186,7 @@ struct NativeSubagentCatalogSheet: View {
 
     private func notice(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11))
+            .font(.system(size: 13))
             .foregroundStyle(NativeParityTokens.labelTertiary)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -200,17 +196,17 @@ struct NativeSubagentCatalogSheet: View {
     private func errorRow(_ message: String) -> some View {
         HStack(spacing: 10) {
             Text(message)
-                .font(.system(size: 11))
+                .font(.system(size: 13))
                 .foregroundStyle(NativeParityTokens.error)
                 .lineLimit(2)
             Spacer(minLength: 0)
             if let onRetry {
                 Button(action: onRetry) {
                     HStack(spacing: 3) {
-                        Image(systemName: "arrow.clockwise").font(.system(size: 12))
+                        Image(systemName: "arrow.clockwise").font(.system(size: 13))
                         Text("重试")
                     }
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
                     .foregroundStyle(NativeParityTokens.error)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 3)
@@ -263,7 +259,7 @@ private struct NativeSubagentCatalogRow: View {
         if entry.canExpand {
             Button(action: onToggle) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .regular))
+                    .font(.system(size: 13, weight: .regular))
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .animation(.easeInOut(duration: 0.12), value: isExpanded)
                     .foregroundStyle(NativeParityTokens.labelTertiary)
@@ -285,11 +281,11 @@ private struct NativeSubagentCatalogRow: View {
                 activitySlot
                 VStack(alignment: .leading, spacing: 0) {
                     Text(entry.title)
-                        .font(.system(size: 12, weight: isCurrent ? .semibold : .regular))
-                        .foregroundStyle(NativeParityTokens.labelPrimary)
+                        .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
+                        .foregroundStyle(HomeSpec.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .frame(height: 17)
+                        .frame(height: 22)
                     secondaryLine
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -342,7 +338,7 @@ private struct NativeSubagentCatalogRow: View {
                 Text(entry.activity.label).lineLimit(1).truncationMode(.tail)
             }
         }
-        .font(.system(size: 10))
+        .font(.system(size: 13))
         .foregroundStyle(NativeParityTokens.labelTertiary)
         .frame(height: 15)
     }
@@ -352,7 +348,7 @@ private struct NativeSubagentCatalogRow: View {
             Text(entry.tokenText ?? "").frame(height: 17)
             Text(entry.durationText ?? "").frame(height: 15)
         }
-        .font(.system(size: 10).monospacedDigit())
+        .font(.system(size: 12).monospacedDigit())
         .foregroundStyle(NativeParityTokens.labelTertiary)
         .lineLimit(1)
         .fixedSize(horizontal: true, vertical: false)
@@ -363,7 +359,7 @@ private struct NativeSubagentCatalogRow: View {
     private var sidebarButton: some View {
         Button(action: onOpenAside) {
             Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .regular))
+                .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(NativeParityTokens.labelTertiary)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())

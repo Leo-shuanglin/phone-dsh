@@ -46,8 +46,6 @@
 // inference provider.
 package com.phonedsh.probe
 
-import com.phonedsh.agentcore.JsonBool
-import com.phonedsh.agentcore.JsonNumber
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
 import com.phonedsh.agentcore.JsonValue
@@ -57,10 +55,16 @@ import com.phonedsh.dsh.host.HostApiStream
 import com.phonedsh.dsh.host.HostChannel
 import com.phonedsh.dsh.turn.DshTurnClient
 import com.phonedsh.dsh.turn.DshTurnException
+import com.phonedsh.dsh.turn.PendingRemoteRequest
+import com.phonedsh.dsh.turn.pendingRemoteRequest
+import com.phonedsh.dsh.turn.remoteEventsOpenFrame
+import com.phonedsh.dsh.turn.sessionFollowOpenFrame
 import com.phonedsh.hostevents.HostEvent
 import com.phonedsh.hostevents.HostEventKind
 import com.phonedsh.hostevents.HostEventProjection
 import java.security.SecureRandom
+import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.withTimeoutOrNull
@@ -137,6 +141,9 @@ internal class ChatTurnRunner(
         onEvent: (HostEvent) -> Unit,
         onDelta: (String) -> Unit,
         onContextLost: (String) -> Unit = {},
+        onInteractiveRequest: ((PendingRemoteRequest, suspend (JsonValue) -> Unit) -> Unit)? = null,
+        onInteractiveCancel: ((String) -> Unit)? = null,
+        onReasoningDelta: (String) -> Unit = {},
     ): ChatTurnOutcome {
         val requested = workerSessionId
         if (requested != null) {
@@ -152,6 +159,9 @@ internal class ChatTurnRunner(
                     onSession,
                     { event -> sawEvent = true; onEvent(event) },
                     onDelta,
+                    onInteractiveRequest,
+                    onInteractiveCancel,
+                    onReasoningDelta,
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -168,7 +178,10 @@ internal class ChatTurnRunner(
         }
         val created = client.createSessionWhenReady(cwd = WORKSPACE)
         log("chat turn: new worker session=$created (previous=${requested ?: "none"})")
-        return oneTurn(created, prompt, onSession, onEvent, onDelta)
+        return oneTurn(
+            created, prompt, onSession, onEvent, onDelta,
+            onInteractiveRequest, onInteractiveCancel, onReasoningDelta,
+        )
             .copy(contextReset = requested != null)
     }
 
@@ -202,6 +215,9 @@ internal class ChatTurnRunner(
         onSession: (String) -> Unit,
         onEvent: (HostEvent) -> Unit,
         onDelta: (String) -> Unit,
+        onInteractiveRequest: ((PendingRemoteRequest, suspend (JsonValue) -> Unit) -> Unit)?,
+        onInteractiveCancel: ((String) -> Unit)?,
+        onReasoningDelta: (String) -> Unit,
     ): ChatTurnOutcome {
         onSession(sessionId)
         val follow = openFollow(sessionId)
@@ -209,11 +225,16 @@ internal class ChatTurnRunner(
         val live = StringBuilder()
         var endReason: String? = null
         var items = 0
-        // The whole wait for the first event, not per read: a stale session sends
-        // one history snapshot and then nothing, and that must cost one short
-        // deadline instead of three long ones.
-        val firstEventDeadline = System.currentTimeMillis() + FIRST_EVENT_TIMEOUT_MILLIS
+        val pendingRemoteRequests = ConcurrentHashMap.newKeySet<String>()
         try {
+            val prefetchedItems = ArrayDeque<JsonObject>()
+            // The server's ready frame supplies the clientId required by result
+            // replies. Do not send a prompt until the live waterfall subscription
+            // has registered; retain any multiplexed follow items read while waiting.
+            val eventClientId = awaitEventsReady(follow, prefetchedItems)
+            // The whole wait for the first durable event, not per read: a stale
+            // session sends one history snapshot and then nothing.
+            val firstEventDeadline = System.currentTimeMillis() + FIRST_EVENT_TIMEOUT_MILLIS
             // The prompt goes out only after the stream is open: the Worker
             // publishes the turn's first frames as soon as it accepts it, and a
             // prompt sent first can outrun the subscription.
@@ -231,7 +252,7 @@ internal class ChatTurnRunner(
                 } else {
                     NEXT_TIMEOUT_MILLIS
                 }
-                val item = follow.next(timeout)
+                val item = prefetchedItems.pollFirst() ?: follow.next(timeout)
                 items++
                 if (item == null) {
                     if (events.isEmpty()) {
@@ -256,6 +277,42 @@ internal class ChatTurnRunner(
                     else -> continue
                 }
                 val value = item["value"] as? JsonObject ?: continue
+                if (item.text("streamId") == EVENTS_STREAM_ID) {
+                    when (value.text("type")) {
+                        "ready" -> Unit // Consumed by `awaitEventsReady` before prompting.
+                        "waterfall" -> {
+                            val remote = pendingRemoteRequest(value, sessionId, eventClientId) ?: continue
+                            val eventId = remote.eventID
+                            if (remote.eventKind == APPROVAL_REQUEST || remote.eventKind == QUESTION_REQUEST) {
+                                val onRequest = onInteractiveRequest
+                                if (onRequest == null) {
+                                    // No UI owner has claimed this waterfall. Return
+                                    // it to the next listener, exactly like the iOS
+                                    // remote harness does for unsupported event kinds.
+                                    client.answerRemoteRequest(remote, NEXT_WATERFALL_OUTCOME)
+                                } else {
+                                    pendingRemoteRequests.add(eventId)
+                                    onRequest(remote) { outcome ->
+                                        client.answerRemoteRequest(remote, outcome)
+                                        pendingRemoteRequests.remove(eventId)
+                                    }
+                                }
+                            } else {
+                                client.answerRemoteRequest(
+                                    remote,
+                                    NEXT_WATERFALL_OUTCOME,
+                                )
+                            }
+                        }
+                        "cancel" -> {
+                            val eventId = value.text("eventId")
+                            if (eventId != null && pendingRemoteRequests.remove(eventId)) {
+                                onInteractiveCancel?.invoke(eventId)
+                            }
+                        }
+                    }
+                    continue
+                }
                 when (value.text("type")) {
                     "event" -> {
                         val event = value["event"] as? JsonObject ?: continue
@@ -272,10 +329,19 @@ internal class ChatTurnRunner(
                     "assistant-stream" -> {
                         val frame = value["frame"] as? JsonObject ?: continue
                         if (frame.text("type") != "chunk") continue
-                        val text = textDeltaOf(frame["chunk"]) ?: continue
-                        if (text.isEmpty()) continue
-                        live.append(text)
-                        onDelta(text)
+                        val chunk = frame["chunk"] ?: continue
+                        when ((chunk as? JsonObject)?.text("type")) {
+                            "text-delta" -> {
+                                val text = textDeltaOf(chunk) ?: continue
+                                if (text.isEmpty()) continue
+                                live.append(text)
+                                onDelta(text)
+                            }
+                            "reasoning-delta" -> {
+                                val text = reasoningDeltaOf(chunk) ?: continue
+                                if (text.isNotEmpty()) onReasoningDelta(text)
+                            }
+                        }
                     }
 
                     // `snapshot` is the Worker's own history replay. This App keeps the
@@ -292,47 +358,49 @@ internal class ChatTurnRunner(
         return ChatTurnOutcome(events, endReason, live.toString())
     }
 
+    /** The iOS remote harness waits for the `$events` client registration before prompts can race it. */
+    private suspend fun awaitEventsReady(
+        follow: FollowStream,
+        prefetchedItems: ArrayDeque<JsonObject>,
+    ): String {
+        val deadline = System.currentTimeMillis() + EVENT_READY_TIMEOUT_MILLIS
+        while (System.currentTimeMillis() < deadline) {
+            val remaining = (deadline - System.currentTimeMillis()).coerceAtLeast(1L)
+            val item = follow.next(remaining)
+                ?: throw DshTurnException("events_not_ready", "the live event stream did not register a client")
+            when (item.text("type")) {
+                "error" -> {
+                    val error = item["error"] as? JsonObject
+                    throw DshTurnException(
+                        error?.text("code") ?: "events_stream_error",
+                        error?.text("message") ?: "the live event stream reported an error",
+                    )
+                }
+                "end" -> throw DshTurnException("events_stream_ended", "the live event stream ended before registration")
+                "item" -> Unit
+                else -> continue
+            }
+            val value = item["value"] as? JsonObject ?: continue
+            if (item.text("streamId") == EVENTS_STREAM_ID && value.text("type") == "ready") {
+                return eventsReadyClientId(item)
+                    ?: throw DshTurnException("events_client_missing", "the live event stream registered no client id")
+            }
+            prefetchedItems.addLast(item)
+        }
+        throw DshTurnException("events_not_ready", "the live event stream did not register a client")
+    }
+
     /** Opens the `session/follow` mux stream with the live assistant frames opted in. */
     private suspend fun openFollow(sessionId: String): FollowStream {
         val muxId = ByteArray(16).also(random::nextBytes).hex()
         sendMux(
             muxId,
-            JsonObject(
-                linkedMapOf(
-                    "type" to JsonString("open"),
-                    "streamId" to JsonString("events"),
-                    "endpoint" to JsonString("\$events"),
-                    "payload" to JsonObject(linkedMapOf("args" to JsonObject(emptyMap()))),
-                ),
-            ).toJsonString(),
-        )
-        val follow = JsonObject(
-            linkedMapOf(
-                "address" to JsonObject(
-                    linkedMapOf(
-                        "kind" to JsonString("session"),
-                        "sessionId" to JsonString(sessionId),
-                    ),
-                ),
-                "maxMessages" to JsonNumber(MAX_MESSAGES.toString()),
-                // The one difference from `DshTurnClient.follow`: the Worker's
-                // process-local assistant frames. Without it the only text event is
-                // the settled `assistant/message`.
-                "assistantStream" to JsonBool(true),
-            ),
+            remoteEventsOpenFrame().toJsonString(),
         )
         sendMux(
             muxId,
-            JsonObject(
-                linkedMapOf(
-                    "type" to JsonString("open"),
-                    "streamId" to JsonString("follow"),
-                    "endpoint" to JsonString("session/follow"),
-                    "payload" to JsonObject(
-                        linkedMapOf("args" to JsonObject(linkedMapOf("request" to follow))),
-                    ),
-                ),
-            ).toJsonString(),
+            // The Worker stream carries live assistant frames as well as durable history.
+            sessionFollowOpenFrame(sessionId, MAX_MESSAGES, assistantStream = true).toJsonString(),
         )
         val stream = channel.openApiStream(
             method = "POST",
@@ -459,12 +527,35 @@ internal class ChatTurnRunner(
 
         /** How long the first durable event of a turn may take (a reloaded page never sends one). */
         const val FIRST_EVENT_TIMEOUT_MILLIS = 20_000L
+        const val EVENT_READY_TIMEOUT_MILLIS = 20_000L
 
         /** Non-event items (the history snapshot) still expected before the first event. */
         const val STALE_ITEMS = 3
         const val CLOSE_TIMEOUT_MILLIS = 5_000L
+        const val EVENTS_STREAM_ID = "events"
+        const val APPROVAL_REQUEST = "approval/request"
+        const val QUESTION_REQUEST = "user-questions/request"
+        val NEXT_WATERFALL_OUTCOME = JsonObject(
+            linkedMapOf("kind" to JsonString("next")),
+        )
         const val HEX = "0123456789abcdef"
     }
+}
+
+/** Reads one live reasoning fragment without logging or persisting the content. */
+internal fun reasoningDeltaOf(chunk: JsonValue?): String? {
+    val value = chunk as? JsonObject ?: return null
+    if ((value["type"] as? JsonString)?.value != "reasoning-delta") return null
+    return (value["text"] as? JsonString)?.value
+}
+
+/** Reads DSH's mux `item` envelope for the events stream's initial ready/clientId message. */
+internal fun eventsReadyClientId(frame: JsonObject): String? {
+    if ((frame["type"] as? JsonString)?.value != "item") return null
+    if ((frame["streamId"] as? JsonString)?.value != "events") return null
+    val value = frame["value"] as? JsonObject ?: return null
+    if ((value["type"] as? JsonString)?.value != "ready") return null
+    return (value["clientId"] as? JsonString)?.value
 }
 
 /**

@@ -167,6 +167,37 @@ class SessionPagesTest {
     }
 
     @Test
+    fun `the drawer action occupies the existing navigation band without adding a page header`() {
+        var opened = 0
+        val state = drawer(sessions = listOf(SessionListing("s1", "项目讨论")))
+        compose.setContent {
+            PdshTheme {
+                Drawer(state = state, onOpenDrawer = { opened += 1 })
+            }
+        }
+        compose.onNodeWithTag("sessions.drawer").assertIsDisplayed().performClick()
+        assertEquals(1, opened)
+        compose.onNodeWithText(UiStrings.SESSIONS).assertDoesNotExist()
+    }
+
+    @Test
+    fun `a fixed single-root host hides workspace mutations it cannot perform`() {
+        val state = drawer(
+            sessions = listOf(SessionListing("chat-1", "项目讨论")),
+            workspaces = listOf(SessionWorkspace("/dsh/workspace", "/dsh/workspace", listOf("chat-1"))),
+            local = SessionsLocalState(workspaceMenuID = "/dsh/workspace"),
+        )
+        compose.setContent {
+            PdshTheme {
+                Drawer(state = state, workspaceActionsAvailable = false)
+            }
+        }
+        compose.onNodeWithTag(UiPageTags.SESSIONS_WORKSPACE_ROW).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.SESSIONS_WORKSPACE_MENU).assertDoesNotExist()
+        compose.onNodeWithTag(UiPageTags.SESSIONS_ADD_WORKSPACE).assertDoesNotExist()
+    }
+
+    @Test
     fun `section two shows the big empty block only when the drawer is completely empty`() {
         val empty = drawer()
         var added = 0
@@ -544,6 +575,8 @@ class SessionPagesTest {
     private fun Drawer(
         state: SessionsScreenState,
         onBack: (() -> Unit)? = null,
+        onOpenDrawer: (() -> Unit)? = null,
+        workspaceActionsAvailable: Boolean = true,
         onSelect: (SessionRowView) -> Unit = {},
         onQueryChange: (String) -> Unit = {},
         onNewSession: () -> Unit = {},
@@ -580,6 +613,8 @@ class SessionPagesTest {
             onNewSession = onNewSession,
             onRetry = onRetry,
             onBack = onBack,
+            onOpenDrawer = onOpenDrawer,
+            workspaceActionsAvailable = workspaceActionsAvailable,
             onToggleWorkspace = onToggleWorkspace,
             onWorkspaceMenuToggle = onWorkspaceMenuToggle,
             onNewSessionInWorkspace = onNewSessionInWorkspace,
