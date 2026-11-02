@@ -1182,3 +1182,96 @@ $ cd android && ./gradlew :app:assembleRelease :app:assembleDebug
 $ bash ../scripts/ci/check.sh --only phone-android-structure,phone-android-tests,phone-android-release
 ```
 
+
+---
+
+## 二十二、它是产品了：可安装、可当 App 用
+
+需求方一句话定性：**「你必须要做一个可以到生产的安卓 app 啊，要不然真机调试怎么调？」**
+
+之前的状态：`applicationId = com.phonedsh.probe`、应用名「PDSH 引擎探针」、`versionName = "0.0.0"`、
+**没有签名配置**（release 装不上真机）、**一个图标都没有**、**首页是「跑一轮」诊断屏**。
+
+### 身份（L61）
+
+| 项 | 前 | 后 |
+|---|---|---|
+| `applicationId` | `com.phonedsh.probe` | **`com.phonedsh.app`** |
+| `android:label` | 「PDSH 引擎探针」 | **「PDSH」** |
+| `versionName` | `0.0.0` | **`0.1.0`** |
+| 签名 | 无 | 两条路 + 5 条回落分支 |
+| 图标 | 无 | adaptive，颜色取自 `spec/ui/v1/tokens.json` |
+| `allowBackup` | `false` | **保持 `false`**（它持有 key 的加密存储） |
+
+`namespace` 保持 `com.phonedsh.probe`——改它要搬 18 个文件，而且用户看不到。
+
+**L61 撞到一个只有真装一次才会撞到的坑**：
+
+> `.MainActivity` 的前导点是按 **applicationId** 展开的。编译、打包、`aapt2` 全部正常，
+> 装上去启动即 `ClassNotFoundException`。改成全限定 `com.phonedsh.probe.MainActivity` 才好。
+
+### 签名：开箱能装，但也告诉你这不是发布签名
+
+- **(a) 开箱可装**：release 借 AGP 的 debug keystore，`assembleRelease` 出来直接 `adb install`
+- **(b) 真发布**：`android/keystore.properties`（gitignored）或 `PDSH_KEYSTORE_*` 环境变量
+
+**5 条回落分支逐条实测，全部「构建成功不报错」**：无文件、文件缺键、`storeFile` 不存在、环境变量半套。
+仓库零密钥（`git check-ignore` 对三种扩展名全生效）。
+
+**「调试签名，不可发布」在 APK 里字节级可验**——走 **manifest 占位符**而不是 string 资源：
+`isShrinkResources` 会把没人引用的 string 裁掉（实测 `resources.arsc` 里该句 0 次，manifest UTF-16LE 池 ×1）。
+
+关于页显示：**`当前版本 / 0.1.0 · 调试签名，不可发布`**。
+
+### 首页换了（L62）
+
+`home = { if (probeOpen) ProbeScreen(...) else HostHomeScreen(...) }`，`probeOpen` 默认 false。
+选这个形状而不是改 `nav` 初值，因为 `PdshNavHost` 的 `PdshRoute.Home` 是宿主自有面，
+`popToHome()` 落回它——launch 面、返回面、popToHome 面是同一个函数。
+
+**探针挪到抽屉第 8 行「引擎探针」**，退回来先回产品首页。
+
+**空态文案全部是 `UiStrings` 现有 iOS 原句，一个常量都没新增。**
+
+**无 key 时不是空白也不是崩溃**：顶部一张引导卡（`还差一步:配好模型服务` → 去配置模型服务），
+引擎照常启动（`PDSH_MODEL_KEY_STATE=absent`、`XL_DSH_READY`），保存后卡片自动消失。
+
+### 我补的三处（都是另外两条车道报的）
+
+1. **`android/tools/` 全部硬编码 `com.phonedsh.probe`** —— 改 applicationId 会直接打断真机脚本
+   （`run-app-turn` / `verify-nav-entries` / `run-demo` / `kill-matrix` / `inject-renderer-death` /
+   `measure-coldstart-slo`）。全部改成 `PDSH_PACKAGE` 可覆盖。
+2. **那些脚本会去找「跑一轮」，而产品首页没有** —— 加了 `--ez pdsh.face.probe true`（L62 为此加的 launch extra）。
+3. **`com.phonedsh.app` 被 hygiene 当成域名** —— 加进「包名不是主机名」白名单（那个列表本来就是为同类误报建的）。
+
+### 首次安装验收（release APK，全新 AVD，**非 debuggable**）
+
+```
+LaunchState: COLD   TotalTime: 879
+
+首页  ☰ | 会话列表 | 还差一步:配好模型服务 | 选一个模型服务,就能开始。 | 去配置模型服务
+      Phone DSH | 运行在手机端的 DeepSeek Harness | 还没有会话 | 新建会话后显示在这里
+
+抽屉  对话 | 会话 | 工作文件夹 | 文件 | 命令 | 设备连接 | DSH 页面 | 引擎探针 | 定时任务 | 设置
+
+探针  PDSH 引擎探针 | 宿主状态 运行中 | D14 Running · admission open | HELLO 摘要
+
+返回  回到产品首页（不是探针）
+
+关于  当前版本 / 0.1.0 · 调试签名，不可发布
+```
+
+### AAR 那条路（L63 的结论）
+
+计划 §176 说「组合根（TonoAI-App）消费 AAR」。L63 建了一个真消费工程验证，结论是
+**编译面成立、运行面不成立**：
+
+- 编译能过（10.6 MB APK 产出）
+- **R8 炸 44 个缺失类**（`agentcore` 7 + `domain.connector` 30 + `domain.device` 7）
+- 根因不是 AAR 的 bug，是 **`:lib` 没有 POM / maven-publish**，`api` 边一个都不来
+- 还查出两件任务书没提的必须项：**`PdshTheme`**（不包它编译过、渲染即崩）、
+  **`PdshBackHandler` 在 `:app` 且 internal**（库给 `PdshBackLevel` 却不给 handler）
+
+**处置：`:app` 是主交付（用户要的是能装的 App），AAR 降为次交付并如实登记缺口。**
+AAR 断言已进 `phone-android-release` stage，且**放在所有 skip 之前**——
+否则干净主机上整段 SKIP，AAR 可以一直构建不出来而门禁只报 SKIP。
