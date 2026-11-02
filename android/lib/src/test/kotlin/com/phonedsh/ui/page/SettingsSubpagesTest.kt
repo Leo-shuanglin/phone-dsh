@@ -20,6 +20,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.PdshTheme
 import org.junit.Assert.assertEquals
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,6 +31,19 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], qualifiers = "w411dp-h891dp")
 class SettingsSubpagesTest {
     @get:Rule val compose = createComposeRule()
+
+    private lateinit var originalLocale: java.util.Locale
+
+    @Before
+    fun useChineseSystemLocaleForNativeCopy() {
+        originalLocale = java.util.Locale.getDefault()
+        java.util.Locale.setDefault(java.util.Locale.SIMPLIFIED_CHINESE)
+    }
+
+    @After
+    fun restoreSystemLocale() {
+        java.util.Locale.setDefault(originalLocale)
+    }
 
     private fun openSettings(
         facts: SettingsFacts,

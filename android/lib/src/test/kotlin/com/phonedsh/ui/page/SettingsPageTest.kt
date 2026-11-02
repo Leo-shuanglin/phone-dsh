@@ -20,6 +20,8 @@ import com.phonedsh.ui.state.EngineLifecycleFacts
 import com.phonedsh.ui.state.EngineLifecycleStatus
 import com.phonedsh.ui.theme.PdshTheme
 import org.junit.Assert.assertEquals
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,6 +31,19 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], qualifiers = "w411dp-h891dp")
 class SettingsPageTest {
     @get:Rule val compose = createComposeRule()
+
+    private lateinit var originalLocale: java.util.Locale
+
+    @Before
+    fun useChineseSystemLocaleForNativeCopy() {
+        originalLocale = java.util.Locale.getDefault()
+        java.util.Locale.setDefault(java.util.Locale.SIMPLIFIED_CHINESE)
+    }
+
+    @After
+    fun restoreSystemLocale() {
+        java.util.Locale.setDefault(originalLocale)
+    }
 
     private fun show(
         facts: SettingsFacts = SettingsFacts(preferences = SettingsPreferences(language = SettingsLanguage.ZH)),
@@ -121,7 +136,7 @@ class SettingsPageTest {
         assertEquals(null, state.preferences.appearance)
         assertEquals(UiStrings.SETTINGS_PERMISSION_UNSET, state.row(SettingsScreenState.LANGUAGE_ROW_ID)?.value)
         assertEquals(UiStrings.SETTINGS_PERMISSION_UNSET, state.row(SettingsScreenState.APPEARANCE_ROW_ID)?.value)
-        show(onSelectPreference = {})
+        show(facts = SettingsFacts(), onSelectPreference = {})
         scrollTo("语言")
         compose.onNodeWithTag(com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "language")
             .assertTextContains(UiStrings.SETTINGS_PERMISSION_UNSET)
