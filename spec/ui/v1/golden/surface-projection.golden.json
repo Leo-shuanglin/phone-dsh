@@ -189,10 +189,10 @@
       "state": "permission-pending",
       "collapsed": false,
       "tokens": [
-        "colors.surface",
-        "colors.primaryButton",
-        "colors.primaryButtonInk",
-        "radius.listCard",
+        "colors.sessionSelector",
+        "colors.sessionAccent",
+        "colors.sessionOnAccent",
+        "radius.card",
         "geometry.cardPadding"
       ]
     },
@@ -214,9 +214,10 @@
       "state": "turn-error",
       "collapsed": false,
       "tokens": [
-        "colors.textPrimary",
-        "colors.textSecondary",
-        "typography.body",
+        "colors.sessionWarning",
+        "colors.sessionAccent",
+        "colors.sessionSecondary",
+        "typography.secondary",
         "geometry.bannerGap"
       ]
     }

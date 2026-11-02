@@ -245,8 +245,9 @@ internal class HostSessionArtifacts(private val workspace: Path) {
         }
 
         /**
-         * The paths that appeared or changed between two snapshots, in the later
-         * snapshot's order.
+         * The paths that appeared or changed between two snapshots, in stable
+         * path order. Files.walkFileTree has no cross-platform visitation order.
+         * Named tool events still retain their observed insertion order.
          */
         fun addedOrChanged(
             before: Map<String, WorkspaceStamp>,
@@ -254,6 +255,7 @@ internal class HostSessionArtifacts(private val workspace: Path) {
         ): List<String> = after.entries
             .filter { (path, stamp) -> before[path] != stamp }
             .map { it.key }
+            .sorted()
 
     }
 }

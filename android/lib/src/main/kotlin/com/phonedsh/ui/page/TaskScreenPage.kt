@@ -630,8 +630,6 @@ internal object TaskScreenPageTokens {
         "colors.tertiary",
         // L75: the presented black cover.
         "colors.taskScreen",
-        "colors.onAccent",
-        "spacing.cardInset",
         "geometry.pageOuterMarginH",
         "geometry.pageRowMinHeight",
         "spacing.badgeInsetV",

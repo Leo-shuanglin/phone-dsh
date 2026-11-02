@@ -52,6 +52,8 @@ import com.phonedsh.domain.connector.DeviceTranscriptRecord
 import com.phonedsh.domain.connector.DeviceTransmission
 import com.phonedsh.domain.connector.DeviceTransmissionRow
 import com.phonedsh.domain.connector.Endpoint
+import com.phonedsh.agentcore.JsonObject
+import com.phonedsh.agentcore.JsonString
 import com.phonedsh.ui.SpecFixtures
 import com.phonedsh.ui.tokenNames
 import com.phonedsh.ui.UiStrings
@@ -554,7 +556,7 @@ class DeviceConnectorPagesTest {
             "SessionArtifactsPage.kt" to SessionArtifactsPageTokens.refs,
         )
         pages.forEach { (file, declared) ->
-            (references(file) + declared).forEach { reference ->
+            (references(file) + declared.map(::canonicalToken)).forEach { reference ->
                 assertTrue(
                     "$file reads '$reference', which is not a token in spec/ui/v1/tokens.json",
                     reference in known,
@@ -563,7 +565,7 @@ class DeviceConnectorPagesTest {
             assertEquals(
                 "$file: the declared inventory must equal the tokens the file reads",
                 references(file).sorted(),
-                declared.toSet().sorted(),
+                declared.map(::canonicalToken).toSet().sorted(),
             )
         }
         val sessionPage = source("NativeDeviceSessionPage.kt")
@@ -657,11 +659,19 @@ class DeviceConnectorPagesTest {
 
     private fun references(file: String): List<String> {
         val text = source(file)
-        val direct = TOKEN_REF.findAll(text).map { "${it.groupValues[1]}.${it.groupValues[2]}" }
+        val direct = TOKEN_REF.findAll(text).map { canonicalToken("${it.groupValues[1]}.${it.groupValues[2]}") }
         val typography = TYPOGRAPHY_REF.findAll(text)
-            .map { "typography.${it.groupValues[1]}" }
+            .map { canonicalToken("typography.${it.groupValues[1]}") }
             .filter { it in SpecFixtures.tokenNames() }
         return (direct + typography).toSet().toList()
+    }
+
+    /** Compatibility names resolve through the same spec map as production. */
+    private fun canonicalToken(token: String): String {
+        val family = token.substringBefore('.')
+        val leaf = token.substringAfter('.')
+        val aliases = (SpecFixtures.tokens["aliases"] as? JsonObject)?.get(family) as? JsonObject
+        return (aliases?.get(leaf) as? JsonString)?.value ?: token
     }
 
     private fun source(file: String): String =

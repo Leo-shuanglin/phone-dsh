@@ -199,7 +199,6 @@ public data class UiGeometry(
     public val bubblePaddingV: Dp,
     /** Gap between the bubble and its queue label (`ChatPage.swift:941`, 6). */
     public val bubbleBadgeGap: Dp,
-    public val bubbleLineSpacing: Dp,
     /** Screen-width compatibility cap; use [maxBubbleWidth] with an actual container where available. */
     public val bubbleMaxWidth: Dp,
     public val cardPadding: Dp,
@@ -390,7 +389,6 @@ public data class UiTokens(
                 bubblePaddingH = UiTokenData.geometryBubblePaddingH.dp(),
                 bubblePaddingV = UiTokenData.geometryBubblePaddingV.dp(),
                 bubbleBadgeGap = UiTokenData.geometryBubbleBadgeGap.dp(),
-                bubbleLineSpacing = UiTokenData.geometryBubbleLineSpacing.dp(),
                 // The Dp compatibility slot derives from the current viewport;
                 // callers with a narrower local container use maxBubbleWidth().
                 bubbleMaxWidth = if (viewportWidth != Dp.Unspecified) {

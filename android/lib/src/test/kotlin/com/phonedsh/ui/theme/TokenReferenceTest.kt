@@ -18,6 +18,7 @@ import com.phonedsh.agentcore.JsonNull
 import com.phonedsh.agentcore.JsonNumber
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.SpecFixtures
 import com.phonedsh.ui.surfaces
 import com.phonedsh.ui.text
@@ -89,12 +90,11 @@ class TokenReferenceTest {
         val signatures = SpecFixtures.surfaces().associate { it.id to it.tokens.toSet() }
         val missing = inventories().mapNotNull { inventory ->
             val active = (inventory.declared + inventory.gaps).toSet()
-            val absent = signatures.getValue(inventory.id) - active
+            val absent = signatures.getValue(inventory.id) - active - verifiedParentRoles(inventory.id)
             if (absent.isEmpty()) null else "${inventory.id}: $absent"
         }
-        // Compatibility records extra roles; set subtraction alone does not
-        // establish that a required role is consumed. Keep this full-suite
-        // obligation while source-owned primitive/composite contracts migrate.
+        // Required roles must be consumed by the primitive or a verified live
+        // parent. Compatibility declarations never waive a missing role.
         assertTrue("Required source-owned surface roles are missing: $missing", missing.isEmpty())
     }
 
@@ -271,6 +271,42 @@ class TokenReferenceTest {
         assertFalse(light.colors.backgroundUnmeasured)
         assertTrue(light.motion.shimmerRepeat)
         assertEquals("easeOut", light.motion.disclosureCurve)
+    }
+
+    /** The transcript owns inter-row spacing and the grouped process-card chrome. */
+    private fun verifiedParentRoles(surface: String): Set<String> {
+        fun source(file: String): String = String(java.nio.file.Files.readAllBytes(
+            SpecFixtures.repoRoot.resolve("android/lib/src/main/kotlin/com/phonedsh/ui/page/$file"),
+        ), Charsets.UTF_8)
+        return when (surface) {
+            "bubble" -> {
+                val rows = source("ChatRows.kt")
+                assertTrue("The live row must place the bubble", rows.contains("ChatBubble("))
+                assertTrue("Bubble paragraph spacing must remain row-owned", rows.contains("Arrangement.spacedBy(HomeMetrics.paragraphGap)"))
+                val spacing = SpecFixtures.tokens["spacing"] as JsonObject
+                assertEquals((spacing["paragraphGap"] as JsonNumber).raw.toFloat(), HomeMetrics.paragraphGap.value, 0f)
+                setOf("spacing.paragraphGap")
+            }
+            "toolRow" -> {
+                val rows = source("ChatRows.kt")
+                assertTrue("The live process group must contain tool rows", rows.contains("ProcessGroupRow(") && rows.contains("ToolRow("))
+                assertTrue(rows.contains(".background(tokens.colors.surface)"))
+                assertTrue(rows.contains("tokens.colors.borderList"))
+                assertTrue(rows.contains("RoundedCornerShape(HomeMetrics.listCardRadius)"))
+                val radius = SpecFixtures.tokens["radius"] as JsonObject
+                assertEquals((radius["listCard"] as JsonNumber).raw.toFloat(), HomeMetrics.listCardRadius.value, 0f)
+                setOf("colors.surface", "colors.borderList", "radius.listCard")
+            }
+            "failLoudBanner" -> {
+                // Production TURN/SEND rows live in ChatPage; the shared legacy
+                // component is kept API-compatible but does not own this retry ink.
+                val page = source("ChatPage.kt")
+                assertTrue(page.contains("private fun SendFailureLine(") || page.contains("private fun SendFailureRow(") || page.contains("SEND_FAILED"))
+                assertTrue(page.contains("tokens.colors.accent"))
+                setOf("colors.sessionAccent")
+            }
+            else -> emptySet()
+        }
     }
 
     private fun componentCompatibility(): Map<String, Set<String>> {

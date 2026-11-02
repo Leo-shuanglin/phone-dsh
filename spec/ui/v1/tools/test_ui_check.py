@@ -436,10 +436,10 @@ class UiCheckTests(unittest.TestCase):
     def test_surface_row_missing_a_declared_token_fails(self) -> None:
         # `approvalCard` really uses colors.primary (ApprovalCard.kt:125); the
         # table dropping it is exactly the drift this rule exists for.
-        self.rewrite_surface_row("审批卡", lambda row: row.replace("`colors.textPrimary` ", "", 1))
+        self.rewrite_surface_row("审批卡", lambda row: row.replace("`colors.sessionPrimary` ", "", 1))
         self.assert_fails(
             run_checker(self.root),
-            "surface 'approvalCard' omits token 'colors.textPrimary' declared by tokens.json",
+            "surface 'approvalCard' omits token 'colors.sessionPrimary' declared by tokens.json",
         )
 
     def test_surface_row_with_an_undeclared_token_fails(self) -> None:
@@ -490,7 +490,7 @@ class UiCheckTests(unittest.TestCase):
         # One row renders part of a surface; only tokens outside the composition fail.
         path, document = self.projection()
         row = next(entry for entry in document["rows"] if entry["row"] == "p1")
-        row["tokens"] = ["radius.listCard"]
+        row["tokens"] = ["radius.card"]
         self.write_projection(path, document)
         self.assert_passes(run_checker(self.root))
 

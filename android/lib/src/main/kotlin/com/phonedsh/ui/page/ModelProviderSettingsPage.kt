@@ -1459,11 +1459,14 @@ internal object ModelProviderSettingsPageTokens {
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_SUCCESS,
         UiTokenNames.COLORS_TERTIARY,
+        UiTokenNames.COLORS_DANGER,
         UiTokenNames.TYPOGRAPHY_BODY,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
         UiTokenNames.SPACING_BADGE_INSET_V,
         UiTokenNames.SPACING_ICON_TEXT,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
+        UiTokenNames.GEOMETRY_STATUS_DOT_DIAMETER,
+        UiTokenNames.STROKE_HAIRLINE,
     )
 }

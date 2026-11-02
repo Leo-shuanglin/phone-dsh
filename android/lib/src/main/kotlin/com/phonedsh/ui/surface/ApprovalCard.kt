@@ -32,7 +32,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.text.font.FontWeight
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.theme.LocalUiTokens
@@ -50,13 +53,12 @@ import com.phonedsh.ui.theme.generated.UiTokenNames
 public object ApprovalCardTokens {
     /** Tokens the spec declares for this surface. */
     public val declared: List<String> = listOf(
-        UiTokenNames.COLORS_SELECTOR,
         UiTokenNames.COLORS_APPROVAL_CARD,
         UiTokenNames.COLORS_CTA_OVERRIDE,
         UiTokenNames.COLORS_ON_ACCENT,
         UiTokenNames.COLORS_SECONDARY,
-        UiTokenNames.TYPOGRAPHY_HEADLINE,
-        UiTokenNames.TYPOGRAPHY_SUBHEADLINE,
+        UiTokenNames.TYPOGRAPHY_PAGE_TITLE,
+        UiTokenNames.TYPOGRAPHY_PROCESS,
         UiTokenNames.RADIUS_CARD,
         UiTokenNames.GEOMETRY_CARD_PADDING,
         UiTokenNames.GEOMETRY_CARD_OUTER_MARGIN_H,
@@ -115,7 +117,7 @@ public fun ApprovalCard(
             // the pixel comparator counts across the card's whole area.
             .background(color = tokens.colors.approvalCard, shape = shape)
             .padding(tokens.geometry.cardPadding),
-        verticalArrangement = Arrangement.spacedBy(tokens.geometry.cardPadding),
+        verticalArrangement = Arrangement.spacedBy(com.phonedsh.ui.ChatMetrics.PERMISSION_CARD_SPACING_PT.dp),
     ) {
         Box(
             modifier = Modifier
@@ -126,12 +128,12 @@ public fun ApprovalCard(
             Column(verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText)) {
                 BasicText(
                     text = title,
-                    style = type.headline.copy(color = tokens.colors.primary),
+                    style = type.pageTitle.copy(color = tokens.colors.primary, lineHeight = TextUnit.Unspecified),
                     modifier = Modifier.semantics { heading() },
                 )
                 BasicText(
                     text = subtitle,
-                    style = type.subheadline.copy(color = tokens.colors.secondary),
+                    style = type.processBody.copy(color = tokens.colors.primary, fontWeight = FontWeight.SemiBold, lineHeight = TextUnit.Unspecified),
                 )
             }
         }
@@ -147,7 +149,7 @@ public fun ApprovalCard(
         ) {
             BasicText(
                 text = primaryLabel,
-                style = type.headline.copy(color = tokens.colors.onAccent),
+                style = type.pageTitle.copy(color = tokens.colors.onAccent, lineHeight = TextUnit.Unspecified),
             )
         }
         if (secondaryLabel != null && onSecondary != null) {
@@ -162,7 +164,7 @@ public fun ApprovalCard(
             ) {
                 BasicText(
                     text = secondaryLabel,
-                    style = type.subheadline.copy(color = tokens.colors.secondary),
+                    style = type.processBody.copy(color = tokens.colors.secondary, lineHeight = TextUnit.Unspecified),
                 )
             }
         }
@@ -201,12 +203,12 @@ public fun FoldedPendingRow(
     ) {
         BasicText(
             text = label,
-            style = type.subheadline.copy(color = tokens.colors.secondary),
+            style = type.processBody.copy(color = tokens.colors.secondary, lineHeight = TextUnit.Unspecified),
             modifier = Modifier.weight(1f),
         )
         BasicText(
             text = FOLD_CHEVRON,
-            style = type.subheadline.copy(color = tokens.colors.secondary),
+            style = type.processBody.copy(color = tokens.colors.secondary, lineHeight = TextUnit.Unspecified),
         )
     }
 }
