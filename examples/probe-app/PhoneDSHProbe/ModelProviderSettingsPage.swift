@@ -26,13 +26,39 @@ enum ProviderWording {
 }
 
 struct ModelProviderSettingsPage: View {
+    /// The sheet's item carries its mode so SwiftUI cannot present a new profile
+    /// using an independently captured, stale edit flag.
+    private enum EditorSheet: Identifiable {
+        case add
+        case edit(ProviderProfile)
+
+        var id: String {
+            switch self {
+            case .add: "add"
+            case .edit(let profile): "edit:\(profile.id)"
+            }
+        }
+
+        var profile: ProviderProfile {
+            switch self {
+            case .add:
+                ProviderProfile(id: "", displayName: "", baseURL: "https://api.deepseek.com/anthropic", model: "deepseek-flash")
+            case .edit(let profile): profile
+            }
+        }
+
+        var isNew: Bool {
+            if case .add = self { return true }
+            return false
+        }
+    }
+
     @State private var model = ChatModel.shared
     @State private var snapshot = ModelProviderSettingsSnapshot()
     @State private var keyStatuses: [String: ModelProviderAPIKeyStatus] = [:]
     @State private var errorText: String?
     @State private var notice: String?
-    @State private var editingProfile: ProviderProfile?
-    @State private var editingIsNew = false
+    @State private var editorSheet: EditorSheet?
     @State private var pendingDelete: ProviderProfile?
 
     private let settings = PhoneModelProviderSettings.shared
@@ -48,11 +74,11 @@ struct ModelProviderSettingsPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { reload() }
         .onChange(of: hostRunning) { _, _ in reload() }
-        .sheet(item: $editingProfile, onDismiss: {
+        .sheet(item: $editorSheet, onDismiss: {
             reload()
-        }) { profile in
+        }) { editor in
             NavigationStack {
-                ModelProviderEditorPage(profile: profile, isNew: editingIsNew) { saved in
+                ModelProviderEditorPage(profile: editor.profile, isNew: editor.isNew) { saved in
                     reload()
                     notice = String(format: NativeText("已保存“%@”。%@", "Saved “%@”. %@"), saved.displayName, restartHint)
                 }
@@ -180,17 +206,18 @@ struct ModelProviderSettingsPage: View {
     private var actionsSection: some View {
         Section {
             Button {
-                editingIsNew = true
-                editingProfile = ProviderProfile(id: "", displayName: "", baseURL: "https://api.deepseek.com/anthropic", model: "deepseek-flash")
+                editorSheet = .add
             } label: {
                 SettingsRowLabel(title: NativeText("添加模型服务", "Add Model Provider"), icon: "plus")
             }
+            .accessibilityIdentifier("provider.add")
             if let selected = snapshot.selected {
                 Button {
                     edit(selected)
                 } label: {
                     SettingsRowLabel(title: NativeText("编辑默认服务", "Edit Default Provider"), icon: "slider.horizontal.3")
                 }
+                .accessibilityIdentifier("provider.edit-default")
             }
         } footer: {
             if let notice {
@@ -245,8 +272,7 @@ struct ModelProviderSettingsPage: View {
     }
 
     private func edit(_ profile: ProviderProfile) {
-        editingIsNew = false
-        editingProfile = profile
+        editorSheet = .edit(profile)
     }
 
     private func select(_ profile: ProviderProfile) {
