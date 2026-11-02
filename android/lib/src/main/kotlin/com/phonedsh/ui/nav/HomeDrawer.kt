@@ -188,6 +188,17 @@ public fun HomeDrawer(
               // The composable owns the source's single 28% scrim. A second
               // platform dim would darken both the page and the status bar twice.
               window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+              window.addFlags(android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
+              if (android.os.Build.VERSION.SDK_INT >= 28) {
+                  val attributes = window.attributes
+                  attributes.layoutInDisplayCutoutMode = if (android.os.Build.VERSION.SDK_INT >= 30)
+                      android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                  else android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                  window.attributes = attributes
+              }
+              window.setGravity(android.view.Gravity.TOP or android.view.Gravity.START)
+              window.statusBarColor = android.graphics.Color.TRANSPARENT
+              window.navigationBarColor = android.graphics.Color.TRANSPARENT
               window.setLayout(android.view.WindowManager.LayoutParams.MATCH_PARENT, android.view.WindowManager.LayoutParams.MATCH_PARENT)
               androidx.core.view.WindowCompat.getInsetsController(window, dialogView).isAppearanceLightStatusBars = true
           }
