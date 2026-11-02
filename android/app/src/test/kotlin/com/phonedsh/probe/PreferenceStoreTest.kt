@@ -26,6 +26,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.runBlocking
 
 class PreferenceStoreTest {
 
@@ -35,9 +36,10 @@ class PreferenceStoreTest {
 
     @Test
     fun aFreshFileResolvesToTheBaselinesDefaults() {
-        val store = PreferenceStore(MapPreferenceFile())
+        val file = MapPreferenceFile()
+        val store = PreferenceStore(file)
 
-        assertEquals(17, store.snapshot().textFontSize)
+        assertEquals(16, store.snapshot().textFontSize)
         assertEquals(14, store.snapshot().codeFontSize)
         assertEquals(13, store.snapshot().terminalFontSize)
         assertEquals(SettingsAppearance.SYSTEM, store.snapshot().appearance)
@@ -48,6 +50,24 @@ class PreferenceStoreTest {
         assertEquals(PerformanceUsage.DETAILED, store.snapshot().performanceUsage)
         assertEquals(BusyEnterMode.QUEUE, store.snapshot().busyEnterMode)
         assertTrue(store.snapshot().backgroundKeepAlive)
+        assertNull(store.snapshot().textFontFamily)
+        assertNull(store.snapshot().collapsedWorkspaceFolders)
+        assertTrue("resolving new-install defaults must not materialize preference values", file.values.isEmpty())
+    }
+
+    @Test
+    fun anExplicitEmptyFontFamilyIsDistinctFromAnUnreadFamilyAndExistingChoicesStayUntouched() {
+        val file = MapPreferenceFile(mapOf(
+            PreferenceStore.TEXT_FONT_SIZE_KEY to 19,
+            PreferenceStore.TEXT_FONT_FAMILY_KEY to "",
+            PreferenceStore.LANGUAGE_KEY to SettingsLanguage.EN.id,
+        ))
+        val before = file.values.toMap()
+        val store = PreferenceStore(file)
+        assertEquals("", store.snapshot().textFontFamily)
+        assertEquals(19, store.snapshot().textFontSize)
+        assertEquals(SettingsLanguage.EN, store.snapshot().language)
+        assertEquals(before, file.values)
     }
 
     // -----------------------------------------------------------------------
@@ -57,68 +77,76 @@ class PreferenceStoreTest {
     /** One stored key: how to write it, and how to read it back. */
     private data class RoundTrip(
         val key: String,
-        val write: (PreferenceStore) -> Unit,
+        val write: suspend (PreferenceStore) -> Unit,
         val read: (Preferences) -> Any?,
     )
 
     @Test
-    fun everyStoredPreferenceSurvivesAStoreRestart() {
+    fun everyStoredPreferenceSurvivesAStoreRestart() = runBlocking {
+        fun confirmed(change: ConfirmedPreferenceChange): suspend (PreferenceStore) -> Unit = { store ->
+            assertEquals(PreferenceWriteOutcome.Persisted,
+                store.writeConfirmed(com.phonedsh.ui.state.StateRequestId(change.key), change).outcome)
+        }
         val cases = listOf(
             RoundTrip(
                 PreferenceStore.TEXT_FONT_SIZE_KEY,
-                { it.setFontSize(FontRole.TEXT, 20) },
+                confirmed(ConfirmedPreferenceChange.FontSize(FontRole.TEXT, 20)),
                 { it.textFontSize },
             ),
             RoundTrip(
                 PreferenceStore.CODE_FONT_SIZE_KEY,
-                { it.setFontSize(FontRole.CODE, 12) },
+                confirmed(ConfirmedPreferenceChange.FontSize(FontRole.CODE, 12)),
                 { it.codeFontSize },
             ),
             RoundTrip(
                 PreferenceStore.TERMINAL_FONT_SIZE_KEY,
-                { it.setFontSize(FontRole.TERMINAL, 18) },
+                confirmed(ConfirmedPreferenceChange.FontSize(FontRole.TERMINAL, 18)),
                 { it.terminalFontSize },
             ),
             RoundTrip(
                 PreferenceStore.APPEARANCE_KEY,
-                { it.setAppearance(SettingsAppearance.DARK) },
+                confirmed(ConfirmedPreferenceChange.Appearance(SettingsAppearance.DARK)),
                 { it.appearance },
             ),
             RoundTrip(
                 PreferenceStore.LANGUAGE_KEY,
-                { it.setLanguage(SettingsLanguage.EN) },
+                confirmed(ConfirmedPreferenceChange.Language(SettingsLanguage.EN)),
                 { it.language },
             ),
             RoundTrip(
                 PreferenceStore.TRANSCRIPT_VIEW_KEY,
-                { it.setTranscriptView(TranscriptViewMode.COMPACT) },
+                confirmed(ConfirmedPreferenceChange.TranscriptView(TranscriptViewMode.COMPACT)),
                 { it.transcriptView },
             ),
             RoundTrip(
                 PreferenceStore.COLLAPSE_TIMING_KEY,
-                { it.setCollapseTiming(CollapseTiming.NEXT_INPUT) },
+                confirmed(ConfirmedPreferenceChange.CollapseTiming(CollapseTiming.NEXT_INPUT)),
                 { it.collapseTiming },
             ),
             RoundTrip(
                 PreferenceStore.DEVELOPER_TOOLS_KEY,
-                { it.setDeveloperTools(false) },
+                confirmed(ConfirmedPreferenceChange.DeveloperTools(false)),
                 { it.developerTools },
             ),
             RoundTrip(
                 PreferenceStore.PERFORMANCE_USAGE_KEY,
-                { it.setPerformanceUsage(PerformanceUsage.COMPACT) },
+                confirmed(ConfirmedPreferenceChange.PerformanceUsage(PerformanceUsage.COMPACT)),
                 { it.performanceUsage },
             ),
             RoundTrip(
                 PreferenceStore.BUSY_ENTER_KEY,
-                { it.setBusyEnterMode(BusyEnterMode.STEER) },
+                confirmed(ConfirmedPreferenceChange.BusyEnterMode(BusyEnterMode.STEER)),
                 { it.busyEnterMode },
             ),
             RoundTrip(
                 PreferenceStore.BACKGROUND_KEEP_ALIVE_KEY,
-                { it.setBackgroundKeepAlive(false) },
+                confirmed(ConfirmedPreferenceChange.BackgroundKeepAlive(false)),
                 { it.backgroundKeepAlive },
             ),
+            RoundTrip(PreferenceStore.TEXT_FONT_FAMILY_KEY, confirmed(ConfirmedPreferenceChange.FontFamily(FontRole.TEXT, "")), { it.textFontFamily }),
+            RoundTrip(PreferenceStore.CODE_FONT_FAMILY_KEY, confirmed(ConfirmedPreferenceChange.FontFamily(FontRole.CODE, "serif")), { it.codeFontFamily }),
+            RoundTrip(PreferenceStore.TERMINAL_FONT_FAMILY_KEY, confirmed(ConfirmedPreferenceChange.FontFamily(FontRole.TERMINAL, "monospace")), { it.terminalFontFamily }),
+            RoundTrip(PreferenceStore.COLLAPSED_WORKSPACE_FOLDERS_KEY, confirmed(ConfirmedPreferenceChange.CollapsedWorkspaceFolders(setOf("daily", "archive"))), { it.collapsedWorkspaceFolders }),
         )
 
         for (case in cases) {
@@ -159,6 +187,10 @@ class PreferenceStoreTest {
                 "performanceUsage",
                 "busyEnterMode",
                 "chat.background.keepalive",
+                "textFontFamily",
+                "codeFontFamily",
+                "terminalFontFamily",
+                "phone-dsh.sidebar.collapsed-workspaces",
             ),
             PreferenceStore.ALL_KEYS,
         )
@@ -222,7 +254,7 @@ class PreferenceStoreTest {
     }
 
     @Test
-    fun theLegacyBusyEnterKeyIsAdoptedAndCopiedForward() {
+    fun theLegacyBusyEnterKeyIsReadWithoutAnInitializationWrite() {
         val file = MapPreferenceFile(
             mapOf(PreferenceStore.LEGACY_BUSY_ENTER_KEY to BusyEnterMode.STEER.id),
         )
@@ -230,15 +262,8 @@ class PreferenceStoreTest {
         val store = PreferenceStore(file)
 
         assertEquals(BusyEnterMode.STEER, store.snapshot().busyEnterMode)
-        assertEquals(
-            BusyEnterMode.STEER.id,
-            file.values[PreferenceStore.BUSY_ENTER_KEY],
-        )
-        // The legacy key is kept, exactly as the baseline keeps it.
-        assertEquals(
-            BusyEnterMode.STEER.id,
-            file.values[PreferenceStore.LEGACY_BUSY_ENTER_KEY],
-        )
+        assertFalse(file.values.containsKey(PreferenceStore.BUSY_ENTER_KEY))
+        assertEquals(BusyEnterMode.STEER.id, file.values[PreferenceStore.LEGACY_BUSY_ENTER_KEY])
     }
 
     @Test
@@ -251,6 +276,32 @@ class PreferenceStoreTest {
         )
 
         assertEquals(BusyEnterMode.QUEUE, PreferenceStore(file).snapshot().busyEnterMode)
+    }
+
+    @Test
+    fun confirmedPreferenceReceiptUsesCommitAndReadbackBeforePublishing() = runBlocking {
+        val file = MapPreferenceFile()
+        val store = PreferenceStore(file)
+        val receipt = store.writeConfirmed(
+            com.phonedsh.ui.state.StateRequestId("appearance-1"),
+            ConfirmedPreferenceChange.Appearance(SettingsAppearance.DARK),
+        )
+        assertEquals(PreferenceWriteOutcome.Persisted, receipt.outcome)
+        assertEquals("dark", file.values[PreferenceStore.APPEARANCE_KEY])
+        assertEquals(SettingsAppearance.DARK, PreferenceStore(file).snapshot().appearance)
+        assertEquals(SettingsAppearance.DARK, store.snapshot().appearance)
+    }
+
+    @Test
+    fun failedConfirmedCommitDoesNotPublishOptimisticState() = runBlocking {
+        val file = MapPreferenceFile().apply { failCommits = true }
+        val store = PreferenceStore(file)
+        val receipt = store.writeConfirmed(
+            com.phonedsh.ui.state.StateRequestId("appearance-fail"),
+            ConfirmedPreferenceChange.Appearance(SettingsAppearance.DARK),
+        )
+        assertTrue(receipt.outcome is PreferenceWriteOutcome.Failed)
+        assertEquals(SettingsAppearance.SYSTEM, store.snapshot().appearance)
     }
 
     // -----------------------------------------------------------------------
@@ -366,6 +417,7 @@ class PreferenceStoreTest {
         initial: Map<String, Any> = emptyMap(),
     ) : PreferenceFile {
         val values: MutableMap<String, Any> = LinkedHashMap(initial)
+        var failCommits: Boolean = false
 
         override fun string(key: String): String? = values[key] as? String
 
@@ -373,17 +425,32 @@ class PreferenceStoreTest {
 
         override fun boolean(key: String): Boolean? = values[key] as? Boolean
 
-        override fun putString(key: String, value: String) {
+        override fun stringSet(key: String): Set<String>? = (values[key] as? Set<*>)?.filterIsInstance<String>()?.toSet()
+
+        override fun putString(key: String, value: String): Boolean {
             values[key] = value
+            return true
         }
 
-        override fun putInt(key: String, value: Int) {
+        override fun putInt(key: String, value: Int): Boolean {
             values[key] = value
+            return true
         }
 
-        override fun putBoolean(key: String, value: Boolean) {
+        override fun putBoolean(key: String, value: Boolean): Boolean {
             values[key] = value
+            return true
         }
+
+        override fun putStringSet(key: String, value: Set<String>): Boolean {
+            values[key] = value.toSet()
+            return true
+        }
+
+        override fun commitString(key: String, value: String): Boolean = if (failCommits) false else putString(key, value)
+        override fun commitInt(key: String, value: Int): Boolean = if (failCommits) false else putInt(key, value)
+        override fun commitBoolean(key: String, value: Boolean): Boolean = if (failCommits) false else putBoolean(key, value)
+        override fun commitStringSet(key: String, value: Set<String>): Boolean = if (failCommits) false else putStringSet(key, value)
 
         override fun remove(key: String) {
             values.remove(key)

@@ -36,9 +36,12 @@ import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.agentcore.toJsonString
 import com.phonedsh.domain.DomainNames
 import com.phonedsh.domain.DomainStore
+import com.phonedsh.domain.DomainTransaction
 import com.phonedsh.ui.projection.UiStateNode
 import com.phonedsh.ui.projection.decodeCanonicalUiState
 import com.phonedsh.ui.projection.encodeCanonical
+import com.phonedsh.ui.state.StateRequestId
+import com.phonedsh.ui.state.StateRevision
 
 /**
  * One conversation as this App knows it.
@@ -67,10 +70,44 @@ internal data class ChatRecord(
     val archived: Boolean = false,
     /** Whether the user pinned this chat to the top of its group. */
     val pinned: Boolean = false,
+    /** Monotonic store revision; zero denotes a caller-created value. */
+    val revision: Long = 0L,
+    /** A visible but non-actionable copy of outstanding remote requests. */
+    /** Null means a legacy row did not report this state; empty is known-empty. */
+    val pendingNodes: List<UiStateNode>? = null,
+    /** Messages accepted by the UI but not yet sent to the Worker. */
+    /** Null means the durable queue was not readable/reported. */
+    val queuedPrompts: List<String>? = null,
+    /** Stable workspace group id; null is explicitly unassigned/unknown. */
+    val workspaceGroupId: String? = ChatSessionStore.DEFAULT_WORKSPACE_GROUP_ID,
+    /** Forward-compatible envelope members preserved across metadata edits. */
+    val unknownFields: Map<String, JsonValue> = emptyMap(),
 ) {
     /** The Worker session the next turn should try first, or `null` before the first. */
     val workerSessionId: String? get() = workerSessionIds.lastOrNull()
 }
+
+/** Outcome of a host-side durable chat mutation. */
+internal sealed interface ChatWriteOutcome {
+    data object Persisted : ChatWriteOutcome
+    data object Stale : ChatWriteOutcome
+    data class Failed(val code: String) : ChatWriteOutcome
+}
+
+/** Receipt is emitted only after the durable row can be read back. */
+internal data class ChatWriteReceipt(
+    val requestId: StateRequestId,
+    val sessionId: String,
+    val revision: StateRevision,
+    val outcome: ChatWriteOutcome,
+)
+
+/** A user-named workspace group; deleting a group never deletes chat rows. */
+internal data class ChatWorkspaceGroup(val id: String, val name: String, val revision: Long = 0L)
+
+/** Unknown and deleted group references stay explicit in every caller. */
+internal fun workspaceGroupTitle(record: ChatRecord, groups: Collection<ChatWorkspaceGroup>): String =
+    record.workspaceGroupId?.let { id -> groups.firstOrNull { it.id == id }?.name } ?: "未分配"
 
 /**
  * The two-way store over [DomainStore]'s `session` domain.
@@ -81,7 +118,50 @@ internal data class ChatRecord(
 internal class ChatSessionStore(private val store: DomainStore) {
     /** Writes [record], replacing the row of the same id. */
     fun save(record: ChatRecord) {
-        store.put(DOMAIN, key(record.id), encode(record).toByteArray(Charsets.UTF_8))
+        store.transaction {
+            val latest = get(DOMAIN, key(record.id))?.toString(Charsets.UTF_8)?.let(::decodeOrNull)
+            require(latest == null || record.updatedAtMs >= latest.updatedAtMs) {
+                "stale chat write for ${record.id}"
+            }
+            val changed = record.copy(revision = (latest?.revision ?: 0L) + 1L)
+            put(DOMAIN, key(record.id), encode(changed).toByteArray(Charsets.UTF_8))
+            check(get(DOMAIN, key(record.id))?.toString(Charsets.UTF_8)?.let(::decodeOrNull) == changed) {
+                "chat row readback differed after write"
+            }
+            changed
+        }
+    }
+
+    /**
+     * Applies a metadata command against the current stored row in one store
+     * transaction. The returned receipt names the committed revision; a missing
+     * row, conflict or storage exception cannot be reported as success.
+     */
+    fun mutate(
+        requestId: StateRequestId,
+        sessionId: String,
+        expectedRevision: StateRevision? = null,
+        transform: (ChatRecord) -> ChatRecord,
+    ): ChatWriteReceipt {
+        require(requestId.value.isNotBlank())
+        require(sessionId.isNotBlank())
+        return try {
+            val revision = store.transaction {
+                val raw = get(DOMAIN, key(sessionId)) ?: return@transaction null
+                val before = decodeOrNull(raw.toString(Charsets.UTF_8)) ?: return@transaction null
+                if (expectedRevision != null && before.revision != expectedRevision.value) return@transaction -1L
+                val changed = transform(before).copy(revision = before.revision + 1L)
+                put(DOMAIN, key(sessionId), encode(changed).toByteArray(Charsets.UTF_8))
+                val readBack = get(DOMAIN, key(sessionId))?.toString(Charsets.UTF_8)?.let(::decodeOrNull)
+                if (readBack != changed) throw IllegalStateException("chat mutation readback mismatch")
+                changed.revision
+            }
+            if (revision == null) ChatWriteReceipt(requestId, sessionId, StateRevision(0), ChatWriteOutcome.Failed("session_not_found"))
+            else if (revision == -1L) ChatWriteReceipt(requestId, sessionId, expectedRevision ?: StateRevision(0), ChatWriteOutcome.Stale)
+            else ChatWriteReceipt(requestId, sessionId, StateRevision(revision), ChatWriteOutcome.Persisted)
+        } catch (failure: Exception) {
+            ChatWriteReceipt(requestId, sessionId, StateRevision(0), ChatWriteOutcome.Failed(failure.javaClass.simpleName))
+        }
     }
 
     /** Loads one record, or `null` when it is absent or does not decode. */
@@ -99,20 +179,111 @@ internal class ChatSessionStore(private val store: DomainStore) {
 
     /** Updates a stored chat's archive bit without replacing transcript content. */
     fun setArchived(id: String, archived: Boolean): Boolean =
-        update(id) { record -> record.copy(archived = archived) }
+        mutate(StateRequestId("archive:$id:${if (archived) 1 else 0}"), id) { record -> record.copy(archived = archived) }
+            .outcome.let { it is ChatWriteOutcome.Persisted }
 
     /** Updates a stored chat's pin bit without replacing transcript content. */
     fun setPinned(id: String, pinned: Boolean): Boolean =
-        update(id) { record -> record.copy(pinned = pinned) }
+        mutate(StateRequestId("pin:$id:${if (pinned) 1 else 0}"), id) { record -> record.copy(pinned = pinned) }
+            .outcome.let { it is ChatWriteOutcome.Persisted }
 
     /** Removes one record; `true` when a row existed. */
     fun delete(id: String): Boolean = store.delete(DOMAIN, key(id))
 
-    private fun update(id: String, transform: (ChatRecord) -> ChatRecord): Boolean {
-        val record = load(id) ?: return false
-        save(transform(record))
-        return true
+    fun rename(id: String, title: String, requestId: StateRequestId, expectedRevision: StateRevision? = null): ChatWriteReceipt =
+        mutate(requestId, id, expectedRevision) { it.copy(title = title.trim()) }
+
+    fun setArchived(id: String, archived: Boolean, requestId: StateRequestId): ChatWriteReceipt =
+        mutate(requestId, id) { it.copy(archived = archived) }
+
+    fun setPinned(id: String, pinned: Boolean, requestId: StateRequestId): ChatWriteReceipt =
+        mutate(requestId, id) { it.copy(pinned = pinned) }
+
+    fun putWorkspaceGroup(
+        group: ChatWorkspaceGroup,
+        requestId: StateRequestId,
+        expectedRevision: StateRevision? = null,
+    ): ChatWriteReceipt {
+        require(group.id.isNotBlank() && group.name.isNotBlank())
+        val revision = try {
+            store.transaction {
+                val key = groupKey(group.id)
+                if (expectedRevision != null && workspaceGroupRevision(this) != expectedRevision.value) return@transaction -1L
+                val next = group.copy(revision = nextWorkspaceGroupRevision(this))
+                put(DOMAIN, key, encodeGroup(next).toByteArray(Charsets.UTF_8))
+                check(get(DOMAIN, key)?.toString(Charsets.UTF_8)?.let(::decodeGroup) == next)
+                workspaceGroupRevision(this)
+            }
+        } catch (failure: Exception) {
+            return ChatWriteReceipt(requestId, group.id, StateRevision(0), ChatWriteOutcome.Failed(failure.javaClass.simpleName))
+        }
+        if (revision == -1L) return ChatWriteReceipt(requestId, group.id, expectedRevision ?: StateRevision(0), ChatWriteOutcome.Stale)
+        return ChatWriteReceipt(requestId, group.id, StateRevision(revision), ChatWriteOutcome.Persisted)
     }
+
+    fun deleteWorkspaceGroup(
+        id: String,
+        requestId: StateRequestId,
+        expectedRevision: StateRevision? = null,
+    ): ChatWriteReceipt {
+        val revision = try {
+            store.transaction {
+                val key = groupKey(id)
+                val currentRevision = workspaceGroupRevision(this)
+                if (expectedRevision != null && currentRevision != expectedRevision.value) return@transaction -1L
+                if (get(DOMAIN, key) == null) return@transaction null
+                check(delete(DOMAIN, key)) { "workspace group disappeared during delete" }
+                val nextRevision = nextWorkspaceGroupRevision(this)
+                check(get(DOMAIN, key) == null) { "workspace group delete readback mismatch" }
+                nextRevision
+            }
+        } catch (failure: Exception) {
+            return ChatWriteReceipt(requestId, id, StateRevision(0), ChatWriteOutcome.Failed(failure.javaClass.simpleName))
+        }
+        if (revision == -1L) return ChatWriteReceipt(requestId, id, expectedRevision ?: StateRevision(0), ChatWriteOutcome.Stale)
+        return if (revision == null) {
+            ChatWriteReceipt(requestId, id, workspaceGroupsRevision(), ChatWriteOutcome.Failed("group_not_found"))
+        } else {
+            ChatWriteReceipt(requestId, id, StateRevision(revision), ChatWriteOutcome.Persisted)
+        }
+    }
+
+    fun loadWorkspaceGroups(): List<ChatWorkspaceGroup> =
+        store.list(DOMAIN, GROUP_PREFIX, MAXIMUM_RECORDS).mapNotNull { decodeGroup(it.value.toString(Charsets.UTF_8)) }
+
+    /** Monotonic revision for the full workspace-group catalog, including deletes. */
+    fun workspaceGroupsRevision(): StateRevision = StateRevision(
+        store.get(DOMAIN, GROUP_REVISION_KEY)?.toString(Charsets.UTF_8)?.toLongOrNull() ?: 0L,
+    )
+
+    /** Seed the visible 日常 group only on an actually empty group store. */
+    fun ensureDefaultWorkspaceGroup(requestId: StateRequestId): ChatWriteReceipt {
+        return try {
+            val revision = store.transaction {
+                val key = groupKey(DEFAULT_WORKSPACE_GROUP_ID)
+                val existing = get(DOMAIN, key)?.toString(Charsets.UTF_8)?.let(::decodeGroup)
+                if (existing != null) return@transaction workspaceGroupRevision(this)
+                val created = ChatWorkspaceGroup(DEFAULT_WORKSPACE_GROUP_ID, DEFAULT_WORKSPACE_GROUP_NAME,
+                    nextWorkspaceGroupRevision(this))
+                put(DOMAIN, key, encodeGroup(created).toByteArray(Charsets.UTF_8))
+                check(get(DOMAIN, key)?.toString(Charsets.UTF_8)?.let(::decodeGroup) == created)
+                workspaceGroupRevision(this)
+            }
+            ChatWriteReceipt(requestId, DEFAULT_WORKSPACE_GROUP_ID, StateRevision(revision), ChatWriteOutcome.Persisted)
+        } catch (failure: Exception) {
+            ChatWriteReceipt(requestId, DEFAULT_WORKSPACE_GROUP_ID, StateRevision(0), ChatWriteOutcome.Failed(failure.javaClass.simpleName))
+        }
+    }
+
+    private fun nextWorkspaceGroupRevision(tx: DomainTransaction): Long {
+        val next = workspaceGroupRevision(tx) + 1L
+        tx.put(DOMAIN, GROUP_REVISION_KEY, next.toString().toByteArray(Charsets.UTF_8))
+        check(workspaceGroupRevision(tx) == next) { "workspace group revision readback mismatch" }
+        return next
+    }
+
+    private fun workspaceGroupRevision(tx: DomainTransaction): Long =
+        tx.get(DOMAIN, GROUP_REVISION_KEY)?.toString(Charsets.UTF_8)?.toLongOrNull() ?: 0L
 
     private fun key(id: String): String = PREFIX + id
 
@@ -128,11 +299,17 @@ internal class ChatSessionStore(private val store: DomainStore) {
             "workspaceID" to (record.workspaceID?.let(::JsonString) ?: JsonNull),
             "archived" to JsonBool(record.archived),
             "pinned" to JsonBool(record.pinned),
+            "revision" to JsonNumber(record.revision.toString()),
+            "workspaceGroupId" to (record.workspaceGroupId?.let(::JsonString) ?: JsonNull),
             // The node sequence is the `ui-state/1` canonical JSONL `:lib` writes,
             // carried as one string member so this envelope never re-implements the
             // node schema.
             "nodes" to JsonString(record.nodes.encodeCanonical()),
-        ),
+        ).apply {
+            record.pendingNodes?.let { put("pendingNodes", JsonString(it.encodeCanonical())) }
+            record.queuedPrompts?.let { put("queuedPrompts", JsonArray(it.map(::JsonString))) }
+            record.unknownFields.forEach { (name, value) -> if (name !in this) put(name, value) }
+        },
     ).toJsonString()
 
     private fun decodeOrNull(text: String?): ChatRecord? {
@@ -159,6 +336,11 @@ internal class ChatSessionStore(private val store: DomainStore) {
                     ?: DEFAULT_WORKSPACE_ID,
                 archived = (root["archived"] as? JsonBool)?.value ?: false,
                 pinned = (root["pinned"] as? JsonBool)?.value ?: false,
+                revision = (root["revision"] as? JsonNumber)?.asLongOrNull() ?: 0L,
+                pendingNodes = (root["pendingNodes"] as? JsonString)?.value?.let(::decodeCanonicalUiState),
+                queuedPrompts = (root["queuedPrompts"] as? JsonArray)?.values?.mapNotNull { (it as? JsonString)?.value },
+                workspaceGroupId = (root["workspaceGroupId"] as? JsonString)?.value,
+                unknownFields = root.members.filterKeys { it !in KNOWN_CHAT_FIELDS },
             )
         } catch (_: Exception) {
             // A damaged row is reported as absent; the next save for that chat
@@ -167,12 +349,30 @@ internal class ChatSessionStore(private val store: DomainStore) {
         }
     }
 
+    private fun groupKey(id: String): String = GROUP_PREFIX + id
+
+    private fun encodeGroup(group: ChatWorkspaceGroup): String = JsonObject(mapOf(
+        "schema" to JsonString(GROUP_SCHEMA), "id" to JsonString(group.id),
+        "name" to JsonString(group.name), "revision" to JsonNumber(group.revision.toString()),
+    )).toJsonString()
+
+    private fun decodeGroup(text: String): ChatWorkspaceGroup? = runCatching {
+        val root = JsonValue.parse(text) as? JsonObject ?: return null
+        if ((root["schema"] as? JsonString)?.value != GROUP_SCHEMA) return null
+        val id = (root["id"] as? JsonString)?.value ?: return null
+        val name = (root["name"] as? JsonString)?.value ?: return null
+        ChatWorkspaceGroup(id, name, (root["revision"] as? JsonNumber)?.asLongOrNull() ?: 0L)
+    }.getOrNull()
+
     companion object {
         /** The domain `SessionArchive` also uses; this store owns the `chat/` range. */
         const val DOMAIN: String = DomainNames.SESSION
 
         /** Key prefix of one chat row. */
         const val PREFIX: String = "chat/"
+        const val GROUP_PREFIX: String = "workspace-group/"
+        const val GROUP_SCHEMA: String = "pdsh-workspace-group/1"
+        const val GROUP_REVISION_KEY: String = "workspace-group-meta/revision"
 
         /** The envelope version this reader accepts. */
         const val SCHEMA: String = "pdsh-chat-session/1"
@@ -182,5 +382,11 @@ internal class ChatSessionStore(private val store: DomainStore) {
 
         /** The cwd all App-created chats pass to the DSH worker. */
         const val DEFAULT_WORKSPACE_ID: String = "/dsh/workspace"
+        const val DEFAULT_WORKSPACE_GROUP_ID: String = "daily"
+        const val DEFAULT_WORKSPACE_GROUP_NAME: String = "日常"
+        val KNOWN_CHAT_FIELDS: Set<String> = setOf(
+            "schema", "id", "title", "updatedAtMs", "workerSessionIds", "workspaceID",
+            "archived", "pinned", "nodes", "revision", "pendingNodes", "queuedPrompts", "workspaceGroupId",
+        )
     }
 }

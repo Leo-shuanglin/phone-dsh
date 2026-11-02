@@ -8,8 +8,8 @@
 // `SettingsPreferences` field stayed `null`, the settings index's pickers were
 // dead controls, and the chat-appearance page reported `settingsWritable = NO`.
 // This file is the missing layer: **one** `SharedPreferences` file behind one
-// class, with the same key names, types and defaults as iOS so a reader can map
-// a value across the two codebases without a translation table.
+// class, with the same persisted key names and types; new installs use text size
+// 16, while pre-existing stored choices are read without migration or overwrite.
 //
 // What is deliberately **not** here:
 //
@@ -17,16 +17,12 @@
 //     `:domain` `SessionArchive` (SQLite) next to the transcript it belongs to;
 //     a second copy in a preferences file would be a second authority for the
 //     same fact. The key is listed in the parity report, answered by that store.
-//   * `textFontFamily` / `codeFontFamily` / `terminalFontFamily` and
-//     `shortcutOverrides` — Android has no font-family surface (no custom font
-//     loading) and no shortcut editor (the page is a reference list; nothing
-//     produces an override), so storing them would be a value no screen can
-//     read or write. See the lane report for the full key-by-key table.
+//   * `shortcutOverrides` — the page is a reference list; nothing produces an
+//     override, so storing one would create a value no screen can read or write.
 //   * `chat.egress.allow`, `phoneDSH.egressListBeforeAllowAll`,
-//     `phone-dsh.session.title-hints`, `phone-dsh.sidebar.collapsed-workspaces`
-//     and the folder bookmarks — each needs a surface Android does not have
-//     (an editable egress allow-all, a prompt composer, a workspace sidebar, a
-//     SAF folder picker). They are open questions, not silent omissions.
+//     `phone-dsh.session.title-hints` and folder bookmarks — each needs a
+//     product surface this store does not own (egress controls, title hints, or
+//     a SAF folder picker). These remain open questions, not silent omissions.
 //
 // The storage seam ([PreferenceFile]) exists so the store's whole behaviour —
 // read, clamp, migrate, write, fail-closed on an unknown enum id — is testable
@@ -46,6 +42,12 @@ import com.phonedsh.ui.page.SettingsLanguage
 import com.phonedsh.ui.page.SettingsPreferences
 import com.phonedsh.ui.page.SettingsScreenState
 import com.phonedsh.ui.page.TranscriptViewMode
+import com.phonedsh.ui.state.StateRequestId
+import com.phonedsh.ui.state.StateRevision
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -56,7 +58,7 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  * @param id the role's stable id, used only in a log line.
  * @param key the `UserDefaults` key the baseline stores this role under.
- * @param defaultSize the baseline's default (`text 17`, `code 14`, `terminal 13`).
+ * @param defaultSize the new-install default (`text 16`, `code 14`, `terminal 13`).
  * @param sizes the baseline's clamp range (`setFontSize` clamps, never refuses).
  */
 internal enum class FontRole(
@@ -65,7 +67,7 @@ internal enum class FontRole(
     val defaultSize: Int,
     val sizes: IntRange,
 ) {
-    TEXT("text", "textFontSize", 17, 10..22),
+    TEXT("text", "textFontSize", 16, 10..22),
     CODE("code", "codeFontSize", 14, 10..16),
     TERMINAL("terminal", "terminalFontSize", 13, 10..20),
 }
@@ -80,7 +82,7 @@ internal enum class FontRole(
  * `chat.background.keepalive = true` (`NativeChatPreferences.swift:118-131`,
  * `ChatModel.swift:43-49`).
  *
- * @param textFontSize 正文 size, 10...22, default 17.
+ * @param textFontSize 正文 size, 10...22, new-install default 16.
  * @param codeFontSize 代码 size, 10...16, default 14.
  * @param terminalFontSize 终端 size, 10...20, default 13.
  * @param appearance 外观 (`appearance`): light / dark / system.
@@ -105,6 +107,12 @@ internal data class Preferences(
     val performanceUsage: PerformanceUsage = PerformanceUsage.DETAILED,
     val busyEnterMode: BusyEnterMode = BusyEnterMode.QUEUE,
     val backgroundKeepAlive: Boolean = true,
+    /** Empty string is a known system default; null means the key was unread/absent. */
+    val textFontFamily: String? = null,
+    val codeFontFamily: String? = null,
+    val terminalFontFamily: String? = null,
+    /** Null means no stored read; an empty set is a known expanded-all choice. */
+    val collapsedWorkspaceFolders: Set<String>? = null,
 ) {
     /** The size of [role], in px. */
     fun fontSize(role: FontRole): Int = when (role) {
@@ -156,6 +164,42 @@ internal data class Preferences(
     )
 }
 
+/** Values that may be written through the confirmed, off-main-thread API. */
+internal sealed class ConfirmedPreferenceChange(val key: String, val value: Any) {
+    data class Appearance(val choice: SettingsAppearance) : ConfirmedPreferenceChange(PreferenceStore.APPEARANCE_KEY, choice.id) { val valueChoice = choice }
+    data class Language(val choice: SettingsLanguage) : ConfirmedPreferenceChange(PreferenceStore.LANGUAGE_KEY, choice.id) { val valueChoice = choice }
+    data class TranscriptView(val choice: TranscriptViewMode) : ConfirmedPreferenceChange(PreferenceStore.TRANSCRIPT_VIEW_KEY, choice.id) { val valueChoice = choice }
+    data class CollapseTiming(val choice: com.phonedsh.ui.page.CollapseTiming) : ConfirmedPreferenceChange(PreferenceStore.COLLAPSE_TIMING_KEY, choice.id) { val valueChoice = choice }
+    data class PerformanceUsage(val choice: com.phonedsh.ui.page.PerformanceUsage) : ConfirmedPreferenceChange(PreferenceStore.PERFORMANCE_USAGE_KEY, choice.id) { val valueChoice = choice }
+    data class DeveloperTools(val enabled: Boolean) : ConfirmedPreferenceChange(PreferenceStore.DEVELOPER_TOOLS_KEY, enabled) { val valueChoice = enabled }
+    data class BusyEnterMode(val choice: com.phonedsh.ui.page.BusyEnterMode) : ConfirmedPreferenceChange(PreferenceStore.BUSY_ENTER_KEY, choice.id) { val valueChoice = choice }
+    data class BackgroundKeepAlive(val enabled: Boolean) : ConfirmedPreferenceChange(PreferenceStore.BACKGROUND_KEEP_ALIVE_KEY, enabled) { val valueChoice = enabled }
+    data class FontSize(val role: FontRole, val size: Int) : ConfirmedPreferenceChange(
+        role.key, size.coerceIn(role.sizes.first, role.sizes.last),
+    )
+    data class FontFamily(val role: FontRole, val family: String) : ConfirmedPreferenceChange(
+        when (role) {
+            FontRole.TEXT -> PreferenceStore.TEXT_FONT_FAMILY_KEY
+            FontRole.CODE -> PreferenceStore.CODE_FONT_FAMILY_KEY
+            FontRole.TERMINAL -> PreferenceStore.TERMINAL_FONT_FAMILY_KEY
+        }, family,
+    )
+    data class CollapsedWorkspaceFolders(val folders: Set<String>) : ConfirmedPreferenceChange(
+        PreferenceStore.COLLAPSED_WORKSPACE_FOLDERS_KEY, folders.toSet(),
+    )
+}
+
+internal sealed interface PreferenceWriteOutcome {
+    data object Persisted : PreferenceWriteOutcome
+    data class Failed(val code: String) : PreferenceWriteOutcome
+}
+
+internal data class PreferenceWriteReceipt(
+    val requestId: StateRequestId,
+    val revision: StateRevision,
+    val outcome: PreferenceWriteOutcome,
+)
+
 /**
  * The storage seam under [PreferenceStore].
  *
@@ -175,26 +219,38 @@ internal interface PreferenceFile {
     fun boolean(key: String): Boolean?
 
     /** Stores [value] at [key], durably enough to survive a kill. */
-    fun putString(key: String, value: String)
+    fun putString(key: String, value: String): Boolean
 
     /** Stores [value] at [key]. */
-    fun putInt(key: String, value: Int)
+    fun putInt(key: String, value: Int): Boolean
 
     /** Stores [value] at [key]. */
-    fun putBoolean(key: String, value: Boolean)
+    fun putBoolean(key: String, value: Boolean): Boolean
+
+    /** Set-valued preference; null distinguishes absence from an empty choice. */
+    fun stringSet(key: String): Set<String>?
+
+    /** Stores a defensive copy of [value]. */
+    fun putStringSet(key: String, value: Set<String>): Boolean
+
+    /** Synchronous durable commit used only from [Dispatchers.IO]. */
+    fun commitString(key: String, value: String): Boolean
+    fun commitInt(key: String, value: Int): Boolean
+    fun commitBoolean(key: String, value: Boolean): Boolean
+    fun commitStringSet(key: String, value: Set<String>): Boolean
 
     /** Drops [key] when present. */
     fun remove(key: String)
 }
 
 /**
- * The `SharedPreferences` binding: one file, committed synchronously.
+ * The `SharedPreferences` binding: one file. Legacy setters use `apply()` to
+ * avoid blocking the UI; confirmed writes use `commit*` from the IO dispatcher
+ * and verify readback before reporting success.
  *
- * `commit()` and not `apply()` on purpose. This store's whole acceptance is
- * "change a preference, kill the process, restart, the value is still there";
- * `apply()` hands the write to a background queue that a `force-stop` does not
- * wait for, so the one test that matters could pass in memory and lose the file.
- * The writes are single small values made on a gesture, not a hot path.
+ * A confirmed action must call `writeConfirmed`: an `apply()` acceptance is
+ * never a durable receipt. Keeping old setters nonblocking preserves their
+ * existing callers while the UI adopts a real disk acknowledgment.
  *
  * @param context any context; only the application context is retained.
  * @param name the one preferences file, defaulting to [PreferenceStore.FILE_NAME].
@@ -221,21 +277,24 @@ internal class SharedPreferenceFile(
     override fun boolean(key: String): Boolean? =
         runCatching { if (prefs.contains(key)) prefs.getBoolean(key, false) else null }.getOrNull()
 
-    override fun putString(key: String, value: String) {
-        prefs.edit().putString(key, value).commit()
-    }
+    override fun putString(key: String, value: String): Boolean { prefs.edit().putString(key, value).apply(); return true }
 
-    override fun putInt(key: String, value: Int) {
-        prefs.edit().putInt(key, value).commit()
-    }
+    override fun putInt(key: String, value: Int): Boolean { prefs.edit().putInt(key, value).apply(); return true }
 
-    override fun putBoolean(key: String, value: Boolean) {
-        prefs.edit().putBoolean(key, value).commit()
-    }
+    override fun putBoolean(key: String, value: Boolean): Boolean { prefs.edit().putBoolean(key, value).apply(); return true }
 
-    override fun remove(key: String) {
-        prefs.edit().remove(key).commit()
-    }
+    override fun stringSet(key: String): Set<String>? =
+        runCatching { prefs.getStringSet(key, null)?.toSet() }.getOrNull()
+
+    override fun putStringSet(key: String, value: Set<String>): Boolean =
+        prefs.edit().putStringSet(key, value.toSet()).apply().let { true }
+
+    override fun commitString(key: String, value: String): Boolean = prefs.edit().putString(key, value).commit()
+    override fun commitInt(key: String, value: Int): Boolean = prefs.edit().putInt(key, value).commit()
+    override fun commitBoolean(key: String, value: Boolean): Boolean = prefs.edit().putBoolean(key, value).commit()
+    override fun commitStringSet(key: String, value: Set<String>): Boolean = prefs.edit().putStringSet(key, value.toSet()).commit()
+
+    override fun remove(key: String) { prefs.edit().remove(key).commit() }
 }
 
 /**
@@ -253,17 +312,12 @@ internal class SharedPreferenceFile(
 internal class PreferenceStore(private val file: PreferenceFile) {
 
     private val mutableState = MutableStateFlow(read())
+    private val confirmedWriteMutex = Mutex()
 
     /** The resolved preferences; a write publishes a new value. */
     val state: StateFlow<Preferences> = mutableState.asStateFlow()
 
-    init {
-        // The baseline migrated `phone-dsh.composer.busyEnter` to `busyEnterMode`
-        // in place (`NativeChatPreferences.swift:147-152`). Android never wrote the
-        // legacy key, but an install that imported iOS data would have it, and the
-        // copy-forward is the same four lines.
-        adoptLegacyBusyEnter()
-    }
+    private var confirmedRevision = 0L
 
     /** The current resolved values. */
     fun snapshot(): Preferences = mutableState.value
@@ -327,6 +381,92 @@ internal class PreferenceStore(private val file: PreferenceFile) {
         val resolved = value.coerceIn(role.sizes.first, role.sizes.last)
         file.putInt(role.key, resolved)
         mutableState.value = mutableState.value.withFontSize(role, resolved)
+    }
+
+    /** A real stored family choice, including the explicit empty/system-default value. */
+    fun setFontFamily(role: FontRole, value: String) {
+        val key = fontFamilyKey(role)
+        file.putString(key, value)
+        mutableState.value = when (role) {
+            FontRole.TEXT -> mutableState.value.copy(textFontFamily = value)
+            FontRole.CODE -> mutableState.value.copy(codeFontFamily = value)
+            FontRole.TERMINAL -> mutableState.value.copy(terminalFontFamily = value)
+        }
+    }
+
+    /** Persists folder collapse state; null is reserved for an unread key. */
+    fun setCollapsedWorkspaceFolders(value: Set<String>) {
+        val copy = value.toSet()
+        file.putStringSet(COLLAPSED_WORKSPACE_FOLDERS_KEY, copy)
+        mutableState.value = mutableState.value.copy(collapsedWorkspaceFolders = copy)
+    }
+
+    private fun fontFamilyKey(role: FontRole): String = when (role) {
+        FontRole.TEXT -> TEXT_FONT_FAMILY_KEY
+        FontRole.CODE -> CODE_FONT_FAMILY_KEY
+        FontRole.TERMINAL -> TERMINAL_FONT_FAMILY_KEY
+    }
+
+
+    /**
+     * A confirmed write suitable for a UI success receipt. Commit and readback
+     * run on IO; the StateFlow changes only after disk reports the exact value.
+     */
+    suspend fun writeConfirmed(requestId: StateRequestId, change: ConfirmedPreferenceChange): PreferenceWriteReceipt =
+        withContext(Dispatchers.IO) {
+            require(requestId.value.isNotBlank())
+            confirmedWriteMutex.withLock {
+            val key = change.key
+            val expected: Any = change.value
+            try {
+                val committed = when (expected) {
+                    is String -> file.commitString(key, expected)
+                    is Int -> file.commitInt(key, expected)
+                    is Boolean -> file.commitBoolean(key, expected)
+                    is Set<*> -> file.commitStringSet(key, expected.filterIsInstance<String>().toSet())
+                    else -> false
+                }
+                check(committed && readPreferenceValue(key, expected) == expected) { "preference commit/readback mismatch" }
+                val revision = synchronized(this@PreferenceStore) {
+                    applyConfirmed(change)
+                    confirmedRevision += 1L
+                    confirmedRevision
+                }
+                PreferenceWriteReceipt(requestId, StateRevision(revision), PreferenceWriteOutcome.Persisted)
+            } catch (failure: Exception) {
+                val revision = synchronized(this@PreferenceStore) { confirmedRevision }
+                PreferenceWriteReceipt(requestId, StateRevision(revision), PreferenceWriteOutcome.Failed(failure.javaClass.simpleName))
+            }
+            }
+        }
+
+    private fun readPreferenceValue(key: String, expected: Any): Any? = when (expected) {
+        is String -> file.string(key)
+        is Int -> file.integer(key)
+        is Boolean -> file.boolean(key)
+        is Set<*> -> file.stringSet(key)
+        else -> null
+    }
+
+    private fun applyConfirmed(change: ConfirmedPreferenceChange) {
+        val current = mutableState.value
+        mutableState.value = when (change) {
+            is ConfirmedPreferenceChange.Appearance -> current.copy(appearance = change.valueChoice)
+            is ConfirmedPreferenceChange.Language -> current.copy(language = change.valueChoice)
+            is ConfirmedPreferenceChange.TranscriptView -> current.copy(transcriptView = change.valueChoice)
+            is ConfirmedPreferenceChange.CollapseTiming -> current.copy(collapseTiming = change.valueChoice)
+            is ConfirmedPreferenceChange.PerformanceUsage -> current.copy(performanceUsage = change.valueChoice)
+            is ConfirmedPreferenceChange.DeveloperTools -> current.copy(developerTools = change.valueChoice)
+            is ConfirmedPreferenceChange.BusyEnterMode -> current.copy(busyEnterMode = change.valueChoice)
+            is ConfirmedPreferenceChange.BackgroundKeepAlive -> current.copy(backgroundKeepAlive = change.valueChoice)
+            is ConfirmedPreferenceChange.FontSize -> current.withFontSize(change.role, change.size)
+            is ConfirmedPreferenceChange.FontFamily -> when (change.role) {
+                FontRole.TEXT -> current.copy(textFontFamily = change.family)
+                FontRole.CODE -> current.copy(codeFontFamily = change.family)
+                FontRole.TERMINAL -> current.copy(terminalFontFamily = change.family)
+            }
+            is ConfirmedPreferenceChange.CollapsedWorkspaceFolders -> current.copy(collapsedWorkspaceFolders = change.folders.toSet())
+        }
     }
 
     /**
@@ -400,8 +540,13 @@ internal class PreferenceStore(private val file: PreferenceFile) {
             // The legacy key is deliberately *not* consulted here: the store
             // adopts it once, in `adoptLegacyBusyEnter`, so a legacy value can
             // never keep shadowing a choice written to the current key.
-            busyEnterMode = readEnum(BUSY_ENTER_KEY, BusyEnterMode.entries, { it.id }, defaults.busyEnterMode),
+            busyEnterMode = readEnum(BUSY_ENTER_KEY, BusyEnterMode.entries, { it.id },
+                BusyEnterMode.entries.firstOrNull { it.id == file.string(LEGACY_BUSY_ENTER_KEY) } ?: defaults.busyEnterMode),
             backgroundKeepAlive = file.boolean(BACKGROUND_KEEP_ALIVE_KEY) ?: defaults.backgroundKeepAlive,
+            textFontFamily = file.string(TEXT_FONT_FAMILY_KEY),
+            codeFontFamily = file.string(CODE_FONT_FAMILY_KEY),
+            terminalFontFamily = file.string(TERMINAL_FONT_FAMILY_KEY),
+            collapsedWorkspaceFolders = file.stringSet(COLLAPSED_WORKSPACE_FOLDERS_KEY)?.toSet(),
         )
     }
 
@@ -415,14 +560,6 @@ internal class PreferenceStore(private val file: PreferenceFile) {
 
     private fun <T> readEnum(key: String, values: List<T>, id: (T) -> String, fallback: T): T =
         values.firstOrNull { id(it) == file.string(key) } ?: fallback
-
-    private fun adoptLegacyBusyEnter() {
-        if (file.string(BUSY_ENTER_KEY) != null) return
-        val legacy = file.string(LEGACY_BUSY_ENTER_KEY) ?: return
-        val mode = BusyEnterMode.entries.firstOrNull { it.id == legacy } ?: return
-        file.putString(BUSY_ENTER_KEY, mode.id)
-        mutableState.value = mutableState.value.copy(busyEnterMode = mode)
-    }
 
     companion object {
         /**
@@ -472,6 +609,11 @@ internal class PreferenceStore(private val file: PreferenceFile) {
         /** 后台运行 (`ChatModel.swift:43`). */
         const val BACKGROUND_KEEP_ALIVE_KEY: String = "chat.background.keepalive"
 
+        const val TEXT_FONT_FAMILY_KEY: String = "textFontFamily"
+        const val CODE_FONT_FAMILY_KEY: String = "codeFontFamily"
+        const val TERMINAL_FONT_FAMILY_KEY: String = "terminalFontFamily"
+        const val COLLAPSED_WORKSPACE_FOLDERS_KEY: String = "phone-dsh.sidebar.collapsed-workspaces"
+
         /**
          * Every key this store persists, in the baseline's spelling.
          *
@@ -491,6 +633,10 @@ internal class PreferenceStore(private val file: PreferenceFile) {
             PERFORMANCE_USAGE_KEY,
             BUSY_ENTER_KEY,
             BACKGROUND_KEEP_ALIVE_KEY,
+            TEXT_FONT_FAMILY_KEY,
+            CODE_FONT_FAMILY_KEY,
+            TERMINAL_FONT_FAMILY_KEY,
+            COLLAPSED_WORKSPACE_FOLDERS_KEY,
         )
     }
 }
