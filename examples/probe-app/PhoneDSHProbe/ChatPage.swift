@@ -124,9 +124,12 @@ struct ChatPage: View {
     /// without animation so history loading never leaves the view at the top.
     @State private var pendingInitialScroll = false
     @State private var userScrolledAway = false
-    /// Last measured tail offset; logged with every follow scroll so a
-    /// "keeps scrolling" report can be diagnosed from chat-status.log.
-    @State private var tailOffsetY: CGFloat = 0
+    /// Last measured tail offset, kept **outside** `@State`: it changes on
+    /// every scroll frame, and publishing it re-evaluated the whole transcript
+    /// per frame — that was the scroll jank and the sustained CPU the phone
+    /// reported. It only feeds the diagnostic line in `scheduleTailScroll`, so
+    /// it does not need to invalidate any view.
+    private let scrollTrace = ScrollTraceBox()
     @State private var lastScrollTrace = Date.distantPast
     @State private var pasteLimitNoticed = false
     @State private var stopping = false
@@ -1199,17 +1202,29 @@ struct ChatPage: View {
                 .defaultScrollAnchor(.bottom)
                 .scrollBounceBehavior(.basedOnSize)
                 .onPreferenceChange(TranscriptContentHeightPreference.self) { height in
-                    transcriptContentHeight = height
+                    // The lazy stack reports a growing height while rows
+                    // materialize, and every write here invalidates this view:
+                    // a sub-pixel difference used to start layout again, which
+                    // reported another height. Only a real change publishes.
+                    if abs(transcriptContentHeight - height) > 0.5 {
+                        transcriptContentHeight = height
+                    }
                 }
                 .onPreferenceChange(TranscriptTailPreference.self) { tailY in
-                    tailOffsetY = tailY
+                    scrollTrace.tailOffsetY = tailY
                     // Past the content (a blank viewport) is not "near the
                     // bottom"; neither may a lazy estimate silently re-enable
                     // following while the reader is far above the tail.
-                    if tailY > viewport.size.height + 44 { userScrolledAway = true }
-                    nearBottom = tailY >= -1 && tailY <= viewport.size.height + 44
+                    // Every write here invalidates this view, so only write
+                    // when the value actually crosses: the preference fires on
+                    // every scroll frame, and an unconditional write re-rendered
+                    // the transcript per frame.
+                    let away = tailY > viewport.size.height + 44
+                    if userScrolledAway != away { userScrolledAway = away }
+                    let near = tailY >= -1 && tailY <= viewport.size.height + 44
+                    if nearBottom != near { nearBottom = near }
                     if nearBottom && transcriptContentHeight <= viewport.size.height + 1 {
-                        userScrolledAway = false
+                        if userScrolledAway { userScrolledAway = false }
                     }
                 }
                 .onChange(of: transcriptScrollSignature) { _, _ in
@@ -1310,7 +1325,7 @@ struct ChatPage: View {
                 lastScrollTrace = Date()
                 ChatModel.appendDiagnostic(
                     "scroll tail content=\(Int(transcriptContentHeight)) viewport=\(Int(viewportHeight)) "
-                    + "tail=\(Int(tailOffsetY)) near=\(nearBottom) away=\(userScrolledAway)")
+                    + "tail=\(Int(scrollTrace.tailOffsetY)) near=\(nearBottom) away=\(userScrolledAway)")
             }
             scrollToTail(proxy, viewportHeight: viewportHeight)
         }
@@ -2400,6 +2415,14 @@ struct ChatPage: View {
                 }
             }
             if succeeded {
+                // 发送即收起键盘。官方 Web 端发完保持聚焦（输入框就是 combobox），
+                // 但手机上键盘会盖住刚发出去的那条和回复，也没有"再打一句"的富余
+                // 空间；要接着打字的人点一下输入框就能重新唤起。
+                // c922fe7 为对齐官方把这条收掉了，实际用起来是退化。
+                inputFocused = false
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                to: nil, from: nil, for: nil)
+                ChatModel.appendDiagnostic("composer: released focus after send")
                 let id = model.items.last(where: { if case .user = $0.kind { return true }; return false })?.id
                 if let id {
                     // `send` sets turnRunning for the turn it just started, so
@@ -2415,16 +2438,13 @@ struct ChatPage: View {
                 }
                 pendingAttachments.removeAll()
                 attachmentError = nil
-                // Official keeps the composer focused after a submit (the
-                // editor is the combobox); the phone keyboard therefore stays
-                // up, exactly like the web bar. Focus is only released by the
-                // person (scroll/tap away) or a sheet.
-                //
-                // A send means "show me the newest turn": the composer and the
-                // keyboard change the transcript viewport, which used to leave
-                // `nearBottom` false even though the person never scrolled
-                // away; the new row then stayed below the fold. Jump to the
-                // tail through the session-open path (no animation).
+                // The keyboard is released above, so the transcript regains the
+                // height it lost while composing. Either way a send means "show
+                // me the newest turn": the composer and the keyboard change the
+                // transcript viewport, which used to leave `nearBottom` false
+                // even though the person never scrolled away; the new row then
+                // stayed below the fold. Jump to the tail through the
+                // session-open path (no animation).
                 nearBottom = true
                 userScrolledAway = false
                 pendingInitialScroll = true
@@ -3211,10 +3231,17 @@ private struct NativeComposerTextView: UIViewRepresentable {
         }
         coordinator.applyTypingAttributes(lineSpacing: lineSpacing)
         if isFocused, !uiView.isFirstResponder, uiView.window != nil {
-            DispatchQueue.main.async { [weak uiView] in
-                guard let uiView, !uiView.isFirstResponder else { return }
-                uiView.becomeFirstResponder()
-            }
+            // The hop exists so the view is in a window before it becomes first
+            // responder. It must re-read the *current* intent when it runs: a
+            // send releases focus in the same turn that queued this block, and
+            // the queued becomeFirstResponder used to run afterwards, see a view
+            // that is no longer first responder, and bring the keyboard back.
+            ComposerFocusRequest.schedule(
+                isCurrent: { [weak uiView, weak coordinator] in
+                    guard let uiView, uiView.window != nil else { return false }
+                    return !uiView.isFirstResponder && coordinator?.parent.isFocused == true
+                },
+                focus: { [weak uiView] in uiView?.becomeFirstResponder() })
         } else if !isFocused, uiView.isFirstResponder {
             uiView.resignFirstResponder()
         }
@@ -3401,6 +3428,15 @@ private final class ComposerUITextView: UITextView {
         }
         _ = onMenuKey?(key)
     }
+}
+
+/// Holds the last measured tail offset for the scroll diagnostic.
+///
+/// A reference box on purpose: assigning to a `@State` here would invalidate
+/// the transcript view on every scroll frame, which is what made scrolling
+/// janky and kept the phone hot. Nothing renders from this value.
+final class ScrollTraceBox {
+    var tailOffsetY: CGFloat = 0
 }
 
 private struct TranscriptTailPreference: PreferenceKey {
