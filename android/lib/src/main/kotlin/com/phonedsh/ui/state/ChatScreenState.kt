@@ -203,6 +203,10 @@ public sealed interface ChatRow {
         override val id: String,
         public val summary: String,
         public val streaming: Boolean,
+        /** Bounded source reasoning for disclosure; null when only a summary was supplied. */
+        public val fullReasoning: String? = null,
+        /** Whether [fullReasoning] lost source text to the UiState text limit; null for older hosts. */
+        public val fullReasoningTruncated: Boolean? = null,
     ) : ChatRow
 
     /**
@@ -225,8 +229,8 @@ public sealed interface ChatRow {
         /** The first line's tool name. */
         public val title: String get() = entries.firstOrNull()?.title.orEmpty()
 
-        /** The last line's summary. */
-        public val summary: String get() = entries.lastOrNull()?.summary.orEmpty()
+        /** The renderer's one-line preview; complete output remains in each entry's body. */
+        public val summary: String get() = entries.lastOrNull()?.summary?.lineSequence()?.firstOrNull().orEmpty()
     }
 
     /** Consecutive reasoning and tool activity for one turn (iOS process group). */
@@ -378,6 +382,19 @@ public data class PendingAnswer(
     public val submissionError: String? = null,
     public val channelAvailable: Boolean? = null,
     public val initialProgress: PendingQuestionProgress? = null,
+    public val form: QuestionFormState? = null,
+    public val actionState: PendingAnswerActionState? = null,
+) {
+    public val typedRequestId: StateRequestId get() = StateRequestId(requestId)
+}
+
+public enum class PendingAnswerAction { SUBMIT, DISCARD, MINIMISE, REOPEN }
+public enum class PendingAnswerActionStatus { PENDING, SUCCEEDED, FAILED }
+public data class PendingAnswerActionState(
+    public val requestId: StateRequestId,
+    public val action: PendingAnswerAction,
+    public val status: PendingAnswerActionStatus,
+    public val error: String? = null,
 )
 
 /** One option label and optional host-provided description. */
@@ -403,7 +420,24 @@ public data class PendingQuestionItem(
 public data class PendingQuestionProgress(
     public val index: Int,
     public val drafts: Map<String, List<String>> = emptyMap(),
+    public val customAnswers: Map<String, String> = emptyMap(),
 )
+
+/** Local form state keeps each question's multiple selections and custom text separately. */
+public data class QuestionFormState(
+    public val index: Int,
+    public val questionIds: List<String>,
+    public val answers: Map<String, List<String>> = emptyMap(),
+    public val customAnswers: Map<String, String> = emptyMap(),
+) {
+    public val currentQuestionId: String? get() = questionIds.getOrNull(index)
+    public val canGoBack: Boolean get() = index > 0 && index < questionIds.size
+    public val canGoForward: Boolean get() = index >= 0 && index + 1 < questionIds.size
+    public val missingRequiredQuestionIds: List<String> get() = questionIds.filter { id ->
+        answers[id].orEmpty().none { it.isNotBlank() } && customAnswers[id].isNullOrBlank()
+    }
+    public val complete: Boolean get() = missingRequiredQuestionIds.isEmpty()
+}
 
 /**
  * The pending-answer slot: at most two asks, the primary card on top and the
@@ -572,6 +606,8 @@ public data class AccessModeMenu(
     public val error: String? = null,
     /** False while a turn runs or an ask is pending (iOS disables the menu). */
     public val enabled: Boolean = false,
+    /** Null while the host has not reported whether the catalog read completed. */
+    public val catalogLoaded: Boolean? = null,
 ) {
     /** iOS `accessModeTitle`: the current title, or the bare product word. */
     public val label: String get() = currentTitle ?: UiStrings.ACCESS_MODE_TITLE_FALLBACK
@@ -604,6 +640,8 @@ public data class ModelMenu(
     public val defaultEffortTitle: String = UiStrings.MODEL_DEFAULT_EFFORT,
     /** False while a turn runs or an ask is pending (iOS disables the menu). */
     public val enabled: Boolean = false,
+    /** Null while the host has not reported whether the catalog read completed. */
+    public val catalogLoaded: Boolean? = null,
 ) {
     /** True when the host reports no model catalog at all. */
     public val unavailable: Boolean get() = models.isEmpty() && modelName.isEmpty()
@@ -647,12 +685,14 @@ public data class ChatHostFacts(
     public val accessModes: List<AccessModeOption> = emptyList(),
     public val currentAccessMode: AccessModeOption? = null,
     public val accessModeError: String? = null,
+    public val accessModesLoaded: Boolean? = null,
     /** The model catalog. */
     public val models: List<String> = emptyList(),
     public val currentModel: String? = null,
     public val effortTitle: String? = null,
     public val efforts: List<EffortOption> = emptyList(),
     public val currentEffort: String? = null,
+    public val modelsLoaded: Boolean? = null,
     public val defaultEffortTitle: String = UiStrings.MODEL_DEFAULT_EFFORT,
     /** Workspace relative paths for the `@` menu. */
     public val files: List<String> = emptyList(),
@@ -668,6 +708,13 @@ public data class ChatHostFacts(
     public val hasOnlineDevices: Boolean? = null,
     /** Host lifecycle details; `null` means not measured by this caller. */
     public val lifecycle: EngineLifecycleFacts? = null,
+    /** Host-owned plan state; null means the host has not supplied a snapshot. */
+    public val plan: PlanApprovalState? = null,
+    public val queueItems: List<ManagedQueueItemState>? = null,
+    public val commandReceipts: List<CommandExecutionReceipt>? = null,
+    public val artifacts: List<ArtifactReference>? = null,
+    public val contextLost: ContextLostReceipt? = null,
+    public val snapshotRevision: StateRevision? = null,
 )
 
 /** One todo row from `session/projections.values.todos`; status remains a wire fact. */
@@ -727,8 +774,16 @@ public sealed interface GoalBarState {
     public data class Visible(
         public val phase: String,
         public val objective: String,
+        /** Parsed host lifecycle phase; null when an unknown phase word was received. */
+        public val phaseKind: GoalPhase? = null,
+        public val goalID: String? = null,
+        public val canPause: Boolean? = null,
+        public val canResume: Boolean? = null,
+        public val canClear: Boolean? = null,
     ) : GoalBarState
 }
+
+public enum class GoalPhase { ACTIVE, PAUSED, BLOCKED }
 
 /**
  * The local UI events of the screen. Nothing here is inferred from the engine:
@@ -738,6 +793,8 @@ public data class ChatLocalState(
     public val draft: String = "",
     /** Request ids the user already answered; their cards leave the slot. */
     public val answeredRequestIds: Set<String> = emptySet(),
+    /** Typed, request-correlated pending-card action state; failed submissions retain input. */
+    public val pendingAnswerActions: Map<StateRequestId, PendingAnswerActionState> = emptyMap(),
     /** Banner node ids the user dismissed. */
     public val dismissedBannerIds: Set<String> = emptySet(),
     /** Rows the user expanded (tool entry ids and thinking pill ids). */
@@ -757,7 +814,165 @@ public data class ChatLocalState(
     public val imeVisible: Boolean = false,
     /** The user tapped the folded slot to see the asks while the keyboard is up. */
     public val pendingSlotExpanded: Boolean = false,
+    /** Session whose transient form state this belongs to, when known. */
+    public val sessionID: String? = null,
 )
+
+/** Opaque, typed request identity used to correlate async responses. */
+@JvmInline
+public value class StateRequestId(public val value: String)
+
+/** A monotonically increasing host revision; absent revisions remain unknown. */
+@JvmInline
+public value class StateRevision(public val value: Long) : Comparable<StateRevision> {
+    override fun compareTo(other: StateRevision): Int = value.compareTo(other.value)
+}
+
+/** Session-scoped revisioned snapshot. A different session is never implicitly adopted. */
+public data class RevisionedSnapshot<T>(
+    public val sessionID: String,
+    public val revision: StateRevision,
+    public val value: T,
+)
+
+/** Only an explicit user switch or a host-confirmed not-found may bind another session. */
+public enum class SessionChangeCause { USER_SELECTED, SESSION_NOT_FOUND, RESTORE, INCIDENTAL_RESPONSE }
+
+public sealed interface SessionBindingResult {
+    public data class Bound(public val sessionID: String) : SessionBindingResult
+    public data class Retained(public val sessionID: String, public val rejectedSessionID: String) : SessionBindingResult
+}
+
+public fun bindSession(
+    currentSessionID: String,
+    requestedSessionID: String,
+    cause: SessionChangeCause,
+): SessionBindingResult = when {
+    currentSessionID == requestedSessionID -> SessionBindingResult.Bound(currentSessionID)
+    cause == SessionChangeCause.USER_SELECTED || cause == SessionChangeCause.SESSION_NOT_FOUND ->
+        SessionBindingResult.Bound(requestedSessionID)
+    else -> SessionBindingResult.Retained(currentSessionID, requestedSessionID)
+}
+
+/** Result of considering a snapshot update against current session and revision. */
+public sealed interface SnapshotUpdate<out T> {
+    public data class Applied<T>(public val snapshot: RevisionedSnapshot<T>) : SnapshotUpdate<T>
+    public data class IgnoredOlder<T>(public val current: RevisionedSnapshot<T>) : SnapshotUpdate<T>
+    public data class WrongSession<T>(public val expectedSessionID: String, public val receivedSessionID: String) : SnapshotUpdate<T>
+}
+
+/** Pure serialized/coalesced snapshot acceptance; late old snapshots cannot overwrite newer facts. */
+public fun <T> acceptSnapshot(
+    current: RevisionedSnapshot<T>?,
+    expectedSessionID: String,
+    incoming: RevisionedSnapshot<T>,
+): SnapshotUpdate<T> = when {
+    incoming.sessionID != expectedSessionID -> SnapshotUpdate.WrongSession(expectedSessionID, incoming.sessionID)
+    current != null && current.sessionID == expectedSessionID && incoming.revision <= current.revision ->
+        SnapshotUpdate.IgnoredOlder(current)
+    else -> SnapshotUpdate.Applied(incoming)
+}
+
+/** A typed request may settle state only while it still owns that state slot. */
+public data class StateRequest<T>(
+    public val id: StateRequestId,
+    public val sessionID: String,
+    public val revision: StateRevision,
+    public val value: T,
+)
+
+public fun <T> StateRequest<T>.isCurrent(
+    activeRequestId: StateRequestId?,
+    activeSessionID: String,
+    minimumRevision: StateRevision?,
+): Boolean = id == activeRequestId && sessionID == activeSessionID &&
+    (minimumRevision == null || revision >= minimumRevision)
+
+/** Submitted `exit_plan_mode` content and explicit host approval status. */
+public data class PlanApprovalState(
+    public val requestId: StateRequestId,
+    public val markdown: String,
+    public val status: PlanApprovalStatus = PlanApprovalStatus.PENDING,
+    public val submissionError: String? = null,
+)
+
+public enum class PlanApprovalStatus { PENDING, APPROVED, REJECTED, DISMISSED }
+
+/** Host-confirmed command result; callbacks alone are not a receipt. */
+public data class CommandExecutionReceipt(
+    public val requestId: StateRequestId,
+    public val command: String,
+    public val input: String? = null,
+    public val outcome: CommandOutcome,
+    public val message: String? = null,
+)
+
+public enum class CommandOutcome { SUCCEEDED, FAILED }
+
+/** An artifact may be explicitly turn/session scoped or unattributed. */
+public data class ArtifactReference(
+    public val id: String,
+    public val name: String,
+    public val path: String? = null,
+    public val scope: ArtifactScope = ArtifactScope.UNKNOWN,
+    public val sessionID: String? = null,
+    public val turnID: String? = null,
+)
+
+public enum class ArtifactScope { TURN, SESSION, UNKNOWN }
+
+/** Durable context-loss fact kept visible after a failed action or restore. */
+public data class ContextLostReceipt(
+    public val requestId: StateRequestId,
+    public val sessionID: String,
+    public val message: String,
+    public val contextID: String? = null,
+)
+
+/** Stable queue row: durable and local identifiers are distinct by construction. */
+public data class ManagedQueueItemState(
+    public val id: QueueItemId,
+    public val text: String,
+    public val state: QueueItemStatus? = null,
+    public val canEdit: Boolean? = null,
+    public val canRemove: Boolean? = null,
+    public val canSteer: Boolean? = null,
+    public val busy: Boolean? = null,
+    public val actionRequestId: StateRequestId? = null,
+    public val receipt: QueueActionReceipt? = null,
+)
+
+public data class QueueActionReceipt(
+    public val requestId: StateRequestId,
+    public val action: QueueAction,
+    public val outcome: CommandOutcome,
+    public val message: String? = null,
+)
+
+public enum class QueueAction { EDIT, REMOVE, STEER }
+
+public sealed interface QueueItemId {
+    public data class Durable(public val value: String) : QueueItemId
+    public data class Local(public val value: String) : QueueItemId
+}
+
+public enum class QueueItemStatus { QUEUED, SENDING, STEERED }
+
+/** Count-preserving reconciliation: each local row consumes at most one same-text durable row. */
+public fun reconcileQueueRows(
+    durable: List<ManagedQueueItemState>,
+    local: List<ManagedQueueItemState>,
+): List<ManagedQueueItemState> {
+    val remaining = durable.toMutableList()
+    local.forEach { localRow ->
+        val key = localRow.text.trim().split(Regex("\\s+")).joinToString(" ")
+        val index = remaining.indexOfFirst { row ->
+            row.text.trim().split(Regex("\\s+")).joinToString(" ") == key
+        }
+        if (index >= 0) remaining.removeAt(index)
+    }
+    return remaining + local
+}
 
 /** The complete screen state of the chat page. */
 public data class ChatScreenState(
@@ -807,6 +1022,12 @@ public data class ChatScreenState(
     public val hasOnlineDevices: Boolean? = null,
     /** The host lifecycle facts the page can render and use to unlock send-to-start. */
     public val lifecycle: EngineLifecycleFacts? = null,
+    public val plan: PlanApprovalState? = null,
+    public val queueItems: List<ManagedQueueItemState>? = null,
+    public val commandReceipts: List<CommandExecutionReceipt>? = null,
+    public val artifacts: List<ArtifactReference>? = null,
+    public val contextLost: ContextLostReceipt? = null,
+    public val snapshotRevision: StateRevision? = null,
 ) {
     /** True when the list has nothing to show yet. */
     public val isEmpty: Boolean get() = rows.isEmpty()
@@ -835,6 +1056,17 @@ public data class ChatScreenState(
             val sessionID = nodes.firstOrNull { it.kind == UiStateKind.SESSION }?.sessionID
                 ?: nodes.firstOrNull()?.sessionID
                 ?: ""
+            // Session-bound transient forms and queue markers must not leak to a
+            // different session. Preserve the draft so a switch cannot silently
+            // discard user input; clear only state that names prior-session rows.
+            val uiLocal = if (local.sessionID != null && local.sessionID != sessionID) {
+                local.copy(
+                    answeredRequestIds = emptySet(), dismissedBannerIds = emptySet(),
+                    pendingAnswerActions = emptyMap(),
+                    expandedRowIds = emptySet(), badges = emptyMap(), attachments = emptyList(),
+                    attachmentError = null, fileImportNotice = null, pendingSlotExpanded = false,
+                )
+            } else local
             val rows = mutableListOf<ChatRow>()
             val pending = mutableListOf<PendingAnswer>()
             val banners = mutableListOf<BannerState>()
@@ -914,7 +1146,7 @@ public data class ChatScreenState(
                                 ChatRow.User(
                                     id = node.nodeID,
                                     text = text,
-                                    badge = local.badges[node.nodeID],
+                                    badge = uiLocal.badges[node.nodeID],
                                 ),
                             )
                         }
@@ -951,6 +1183,8 @@ public data class ChatScreenState(
                                 id = node.nodeID,
                                 summary = node.text.orEmpty(),
                                 streaming = node.props.boolean("streaming"),
+                                fullReasoning = node.props.string("fullReasoning"),
+                                fullReasoningTruncated = node.props.nullableBoolean("fullReasoningTruncated"),
                             ),
                         )
                     }
@@ -1000,7 +1234,7 @@ public data class ChatScreenState(
                     UiStateKind.APPROVAL_CARD -> {
                         flushRun()
                         val requestId = node.props.string("requestId") ?: node.nodeID
-                        if (requestId in local.answeredRequestIds) return@forEach
+                        if (requestId in uiLocal.answeredRequestIds) return@forEach
                         val kind = node.props.string("kind") ?: PERMISSION
                         pending.add(
                             PendingAnswer(
@@ -1020,6 +1254,8 @@ public data class ChatScreenState(
                                 submissionError = node.props.string("submissionError"),
                                 channelAvailable = node.props.nullableBoolean("channelAvailable"),
                                 initialProgress = node.props.questionProgress(),
+                                form = node.props.questionForm(),
+                                actionState = uiLocal.pendingAnswerActions[StateRequestId(requestId)],
                             ),
                         )
                     }
@@ -1028,7 +1264,7 @@ public data class ChatScreenState(
                         flushRun()
                         val reason = node.props.string("reason") ?: "error"
                         failed = true
-                        if (node.nodeID !in local.dismissedBannerIds) {
+                        if (node.nodeID !in uiLocal.dismissedBannerIds) {
                             banners.add(
                                 BannerState(
                                     id = node.nodeID,
@@ -1099,7 +1335,7 @@ public data class ChatScreenState(
                 }
             }
 
-            val timeline = turnAwareRows(closed, nodes, openTurns, local.expandedRowIds)
+            val timeline = turnAwareRows(closed, nodes, openTurns, uiLocal.expandedRowIds)
 
             // At most two asks share the slot: the permission card stays on top,
             // the other folds into one line (spec §2 "审批卡" fold rule). A third
@@ -1118,7 +1354,7 @@ public data class ChatScreenState(
                 else -> ChatPhase.IDLE
             }
             // Spec §3: keyboard up and not manually expanded folds the whole area.
-            val fold = if (slot.isEmpty || local.pendingSlotExpanded || !local.imeVisible) {
+            val fold = if (slot.isEmpty || uiLocal.pendingSlotExpanded || !uiLocal.imeVisible) {
                 PendingFold.EXPANDED
             } else {
                 PendingFold.FOLDED
@@ -1136,9 +1372,9 @@ public data class ChatScreenState(
             val enabled = lock == ComposerLock.NONE && !host.selectingAccessMode &&
                 if (running) (if (steering) host.canSteer else host.canSend)
                 else host.canSend || host.lifecycle?.canStartBySending == true
-            val trimmed = local.draft.trim()
+            val trimmed = uiLocal.draft.trim()
             val hasText = trimmed.isNotEmpty()
-            val hasAttachments = local.attachments.isNotEmpty()
+            val hasAttachments = uiLocal.attachments.isNotEmpty()
             // iOS `canSubmit`: steering cannot carry attachments.
             val canSubmit = enabled && when {
                 running && steering -> hasText && !hasAttachments
@@ -1175,7 +1411,7 @@ public data class ChatScreenState(
                 pending = slot,
                 banners = banners,
                 composer = ComposerState(
-                    draft = local.draft,
+                    draft = uiLocal.draft,
                     // The main key is the stop key only while a turn runs and the
                     // draft cannot be submitted to it (iOS `actionButton`).
                     mode = if (running && !canSubmit) ComposerMode.STOP else ComposerMode.SEND,
@@ -1188,17 +1424,17 @@ public data class ChatScreenState(
                     canSubmit = canSubmit,
                     running = running,
                     steering = steering,
-                    attachments = local.attachments,
-                    attachmentError = local.attachmentError,
-                    fileImportNotice = local.fileImportNotice,
-                    slash = slashMenu(local.draft, host),
-                    reference = referenceMenu(local.draft, host),
+                    attachments = uiLocal.attachments,
+                    attachmentError = uiLocal.attachmentError,
+                    fileImportNotice = uiLocal.fileImportNotice,
+                    slash = slashMenu(uiLocal.draft, host),
+                    reference = referenceMenu(uiLocal.draft, host),
                 ),
                 goal = goal,
-                expandedRowIds = local.expandedRowIds,
+                expandedRowIds = uiLocal.expandedRowIds,
                 stats = stats,
                 pendingFold = fold,
-                pendingExpanded = local.pendingSlotExpanded,
+                pendingExpanded = uiLocal.pendingSlotExpanded,
                 composerLock = lock,
                 transcript = TranscriptState(
                     hasMore = host.transcript.hasMore,
@@ -1221,6 +1457,7 @@ public data class ChatScreenState(
                     // iOS disables the menu while a turn runs, an ask is pending or a
                     // write is in flight.
                     enabled = enabled && !running && slot.isEmpty,
+                    catalogLoaded = host.accessModesLoaded,
                 ),
                 modelMenu = ModelMenu(
                     modelName = host.currentModel.orEmpty(),
@@ -1231,11 +1468,18 @@ public data class ChatScreenState(
                     currentEffort = host.currentEffort,
                     defaultEffortTitle = host.defaultEffortTitle,
                     enabled = enabled && !running && slot.isEmpty,
+                    catalogLoaded = host.modelsLoaded,
                 ),
                 contextPercent = host.contextPercent,
                 todoItems = host.todoItems,
                 hasOnlineDevices = host.hasOnlineDevices,
                 lifecycle = host.lifecycle,
+                plan = host.plan,
+                queueItems = host.queueItems,
+                commandReceipts = host.commandReceipts,
+                artifacts = host.artifacts,
+                contextLost = host.contextLost,
+                snapshotRevision = host.snapshotRevision,
             )
         }
 
@@ -1686,7 +1930,22 @@ private fun JsonObject.questionProgress(): PendingQuestionProgress? {
         }
         if (answers.isEmpty()) null else id to answers
     }.toMap()
-    return PendingQuestionProgress(index = index, drafts = drafts)
+    val customAnswers = (progress["customAnswers"] as? JsonObject)?.members.orEmpty()
+        .mapNotNull { (id, value) -> (value as? JsonString)?.value?.let { id to it } }
+        .toMap()
+    return PendingQuestionProgress(index = index, drafts = drafts, customAnswers = customAnswers)
+}
+
+private fun JsonObject.questionForm(): QuestionFormState? {
+    val items = questionItems()
+    if (items.isEmpty()) return null
+    val progress = questionProgress()
+    return QuestionFormState(
+        index = progress?.index ?: 0,
+        questionIds = items.map { it.id },
+        answers = progress?.drafts.orEmpty(),
+        customAnswers = progress?.customAnswers.orEmpty(),
+    )
 }
 
 /** The tools whose calls count as a changed file (iOS `changes(forTurn:)`, `:159`). */

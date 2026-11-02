@@ -316,6 +316,7 @@ public object UiStateProjector {
             val buffered = reasoning[sessionId]?.toString().orEmpty()
             if (buffered.isNotBlank()) {
                 val summary = ReasoningSummary.summarize(buffered)
+                val (fullReasoning, fullReasoningTruncated) = bounded(buffered)
                 if (summary.isNotEmpty()) {
                     eventRow(
                         event = event,
@@ -326,6 +327,12 @@ public object UiStateProjector {
                         props = props(
                             "streaming" to JsonBool(false),
                             "collapsed" to JsonBool(true),
+                            // The collapsed row text is only the preview. Preserve
+                            // the existing text budget for expanded content and
+                            // expose truncation instead of claiming the prefix is
+                            // the complete source reasoning.
+                            "fullReasoning" to JsonString(fullReasoning),
+                            "fullReasoningTruncated" to JsonBool(fullReasoningTruncated),
                         ),
                     )
                 }

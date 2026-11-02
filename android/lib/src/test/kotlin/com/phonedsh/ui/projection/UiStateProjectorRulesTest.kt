@@ -144,6 +144,11 @@ class UiStateProjectorRulesTest {
         val pill = nodes.single { it.kind == UiStateKind.THINKING_PILL }
         val bubble = nodes.single { it.kind == UiStateKind.BUBBLE }
         assertEquals("归档方式：按天分组。", pill.text)
+        assertEquals(
+            "先看目录结构。\n再决定归档方式。\n\n**归档方式**：按天分组。",
+            (pill.props["fullReasoning"] as com.phonedsh.agentcore.JsonString).value,
+        )
+        assertEquals(false, (pill.props["fullReasoningTruncated"] as com.phonedsh.agentcore.JsonBool).value)
         assertEquals("thinking-pill", pill.surface.wire)
         assertEquals("session/sess-1/turn/turn-0001/event/2/thinking", pill.nodeID)
         assertEquals("session/sess-1/turn/turn-0001/event/2/assistant-message", bubble.nodeID)
@@ -158,6 +163,21 @@ class UiStateProjectorRulesTest {
             event(HarnessKind.AssistantMessage("answer"), 2),
         )
         assertTrue(UiStateProjector.project(events).none { it.kind == UiStateKind.THINKING_PILL })
+    }
+
+    @Test
+    fun `over-limit full reasoning is marked truncated without changing settled summary or node id`() {
+        val full = "x".repeat(UiStateProjector.TEXT_LIMIT + 10) + "\n\n**Settled summary**: done"
+        val events = listOf(
+            event(HarnessKind.TurnStarted("1"), 1),
+            event(HarnessKind.ReasoningDelta(full), seq = null),
+            event(HarnessKind.AssistantMessage("answer"), 2),
+        )
+        val pill = UiStateProjector.project(events).single { it.kind == UiStateKind.THINKING_PILL }
+        assertEquals("Settled summary: done", pill.text)
+        assertEquals("session/$SESSION/turn/turn-0001/event/2/thinking", pill.nodeID)
+        assertEquals(UiStateProjector.TEXT_LIMIT, (pill.props["fullReasoning"] as com.phonedsh.agentcore.JsonString).value.length)
+        assertEquals(true, (pill.props["fullReasoningTruncated"] as com.phonedsh.agentcore.JsonBool).value)
     }
 
     @Test

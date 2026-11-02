@@ -10,10 +10,13 @@ package com.phonedsh.ui.state
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonArray
 import com.phonedsh.agentcore.JsonString
+import com.phonedsh.agentcore.HarnessEvent
+import com.phonedsh.agentcore.HarnessKind
 import com.phonedsh.ui.SpecFixtures
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.projection.UiStateKind
 import com.phonedsh.ui.projection.UiStateNode
+import com.phonedsh.ui.projection.UiStateProjector
 import com.phonedsh.ui.projection.UiStateSurface
 import com.phonedsh.ui.state.ChatAttachment
 import com.phonedsh.ui.state.ChatEmpty
@@ -32,6 +35,167 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatScreenStateTest {
+    @Test
+    fun `stale async success cannot settle a later request or another session`() {
+        val active = StateRequestId("new-form")
+        val old = StateRequest(StateRequestId("old-form"), "s1", StateRevision(4), "old success")
+        assertFalse(old.isCurrent(active, "s1", StateRevision(5)))
+        assertFalse(old.isCurrent(active, "s2", StateRevision(4)))
+        val current = StateRequest(active, "s1", StateRevision(5), "current success")
+        assertTrue(current.isCurrent(active, "s1", StateRevision(5)))
+    }
+
+    @Test
+    fun `older and wrong-session snapshots cannot replace restored newer state`() {
+        val restored = RevisionedSnapshot("s1", StateRevision(12), listOf("restored"))
+        val old = acceptSnapshot(restored, "s1", RevisionedSnapshot("s1", StateRevision(10), listOf("old")))
+        assertEquals(SnapshotUpdate.IgnoredOlder(restored), old)
+        val switched = acceptSnapshot(restored, "s2", RevisionedSnapshot("s1", StateRevision(13), listOf("wrong session")))
+        assertEquals(SnapshotUpdate.WrongSession<String>("s2", "s1"), switched)
+        val fresh = RevisionedSnapshot("s2", StateRevision(1), listOf("new session"))
+        assertEquals(SnapshotUpdate.Applied(fresh), acceptSnapshot(restored, "s2", fresh))
+        assertEquals(
+            SnapshotUpdate.Applied(RevisionedSnapshot("s1", StateRevision(1), listOf("cold restore"))),
+            acceptSnapshot(null, "s1", RevisionedSnapshot("s1", StateRevision(1), listOf("cold restore"))),
+        )
+        assertEquals(
+            SessionBindingResult.Retained("s1", "s2"),
+            bindSession("s1", "s2", SessionChangeCause.INCIDENTAL_RESPONSE),
+        )
+        assertEquals(
+            SessionBindingResult.Bound("s2"),
+            bindSession("s1", "s2", SessionChangeCause.SESSION_NOT_FOUND),
+        )
+    }
+
+    @Test
+    fun `session switch clears scoped forms without dropping the user's draft`() {
+        val state = ChatScreenState.from(
+            structural(),
+            local = ChatLocalState(
+                draft = "keep this input",
+                sessionID = "old-session",
+                answeredRequestIds = setOf("old-request"),
+                attachments = listOf(ChatAttachment("photo.png", image = true)),
+            ),
+        )
+        assertEquals("keep this input", state.composer.draft)
+        assertTrue(state.pending.isEmpty)
+        assertTrue(state.composer.attachments.isEmpty())
+    }
+
+    @Test
+    fun `multi-answer question form retains selections custom input and validates every step`() {
+        val form = QuestionFormState(
+            index = 1,
+            questionIds = listOf("features", "other"),
+            answers = mapOf("features" to listOf("voice", "camera")),
+        )
+        assertEquals("other", form.currentQuestionId)
+        assertTrue(form.canGoBack)
+        assertFalse(form.canGoForward)
+        assertEquals(listOf("other"), form.missingRequiredQuestionIds)
+        assertFalse(form.complete)
+        val completed = form.copy(customAnswers = mapOf("other" to "something else"))
+        assertTrue(completed.complete)
+        assertEquals(listOf("voice", "camera"), completed.answers["features"])
+    }
+
+    @Test
+    fun `queue reconciliation retains duplicate identical messages and stable id namespaces`() {
+        val durable = listOf(
+            ManagedQueueItemState(QueueItemId.Durable("d1"), "same text", QueueItemStatus.QUEUED),
+            ManagedQueueItemState(QueueItemId.Durable("d2"), "same text", QueueItemStatus.QUEUED),
+        )
+        val local = listOf(
+            ManagedQueueItemState(QueueItemId.Local("l1"), "same text", QueueItemStatus.QUEUED),
+            ManagedQueueItemState(QueueItemId.Local("l2"), "same text", QueueItemStatus.SENDING),
+        )
+        val merged = reconcileQueueRows(durable, local)
+        assertEquals(2, merged.size)
+        assertEquals(listOf(QueueItemId.Local("l1"), QueueItemId.Local("l2")), merged.map { it.id })
+        assertEquals(QueueItemStatus.SENDING, merged.last().state)
+    }
+
+    @Test
+    fun `host receipts and scopes remain explicit and unknown facts stay null`() {
+        val host = ChatHostFacts(
+            plan = PlanApprovalState(StateRequestId("plan"), "# Plan", PlanApprovalStatus.PENDING),
+            commandReceipts = listOf(
+                CommandExecutionReceipt(StateRequestId("cmd"), "clear", outcome = CommandOutcome.FAILED, message = "offline"),
+                CommandExecutionReceipt(StateRequestId("cmd-2"), "pause", outcome = CommandOutcome.SUCCEEDED),
+            ),
+            artifacts = listOf(ArtifactReference("a", "result.txt", scope = ArtifactScope.UNKNOWN)),
+            contextLost = ContextLostReceipt(StateRequestId("lost"), "s1", "Session context expired"),
+            snapshotRevision = StateRevision(7),
+        )
+        val state = ChatScreenState.from(structural(), host = host)
+        assertEquals(PlanApprovalStatus.PENDING, state.plan?.status)
+        assertEquals(listOf(CommandOutcome.FAILED, CommandOutcome.SUCCEEDED), state.commandReceipts?.map { it.outcome })
+        assertEquals(ArtifactScope.UNKNOWN, state.artifacts?.single()?.scope)
+        assertTrue(state.contextLost != null)
+        assertNull(state.modelMenu.currentEffort)
+    }
+
+    @Test
+    fun `tool run preview is one line and expanded entry keeps full result`() {
+        val call = node(
+            kind = UiStateKind.TOOL_ROW,
+            slot = "tool-call",
+            surface = UiStateSurface.TOOL_ROW,
+            text = "bash",
+            props = mapOf("callId" to JsonString("c1"), "name" to JsonString("bash"), "phase" to JsonString("call")),
+        )
+        val body = "a,b\n1,2"
+        val result = node(
+            kind = UiStateKind.TOOL_ROW,
+            slot = "tool-result",
+            surface = UiStateSurface.TOOL_ROW,
+            text = body,
+            props = mapOf("callId" to JsonString("c1"), "name" to JsonString("bash"), "phase" to JsonString("result"), "body" to JsonString(body)),
+        )
+        val run = visibleRows(ChatScreenState.from(structural() + call + result).rows)
+            .filterIsInstance<ChatRow.ToolRun>().single()
+        assertEquals("a,b", run.summary)
+        assertEquals(body, run.entries.single().body)
+    }
+
+    @Test
+    fun `thinking keeps collapsed summary separate from full disclosure text`() {
+        val full = "First reasoning paragraph.\n\nSecond reasoning paragraph."
+        val thinking = node(
+            kind = UiStateKind.THINKING_PILL,
+            slot = "thinking",
+            surface = UiStateSurface.THINKING_PILL,
+            text = "Second reasoning paragraph.",
+            props = mapOf("streaming" to com.phonedsh.agentcore.JsonBool(false), "fullReasoning" to JsonString(full)),
+        )
+        val row = ChatScreenState.from(structural() + thinking).rows
+            .flatMap { visibleRows(listOf(it)) }
+            .filterIsInstance<ChatRow.Thinking>().single()
+        assertEquals("Second reasoning paragraph.", row.summary)
+        assertEquals(full, row.fullReasoning)
+        assertNull(row.fullReasoningTruncated)
+    }
+
+    @Test
+    fun `reasoning event through UiState into screen keeps markdown body and settled summary`() {
+        val full = "Inspect the inputs.\n\n**Plan**: compare each option.\nKeep the full markdown body."
+        val events = listOf(
+            HarnessEvent("s1", 0L, 1L, HarnessKind.TurnStarted("1")),
+            HarnessEvent("s1", 1L, null, HarnessKind.ReasoningDelta(full)),
+            HarnessEvent("s1", 2L, 2L, HarnessKind.AssistantMessage("Done")),
+        )
+        val nodes = UiStateProjector.project(events)
+        val pill = nodes.single { it.kind == UiStateKind.THINKING_PILL }
+        assertEquals("Plan: compare each option.", pill.text)
+        assertEquals(full, (pill.props["fullReasoning"] as JsonString).value)
+        val row = visibleRows(ChatScreenState.from(nodes).rows).filterIsInstance<ChatRow.Thinking>().single()
+        assertEquals("Plan: compare each option.", row.summary)
+        assertEquals(full, row.fullReasoning)
+        assertEquals(false, row.fullReasoningTruncated)
+    }
+
     @Test
     fun `todo dock rows pass through only from host facts`() {
         val todo = TodoDockItem(id = "t1", content = "Review changes", status = "in_progress")
@@ -78,7 +242,18 @@ class ChatScreenStateTest {
                 ),
             ),
         )
-        val question = requireNotNull(ChatScreenState.from(structural() + ask).pending.primary)
+        val question = requireNotNull(
+            ChatScreenState.from(
+                structural() + ask,
+                local = ChatLocalState(
+                    pendingAnswerActions = mapOf(
+                        StateRequestId("q-1") to PendingAnswerActionState(
+                            StateRequestId("q-1"), PendingAnswerAction.SUBMIT, PendingAnswerActionStatus.FAILED, "retry me",
+                        ),
+                    ),
+                ),
+            ).pending.primary,
+        )
         assertEquals("color", question.questionItems.single().id)
         assertEquals("Choose a color", question.questionItems.single().prompt)
         val typed = question.questionItems.single()
@@ -94,6 +269,10 @@ class ChatScreenStateTest {
         assertEquals("try again", question.submissionError)
         assertEquals(0, question.initialProgress?.index)
         assertEquals(listOf("blue (recommended)"), question.initialProgress?.drafts?.get("color"))
+        assertEquals("color", question.form?.currentQuestionId)
+        assertEquals(listOf("blue (recommended)"), question.form?.answers?.get("color"))
+        assertEquals(PendingAnswerActionStatus.FAILED, question.actionState?.status)
+        assertEquals("retry me", question.actionState?.error)
     }
 
     @Test
@@ -285,6 +464,7 @@ class ChatScreenStateTest {
             stats = "1.2k tokens",
         )
         assertEquals(GoalBarState.Visible("active", "ship F6"), visible.goal)
+        assertEquals(GoalPhase.ACTIVE, GoalBarState.Visible("active", "ship F6", phaseKind = GoalPhase.ACTIVE).phaseKind)
         assertEquals("1.2k tokens", visible.stats)
         assertNull(visibleRows(visible.rows).firstOrNull { it is ChatRow.SystemEvent })
     }
