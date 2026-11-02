@@ -112,6 +112,12 @@ public object ComposerTokens {
         UiTokenNames.GEOMETRY_CHROME_INSET,
         UiTokenNames.GEOMETRY_COMPOSER_MAX_HEIGHT,
         UiTokenNames.GEOMETRY_COMPOSER_CONTROL_HEIGHT,
+        UiTokenNames.GEOMETRY_COMPOSER_MIN_HEIGHT,
+        UiTokenNames.GEOMETRY_COMPOSER_OUTER_MARGIN_TOP,
+        UiTokenNames.GEOMETRY_COMPOSER_OUTER_MARGIN_BOTTOM,
+        UiTokenNames.GEOMETRY_COMPOSER_PORT_TOP,
+        UiTokenNames.GEOMETRY_COMPOSER_CONTROL_TOP,
+        UiTokenNames.GEOMETRY_COMPOSER_CONTROL_BOTTOM,
         UiTokenNames.GEOMETRY_STAT_PILL_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_COMPOSER_CONTROL_SIZE,
         UiTokenNames.SPACING_ICON_TEXT,
@@ -167,7 +173,7 @@ public fun Composer(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    val shape = RoundedCornerShape(ChatMetrics.COMPOSER_RADIUS_PT.dp)
+    val shape = RoundedCornerShape(tokens.radius.composer)
     val focusRequester = remember { FocusRequester() }
     // Keep selection/composition data from the platform editor while the host
     // continues to own the plain-text draft. External command/reference picks
@@ -193,10 +199,10 @@ public fun Composer(
             .fillMaxWidth()
             .testTag(UiTags.COMPOSER)
             .padding(
-                start = ChatMetrics.COMPOSER_OUTER_MARGIN_H_PT.dp,
-                end = ChatMetrics.COMPOSER_OUTER_MARGIN_H_PT.dp,
-                top = ChatMetrics.COMPOSER_OUTER_MARGIN_TOP_PT.dp,
-                bottom = ChatMetrics.COMPOSER_OUTER_MARGIN_BOTTOM_PT.dp,
+                start = tokens.geometry.composerOuterMarginH,
+                end = tokens.geometry.composerOuterMarginH,
+                top = tokens.geometry.composerOuterMarginTop,
+                bottom = tokens.geometry.composerOuterMarginBottom,
             ),
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
@@ -223,7 +229,7 @@ public fun Composer(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = ChatMetrics.COMPOSER_PORT_TOP_PT.dp),
+                    .padding(top = tokens.geometry.composerPortTop),
             ) {
                 Box(
                     modifier = Modifier
@@ -279,8 +285,8 @@ public fun Composer(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(
-                                min = ChatMetrics.COMPOSER_TEXT_MIN_HEIGHT_PT.dp,
-                                max = ChatMetrics.COMPOSER_PORT_MAX_HEIGHT_PT.dp,
+                                min = tokens.geometry.composerMinHeight,
+                                max = tokens.geometry.composerMaxHeight,
                             )
                             .focusRequester(focusRequester)
                             .onPreviewKeyEvent(::handleHardwareEnter)
@@ -299,12 +305,12 @@ public fun Composer(
                         .padding(
                             start = ChatMetrics.COMPOSER_CONTROL_LEADING_PT.dp,
                             end = ChatMetrics.COMPOSER_CONTROL_TRAILING_PT.dp,
-                            top = ChatMetrics.COMPOSER_CONTROL_TOP_PT.dp,
-                            bottom = ChatMetrics.COMPOSER_CONTROL_BOTTOM_PT.dp,
+                            top = tokens.geometry.composerControlTop,
+                            bottom = tokens.geometry.composerControlBottom,
                         )
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().height(ChatMetrics.COMPOSER_CONTROL_ROW_HEIGHT_PT.dp),
+                        modifier = Modifier.fillMaxWidth().height(tokens.geometry.composerControlRowHeight),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(modifier = Modifier.weight(1f).fillMaxWidth()) { controls?.invoke() }
@@ -372,7 +378,7 @@ private fun SendKey(
         contentAlignment = Alignment.CenterEnd,
     ) {
         Box(
-            modifier = Modifier.size(ChatMetrics.SEND_DIAMETER_PT.dp)
+            modifier = Modifier.size(tokens.geometry.sendButtonDiameter)
                 .clip(CircleShape)
                 .background(if (enabled) tokens.colors.primaryButton else tokens.colors.userBubble)
                 .testTag(COMPOSER_SEND_CIRCLE_TAG),
@@ -403,7 +409,7 @@ private fun StopKey(
         contentAlignment = Alignment.CenterEnd,
     ) {
         Box(
-            modifier = Modifier.size(ChatMetrics.SEND_DIAMETER_PT.dp)
+            modifier = Modifier.size(tokens.geometry.sendButtonDiameter)
                 .clip(CircleShape)
                 .background(tokens.colors.primaryButton)
                 .testTag(COMPOSER_STOP_CIRCLE_TAG),
