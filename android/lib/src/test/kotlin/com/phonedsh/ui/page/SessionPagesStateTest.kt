@@ -127,8 +127,9 @@ class SessionPagesStateTest {
             zone = zone,
         )
         assertEquals(listOf("w2", "w1"), state.workspaces.map { it.id })
-        // Default names are numbered by their position among the folders.
-        assertEquals(listOf("工作文件夹", "工作文件夹 2"), state.workspaces.map { it.title })
+        // PR22 SessionsPage.swift:41-55 names the default folder 日常 and
+        // numbers repeated defaults by their position. Ordering stays unchanged.
+        assertEquals(listOf("日常", "日常 2"), state.workspaces.map { it.title })
         // A folder's rows follow the host's membership list, not the session list.
         assertEquals(listOf("s2", "s1"), state.workspaces[1].sessions.map { it.id })
         assertEquals(2L, state.workspaces[1].sessionCount)
@@ -276,8 +277,8 @@ class SessionPagesStateTest {
 
     @Test
     fun `default and path-like workspace names follow the baseline`() {
-        assertEquals(UiStrings.SESSIONS_WORKSPACE_DEFAULT, workspaceTitle("workspace", 1))
-        assertEquals(UiStrings.SESSIONS_WORKSPACE_INDEXED.format(2), workspaceTitle("工作文件夹", 2))
+        assertEquals("日常", workspaceTitle("workspace", 1))
+        assertEquals("日常 2", workspaceTitle("工作文件夹", 2))
         assertEquals("项目A", workspaceTitle("/dsh/workspace/项目A", 1))
         assertEquals("b", workspaceTitle("a/b/", 1))
         assertEquals(UiStrings.SESSIONS_WORKSPACE_UNNAMED, workspaceTitle("/", 1))

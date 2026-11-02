@@ -85,6 +85,20 @@ class TokenReferenceTest {
     }
 
     @Test
+    fun `required surface roles cannot disappear behind compatibility declarations`() {
+        val signatures = SpecFixtures.surfaces().associate { it.id to it.tokens.toSet() }
+        val missing = inventories().mapNotNull { inventory ->
+            val active = (inventory.declared + inventory.gaps).toSet()
+            val absent = signatures.getValue(inventory.id) - active
+            if (absent.isEmpty()) null else "${inventory.id}: $absent"
+        }
+        // Compatibility records extra roles; set subtraction alone does not
+        // establish that a required role is consumed. Keep this full-suite
+        // obligation while source-owned primitive/composite contracts migrate.
+        assertTrue("Required source-owned surface roles are missing: $missing", missing.isEmpty())
+    }
+
+    @Test
     fun `generated token data is in sync with the spec`() {
         val tokens = SpecFixtures.tokens
         assertEquals("token names", SpecFixtures.tokenNames(), UiTokenData.allNames)
