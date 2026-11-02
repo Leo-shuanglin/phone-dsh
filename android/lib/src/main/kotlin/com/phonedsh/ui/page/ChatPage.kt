@@ -645,7 +645,11 @@ private fun ChatHeader(
         HeaderAction(
             description = UiStrings.HEADER_DRAWER,
             onClick = onOpenSessions,
-            modifier = Modifier.size(HomeMetrics.navButton).shadow(tokens.geometry.pageBarButtonElevation, CircleShape)
+            modifier = Modifier.size(HomeMetrics.navButton).shadow(
+                    elevation = tokens.shadow.floatingRadius, shape = CircleShape,
+                    ambientColor = Color.Black.copy(alpha = tokens.shadow.floatingOpacity),
+                    spotColor = Color.Black.copy(alpha = tokens.shadow.floatingOpacity),
+                )
                 .clip(CircleShape).background(tokens.colors.surface)
                 .testTag(UiPageTags.CHAT_HEADER_DRAWER),
         )
@@ -674,7 +678,11 @@ private fun ChatHeader(
         }
         Row(
             modifier = Modifier.size(width = HomeMetrics.navPillWidth, height = HomeMetrics.navButton)
-                .shadow(tokens.geometry.pageBarButtonElevation, shape).clip(shape).background(tokens.colors.surface),
+                .shadow(
+                    elevation = tokens.shadow.floatingRadius, shape = shape,
+                    ambientColor = Color.Black.copy(alpha = tokens.shadow.floatingOpacity),
+                    spotColor = Color.Black.copy(alpha = tokens.shadow.floatingOpacity),
+                ).clip(shape).background(tokens.colors.surface),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(modifier = Modifier.weight(1f)) {
@@ -3653,7 +3661,6 @@ internal object ChatPageTokens {
         UiTokenNames.GEOMETRY_NAV_BUTTON,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_PAGE_BAR_BUTTON_ELEVATION,
         UiTokenNames.GEOMETRY_PRIMARY_BUTTON_HEIGHT,
         UiTokenNames.GEOMETRY_STATUS_DOT_DIAMETER,
         UiTokenNames.GEOMETRY_TOOL_DETAIL_VERTICAL,

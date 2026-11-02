@@ -33,6 +33,11 @@ import androidx.compose.ui.unit.dp
  * `geometry.pageRowMinHeight` (44), both of which the rendered page exceeds.
  */
 public object SettingsMetrics {
+    /** 430pt PR22 workspace.png: 64pt text pill minus 32pt text => 16pt each side. */
+    public const val WORKSPACE_TOOLBAR_TEXT_INSET_H_PT: Int = 16
+    /** UIKit toolbar halo is unmeasured on Android; preserve zero elevation until a native comparison. */
+    public const val WORKSPACE_TOOLBAR_SHADOW_ELEVATION_PT: Int = 0
+
     /** SettingsPage.swift ArchivedSessionsPage: title/time VStack spacing 2. */
     public const val ARCHIVE_TEXT_GAP_PT: Int = 2
 

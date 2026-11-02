@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 package com.phonedsh.ui.surface
 
+import androidx.compose.ui.unit.dp
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -164,8 +166,8 @@ class SharedPageChromeTest {
                 PageBarCapsule(
                     description = "打开文件",
                     onClick = { calls += 1 },
-                    insetH = tokens.geometry.pageBarButtonInsetH,
-                    elevation = tokens.geometry.pageBarButtonElevation,
+                    insetH = com.phonedsh.ui.SettingsMetrics.WORKSPACE_TOOLBAR_TEXT_INSET_H_PT.dp,
+                    elevation = com.phonedsh.ui.SettingsMetrics.WORKSPACE_TOOLBAR_SHADOW_ELEVATION_PT.dp,
                     enabled = enabled,
                     tag = "page-capsule",
                 )

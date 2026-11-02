@@ -234,8 +234,6 @@ public data class UiGeometry(
     public val pageRowMinHeight: Dp,
     public val pageListRowMinHeight: Dp,
     public val statusDotDiameter: Dp,
-    public val pageBarButtonInsetH: Dp,
-    public val pageBarButtonElevation: Dp,
     /** PR22 runtime rule: `(containerWidth - 2 * contentInset) * ratio`. */
     public val bubbleMaxWidthRatio: Float,
     /** Grouped list/form minimum row height (HomeSpec 48). */
@@ -422,8 +420,6 @@ public data class UiTokens(
                 pageRowMinHeight = UiTokenData.geometryPageRowMinHeight.dp(),
                 pageListRowMinHeight = UiTokenData.geometryPageListRowMinHeight.dp(),
                 statusDotDiameter = UiTokenData.geometryStatusDotDiameter.dp(),
-                pageBarButtonInsetH = UiTokenData.geometryPageBarButtonInsetH.dp(),
-                pageBarButtonElevation = UiTokenData.geometryPageBarButtonElevation.dp(),
                 bubbleMaxWidthRatio = UiTokenData.geometryBubbleMaxWidthRatio.ratio(),
                 defaultMinListRowHeight = UiTokenData.geometryDefaultMinListRowHeight.dp(),
                 homePrimaryButtonHeight = UiTokenData.geometryHomePrimaryButtonHeight.dp(),

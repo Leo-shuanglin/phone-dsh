@@ -1419,7 +1419,7 @@ public object UiStrings {
     public const val HEADER_RUN_STATUS: String = "运行状态"
     public const val HEADER_MORE: String = "更多操作"
     public const val HEADER_EXPORT: String = "导出对话记录"
-    public const val HEADER_SESSION_SETTINGS: String = "本会话设置"
+    public const val HEADER_SESSION_SETTINGS: String = "插件与工具"
     public const val SESSION_TITLE_NEW: String = "新会话"
     public const val SESSION_TITLE_CURRENT: String = "当前会话"
     public const val RENAME_DIALOG_TITLE: String = "重命名会话"
@@ -1986,7 +1986,7 @@ public object UiStrings {
     // The chat page-head menu's two session-scoped rows (`ChatPage.swift:256`,
     // `:260`). They are visible menu copy, not screen-reader strings.
     public const val HEADER_ARTIFACTS: String = "产物"
-    public const val HEADER_WORKBENCH: String = "右侧边栏"
+    public const val HEADER_WORKBENCH: String = "工作区"
 
     // -----------------------------------------------------------------------
     // L25 lane: the two embedded subpages of README §1's

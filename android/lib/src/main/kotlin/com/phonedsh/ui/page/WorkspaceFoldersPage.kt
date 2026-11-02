@@ -377,8 +377,8 @@ public fun WorkspaceFoldersPage(
             PageBarCapsule(
                 description = UiStrings.WORKSPACE_ADD,
                 onClick = onBeginCreate,
-                insetH = tokens.geometry.pageBarButtonInsetH,
-                elevation = tokens.geometry.pageBarButtonElevation,
+                insetH = com.phonedsh.ui.SettingsMetrics.WORKSPACE_TOOLBAR_TEXT_INSET_H_PT.dp,
+                elevation = com.phonedsh.ui.SettingsMetrics.WORKSPACE_TOOLBAR_SHADOW_ELEVATION_PT.dp,
                 enabled = state.canWrite,
                 tag = UiPageTags.WORKSPACE_NEW,
             )
@@ -829,7 +829,5 @@ internal object WorkspaceFoldersPageTokens {
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
         // L75: the toolbar capsule's two page-layer lengths. The white page fill and
         // the 34 pt title are the frame's (`pageFill` / `largeTitle`).
-        UiTokenNames.GEOMETRY_PAGE_BAR_BUTTON_INSET_H,
-        UiTokenNames.GEOMETRY_PAGE_BAR_BUTTON_ELEVATION,
     )
 }
