@@ -1,39 +1,28 @@
-// The 402 pt parity yardstick every screenshot is measured against.
+// The PR22 430 x 932 pt capture contract every Android screenshot is measured against.
 // SPDX-License-Identifier: MIT
 //
-// This object is the single owner of the numbers a `402 x 874 @3` capture is
-// compared to. It is NOT a second token store: the UI draws from
-// `LocalUiTokens`, whose geometry mirrors the iOS app (`ChatPage.swift`), and the
-// two reference layers are deliberately different. The clearest example is the
-// header: the iOS app draws a 44 pt bar (`geometry.pageHeaderMinHeight`), the
-// official UI draws 50 pt, and this file names the **official** number because a
-// parity review compares a screenshot to what the official UI shows.
+// PR22 replaces the older 402 pt official-UI yardstick: the authoritative
+// design is `docs/design/ios-home-design-spec-no-overview.html` and
+// `examples/probe-app/PhoneDSHProbe/HomeSpec.swift`, measured on a 430 x 932 pt
+// iPhone Pro Max frame. This object is the single owner of that frame and of the
+// shared page metrics that follow from it. It is NOT a second token store: the
+// per-surface numbers live in [HomeMetrics], [ChatMetrics], [SessionsMetrics],
+// [SettingsMetrics] and [ShellFilesMetrics].
 //
-// Sources, in order of authority:
+// Sources:
 //
-//   * `docs/receipts/ios-session-audit/screens/official/manifest.json` — the
-//     official golden's viewport contract: CSS `402 x 874`, `deviceScaleFactor 3`,
-//     PNG `1206 x 2622`, light, mobile emulation. Captured by
-//     `scripts/ios-parity/golden/capture-official.sh` (real `dsh web` + CDP).
-//   * `docs/receipts/ios-baseline-screens/conditions.txt` — the iOS baseline's
-//     identical screen contract (`screen_pt=402x874`, `screen_px=1206x2622`,
-//     `scale=3`), captured by `android/tools/ios-baseline-capture.sh`.
-//   * iOS PR #13 — the shared-metric list this file names:
-//     `header 50 / composer 370x98 / content 338 / tool row 24 / flow 6/12`.
-//     The per-number official derivations are receipted in
-//     `docs/receipts/ios-session-audit/08-composer.md` (S6 composer card, C-18
-//     header, C-25 content column) and `00-MASTER.md` (P1-04, P1-05).
+//   * `HomeSpec.swift` — the page's own table (chrome 16, content 20, nav 44,
+//     composer 104/56, tab 50, bubble r24, send 36).
+//   * `docs/design/ios-home-design-spec-no-overview.html` — the 430 x 932 pt
+//     canvas, 59 pt top / 34 pt bottom safe area, and the component geometry.
 //
 // Consumers:
 //
 //   * `android/tools/screenshot-capture.sh` reads the viewport constants out of
 //     this file to size the emulator display, so the capture viewport has exactly
 //     one definition.
-//   * the instrumented capture harness pins its frame against them
-//     (`ScreenshotProfile.IOS_PARITY`).
-//   * a page lane that implements one of the five metrics reads the constant
-//     instead of re-typing the number, and records the measurement in its own
-//     receipt.
+//   * the instrumented capture harness pins its frame against them.
+//   * a page lane reads the constant instead of re-typing the number.
 package com.phonedsh.ui
 
 import androidx.compose.ui.unit.Dp
@@ -53,19 +42,19 @@ import androidx.compose.ui.unit.dp
 public object UiMetrics {
     // ----------------------------------------------------------------- viewport
 
-    /** CSS viewport width of the official golden and the iOS baseline, in points. */
-    public const val BASELINE_WIDTH_PT: Int = 402
+    /** Design/capture width of the PR22 reference, in points. */
+    public const val BASELINE_WIDTH_PT: Int = 430
 
-    /** CSS viewport height of the official golden and the iOS baseline, in points. */
-    public const val BASELINE_HEIGHT_PT: Int = 874
+    /** Design/capture height of the PR22 reference, in points. */
+    public const val BASELINE_HEIGHT_PT: Int = 932
 
-    /** Device pixel ratio of both baselines (`deviceScaleFactor: 3`). */
+    /** Device pixel ratio of the reference (`@3x`). */
     public const val BASELINE_DPR: Int = 3
 
-    /** Golden PNG width: `402 pt x 3`. */
+    /** Reference PNG width: `430 pt x 3`. */
     public const val BASELINE_WIDTH_PX: Int = BASELINE_WIDTH_PT * BASELINE_DPR
 
-    /** Golden PNG height: `874 pt x 3`. */
+    /** Reference PNG height: `932 pt x 3`. */
     public const val BASELINE_HEIGHT_PX: Int = BASELINE_HEIGHT_PT * BASELINE_DPR
 
     /** Android `wm density` that makes 1 dp equal 1 pt: `160 x 3`. */
@@ -74,62 +63,66 @@ public object UiMetrics {
     // ------------------------------------------------- shared metrics (PR #13)
 
     /**
-     * Page header height: the official four-slot bar is `10 + 30 + 10`.
-     *
-     * iOS draws 44 pt here (`geometry.pageHeaderMinHeight`), so this is a
-     * yardstick difference, not a token.
+     * Floating nav row height: 44 pt (`HomeSpec.navButton`, `.nav { height: 44 }`).
+     * It starts 8 pt below the top safe area; the safe area itself is
+     * platform-owned and is not part of this content-frame number.
      */
-    public const val HEADER_HEIGHT_PT: Int = 50
+    public const val HEADER_HEIGHT_PT: Int = 44
 
-    /** The header's title row inside [HEADER_HEIGHT_PT] (`min-height: 30`). */
-    public const val HEADER_TITLE_ROW_PT: Int = 30
+    /** The nav row is a single 44 pt row: title (22) + subtitle (20) fit inside it. */
+    public const val HEADER_TITLE_ROW_PT: Int = 44
 
-    /** The header's vertical padding above and below the title row (`10`). */
-    public const val HEADER_VERTICAL_PAD_PT: Int = 10
+    /** No extra vertical padding inside the 44 pt nav row (the 8 pt is [HomeMetrics.NAV_TOP_PT]). */
+    public const val HEADER_VERTICAL_PAD_PT: Int = 0
 
-    /** Composer card width at 402 pt: `402 - 2 x 16`. */
-    public const val COMPOSER_WIDTH_PT: Int = 370
+    /** Composer card width at 430 pt: `430 - 2 x 16`. */
+    public const val COMPOSER_WIDTH_PT: Int = 398
 
-    /** Composer card height at 402 pt, single line of draft (`InputBar.module.css:45-77`). */
-    public const val COMPOSER_HEIGHT_PT: Int = 98
+    /** Open composer minimum height (`HomeSpec.composerOpenMinHeight = 104`). */
+    public const val COMPOSER_HEIGHT_PT: Int = 104
 
-    /** Composer card corner radius (`--dsw-radius-panel`); iOS draws 22. */
-    public const val COMPOSER_RADIUS_PT: Int = 28
+    /** Closed composer height (`.composer.closed { height: 56 }`). */
+    public const val COMPOSER_CLOSED_HEIGHT_PT: Int = 56
+
+    /** Open composer radius (`HomeSpec.composerOpenRadius = 24`). */
+    public const val COMPOSER_RADIUS_PT: Int = 24
+
+    /** Closed composer radius (`.composer.closed { border-radius: 28px }`). */
+    public const val COMPOSER_CLOSED_RADIUS_PT: Int = 28
 
     /**
-     * Transcript content column at 402 pt: `402 - 2 x 32`.
-     *
-     * The official page insets the message column by `16` (composer clearance)
-     * `+ 16` (card padding); the composer stays 370 wide, i.e. 338 is the narrower
-     * of the two card families (`08-composer.md` C-25).
+     * Reading content column at 430 pt: `430 - 2 x 20` (`HomeSpec.contentInset`).
      */
-    public const val CONTENT_COLUMN_WIDTH_PT: Int = 338
+    public const val CONTENT_COLUMN_WIDTH_PT: Int = 390
 
-    /** Composer-to-screen inset, both sides: `(402 - 370) / 2`. */
+    /** Composer-to-screen inset, both sides: `(430 - 398) / 2`. */
     public const val COMPOSER_OUTER_MARGIN_PT: Int =
         (BASELINE_WIDTH_PT - COMPOSER_WIDTH_PT) / 2
 
-    /** Content-column inset, both sides: `(402 - 338) / 2`. */
+    /** Content-column inset, both sides: `(430 - 390) / 2`. */
     public const val CONTENT_COLUMN_INSET_PT: Int =
         (BASELINE_WIDTH_PT - CONTENT_COLUMN_WIDTH_PT) / 2
 
-    /** Collapsed tool row height (`geometry.disclosureRowHeight`, surface-owned). */
+    /** Collapsed process row height (`HomeSpec.processRowHeight = 24`). */
     public const val TOOL_ROW_HEIGHT_PT: Int = 24
 
-    /** Flow gap between adjacent rows of the same group (official row spacing `6`). */
-    public const val FLOW_GAP_PT: Int = 6
+    /** Block gap between transcript blocks (`HomeSpec.blockGap = 20`). */
+    public const val FLOW_GAP_PT: Int = 20
 
-    /** Flow gap after a response row, before the next row (official `12`). */
-    public const val FLOW_GAP_RESPONSE_PT: Int = 12
+    /** Gap after a response row (`HomeSpec.blockGap = 20`; the old 12 is gone). */
+    public const val FLOW_GAP_RESPONSE_PT: Int = 20
 
-    /**
-     * Flow gap after a `turn-process` control row (official `16`).
-     *
-     * PR #13 pinned `6/12`; the official matrix has this third value
-     * (`05-timeline.md` T-05, `ChatView.module.css:68-84,116-121`) and the audit
-     * flags the missing one, so it is named here rather than left in a comment.
-     */
-    public const val FLOW_GAP_TURN_PROCESS_PT: Int = 16
+    /** Gap after a turn-process control row (`HomeSpec.blockGap = 20`). */
+    public const val FLOW_GAP_TURN_PROCESS_PT: Int = 20
+
+    /** Paragraph gap after a user bubble / between paragraphs (`16`). */
+    public const val PARAGRAPH_GAP_PT: Int = 16
+
+    /** Process row to its opened card (`HomeSpec.disclosureGap = 8`). */
+    public const val DISCLOSURE_GAP_PT: Int = 8
+
+    /** Tab bar content height above the bottom safe area (`HomeSpec.tabBarHeight = 50`). */
+    public const val TAB_BAR_HEIGHT_PT: Int = 50
 
     // ------------------------------------------------------------ dp accessors
 
@@ -141,6 +134,9 @@ public object UiMetrics {
 
     /** [COMPOSER_HEIGHT_PT] as a Compose length. */
     public val composerHeight: Dp get() = COMPOSER_HEIGHT_PT.dp
+
+    /** [COMPOSER_CLOSED_HEIGHT_PT] as a Compose length. */
+    public val composerClosedHeight: Dp get() = COMPOSER_CLOSED_HEIGHT_PT.dp
 
     /** [CONTENT_COLUMN_WIDTH_PT] as a Compose length. */
     public val contentColumnWidth: Dp get() = CONTENT_COLUMN_WIDTH_PT.dp
@@ -155,7 +151,7 @@ public object UiMetrics {
     public val flowGapResponse: Dp get() = FLOW_GAP_RESPONSE_PT.dp
 
     /**
-     * True when a capture is the contract frame: 1206 x 2622 px at 480 dpi.
+     * True when a capture is the contract frame: 1290 x 2796 px at 480 dpi.
      *
      * A capture at any other size is not comparable to the golden and must not be
      * written into the parity baseline directory.

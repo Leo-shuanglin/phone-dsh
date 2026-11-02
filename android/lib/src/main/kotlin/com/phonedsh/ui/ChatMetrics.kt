@@ -1,20 +1,20 @@
-// The Chat family's iOS-measured geometry, declared once.
+// The Chat family's PR22 geometry, declared once.
 // SPDX-License-Identifier: MIT
 //
 // Authority order used for every number below:
 //
-//   1. `examples/probe-app/PhoneDSHProbe/*.swift` — the implementation, read as
-//      the highest authority: a literal there is what the phone draws.
-//   2. `docs/receipts/ios-session-audit/screens/current/*.png` — 1206 x 2622 px
-//      at DPR 3, so a pixel measurement divides by 3 to become points.
-//   3. `docs/receipts/ios-session-audit/screens/official/manifest.json` — the
-//      official web golden. It carries the viewport (402 x 874 @3) and the
-//      interaction `rect`s only; it has **no** layout-metric table, so it
-//      contributes no geometry below.
+//   1. `examples/probe-app/PhoneDSHProbe/HomeSpec.swift` + the PR22 page source —
+//      the home implementation at 430 x 932 pt: nav row, transcript, bubble and
+//      open/closed composer all read HomeSpec directly.
+//   2. `NativeParityTokens.swift` and the subcomponent Swift files PR22 kept
+//      (question composer, todo dock, plan review, tool cards) — those rows are
+//      still drawn from the parity table, so their literals remain exact.
+//   3. PNG measurements from the audit screenshots; `pt = px / 3`.
 //
-// The older `docs/receipts/ios-baseline-screens/*.png` set is deliberately NOT
-// cited: its chat shots predate the parity rewrite (44 pt header, 22 pt
-// composer, 17 pt body, no header hairline). The L6 receipt lists that set.
+// `UiMetrics` owns the frame/yardstick; this object owns the Chat page's
+// per-surface numbers. Values PR22 no longer states keep their last measured
+// parity value and say `inferred` / `legacy` in their own KDoc; no value below
+// was invented for the new design.
 //
 // Confidence vocabulary (same in every `*Metrics.kt` file):
 //
@@ -48,70 +48,76 @@ public object ChatMetrics {
     public const val NO_GAP_PT: Int = 0
     // ------------------------------------------------------------------ header
 
-    /** Page header height. Source: `NativeParityTokens.swift:99` (`headerHeight = 50`), drawn at `ChatPage.swift:195,303`. Confidence: exact. */
-    public const val HEADER_HEIGHT_PT: Int = 50
+    /** PR22 floating nav row height. Source: `HomeSpec.navButton = 44`, `.nav { height: 44 }`. Confidence: exact. */
+    public const val HEADER_HEIGHT_PT: Int = 44
 
     /**
-     * Header title size. Source: `NativeParityTokens.swift:65` (`headerTitleSize = 14`).
-     * This is a reference value only: Android text sizes come from `LocalUiType`.
+     * PR22 nav title size. Source: `HomeSpec.navTitleSize = 17.5`.
+     * Reference only: Android text sizes come from `LocalUiType`.
      * Confidence: exact.
      */
-    public const val HEADER_TITLE_REF_PT: Int = 14
+    public const val HEADER_TITLE_REF_PT: Float = 17.5f
 
-    /** Header title weight (`.medium`). Source: `NativeParityTokens.swift:66`. Reference only. Confidence: exact. */
-    public const val HEADER_TITLE_WEIGHT_REF: Int = 500
+    /** PR22 nav title weight (`.semibold`). Source: design spec `nav.title 600`. Reference only. Confidence: exact. */
+    public const val HEADER_TITLE_WEIGHT_REF: Int = 600
 
-    /** Header horizontal inset. Source: `ChatPage.swift:302` (`.padding(.horizontal, 16)`). Confidence: exact. */
+    /** PR22 nav horizontal inset. Source: `HomeSpec.chromeInset = 16`. Confidence: exact. */
     public const val HEADER_HORIZONTAL_INSET_PT: Int = 16
 
-    /** Sidebar glyph slot inside the 50 pt bar: 32 x 44. Source: `ChatPage.swift:224`. Confidence: exact. */
-    public const val HEADER_LEADING_SLOT_WIDTH_PT: Int = 32
+    /** Drawer button slot: 44 x 44. Source: `HomeSpec.navButton`, `ChatPage.swift:207`. Confidence: exact. */
+    public const val HEADER_LEADING_SLOT_WIDTH_PT: Int = 44
 
-    /** Device entry slot: 36 x 44. Source: `ChatPage.swift:235`. Confidence: exact. */
-    public const val HEADER_DEVICE_SLOT_WIDTH_PT: Int = 36
+    /** Device entry half of the 92 pt pill: 46 x 44. Source: `ChatPage.swift:247`. Confidence: exact. */
+    public const val HEADER_DEVICE_SLOT_WIDTH_PT: Int = 46
 
-    /** Overflow ("more") slot: 44 x 44. Source: `ChatPage.swift:288`. Confidence: exact. */
-    public const val HEADER_TRAILING_SLOT_WIDTH_PT: Int = 44
+    /** Overflow ("more") half of the 92 pt pill: 46 x 44. Source: `ChatPage.swift:330`. Confidence: exact. */
+    public const val HEADER_TRAILING_SLOT_WIDTH_PT: Int = 46
 
-    /** Every header control's height (the bar is 50, controls keep the 44 hit box). Source: `ChatPage.swift:224,235,288`. Confidence: exact. */
+    /** Every nav control's height (the row is 44). Source: `HomeSpec.navButton`. Confidence: exact. */
     public const val HEADER_SLOT_HEIGHT_PT: Int = 44
 
-    /** Side reserve the centred title must clear on both sides. Source: `ChatPage.swift:216` (`.padding(.horizontal, 104)`). Confidence: exact. */
-    public const val HEADER_TITLE_SIDE_RESERVE_PT: Int = 104
+    /** Side reserve the centred title must clear: 16 + 44 + 16 left, 92 + 16 right. Source: `HomeSpec.chromeInset/navButton/navPillWidth`. Confidence: inferred. */
+    public const val HEADER_TITLE_SIDE_RESERVE_PT: Int = 108
 
-    /** Header bottom hairline. Source: `ChatPage.swift:199` (`.frame(height: 0.5)`). Confidence: exact. */
-    public const val HEADER_DIVIDER_PT: Float = 0.5f
+    /** PR22 has no header hairline: the nav row floats on the page. Source: `ChatPage.swift:384` (`.background(HomeSpec.page)`). Confidence: exact. */
+    public const val HEADER_DIVIDER_PT: Float = 0f
 
     // -------------------------------------------------------------- transcript
 
-    /** Transcript content column at 402 pt. Source: `NativeParityTokens.swift:94` (`contentWidth = 338`). Same value as [UiMetrics.CONTENT_COLUMN_WIDTH_PT]. Confidence: exact. */
-    public const val CONTENT_COLUMN_WIDTH_PT: Int = 338
+    /** PR22 content column at 430 pt: `430 - 2 x 20`. Source: `HomeSpec.contentInset`. Confidence: exact. */
+    public const val CONTENT_COLUMN_WIDTH_PT: Int = 390
 
-    /** Transcript side inset (both sides). Source: `NativeParityTokens.swift:123` (`transcriptSide = 32`), drawn at `ChatPage.swift:1162`. Confidence: exact. */
-    public const val TRANSCRIPT_SIDE_INSET_PT: Int = 32
+    /** PR22 transcript side inset. Source: `HomeSpec.contentInset = 20`, `ChatPage.swift:1219`. Confidence: exact. */
+    public const val TRANSCRIPT_SIDE_INSET_PT: Int = 20
 
-    /** First transcript row's top inset. Source: `ChatPage.swift:1163` (`.padding(.top, 16)`). Confidence: exact. */
-    public const val TRANSCRIPT_TOP_INSET_PT: Int = 16
+    /** Nav bottom -> timestamp gap. Source: design spec spacing table (`20`). Confidence: exact. */
+    public const val TRANSCRIPT_TOP_INSET_PT: Int = 20
 
-    /** Bottom clearance under the last row, so the composer never covers it. Source: `ChatPage.swift:1166` (`.padding(.bottom, 48)`). Confidence: exact. */
-    public const val TRANSCRIPT_BOTTOM_INSET_PT: Int = 48
+    /** Bottom clearance under the last row: composer height + 16. Source: design spec (`输入框高度 + 16`); open composer is 104. Confidence: inferred. */
+    public const val TRANSCRIPT_BOTTOM_INSET_PT: Int = 104 + 16
 
-    /** Gap between adjacent rows of the same flow group. Source: `NativeParityTokens.swift:120` (`flowGap = 6`). Confidence: exact. */
-    public const val FLOW_GAP_PT: Int = 6
+    /** Block gap between transcript blocks. Source: `HomeSpec.blockGap = 20`. Confidence: exact. */
+    public const val FLOW_GAP_PT: Int = 20
 
-    /** Gap after a response row. Source: `NativeParityTokens.swift:121` (`responseGap = 12`). Confidence: exact. */
-    public const val RESPONSE_GAP_PT: Int = 12
+    /** Gap after a response row. Source: `HomeSpec.blockGap = 20`. Confidence: exact. */
+    public const val RESPONSE_GAP_PT: Int = 20
 
-    /** Gap after a turn-process control row. Source: `NativeParityTokens.swift:122` (`turnGap = 16`). Confidence: exact. */
-    public const val TURN_GAP_PT: Int = 16
+    /** Gap after a turn-process control row. Source: `HomeSpec.blockGap = 20`. Confidence: exact. */
+    public const val TURN_GAP_PT: Int = 20
 
-    /** Collapsed tool / thinking disclosure row. Source: `NativeParityTokens.swift:101` and `NativeMessageRows.swift:43` (`.frame(height: 24)`). Confidence: exact. */
+    /** Paragraph gap after a user bubble / between paragraphs. Source: `HomeSpec.paragraphGap = 16`. Confidence: exact. */
+    public const val PARAGRAPH_GAP_PT: Int = 16
+
+    /** Process row -> its opened card. Source: `HomeSpec.disclosureGap = 8`. Confidence: exact. */
+    public const val DISCLOSURE_GAP_PT: Int = 8
+
+    /** Collapsed process row. Source: `HomeSpec.processRowHeight = 24`. Confidence: exact. */
     public const val DISCLOSURE_ROW_HEIGHT_PT: Int = 24
 
-    /** Disclosure leading icon box. Source: `NativeMessageRows.swift:26` (`.frame(width: 16, height: 16)`). Confidence: exact. */
-    public const val DISCLOSURE_ICON_PT: Int = 16
+    /** Process row leading icon box. Source: `HomeSpec.processIcon = 18`. Confidence: exact. */
+    public const val DISCLOSURE_ICON_PT: Int = 18
 
-    /** Icon-to-title gap. Source: `NativeMessageRows.swift:27` (`.padding(.trailing, 6)`). Confidence: exact. */
+    /** Icon-to-title gap. Source: design spec (`间隔 6`). Confidence: exact. */
     public const val DISCLOSURE_ICON_GAP_PT: Int = 6
 
     /** Expanded thinking body's leading indent. Source: `NativeMessageRows.swift:82` (`.padding(.leading, 22)`). Confidence: exact. */
@@ -120,16 +126,16 @@ public object ChatMetrics {
     /** Expanded thinking body's vertical inset. Source: `NativeMessageRows.swift:83` (`.padding(.vertical, 4)`). Confidence: exact. */
     public const val THINKING_CONTENT_VERTICAL_PT: Int = 4
 
-    /** Closed-turn process control row height. Source: `NativeParityTokens.swift:100` (`turnProcessHeight = 33`), drawn at `NativeTurnProcessRow.swift:179`. Confidence: exact. */
-    public const val TURN_PROCESS_HEIGHT_PT: Int = 33
+    /** Closed-turn process control row height. PR22 uses the 24 pt process row. Source: `HomeSpec.processRowHeight`. Confidence: exact. */
+    public const val TURN_PROCESS_HEIGHT_PT: Int = 24
 
     // --------------------------------------------------------------- user bubble
 
-    /** User bubble corner radius (continuous). Source: `NativeParityTokens.swift:115` (`radiusXL = 20`), drawn at `ChatPage.swift:3741`; `tokens.json` declares `radius.bubble: 20` as of L9. Confidence: exact. */
-    public const val USER_BUBBLE_RADIUS_PT: Int = 20
+    /** User bubble corner radius. Source: `HomeSpec.bubbleRadius = 24`, top-trailing square. Confidence: exact. */
+    public const val USER_BUBBLE_RADIUS_PT: Int = 24
 
-    /** User bubble maximum width. Source: `NativeParityTokens.swift:98` (`userBubbleMaxWidth = 277`), applied at `ChatPage.swift:3742`; `tokens.json` declares `geometry.bubbleMaxWidth: 277` as of L9. Confidence: exact. */
-    public const val USER_BUBBLE_MAX_WIDTH_PT: Int = 277
+    /** User bubble maximum width: 80% of the 390 pt content column. Source: `ChatPage.swift:3906` (`(width - 2 * contentInset) * 0.8`). Confidence: exact. */
+    public const val USER_BUBBLE_MAX_WIDTH_PT: Int = 312
 
     // The user bubble's 16 h / 10 v text insets (`ChatPage.swift:3738-3739`) are
     // **not** declared here any more: L22 landed the spec split, so the bubble
@@ -137,11 +143,11 @@ public object ChatMetrics {
     // file no longer holds a second copy of those two numbers. Keeping a constant
     // next to a token with the same value is the drift this repo rejects.
 
-    /** User bubble line box (the extra leading is `22 - font.lineHeight`). Source: `NativeParityTokens.swift:74-76`. Confidence: exact. */
-    public const val USER_BUBBLE_LINE_HEIGHT_PT: Int = 22
+    /** User bubble line box. Source: `HomeSpec.bodyLine = 24`. Confidence: exact. */
+    public const val USER_BUBBLE_LINE_HEIGHT_PT: Int = 24
 
-    /** Assistant paragraph spacing. Source: `NativeChatTheme.swift:49`. Confidence: exact. */
-    public const val MESSAGE_PARAGRAPH_SPACING_PT: Int = 20
+    /** Assistant paragraph spacing. Source: `HomeSpec.paragraphGap = 16`. Confidence: exact. */
+    public const val MESSAGE_PARAGRAPH_SPACING_PT: Int = 16
 
     /** Assistant list spacing. Source: `NativeChatTheme.swift:50`. Confidence: exact. */
     public const val MESSAGE_LIST_SPACING_PT: Int = 10
@@ -151,8 +157,8 @@ public object ChatMetrics {
 
     // ----------------------------------------------------------------- composer
 
-    /** Composer card width at 402 pt. Source: `NativeParityTokens.swift:96` (`composerWidth = 370`); the 16 pt side insets are at `ChatPage.swift:1892`. Confidence: exact. */
-    public const val COMPOSER_WIDTH_PT: Int = 370
+    /** Open composer width at 430 pt: `430 - 2 x 16`. Source: `HomeSpec.chromeInset`, design spec `左右边距 16, 宽 398`. Confidence: exact. */
+    public const val COMPOSER_WIDTH_PT: Int = 398
 
     /**
      * Collapsed composer card height, **as drawn**: 94 pt.
@@ -170,15 +176,21 @@ public object ChatMetrics {
      * on purpose and lives in [UiMetrics.COMPOSER_HEIGHT_PT].
      * Confidence: exact (commit diff, re-summed).
      */
-    public const val COMPOSER_HEIGHT_PT: Int = 94
+    public const val COMPOSER_HEIGHT_PT: Int = 104
 
-    /** Composer card corner radius (continuous). Source: `NativeParityTokens.swift:116` (`radiusPanel = 28`), drawn at `ChatPage.swift:1884`; `tokens.json` declares `radius.composer: 28` as of L9. Confidence: exact. */
-    public const val COMPOSER_RADIUS_PT: Int = 28
+    /** Closed composer height. Source: design spec `.composer.closed { height: 56 }`. Confidence: exact. */
+    public const val COMPOSER_CLOSED_HEIGHT_PT: Int = 56
 
-    /** Composer outer side inset. Source: `ChatPage.swift:1892`. Confidence: exact. */
+    /** Open composer corner radius. Source: `HomeSpec.composerOpenRadius = 24`. Confidence: exact. */
+    public const val COMPOSER_RADIUS_PT: Int = 24
+
+    /** Closed composer corner radius. Source: design spec `.composer.closed { border-radius: 28 }`. Confidence: exact. */
+    public const val COMPOSER_CLOSED_RADIUS_PT: Int = 28
+
+    /** Composer outer side inset. Source: `HomeSpec.chromeInset = 16`. Confidence: exact. */
     public const val COMPOSER_OUTER_MARGIN_H_PT: Int = 16
 
-    /** Composer outer top inset. Source: `ChatPage.swift:1893`. Confidence: exact. */
+    /** Composer outer top inset. Not stated by PR22; kept from the previous measured render. Confidence: inferred. */
     public const val COMPOSER_OUTER_MARGIN_TOP_PT: Int = 12
 
     /**
@@ -199,14 +211,14 @@ public object ChatMetrics {
     /** Input port maximum height before it scrolls internally. Source: `ChatPage.swift:1841` (`maxHeight: 336`). Confidence: exact. */
     public const val COMPOSER_PORT_MAX_HEIGHT_PT: Int = 336
 
-    /** Input port leading inset. Source: `ChatPage.swift:1849`. Confidence: exact. */
-    public const val COMPOSER_PORT_LEADING_PT: Int = 14
+    /** Input port leading inset. Source: design spec `.composer.open .ph { left: 16 }`. Confidence: exact. */
+    public const val COMPOSER_PORT_LEADING_PT: Int = 16
 
-    /** Input port trailing inset (the send column is outside it). Source: `ChatPage.swift:1850`. Confidence: exact. */
+    /** Input port trailing inset (the send column is outside it). Source: design spec `.composer.open .row { right: 8 }`. Confidence: exact. */
     public const val COMPOSER_PORT_TRAILING_PT: Int = 8
 
-    /** Input port top inset. Source: `ChatPage.swift:1852`. Confidence: exact. */
-    public const val COMPOSER_PORT_TOP_PT: Int = 8
+    /** Input port top inset. Source: design spec `.composer.open .ph { top: 16 }`. Confidence: exact. */
+    public const val COMPOSER_PORT_TOP_PT: Int = 16
 
     /**
      * Composer font size, forced to 16 so iOS focus zoom never triggers.
@@ -215,11 +227,11 @@ public object ChatMetrics {
      */
     public const val COMPOSER_FONT_REF_PT: Int = 16
 
-    /** Control row height. Source: `ChatPage.swift:1867` (`.frame(height: 32)`). Confidence: exact. */
-    public const val COMPOSER_CONTROL_ROW_HEIGHT_PT: Int = 32
+    /** Control row height. Source: design spec `.composer.open .row { height: 36 }`. Confidence: exact. */
+    public const val COMPOSER_CONTROL_ROW_HEIGHT_PT: Int = 36
 
-    /** Control row leading inset. Source: `ChatPage.swift:1865`. Confidence: exact. */
-    public const val COMPOSER_CONTROL_LEADING_PT: Int = 14
+    /** Control row leading inset. Source: design spec `.composer.open .row { left: 16 }`. Confidence: exact. */
+    public const val COMPOSER_CONTROL_LEADING_PT: Int = 16
 
     /** Trailing width reserved for the send circle. Source: `ChatPage.swift:1866` (`.padding(.trailing, 40)`). Confidence: exact. */
     public const val COMPOSER_CONTROL_TRAILING_RESERVE_PT: Int = 40
@@ -235,20 +247,20 @@ public object ChatMetrics {
      */
     public const val COMPOSER_CONTROL_BOTTOM_PT: Int = 8
 
-    /** Send circle diameter. Source: `ChatPage.swift:1967` (`.frame(width: 34, height: 34)`). Confidence: exact. */
-    public const val SEND_DIAMETER_PT: Int = 34
+    /** Send/stop circle diameter. Source: `HomeSpec.sendButton = 36`. Confidence: exact. */
+    public const val SEND_DIAMETER_PT: Int = 36
 
     /** Send control hit frame. Source: `ChatPage.swift:1970` (`.frame(width: 44, height: 44)`). Confidence: exact. */
     public const val SEND_HIT_PT: Int = 44
 
-    /** Send/stop overlay inset from the card's trailing/bottom edges. Source: `ChatPage.swift:1880-1881`. Confidence: exact. */
-    public const val SEND_OVERLAY_INSET_PT: Int = 2
+    /** Send/stop overlay inset from the card's trailing/bottom edges. Source: design spec (`离右边和底边各 8`). Confidence: exact. */
+    public const val SEND_OVERLAY_INSET_PT: Int = 8
 
-    /** Stop circle when it shares the row with a submit control. Source: `ChatPage.swift:1876` (`stopButton(diameter: 24, ...)`). Confidence: exact. */
-    public const val STOP_INLINE_DIAMETER_PT: Int = 24
+    /** Stop circle when it shares the row with a submit control. PR22 uses the 36 pt send circle. Source: `HomeSpec.sendButton`. Confidence: exact. */
+    public const val STOP_INLINE_DIAMETER_PT: Int = 36
 
-    /** Stop circle when it replaces the send control. Source: `ChatPage.swift:1963` (`stopButton(diameter: 34, ...)`). Confidence: exact. */
-    public const val STOP_DIAMETER_PT: Int = 34
+    /** Stop circle when it replaces the send control. Source: `HomeSpec.sendButton = 36`. Confidence: exact. */
+    public const val STOP_DIAMETER_PT: Int = 36
 
     /** "回到最新" pill horizontal padding. Source: `ChatPage.swift:1244`. Confidence: exact. */
     public const val BACK_TO_LATEST_PADDING_H_PT: Int = 12
@@ -391,18 +403,18 @@ public object ChatMetrics {
 
     // ---------------------------------------------------------------- native header controls
 
-    /** ChatPage's drawer control width. Source: `ChatPage.swift:227`. Confidence: exact. */
-    public const val CHAT_DRAWER_WIDTH_PT: Int = 32
-    /** Device entry control width. Source: `ChatPage.swift:238`. Confidence: exact. */
-    public const val CHAT_DEVICE_ENTRY_WIDTH_PT: Int = 36
-    /** Overflow menu control width. Source: `ChatPage.swift:291`. Confidence: exact. */
-    public const val CHAT_HEADER_MENU_WIDTH_PT: Int = 44
-    /** Fixed side reserve around the centered session title. Source: `ChatPage.swift:219`. Confidence: exact. */
-    public const val CHAT_HEADER_TITLE_RESERVE_PT: Int = 104
-    /** Gap inside the device/menu group. Source: `ChatPage.swift:235`. Confidence: exact. */
-    public const val CHAT_HEADER_GROUP_GAP_PT: Int = 4
-    /** Drawer icon box. Source: `ChatPage.swift:225-227`. Confidence: exact. */
-    public const val CHAT_DRAWER_ICON_PT: Int = 20
+    /** ChatPage's drawer control width. Source: `HomeSpec.navButton = 44`. Confidence: exact. */
+    public const val CHAT_DRAWER_WIDTH_PT: Int = 44
+    /** Device entry control width (half the 92 pt pill). Source: `HomeSpec.navPillWidth`. Confidence: exact. */
+    public const val CHAT_DEVICE_ENTRY_WIDTH_PT: Int = 46
+    /** Overflow menu control width (half the 92 pt pill). Source: `HomeSpec.navPillWidth`. Confidence: exact. */
+    public const val CHAT_HEADER_MENU_WIDTH_PT: Int = 46
+    /** Fixed side reserve around the centered session title. Source: `HomeSpec.chromeInset/navButton/navPillWidth`. Confidence: inferred. */
+    public const val CHAT_HEADER_TITLE_RESERVE_PT: Int = 108
+    /** Gap inside the device/menu group. Source: design spec (two 46 pt halves, no gap). Confidence: exact. */
+    public const val CHAT_HEADER_GROUP_GAP_PT: Int = 0
+    /** Drawer icon box. Source: `HomeSpec.navIcon = 22`. Confidence: exact. */
+    public const val CHAT_DRAWER_ICON_PT: Int = 22
     /** Drawer icon stroke. Source: SF `sidebar.left` 20pt Android vector approximation. Confidence: approximated. */
     public const val CHAT_DRAWER_ICON_STROKE_TENTH_PT: Float = 1.5f
     /** Drawer icon inset and corner. Source: 20pt icon's interior stroke geometry. Confidence: approximated. */

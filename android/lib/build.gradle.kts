@@ -106,6 +106,16 @@ androidComponents {
 // ---------------------------------------------------------------------------
 val repoRoot: File = rootProject.projectDir.parentFile
 val tokensJson: File = repoRoot.resolve("spec/ui/v1/tokens.json")
+// PR22 home design authority. The HomeSpec Swift source is the page's own
+// number/colour table (430x932pt); the codegen below reads it directly so no
+// Kotlin file re-types one of its values. `ios-home-design-spec-no-overview.html`
+// is the prose/weight authority for the type roles HomeSpec stores only as
+// sizes (the two weights and the two line boxes the Swift file derives at call
+// sites).
+val homeSpecSwift: File =
+    repoRoot.resolve("examples/probe-app/PhoneDSHProbe/HomeSpec.swift")
+val homeSpecHtml: File =
+    repoRoot.resolve("docs/design/ios-home-design-spec-no-overview.html")
 val generatedTokensDir: File = layout.buildDirectory.dir("generated/ui-tokens/kotlin").get().asFile
 
 fun upperSnake(name: String): String =
@@ -122,6 +132,8 @@ val generateUiTokens = tasks.register("generateUiTokens") {
     description = "Generates Compose token accessors from spec/ui/v1/tokens.json."
     group = "build"
     inputs.file(tokensJson)
+    inputs.file(homeSpecSwift)
+    inputs.file(homeSpecHtml)
     outputs.dir(generatedTokensDir)
     doLast {
         @Suppress("UNCHECKED_CAST")
@@ -183,7 +195,7 @@ val generateUiTokens = tasks.register("generateUiTokens") {
             val weight = (entry["weight"] as Number).toInt()
             val mono = entry["mono"] as Boolean
             fields.append(
-                "    public val type${camel(key)}: TokenType = TokenType(\"$token\", ${baseSize}f, $weight, $mono)\n"
+                "    public val type${camel(key)}: TokenType = TokenType(\"$token\", ${baseSize}f, $weight, $mono, null)\n"
             )
             typeMap.append("        \"$token\" to type${camel(key)},\n")
         }
@@ -255,7 +267,9 @@ val generateUiTokens = tasks.register("generateUiTokens") {
         out.append("/** One typography token: a base size in pt that the platform scale multiplies. */\n")
         out.append("public data class TokenType(\n")
         out.append("    public val name: String,\n    public val baseSize: Float,\n    public val weight: Int,\n")
-        out.append("    public val mono: Boolean,\n)\n\n")
+        out.append("    public val mono: Boolean,\n")
+        out.append("    /** Optional line box in pt (PR22 HomeSpec roles); null keeps the platform line height. */\n")
+        out.append("    public val lineHeight: Float? = null,\n)\n\n")
         out.append("/** A spacing/radius/stroke token, in dp on Android. */\n")
         out.append("public data class TokenDp(public val name: String, public val value: Float)\n\n")
         out.append("/** A motion token; `curve` is the spec's curve name, resolved by the theme. */\n")
@@ -293,6 +307,194 @@ val generateUiTokens = tasks.register("generateUiTokens") {
         out.append("    public val allNames: Set<String> =\n")
         out.append("        colors.keys + types.keys + spacing.keys + radius.keys + stroke.keys + motion.keys + geometry.keys\n")
         out.append("}\n")
+
+
+        // ------------------------------------------------------------------
+        // PR22 HomeSpec table: read the Swift literals, never a Kotlin copy.
+        // ------------------------------------------------------------------
+        val homeSource = homeSpecSwift.readText()
+        val homeHtml = homeSpecHtml.readText()
+
+        val numberEntries = LinkedHashMap<String, Float>()
+        Regex("""static let (\w+): CGFloat = ([0-9.]+)""").findAll(homeSource).forEach { m ->
+            numberEntries[m.groupValues[1]] = m.groupValues[2].toFloat()
+        }
+        require(numberEntries.size >= 30) {
+            "HomeSpec.swift: parsed only ${numberEntries.size} CGFloat literals; the source shape changed"
+        }
+
+        val colourEntries = LinkedHashMap<String, Pair<Long, Long>>()
+        Regex("""static let (\w+) = NativeParityTokens\.color\(light: 0x([0-9A-Fa-f]{6}), dark: 0x([0-9A-Fa-f]{6})\)""")
+            .findAll(homeSource).forEach { m ->
+                colourEntries[m.groupValues[1]] =
+                    ("FF" + m.groupValues[2].uppercase()).toLong(16) to
+                        ("FF" + m.groupValues[3].uppercase()).toLong(16)
+            }
+        require(colourEntries.size >= 12) {
+            "HomeSpec.swift: parsed only ${colourEntries.size} colour literals; the source shape changed"
+        }
+
+        fun cssBlock(selector: String): String =
+            Regex(Regex.escape(selector) + """\s*\{([^}]*)\}""").find(homeHtml)
+                ?.groupValues?.get(1)
+                ?: error("home design spec: selector '$selector' not found")
+
+        fun cssFont(selector: String): Triple<Int, Float, Float> {
+            val block = cssBlock(selector)
+            val m = Regex("""font:\s*(\d+)\s+([0-9.]+)px/([0-9.]+)px""").find(block)
+                ?: error("home design spec: selector '$selector' has no font shorthand")
+            return Triple(
+                m.groupValues[1].toInt(),
+                m.groupValues[2].toFloat(),
+                m.groupValues[3].toFloat(),
+            )
+        }
+
+        fun swiftWeight(value: String): Int = when (value) {
+            "regular" -> 400
+            "medium" -> 500
+            "semibold" -> 600
+            "bold" -> 700
+            else -> error("HomeSpec.swift: unknown font weight .$value")
+        }
+
+        fun swiftFontWeight(pattern: String): Int {
+            val m = Regex(pattern).find(homeSource)
+                ?: error("HomeSpec.swift: expected a system font matching /$pattern/")
+            return swiftWeight(m.groupValues[1])
+        }
+
+        val navTitleFont = cssFont(".navtitle b")
+        val navSubtitleFont = cssFont(".navtitle span")
+        val bodyFont = cssFont(".body")
+        val processFont = cssFont(".proc")
+        val listItemFont = cssFont(".listcard div")
+        val tabLabelFont = cssFont(".tabbar div")
+
+        // The two role weights HomeSpec writes as SwiftUI names instead of CSS.
+        val buttonWeight = swiftFontWeight("""font\(\.system\(size: HomeSpec\.bodySize, weight: \.(\w+)\)\)""")
+        val tagWeight = swiftFontWeight("""font\(\.system\(size: 12, weight: \.(\w+)\)\)""")
+        val tagSize = Regex("""font\(\.system\(size: ([0-9.]+), weight: \.medium\)\)""")
+            .find(homeSource)?.groupValues?.get(1)?.toFloat()
+            ?: error("HomeSpec.swift: HomeTag's 12pt size is missing")
+
+        fun shadowFor(name: String): Triple<Float, Float, Float> {
+            val block = Regex("""func ${name}\(\) -> some View \{([\s\S]*?)\n    \}""")
+                .find(homeSource)?.groupValues?.get(1)
+                ?: error("HomeSpec.swift: shadow helper $name not found")
+            val m = Regex("""shadow\(color: \.black\.opacity\(([0-9.]+)\), radius: ([0-9.]+), y: ([0-9.]+)\)""")
+                .find(block)
+                ?: error("HomeSpec.swift: $name has no shadow literal")
+            return Triple(
+                m.groupValues[1].toFloat(),
+                m.groupValues[2].toFloat(),
+                m.groupValues[3].toFloat(),
+            )
+        }
+        val floatingShadow = shadowFor("homeFloatingShadow")
+        val composerShadow = shadowFor("homeComposerShadow")
+        val topTrailingRadius = Regex("""topTrailingRadius: ([0-9.]+)""").find(homeSource)
+            ?.groupValues?.get(1)?.toFloat()
+            ?: error("HomeSpec.swift: bubbleShape's top-trailing corner is missing")
+
+        data class HomeTypeRole(
+            val id: String,
+            val sizeConst: String,
+            val lineConst: String?,
+            val size: Float,
+            val weight: Int,
+            val line: Float?,
+        )
+
+        val homeTypeRoles = listOf(
+            HomeTypeRole(
+                "navTitle", "NAV_TITLE_SIZE", "NAV_TITLE_LINE",
+                numberEntries.getValue("navTitleSize"), navTitleFont.first,
+                numberEntries["navTitleLine"] ?: navTitleFont.third,
+            ),
+            HomeTypeRole(
+                "navSubtitle", "NAV_SUBTITLE_SIZE", "NAV_SUBTITLE_LINE",
+                numberEntries.getValue("navSubtitleSize"), navSubtitleFont.first,
+                numberEntries["navSubtitleLine"] ?: navSubtitleFont.third,
+            ),
+            HomeTypeRole(
+                "body", "BODY_SIZE", "BODY_LINE",
+                numberEntries.getValue("bodySize"), bodyFont.first,
+                numberEntries["bodyLine"] ?: bodyFont.third,
+            ),
+            HomeTypeRole(
+                "processBody", "PROCESS_SIZE", null,
+                numberEntries.getValue("processSize"), processFont.first, processFont.third,
+            ),
+            HomeTypeRole(
+                "listItem", "LIST_ITEM_SIZE", "LIST_ITEM_LINE",
+                numberEntries.getValue("listItemSize"), listItemFont.first,
+                numberEntries["listItemLine"] ?: listItemFont.third,
+            ),
+            HomeTypeRole(
+                "buttonLabel", "BODY_SIZE", null,
+                numberEntries.getValue("bodySize"), buttonWeight, null,
+            ),
+            HomeTypeRole(
+                "tagLabel", "TAG_LABEL_SIZE", null,
+                tagSize, tagWeight, null,
+            ),
+            HomeTypeRole(
+                "tabLabel", "TAB_LABEL_SIZE", null,
+                numberEntries.getValue("tabLabelSize"), tabLabelFont.first, tabLabelFont.third,
+            ),
+        )
+
+        val home = StringBuilder()
+        home.append("// GENERATED FILE - do not edit. Source: examples/probe-app/PhoneDSHProbe/HomeSpec.swift\n")
+        home.append("// SPDX-License-Identifier: MIT\n")
+        home.append("// Regenerate with: ./gradlew :lib:generateUiTokens\n")
+        home.append("package com.phonedsh.ui.theme.generated\n\n")
+        home.append("/** PR22 HomeSpec (430x932pt) grid, size, radius, colour, type and shadow table. */\n")
+        home.append("public object HomeSpecData {\n")
+        numberEntries.forEach { (key, homeValue) ->
+            // Once `tokens.json` declares a HomeSpec length (the a-tokens pass),
+            // that declaration is the single source; before it does, the Swift
+            // literal is. A disagreeing override fails the build here.
+            val specEntry = geometry[key] as? Map<*, *>
+            val value = if (specEntry != null) {
+                require(specEntry["unit"] == "pt") {
+                    "geometry.$key: HomeSpec lengths must be pt, was '${specEntry["unit"]}'"
+                }
+                (specEntry["value"] as Number).toFloat()
+            } else {
+                homeValue
+            }
+            home.append("    public const val ${upperSnake(key)}: Float = ${value}f\n")
+        }
+        home.append("\n")
+        colourEntries.forEach { (key, pair) ->
+            home.append("    public const val ${upperSnake(key)}_LIGHT: Long = ${pair.first}L\n")
+            home.append("    public const val ${upperSnake(key)}_DARK: Long = ${pair.second}L\n")
+        }
+        home.append("\n    public const val TAG_LABEL_SIZE: Float = ${tagSize}f\n")
+        home.append("    /** `bubbleShape`'s square top-trailing corner. */\n")
+        home.append("    public const val BUBBLE_TOP_TRAILING_RADIUS: Float = ${topTrailingRadius}f\n")
+        home.append("\n    public val types: Map<String, TokenType> = mapOf(\n")
+        homeTypeRoles.forEach { role ->
+            val line = role.line?.let { "${it}f" } ?: "null"
+            home.append("        \"typography.${role.id}\" to TokenType(\"typography.${role.id}\", ${role.size}f, ${role.weight}, false, $line),\n")
+        }
+        home.append("    )\n")
+        home.append("\n    /** Shadow helpers: black opacity, SwiftUI blur radius and y offset, in pt. */\n")
+        home.append("    public object Shadow {\n")
+        home.append("        public const val FLOATING_OPACITY: Float = ${floatingShadow.first}f\n")
+        home.append("        public const val FLOATING_RADIUS: Float = ${floatingShadow.second}f\n")
+        home.append("        public const val FLOATING_Y: Float = ${floatingShadow.third}f\n")
+        home.append("        public const val COMPOSER_OPACITY: Float = ${composerShadow.first}f\n")
+        home.append("        public const val COMPOSER_RADIUS: Float = ${composerShadow.second}f\n")
+        home.append("        public const val COMPOSER_Y: Float = ${composerShadow.third}f\n")
+        home.append("    }\n")
+        home.append("}\n")
+
+        val homeTarget = generatedTokensDir.resolve("com/phonedsh/ui/theme/generated/HomeSpecData.kt")
+        homeTarget.parentFile.mkdirs()
+        homeTarget.writeText(home.toString())
 
         val target = generatedTokensDir.resolve("com/phonedsh/ui/theme/generated/UiTokenData.kt")
         target.parentFile.mkdirs()

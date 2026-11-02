@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: MIT
 //
 // Shell: `NativeShell.swift:39-43` (`NativeHeaderStyle`) and the drawer
-// furniture row. Files: `FilesPage.swift` first, then
-// `docs/receipts/ios-session-audit/screens/current/darkpass-files-light.png`
-// (1206 x 2622 px @3, `pt = px / 3`) for the system-drawn navigation bar and
-// search field, which the page never writes as literals.
+// furniture row. Files: `FilesPage.swift` first, then the system-drawn
+// navigation bar and search field, which the page never writes as literals.
 //
-// Files uses `List(...).listStyle(.insetGrouped)` (`FilesPage.swift:53`), i.e.
-// the same system chrome as `SettingsPage`; the card margins/radius/row height
+// PR22 Files is a `.homeGroupedList()` page (`FilesPage.swift:124`) with an
+// **inline** navigation title, not the old large title: the page no longer
+// draws a 34 pt large-title header. The grouped card margins/radius/row height
 // measured for Settings therefore apply here too
 // ([SettingsMetrics.CARD_MARGIN_H_PT], [SettingsMetrics.CARD_RADIUS_PT],
-// [SettingsMetrics.ROW_HEIGHT_PT]). The Files screenshots in hand are the empty
-// state, so there is no Files-specific row/card measurement to add.
+// [SettingsMetrics.ROW_HEIGHT_PT]); the empty state is still the only
+// Files-specific capture, so [LARGE_TITLE_REF_PT] is kept as a legacy
+// measurement and [INLINE_TITLE_REF_PT] is the PR22 value.
 //
 // Confidence: see the vocabulary in `ChatMetrics.kt`.
 
@@ -45,8 +45,17 @@ public object ShellFilesMetrics {
 
     // ------------------------------------------------------------------- files
 
-    /** Large navigation title size. Source: `.navigationBarTitleDisplayMode(.large)` at `FilesPage.swift:52`; PNG check: "手机工作区" ink box y=377..465 px = 89 px = 29.7 pt, CJK ink ≈ 0.87 x size → 34 pt. Confidence: measured. */
+    /** Legacy large-title measurement; PR22 Files uses an inline title. Source: old `.large` capture. Confidence: measured (legacy). */
     public const val LARGE_TITLE_REF_PT: Int = 34
+
+    /** PR22 inline navigation title. Source: `FilesPage.swift` `.navigationBarTitleDisplayMode(.inline)` + `HomeAppearance` 17 pt semibold. Confidence: exact. */
+    public const val INLINE_TITLE_REF_PT: Int = 17
+
+    /** PR22 grouped-list body text. Source: `HomeSpec.homeGroupedList()` (`HomeSpec.bodySize = 16`). Confidence: exact. */
+    public const val GROUPED_LIST_BODY_REF_PT: Int = 16
+
+    /** PR22 grouped-list minimum row height. Source: `HomeSpec.homeGroupedList()` (`48`). Confidence: exact. */
+    public const val GROUPED_LIST_MIN_ROW_HEIGHT_PT: Int = 48
 
     /** Large title leading inset, measured: glyph starts x=53 px = 17.7 pt (16 pt page margin plus ~1.7 pt glyph bearing). Source: `darkpass-files-light.png` title ink box. Confidence: measured (glyph), inferred (the 16 pt margin). */
     public const val LARGE_TITLE_INSET_PT: Int = 16

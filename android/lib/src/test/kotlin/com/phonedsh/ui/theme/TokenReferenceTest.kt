@@ -186,6 +186,30 @@ class TokenReferenceTest {
         assertEquals(Color(0xFF000000), light.colors.systemLabel)
         assertEquals(Color(0xFFFFFFFF), dark.colors.systemLabel)
         assertEquals(Color(0xFF8A8A8E), light.colors.systemSecondary)
+        // PR22 HomeSpec palette: the three names that already existed take the
+        // HomeSpec value, and the new roles are appended.
+        assertEquals(Color(0xFFF7F7F7), light.colors.page)
+        assertEquals(Color(0xFF101012), dark.colors.page)
+        assertEquals(Color(0xFFFFFFFF), light.colors.surface)
+        assertEquals(Color(0xFF1C1C1E), dark.colors.surface)
+        assertEquals(Color(0xFFE8E8E8), light.colors.userBubble)
+        assertEquals(Color(0xFF2C2C2E), dark.colors.userBubble)
+        assertEquals(Color(0xFF191919), light.colors.primaryButton)
+        assertEquals(Color(0xFFF2F2F2), dark.colors.primaryButton)
+        assertEquals(Color(0xFFFFFFFF), light.colors.primaryButtonInk)
+        assertEquals(Color(0xFF111111), dark.colors.primaryButtonInk)
+        assertEquals(Color(0xFF1A1A1A), light.colors.textPrimary)
+        assertEquals(Color(0xFF555555), light.colors.textSecondary)
+        assertEquals(Color(0xFF717171), light.colors.textTertiary)
+        assertEquals(Color(0xFF7D7D7D), light.colors.textSubtle)
+        assertEquals(Color(0xFF888888), light.colors.textPlaceholder)
+        assertEquals(Color(0xFF8B8B8B), light.colors.inputPlaceholder)
+        assertEquals(Color(0xFFA9A9A9), light.colors.iconMuted)
+        assertEquals(Color(0xFF3DC979), light.colors.success)
+        assertEquals(Color(0xFFE2E2E2), light.colors.borderList)
+        assertEquals(0.05f, light.shadow.floatingOpacity, 0f)
+        assertEquals(5f, light.shadow.floatingRadius.value, 0f)
+        assertEquals(0.08f, light.shadow.composerOpacity, 0f)
         // The values the resolved theme must carry are the *current* spec's, not the
         // ones this test was written against: L9 re-based the two radii and the bubble
         // cap on the iOS implementation (`NativeParityTokens.swift:115-116` radiusXL =
