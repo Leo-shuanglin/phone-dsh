@@ -1229,6 +1229,8 @@ public object UiStrings {
     public const val SHELL_ARGUMENTS_PLACEHOLDER: String = "例如:--help\n文件名"
     public const val SHELL_RUN: String = "运行"
     public const val SHELL_CANCEL: String = "取消"
+    /** PDSHShellPage's in-flight command action (`PDSHShellPage.swift:69`). */
+    public const val SHELL_STOP_RUNNING: String = "停止运行"
     public const val SHELL_OUTPUT_TITLE: String = "输出"
     public const val SHELL_OUTPUT_EMPTY: String = "运行结果会显示在这里。"
     public const val SHELL_LIMITS_TITLE: String = "限制"
@@ -1647,16 +1649,16 @@ public object UiStrings {
     public const val DEVICE_CONTEXT_LABEL: String = "设备上下文"
     public const val DEVICE_REASONING_LABEL: String = "思考"
 
-    // 本 session 产物 (`SessionArtifactsPage.swift:31-188`).
-    public const val ARTIFACTS_TITLE: String = "本 session 产物"
+    // 本会话产物 (`SessionArtifactsPage.swift:31-188`).
+    public const val ARTIFACTS_TITLE: String = "本会话产物"
     public const val ARTIFACTS_LOADING: String = "正在读取产物…"
-    public const val ARTIFACTS_EMPTY_TITLE: String = "本 session 还没有已确认归属的产物"
+    public const val ARTIFACTS_EMPTY_TITLE: String = "本会话 还没有已确认归属的产物"
     public const val ARTIFACTS_EMPTY_HINT: String =
-        "此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本 session。"
-    public const val ARTIFACTS_SECTION_SESSION: String = "本 session"
+        "此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本会话。"
+    public const val ARTIFACTS_SECTION_SESSION: String = "本会话"
     public const val ARTIFACTS_SECTION_UNASSIGNED: String = "未归属"
     public const val ARTIFACTS_UNASSIGNED_FOOTER: String =
-        "这些记录没有当前会话的真实来源信息，不计为本 session 产物。"
+        "这些记录没有当前会话的真实来源信息，不计为本会话产物。"
     public const val ARTIFACTS_LOAD_FAILED: String = "无法读取产物：%s"
     public const val ARTIFACTS_OPEN_FAILED: String = "无法打开产物"
     public const val ARTIFACTS_MISSING_FILE: String = "文件已不在本机产物存储中。"
@@ -1686,11 +1688,14 @@ public object UiStrings {
     public const val AGENT_PRESETS_VIEW_CONFIG: String = "查看配置"
     public const val AGENT_PRESETS_MAKE_DEFAULT: String = "设为默认"
 
-    // 内置插件 (`NativePluginInventoryPage.swift`).
-    public const val PLUGIN_INVENTORY_TITLE: String = "内置插件"
-    public const val PLUGIN_INVENTORY_CONFIG: String = "插件配置"
+    // 已加载插件 (`NativePluginInventoryPage.swift`).
+    public const val PLUGIN_INVENTORY_TITLE: String = "已加载插件"
+    /** Destination title from NativeConfigurationPage; retained for callers. */
+    public const val PLUGIN_INVENTORY_CONFIG: String = "插件与工具"
+    @Deprecated("The source inventory page has no separate read-only CTA row.")
     public const val PLUGIN_INVENTORY_READ_ONLY: String =
-        "清单只读；修改官方插件、网页搜索和执行器配置请进入插件配置。"
+        "这台手机没有 pnpm、execa 或子进程安装环境。插件和 bundle 可以在这里查看；安装、启用和停用请在桌面 DSH 完成。"
+    @Deprecated("The source inventory page is an untitled list section.")
     public const val PLUGIN_INVENTORY_SECTION: String = "插件列表"
     public const val PLUGIN_INVENTORY_SEARCH: String = "搜索插件"
     public const val PLUGIN_INVENTORY_LOADING: String = "正在读取插件…"

@@ -1,24 +1,16 @@
-// Built-in plugins: the read-only inventory, its search, and the configuration link.
+// Loaded plugins: the untitled, read-only inventory and its search.
 // SPDX-License-Identifier: MIT
 //
 // Authority: `examples/probe-app/PhoneDSHProbe/NativePluginInventoryPage.swift` at
 // iOS HEAD 86a39aac (66 lines). Contract:
 // `spec/ui/v1/pages/native-plugin-inventory.json`.
 //
-// Section shape (contract: 4 sections, 7 rows, one titled)
-// -------------------------------------------------------
-//   1. the 插件配置 navigation row plus the read-only footnote — an *untitled*
-//      group in the baseline (`:18`), so this page draws no caption above it;
-//   2. 插件列表 — 正在读取插件… while the read is in flight, 没有匹配的插件。 when the
-//      query filters everything out, otherwise one disclosure row per plugin with
-//      its 条目 / 模块 / 启用 / 运行状态 values;
-//   3. the failure line, only when the host reported one. Untitled, as in the
-//      baseline (`:53`) — and with no retry the baseline does not have;
-//   4. the platform footer, untitled (`:55`).
+// Section shape (`NativePluginInventoryPage.swift:18-61`): one untitled section
+// containing loading / empty / result rows and the platform footer. Search remains
+// the page's only control; configuration is reached from the actual parent route.
 //
 // Data: the entries are `ConfigurationPlugin`, the host's one read model for DSH
-// loader entries — the same rows the 插件配置 page shows, so the inventory cannot
-// drift from the page it links to. `enabled` is a three-valued [FactState]: 是 / 否
+// loader entries. `enabled` is a three-valued [FactState]: 是 / 否
 // / 未知, and the leading dot is green only for `YES` with `phase == "active"`, the
 // baseline's own condition (`:43`); everything else — including 未知 — is grey,
 // never a green "on".
@@ -30,8 +22,8 @@
 // because printing "iPhone" on an Android phone would be a false statement about
 // the device the user is holding.
 //
-// Chrome: 插件配置 pushes the configuration page (the baseline's `NavigationLink`),
-// the search field filters on module and id (`:11`), and nothing else is tappable.
+// Chrome: the page title is 已加载插件 (`:66`); the search field filters on module
+// and id (`:11`), and nothing else is tappable.
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
@@ -225,16 +217,18 @@ public data class PluginInventoryScreenState(
 // ---------------------------------------------------------------------------
 
 /**
- * The built-in-plugin inventory page.
+ * The loaded-plugin inventory page.
  *
  * @param state the pure screen state (`PluginInventoryScreenState.from`).
- * @param onOpenConfiguration 插件配置: open the configuration page.
+ * @param onOpenConfiguration kept for source compatibility; the iOS inventory
+ *   page has no configuration CTA, so the parent route owns that navigation.
  * @param onQueryChange the search field's text changed.
  * @param onToggleRow a plugin row was tapped.
  * @param onBack leave the page.
  * @param embedded render as the settings sheet's 插件 tab: no page header.
  */
 @Composable
+@Suppress("UNUSED_PARAMETER")
 public fun NativePluginInventoryPage(
     state: PluginInventoryScreenState,
     onOpenConfiguration: () -> Unit = {},
@@ -256,7 +250,6 @@ public fun NativePluginInventoryPage(
         ) {
             PluginInventoryBody(
                 state = state,
-                onOpenConfiguration = onOpenConfiguration,
                 onQueryChange = onQueryChange,
                 onToggleRow = onToggleRow,
             )
@@ -269,7 +262,6 @@ public fun NativePluginInventoryPage(
         ) {
             PluginInventoryBody(
                 state = state,
-                onOpenConfiguration = onOpenConfiguration,
                 onQueryChange = onQueryChange,
                 onToggleRow = onToggleRow,
             )
@@ -277,11 +269,10 @@ public fun NativePluginInventoryPage(
     }
 }
 
-/** The four groups, in the baseline's order. */
+/** The untitled source section: search, one inventory state, and its footer. */
 @Composable
 private fun PluginInventoryBody(
     state: PluginInventoryScreenState,
-    onOpenConfiguration: () -> Unit,
     onQueryChange: (String) -> Unit,
     onToggleRow: (String) -> Unit,
 ) {
@@ -302,44 +293,6 @@ private fun PluginInventoryBody(
         verticalArrangement = Arrangement.spacedBy(tokens.geometry.cardOuterMarginV),
         contentPadding = PaddingValues(vertical = tokens.geometry.cardOuterMarginV),
     ) {
-        // 1. the navigation row and its footnote: an untitled group in the baseline.
-        item(key = "configuration") {
-            Column(verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV)) {
-                // A clickable row whose label is a text call site: this is the
-                // untitled group's criterion, and the gate reads a criterion from a
-                // row's own label, not from a shared component's parameter.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-                        .clickable(role = Role.Button, onClick = onOpenConfiguration)
-                        .semantics(mergeDescendants = true) {},
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
-                ) {
-                    BasicText(
-                        text = UiStrings.PLUGIN_INVENTORY_CONFIG,
-                        style = type.body.copy(color = tokens.colors.accent),
-                        modifier = Modifier.weight(1f),
-                    )
-                    BasicText(
-                        text = CHEVRON_CLOSED,
-                        style = type.caption.copy(color = tokens.colors.tertiary),
-                    )
-                }
-                BasicText(
-                    text = UiStrings.PLUGIN_INVENTORY_READ_ONLY,
-                    style = type.caption.copy(color = tokens.colors.secondary),
-                    modifier = Modifier
-                        .padding(horizontal = tokens.spacing.cardInset)
-                        .testTag(UiPageTags.PLUGIN_INVENTORY_READ_ONLY),
-                )
-            }
-        }
-        // 2. 插件列表: the one titled group.
-        item(key = "inventory-header") {
-            SessionSectionLabel(UiStrings.PLUGIN_INVENTORY_SECTION)
-        }
         item(key = "search") {
             PluginSearchField(query = state.query, onQueryChange = onQueryChange)
         }

@@ -93,7 +93,7 @@ import com.phonedsh.ui.theme.UiColors
  * @param onWorkingDirectoryChange the 工作目录 field changed (`:47`).
  * @param onArgumentsChange the 参数 box changed (`:53`).
  * @param onRun 运行 was tapped (`:68`).
- * @param onCancel 取消 was tapped while a run is in flight (`:71`).
+ * @param onCancel 停止运行 was tapped while a run is in flight (`:71`).
  * @param onBack leave the page (the iOS NavigationStack's back control).
  */
 @Composable
@@ -571,7 +571,7 @@ private fun ShellRunSection(
             multiline = true,
         )
         ShellHairline()
-        // `:67`–`:75`: 运行 and, while a run is in flight, 取消.
+        // `:67`–`:75`: 运行 and, while a run is in flight, 停止运行.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -592,7 +592,7 @@ private fun ShellRunSection(
             )
             if (state.running && onCancel != null) {
                 ShellAction(
-                    label = UiStrings.SHELL_CANCEL,
+                    label = UiStrings.SHELL_STOP_RUNNING,
                     enabled = true,
                     tone = tokens.colors.pageDanger,
                     tag = UiPageTags.SHELL_CANCEL,

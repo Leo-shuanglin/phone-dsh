@@ -20,8 +20,10 @@ package com.phonedsh.ui.screenshot
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -49,6 +51,7 @@ import com.phonedsh.ui.page.PluginInventoryLocalState
 import com.phonedsh.ui.page.PluginInventoryScreenState
 import com.phonedsh.ui.page.UiPageTags
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -121,12 +124,13 @@ class L14BGroupPageScreenshotTest : ScreenshotTestBase() {
 
     @Test
     fun pluginInventoryThroughTheRoute() {
+        var backCalls = 0
         setCapturedContent {
             PdshNavHost(
                 nav = PdshNavState(stack = listOf(PdshRoute.Home, PdshRoute.PluginInventory)),
                 facts = PdshNavFacts(),
                 onNavigate = {},
-                onBack = {},
+                onBack = { backCalls++ },
                 onHome = {},
                 onHostAction = {},
                 home = {},
@@ -134,10 +138,14 @@ class L14BGroupPageScreenshotTest : ScreenshotTestBase() {
             )
         }
         compose.onNodeWithText(UiStrings.PLUGIN_INVENTORY_TITLE).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PLUGIN_INVENTORY_CONFIG).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PLUGIN_INVENTORY_SECTION).assertIsDisplayed()
+        // The current Swift inventory is an untitled list. Configuration lives
+        // in the parent Plugins and Tools page, not as a navigation loop here.
+        compose.onAllNodesWithText(UiStrings.PLUGIN_INVENTORY_CONFIG).assertCountEquals(0)
+        compose.onAllNodesWithText("插件列表").assertCountEquals(0)
         compose.onNodeWithText(UiStrings.PLUGIN_INVENTORY_SEARCH).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PLUGIN_INVENTORY_UNREAD).assertIsDisplayed()
+        compose.onNodeWithContentDescription(UiStrings.BACK).performClick()
+        assertEquals("the source page's back control returns through the host", 1, backCalls)
         capture("l14-plugin-inventory-unread")
     }
 
@@ -248,8 +256,10 @@ class L14BGroupPageScreenshotTest : ScreenshotTestBase() {
 
     @Test
     fun pluginInventoryWithAnExpandedEntry() {
+        var configurationOpens = 0
         setCapturedContent {
             NativePluginInventoryPage(
+                onOpenConfiguration = { configurationOpens++ },
                 state = PluginInventoryScreenState.from(
                     facts = PluginInventoryFacts(
                         plugins = listOf(
@@ -261,7 +271,9 @@ class L14BGroupPageScreenshotTest : ScreenshotTestBase() {
                 ),
             )
         }
-        compose.onNodeWithText("插件配置").assertIsDisplayed()
+        compose.onAllNodesWithText(UiStrings.PLUGIN_INVENTORY_CONFIG).assertCountEquals(0)
+        compose.onAllNodesWithText("插件列表").assertCountEquals(0)
+        assertEquals("the inventory's source layout has no configuration CTA", 0, configurationOpens)
         // The module name is both the row's title and its 模块 value once expanded.
         compose.onAllNodesWithText("dsh-web").assertCountEquals(2)
         compose.onNodeWithText(UiStrings.PLUGIN_INVENTORY_ENTRY).assertIsDisplayed()

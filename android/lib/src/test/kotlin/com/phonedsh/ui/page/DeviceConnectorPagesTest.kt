@@ -432,10 +432,10 @@ class DeviceConnectorPagesTest {
         compose.onNodeWithText(UiStrings.DEVICE_SESSION_NO_PROGRESS.format(41)).assertIsDisplayed()
     }
 
-    // ------------------------------------------------------- 本 session 产物
+    // ------------------------------------------------------- 本会话产物
 
     @Test
-    fun `the artifacts page splits 本 session from 未归属 and never merges them`() {
+    fun `the artifacts page splits 本会话 from 未归属 and never merges them`() {
         val state = SessionArtifactsScreenState.from(
             artifacts = listOf(
                 SessionArtifactRef("art_doc", "weekly-report.docx", 48_120),
@@ -454,6 +454,8 @@ class DeviceConnectorPagesTest {
         compose.setContent {
             PdshTheme { SessionArtifactsPage(state, onOpen = {}, onDone = {}) }
         }
+        compose.onNodeWithText(UiStrings.ARTIFACTS_TITLE).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.ARTIFACTS_SECTION_SESSION).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.ARTIFACTS_SESSION_SECTION).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.ARTIFACTS_UNASSIGNED_SECTION).assertIsDisplayed()
         compose.onNodeWithText("weekly-report.docx").assertIsDisplayed()
