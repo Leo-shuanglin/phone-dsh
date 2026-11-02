@@ -165,22 +165,7 @@ public object ChatMetrics {
     /** Open composer width at 430 pt: `430 - 2 x 16`. Source: `HomeSpec.chromeInset`, design spec `左右边距 16, 宽 398`. Confidence: exact. */
     public const val COMPOSER_WIDTH_PT: Int = 398
 
-    /**
-     * Collapsed composer card height, **as drawn**: 94 pt.
-     *
-     * Authority is commit `86a39aac` (`fix: tighten composer bottom spacing`),
-     * not a guess: it changed `ChatPage.swift:1869` from `.padding(.bottom, 12)`
-     * to `.padding(.bottom, 8)`, so the card is now the sum of its parts —
-     * 8 (port top) + 36 (port min) + 10 (control top) + 32 (control row) +
-     * 8 (control bottom) = **94**.
-     *
-     * `NativeParityTokens.swift:97` still declares `composerHeight = 98`. That
-     * constant is **stale** with respect to the drawn layout: the composer's height
-     * is its padding stack (the view never frames itself to that literal), so 98 is
-     * not the number to implement. The official-web yardstick is a different value
-     * on purpose and lives in [UiMetrics.COMPOSER_HEIGHT_PT].
-     * Confidence: exact (commit diff, re-summed).
-     */
+    /** Open composer minimum; intrinsic text/control content may be taller. Source: `HomeSpec.composerOpenMinHeight`. Confidence: exact. */
     public const val COMPOSER_HEIGHT_PT: Int = 104
 
     /** Closed composer height. Source: design spec `.composer.closed { height: 56 }`. Confidence: exact. */
@@ -195,7 +180,7 @@ public object ChatMetrics {
     /** Composer outer side inset. Source: `HomeSpec.chromeInset = 16`. Confidence: exact. */
     public const val COMPOSER_OUTER_MARGIN_H_PT: Int = 16
 
-    /** Composer outer top inset. Source: `ChatPage.swift:1931` (`.padding(.top, 8)`). Confidence: exact. */
+    /** Composer dock outer top inset. Source: `ChatPage.swift:1931` (`.padding(.top, 8)`). Confidence: exact. */
     public const val COMPOSER_OUTER_MARGIN_TOP_PT: Int = 8
 
     /**
@@ -216,14 +201,14 @@ public object ChatMetrics {
     /** Input port maximum height before it scrolls internally. Source: `ChatPage.swift:1841` (`maxHeight: 336`). Confidence: exact. */
     public const val COMPOSER_PORT_MAX_HEIGHT_PT: Int = 336
 
-    /** Input port leading inset. Source: design spec `.composer.open .ph { left: 16 }`. Confidence: exact. */
-    public const val COMPOSER_PORT_LEADING_PT: Int = 16
+    /** Input port leading inset. Source: `ChatPage.swift:1991` (`.padding(.leading, 11)`). Confidence: exact. */
+    public const val COMPOSER_PORT_LEADING_PT: Int = 11
 
     /** Input port trailing inset (the send column is outside it). Source: design spec `.composer.open .row { right: 8 }`. Confidence: exact. */
     public const val COMPOSER_PORT_TRAILING_PT: Int = 8
 
-    /** Input port top inset. Source: design spec `.composer.open .ph { top: 16 }`. Confidence: exact. */
-    public const val COMPOSER_PORT_TOP_PT: Int = 16
+    /** Input port top inset. Source: `ChatPage.swift:1993` (`.padding(.top, 8)`). Confidence: exact. */
+    public const val COMPOSER_PORT_TOP_PT: Int = 8
 
     /**
      * Composer font size, forced to 16 so iOS focus zoom never triggers.
@@ -232,30 +217,25 @@ public object ChatMetrics {
      */
     public const val COMPOSER_FONT_REF_PT: Int = 16
 
-    /** Control row height. Source: design spec `.composer.open .row { height: 36 }`. Confidence: exact. */
-    public const val COMPOSER_CONTROL_ROW_HEIGHT_PT: Int = 36
+    /** Control row height. Source: `ChatPage.swift:2007` (`.frame(height: 44)`). Confidence: exact. */
+    public const val COMPOSER_CONTROL_ROW_HEIGHT_PT: Int = 44
 
-    /** Control row leading inset. Source: design spec `.composer.open .row { left: 16 }`. Confidence: exact. */
-    public const val COMPOSER_CONTROL_LEADING_PT: Int = 16
+    /** Control row leading inset. Source: `ChatPage.swift:2005`. Confidence: exact. */
+    public const val COMPOSER_CONTROL_LEADING_PT: Int = 8
 
     /** Trailing width reserved for the send circle. Source: `ChatPage.swift:1866` (`.padding(.trailing, 40)`). Confidence: exact. */
     public const val COMPOSER_CONTROL_TRAILING_RESERVE_PT: Int = 40
 
-    /** Control row top padding. Source: `ChatPage.swift:1868`. Confidence: exact. */
-    public const val COMPOSER_CONTROL_TOP_PT: Int = 10
+    /** Control row top padding. Source: `ChatPage.swift:2008`. Confidence: exact. */
+    public const val COMPOSER_CONTROL_TOP_PT: Int = 4
 
-    /**
-     * Control row bottom padding: **8** since commit `86a39aac`
-     * (`ChatPage.swift:1869`, `.padding(.bottom, 12)` -> `8`). It is the 4 pt that
-     * came out of the card, which is why [COMPOSER_HEIGHT_PT] is 94 and not 98.
-     * Confidence: exact.
-     */
-    public const val COMPOSER_CONTROL_BOTTOM_PT: Int = 8
+    /** Control row bottom padding. Source: `ChatPage.swift:2009`. Confidence: exact. */
+    public const val COMPOSER_CONTROL_BOTTOM_PT: Int = 4
 
     /** Send/stop circle diameter. Source: `HomeSpec.sendButton = 36`. Confidence: exact. */
     public const val SEND_DIAMETER_PT: Int = 36
 
-    /** Send control hit frame. Source: `ChatPage.swift:1970` (`.frame(width: 44, height: 44)`). Confidence: exact. */
+    /** Android touch frame; paint stays at the source 36pt diameter, trailing-aligned to preserve its 8pt visual gaps. Confidence: platform adaptation. */
     public const val SEND_HIT_PT: Int = 44
 
     /** Send/stop overlay inset from the card's trailing/bottom edges. Source: design spec (`离右边和底边各 8`). Confidence: exact. */
@@ -607,6 +587,247 @@ public object ChatMetrics {
     public const val TODO_STATUS_GAP_PT: Int = 10
     /** Todo status dot dimensions. Source: `NativeTodoDock.swift:187-188`. Confidence: exact. */
     public const val TODO_STATUS_DOT_CONTAINER_PT: Int = 16
+
+
+
+    // Native component metrics required by the scoped C/D/F consumers.
+
+    /** Category artwork inside the process icon box. Source: `NativeMessageRows.swift:32`. Confidence: exact. */
+    public const val DISCLOSURE_CATEGORY_ICON_PT: Int = 16
+
+    /** Expanded disclosure chevron artwork. Source: `NativeMessageRows.swift:31`. Confidence: exact. */
+    public const val DISCLOSURE_CHEVRON_ICON_PT: Int = 14
+
+    /** Actual editable text-view floor inside the port. Source: `ChatPage.swift:1987` (`max(56, composerHeight)`). Confidence: exact. */
+    public const val COMPOSER_TEXT_MIN_HEIGHT_PT: Int = 56
+
+    /** Placeholder leading inset inside the port. Source: `ChatPage.swift:1972`. Confidence: exact. */
+    public const val COMPOSER_PLACEHOLDER_LEADING_PT: Int = 5
+
+    /** Placeholder top inset inside the port. Source: `ChatPage.swift:1973`. Confidence: exact. */
+    public const val COMPOSER_PLACEHOLDER_TOP_PT: Int = 8
+
+    /** Control row trailing inset. Source: `ChatPage.swift:2006`. Confidence: exact. */
+    public const val COMPOSER_CONTROL_TRAILING_PT: Int = 8
+
+    /** Plus/access target minimum width. Source: `ChatPage.swift:2126,2140,2179`. Confidence: exact. */
+    public const val COMPOSER_CONTROL_MIN_WIDTH_PT: Int = 40
+
+    /** Flexible separation before the model. Source: `ChatPage.swift:2148` (`Spacer(minLength: 8)`). Confidence: exact. */
+    public const val COMPOSER_MODEL_MIN_GAP_PT: Int = 8
+
+    /** Action group leading inset and dual-button spacing. Source: `ChatPage.swift:2151,2155`. Confidence: exact. */
+    public const val COMPOSER_ACTION_GAP_PT: Int = 8
+
+    /** Send arrow font size inside its circle. Source: `ChatPage.swift:2067`. Confidence: exact. */
+    public const val SEND_GLYPH_PT: Int = 15
+
+    /** Stop artwork square edge. Source: `ChatPage.swift:2099`. Confidence: exact. */
+    public const val STOP_GLYPH_PT: Int = 12
+
+    /** Stop artwork corner radius. Source: `ChatPage.swift:2097`. Confidence: exact. */
+    public const val STOP_GLYPH_RADIUS_PT: Int = 3
+
+    /** Source text font applied by `NativeCodeHighlighter.attributed` in DSSCodeBlock. Source: `NativeCodeHighlighter.swift:19`. Separate from the user code preference (14pt). Confidence: exact. */
+    public const val CODE_BLOCK_SOURCE_FONT_SIZE_PT: Int = 13
+
+    /** Gap between code-language label and controls. Source: `Components.swift:164`. Confidence: exact. */
+    public const val CODE_BLOCK_HEADER_GAP_PT: Int = 8
+
+    /** Code toolbar horizontal inset. Source: `Components.swift:195`. Confidence: exact. */
+    public const val CODE_BLOCK_HEADER_INSET_H_PT: Int = 12
+
+    /** Code-language label size. Source: `Components.swift:166`. Confidence: exact. */
+    public const val CODE_BLOCK_LABEL_SIZE_PT: Int = 11
+
+    /** Wrap/copy toolbar action label size. Source: `Components.swift:172,187`. Confidence: exact. */
+    public const val CODE_BLOCK_ACTION_SIZE_PT: Int = 11
+
+    /** Wrap artwork inside the 28pt control. Source: `Components.swift:172-173`. Confidence: exact. */
+    public const val CODE_BLOCK_WRAP_ICON_SIZE_PT: Int = 11
+
+    /** Expand/collapse label size. Source: `Components.swift:213`. Confidence: exact. */
+    public const val CODE_BLOCK_EXPAND_LABEL_SIZE_PT: Int = 12
+
+    /** Copy icon-to-label gap. Source: `Components.swift:185`. Confidence: exact. */
+    public const val CODE_BLOCK_COPY_GAP_PT: Int = 5
+
+    /** Copy/check artwork size. Source: `Components.swift:186`. Confidence: exact. */
+    public const val CODE_BLOCK_COPY_ICON_SIZE_PT: Int = 13
+
+    /** Copy control minimum width. Source: `Components.swift:189`. Confidence: exact. */
+    public const val CODE_BLOCK_COPY_MIN_WIDTH_PT: Int = 44
+
+    /** Copy/wrap control square size. Source: `Components.swift:173,189`. Confidence: exact. */
+    public const val CODE_BLOCK_CONTROL_SIZE_PT: Int = 28
+
+    /** Attributed source extra line spacing. Source: `Components.swift:201`. Confidence: exact. */
+    public const val CODE_BLOCK_LINE_SPACING_PT: Int = 5
+
+    /** Code block outer vertical inset. Source: `Components.swift:224`. Confidence: exact. */
+    public const val CODE_BLOCK_OUTER_INSET_V_PT: Int = 2
+
+    /** NativeMarkdownBody block gap, separate from HomeSpec transcript blockGap. Source: `NativeChatTheme.swift:49`. Confidence: exact. */
+    public const val MARKDOWN_BLOCK_SPACING_PT: Int = 20
+
+    /** Markdown body line box; extra leading is computed at the preference's actual font size. Source: `NativeParityTokens.swift:55`. Confidence: exact. */
+    public const val MARKDOWN_BODY_LINE_HEIGHT_PT: Int = 24
+
+    /** Expanded list indentation. Source: `NativeMarkdownBody.swift:88`. Confidence: exact. */
+    public const val MARKDOWN_LIST_INDENT_PT: Int = 8
+
+    /** Compact list indentation. Source: `NativeMarkdownBody.swift:88`. Confidence: exact. */
+    public const val MARKDOWN_LIST_COMPACT_INDENT_PT: Int = 4
+
+    /** Ordered list marker column. Source: `NativeMarkdownBody.swift:77`. Confidence: exact. */
+    public const val MARKDOWN_ORDERED_MARKER_MIN_WIDTH_PT: Int = 24
+
+    /** Bullet/checkbox marker column. Source: `NativeMarkdownBody.swift:77`. Confidence: exact. */
+    public const val MARKDOWN_BULLET_MARKER_MIN_WIDTH_PT: Int = 18
+
+    /** List marker baseline top inset. Source: `NativeMarkdownBody.swift:78`. Confidence: exact. */
+    public const val MARKDOWN_MARKER_TOP_INSET_PT: Int = 1
+
+    /** Expanded quote child gap. Source: `NativeMarkdownBody.swift:90`. Confidence: exact. */
+    public const val MARKDOWN_QUOTE_CHILD_GAP_PT: Int = 12
+
+    /** Compact quote child gap. Source: `NativeMarkdownBody.swift:90`. Confidence: exact. */
+    public const val MARKDOWN_QUOTE_COMPACT_CHILD_GAP_PT: Int = 4
+
+    /** Expanded quote leading inset. Source: `NativeMarkdownBody.swift:96`. Confidence: exact. */
+    public const val MARKDOWN_QUOTE_INSET_PT: Int = 14
+
+    /** Compact quote leading inset. Source: `NativeMarkdownBody.swift:96`. Confidence: exact. */
+    public const val MARKDOWN_QUOTE_COMPACT_INSET_PT: Int = 8
+
+    /** Quote vertical bar width. Source: `NativeMarkdownBody.swift:98`. Confidence: exact. */
+    public const val MARKDOWN_QUOTE_BAR_WIDTH_PT: Int = 2
+
+    /** Regular table cell horizontal inset. Source: `NativeMarkdownBody.swift:219`. Confidence: exact. */
+    public const val MARKDOWN_TABLE_CELL_INSET_H_PT: Int = 16
+
+    /** Regular table cell vertical inset. Source: `NativeMarkdownBody.swift:220`. Confidence: exact. */
+    public const val MARKDOWN_TABLE_CELL_INSET_V_PT: Int = 10
+
+    /** Compact table cell horizontal inset. Source: `NativeMarkdownBody.swift:219`. Confidence: exact. */
+    public const val MARKDOWN_TABLE_COMPACT_CELL_INSET_H_PT: Int = 8
+
+    /** Compact table cell vertical inset. Source: `NativeMarkdownBody.swift:220`. Confidence: exact. */
+    public const val MARKDOWN_TABLE_COMPACT_CELL_INSET_V_PT: Int = 4
+
+    /** Table grid/card minimum column width. Source: `NativeMarkdownBody.swift:218`. Confidence: exact. */
+    public const val MARKDOWN_TABLE_COLUMN_MIN_WIDTH_PT: Int = 100
+
+    /** Table grid/card maximum column width. Source: `NativeMarkdownBody.swift:218`. Confidence: exact. */
+    public const val MARKDOWN_TABLE_COLUMN_MAX_WIDTH_PT: Int = 320
+
+    /** Table card row stack gap. Source: `NativeMarkdownBody.swift:165`. Confidence: exact. */
+    public const val MARKDOWN_TABLE_CARD_GAP_PT: Int = 8
+
+    /** Table card field stack gap. Source: `NativeMarkdownBody.swift:167`. Confidence: exact. */
+    public const val MARKDOWN_TABLE_FIELD_GAP_PT: Int = 10
+
+    /** Table card field label/value gap. Source: `NativeMarkdownBody.swift:169`. Confidence: exact. */
+    public const val MARKDOWN_TABLE_LABEL_VALUE_GAP_PT: Int = 2
+
+    /** Table card content inset. Source: `NativeMarkdownBody.swift:184`. Confidence: exact. */
+    public const val MARKDOWN_TABLE_CARD_INSET_PT: Int = 12
+
+    /** Table card corner radius. Source: `NativeMarkdownBody.swift:187`. Confidence: exact. */
+    public const val MARKDOWN_TABLE_CARD_RADIUS_PT: Int = 12
+
+    /** Markdown H1 size. Source: `NativeMarkdownBody.swift:123`. Confidence: exact. */
+    public const val MARKDOWN_H1_SIZE_PT: Int = 24
+
+    /** Markdown H2 size. Source: `NativeMarkdownBody.swift:124`. Confidence: exact. */
+    public const val MARKDOWN_H2_SIZE_PT: Int = 22
+
+    /** Markdown H3 size. Source: `NativeMarkdownBody.swift:125`. Confidence: exact. */
+    public const val MARKDOWN_H3_SIZE_PT: Int = 20
+
+    /** Markdown H4 size. Source: `NativeMarkdownBody.swift:126`. Confidence: exact. */
+    public const val MARKDOWN_H4_SIZE_PT: Int = 17
+
+    /** Markdown footnote size. Source: `NativeMarkdownBody.swift:292`. Confidence: exact. */
+    public const val MARKDOWN_FOOTNOTE_SIZE_PT: Int = 9
+
+    /** Markdown footnote baseline offset. Source: `NativeMarkdownBody.swift:292`. Confidence: exact. */
+    public const val MARKDOWN_FOOTNOTE_BASELINE_OFFSET_PT: Int = 6
+
+    /** Regular thematic-rule vertical inset. Source: `NativeMarkdownBody.swift:116`. Confidence: exact. */
+    public const val MARKDOWN_RULE_INSET_V_PT: Int = 16
+
+    /** Compact thematic-rule vertical inset. Source: `NativeMarkdownBody.swift:116`. Confidence: exact. */
+    public const val MARKDOWN_RULE_COMPACT_INSET_V_PT: Int = 4
+
+    /** Thematic-rule thickness. Source: `NativeMarkdownBody.swift:115`. Confidence: exact. */
+    public const val MARKDOWN_RULE_HEIGHT_PT: Float = 0.5f
+
+    /** Header HStack icon-to-title gap. Source: `NativeChangedFilesCard.swift:18`. Confidence: exact. */
+    public const val CHANGED_FILES_HEADER_GAP_PT: Int = 10
+
+    /** File glyph frame. Source: `NativeChangedFilesCard.swift:29`. Confidence: exact. */
+    public const val CHANGED_FILES_HEADER_GLYPH_BOX_PT: Int = 40
+
+    /** File-type glyph itself. Source: `NativeChangedFilesCard.swift:25-26`. Confidence: exact. */
+    public const val CHANGED_FILES_HEADER_GLYPH_SIZE_PT: Int = 20
+
+    /** File-glyph tile corner radius. Source: `NativeChangedFilesCard.swift:20,22`. Confidence: exact. */
+    public const val CHANGED_FILES_HEADER_GLYPH_RADIUS_PT: Int = 10
+
+    /** Header title/summary vertical gap. Source: `NativeChangedFilesCard.swift:30`. Confidence: exact. */
+    public const val CHANGED_FILES_TITLE_STACK_GAP_PT: Int = 2
+
+    /** Changed-files header title size. Source: `NativeChangedFilesCard.swift:33`. Confidence: exact. */
+    public const val CHANGED_FILES_TITLE_SIZE_PT: Int = 13
+
+    /** Changed-files header title weight (`.medium`). Source: `NativeChangedFilesCard.swift:33`. Confidence: exact. */
+    public const val CHANGED_FILES_TITLE_WEIGHT: Int = 500
+
+    /** Changed-files header count size. Source: `NativeChangedFilesCard.swift:40`. Confidence: exact. */
+    public const val CHANGED_FILES_HEADER_COUNT_SIZE_PT: Int = 10
+
+    /** Added/deleted count gap. Source: `NativeChangedFilesCard.swift:36`. Confidence: exact. */
+    public const val CHANGED_FILES_DIFF_COUNT_GAP_PT: Int = 6
+
+    /** Header internal padding. Source: `NativeChangedFilesCard.swift:44`. Confidence: exact. */
+    public const val CHANGED_FILES_HEADER_INSET_PT: Int = 10
+
+    /** Header row height. Source: `NativeChangedFilesCard.swift:45`. Confidence: exact. */
+    public const val CHANGED_FILES_HEADER_HEIGHT_PT: Int = 60
+
+    /** File row text/count gap. Source: `NativeChangedFilesCard.swift:55,62`. Confidence: exact. */
+    public const val CHANGED_FILES_ROW_GAP_PT: Int = 10
+
+    /** File path size. Source: `NativeChangedFilesCard.swift:57`. Confidence: exact. */
+    public const val CHANGED_FILES_ROW_PATH_SIZE_PT: Int = 12
+
+    /** Added/deleted row counter size. Source: `NativeChangedFilesCard.swift:66`. Confidence: exact. */
+    public const val CHANGED_FILES_ROW_COUNT_SIZE_PT: Int = 11
+
+    /** File row horizontal inset. Source: `NativeChangedFilesCard.swift:68`. Confidence: exact. */
+    public const val CHANGED_FILES_ROW_INSET_H_PT: Int = 14
+
+    /** File row vertical inset. Source: `NativeChangedFilesCard.swift:69`. Confidence: exact. */
+    public const val CHANGED_FILES_ROW_INSET_V_PT: Int = 7
+
+    /** File/toggle interactive minimum row height. Source: `NativeChangedFilesCard.swift:70,86`. Confidence: exact. */
+    public const val CHANGED_FILES_ROW_MIN_HEIGHT_PT: Int = 44
+
+    /** Expand/collapse row content gap. Source: `NativeChangedFilesCard.swift:77`. Confidence: exact. */
+    public const val CHANGED_FILES_TOGGLE_GAP_PT: Int = 4
+
+    /** Expand/collapse label size. Source: `NativeChangedFilesCard.swift:82`. Confidence: exact. */
+    public const val CHANGED_FILES_TOGGLE_SIZE_PT: Int = 12
+
+    /** Expand/collapse chevron glyph size. Source: `NativeChangedFilesCard.swift:79`. Confidence: exact. */
+    public const val CHANGED_FILES_TOGGLE_CHEVRON_SIZE_PT: Int = 14
+
+    /** Expand/collapse row horizontal inset. Source: `NativeChangedFilesCard.swift:84`. Confidence: exact. */
+    public const val CHANGED_FILES_TOGGLE_INSET_H_PT: Int = 14
+
+    /** Expand/collapse row vertical inset. Source: `NativeChangedFilesCard.swift:85`. Confidence: exact. */
+    public const val CHANGED_FILES_TOGGLE_INSET_V_PT: Int = 10
 
     // ------------------------------------------------------------ dp accessors
 

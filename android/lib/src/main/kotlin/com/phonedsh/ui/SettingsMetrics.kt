@@ -249,6 +249,25 @@ public object SettingsMetrics {
     /** Settings page grouped-list minimum row height. Source: same helper (`defaultMinListRowHeight 48`). Confidence: exact. */
     public const val GROUPED_LIST_MIN_ROW_HEIGHT_PT: Int = 48
 
+
+
+    // Native component metrics required by the scoped C/D/F consumers.
+
+    /** Native Stepper painted bounds. Source: PR22 `settings-font-runtime.png`, 1290x2796 at 3x (gray fill 279px plus antialiasing). Confidence: measured. */
+    public const val FONT_STEPPER_WIDTH_PT: Int = 94
+
+    /** Native Stepper painted height: 96px / 3 in the same reference. Confidence: measured. */
+    public const val FONT_STEPPER_HEIGHT_PT: Int = 32
+
+    /** Plus/minus painted glyph extent in the same native Stepper capture. Confidence: measured (rounded). */
+    public const val FONT_STEPPER_GLYPH_PT: Int = 14
+
+    /** Plus/minus stroke in the same 3x capture. Confidence: measured (rounded). */
+    public const val FONT_STEPPER_STROKE_PT: Int = 2
+
+    /** Separator painted height inside the native Stepper. Confidence: measured (rounded). */
+    public const val FONT_STEPPER_SEPARATOR_HEIGHT_PT: Int = 24
+
     // ------------------------------------------------------------ dp accessors
 
     /** [NAV_BAR_HEIGHT_PT] as a Compose length. */
