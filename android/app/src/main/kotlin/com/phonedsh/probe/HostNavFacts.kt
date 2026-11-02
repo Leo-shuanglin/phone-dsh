@@ -210,6 +210,21 @@ internal fun buildNavFacts(
         else -> WorkbenchSnapshot(writable = FactState.NO)
     }
 
+    val phonePermissions = phonePermissionsFacts(
+        readings = readings.permissions,
+        asked = readings.permissionAsks,
+        inFlight = readings.permissionInFlight,
+    )
+    val phonePermissionSummary = phonePermissions.statuses?.takeIf { it.isNotEmpty() }?.let { statuses ->
+        val usable = statuses.values.count { it.permitsUse }
+        val measuredCount = statuses.size
+        com.phonedsh.ui.UiStrings.settingsNativeText(
+            preferences.language?.id,
+            "$usable / $measuredCount 项权限可用",
+            "$usable of $measuredCount measured permissions available",
+        )
+    }
+
     return PdshNavFacts(
         workspaceFolders = workspaceFoldersFact(readings.workspacePresent),
         workbench = workbench,
@@ -293,11 +308,7 @@ internal fun buildNavFacts(
         // the host reports only the rows something on this device actually answered
         // and leaves the rest to the page's unread state, and it reports no audit
         // because it has none. See `HostPhonePermissions.kt` for the row-by-row rule.
-        phonePermissions = phonePermissionsFacts(
-            readings = readings.permissions,
-            asked = readings.permissionAsks,
-            inFlight = readings.permissionInFlight,
-        ),
+        phonePermissions = phonePermissions,
         settings = SettingsFacts(
             // HostShell overlays this with the DSH permission namespace readback;
             // this pure device-reading projection has not read that namespace.
@@ -311,6 +322,12 @@ internal fun buildNavFacts(
                     ProviderKeyStatus.CONFIGURED, ProviderKeyStatus.INVALID -> LOCAL_PROVIDER_NAME
                     ProviderKeyStatus.NOT_CONFIGURED, ProviderKeyStatus.UNKNOWN -> null
                 },
+            providerSetupRequired = when (providerKey.status) {
+                ProviderKeyStatus.NOT_CONFIGURED -> true
+                ProviderKeyStatus.CONFIGURED, ProviderKeyStatus.INVALID -> false
+                ProviderKeyStatus.UNKNOWN -> null
+            },
+            phonePermissionSummary = phonePermissionSummary,
             // The five 通用-tab pickers plus the three font sizes are the values
             // this host now stores (`PreferenceStore`): every field is a real read,
             // so the page shows the stored choice instead of 未设置.

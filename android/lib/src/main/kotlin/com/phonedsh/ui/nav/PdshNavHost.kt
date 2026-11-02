@@ -1387,7 +1387,14 @@ private fun SettingsRoute(
         )
     } else if (permissionDefaults) {
         PermissionDefaultsPage(
-            state = PermissionDefaultsState.from(settings.defaultPermissionTier, settings.preferences.language?.id),
+            state = PermissionDefaultsState.from(
+                selected = settings.defaultPermissionTier,
+                languageId = settings.preferences.language?.id,
+                availableTiers = settings.defaultPermissionAvailableTiers,
+                writable = settings.defaultPermissionWritable,
+                busy = settings.defaultPermissionBusy,
+                failure = settings.defaultPermissionFailure,
+            ),
             onSelect = { tier -> onSettingsWrite(SettingsWrite.DefaultPermissionTier(tier)) },
             onBack = { permissionDefaults = false },
         )

@@ -10,13 +10,30 @@ import com.phonedsh.ui.nav.PdshActionKey
 import com.phonedsh.ui.nav.PdshUiHostCommand
 import com.phonedsh.ui.nav.PdshUnavailableReason
 import com.phonedsh.ui.nav.PdshWorkspaceSelection
+import com.phonedsh.ui.nav.confirms
 import com.phonedsh.ui.state.StateRequestId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HostSessionsFactsTest {
+    @Test
+    fun `permission defaults expose only modes the host actually offered`() {
+        val measured = PermissionDefaultsHostState(
+            currentModeId = "read-only",
+            availableModeIds = setOf("read-only", "danger-full-access"),
+            writable = false,
+        )
+        assertEquals(com.phonedsh.ui.page.PermissionTier.VIEW_ONLY, measured.currentTier)
+        assertEquals(
+            setOf(com.phonedsh.ui.page.PermissionTier.VIEW_ONLY, com.phonedsh.ui.page.PermissionTier.FULL_ACCESS),
+            measured.availableTiers,
+        )
+        assertEquals(false, measured.writable)
+    }
+
     @Test
     fun `device connector absence stays unread with explicit unavailable actions`() {
         val facts = hostDeviceFacts()
@@ -64,6 +81,63 @@ class HostSessionsFactsTest {
         assertEquals("archive-missing", receipt.requestId.value)
         assertEquals("missing", receipt.sessionId)
         assertEquals(PdshActionOutcome.FAILED, receipt.outcome)
+    }
+
+    @Test
+    fun `new chat session readback preserves the stable folder id`() {
+        val store = ChatSessionStore(MemoryDomainStore())
+        val folder = requireNotNull(applyHostWorkspaceCommand(
+            store,
+            PdshUiHostCommand.WorkspaceFolderCreate("Research", StateRequestId("folder-create")),
+        ))
+        assertEquals(PdshActionOutcome.SUCCEEDED, folder.outcome)
+        val folderId = store.loadWorkspaceGroups().single { it.name == "Research" }.id
+
+        val created = createHostChatSession(
+            store = store,
+            sessionId = "chat-in-research",
+            updatedAtMs = 123L,
+            workspaceGroupId = folderId,
+            requestId = StateRequestId("new-in-research"),
+        )
+        assertTrue(created.confirms(StateRequestId("new-in-research"), "chat-in-research", null))
+        assertEquals(folderId, store.load("chat-in-research")?.workspaceGroupId)
+    }
+
+    @Test
+    fun `new chat cannot claim a missing folder and leaves no session row`() {
+        val store = ChatSessionStore(MemoryDomainStore())
+        val failed = createHostChatSession(
+            store = store,
+            sessionId = "chat-missing-folder",
+            updatedAtMs = 123L,
+            workspaceGroupId = "folder-gone",
+            requestId = StateRequestId("new-in-gone"),
+        )
+        assertEquals(PdshActionOutcome.FAILED, failed.outcome)
+        assertNull(store.load("chat-missing-folder"))
+        assertTrue(store.loadWorkspaceGroups().isEmpty())
+    }
+
+    @Test
+    fun `folder deletion retains session rows and maps them to unassigned on readback`() {
+        val store = ChatSessionStore(MemoryDomainStore())
+        store.ensureDefaultWorkspaceGroup(StateRequestId("seed-default"))
+        val created = requireNotNull(applyHostWorkspaceCommand(
+            store,
+            PdshUiHostCommand.WorkspaceFolderCreate("Research", StateRequestId("folder-create-retain")),
+        ))
+        assertEquals(PdshActionOutcome.SUCCEEDED, created.outcome)
+        val folderId = store.loadWorkspaceGroups().single { it.name == "Research" }.id
+        store.save(ChatRecord("session-kept", "Kept", 1L, emptyList(), emptyList(), workspaceGroupId = folderId))
+
+        val deleted = requireNotNull(applyHostWorkspaceCommand(
+            store,
+            PdshUiHostCommand.WorkspaceFolderDelete(folderId, StateRequestId("folder-delete-retain")),
+        ))
+        assertEquals(PdshActionOutcome.SUCCEEDED, deleted.outcome)
+        assertNotNull(store.load("session-kept"))
+        assertTrue(store.loadWorkspaceGroups().none { it.id == folderId })
     }
 
     @Test

@@ -79,6 +79,7 @@ import com.phonedsh.log.VfsOp
 import com.phonedsh.log.WalPaths
 import com.phonedsh.log.WorkspaceLog
 import com.phonedsh.ui.projection.UiStateNode
+import com.phonedsh.ui.nav.confirms
 import com.phonedsh.ui.state.ChatAttachment
 import com.phonedsh.ui.state.ChatScreenState
 import com.phonedsh.loopback.ChannelCloseCause
@@ -126,6 +127,25 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
+
+/** Permission preset catalog and write capability measured from the DSH host. */
+internal data class PermissionDefaultsHostState(
+    val currentModeId: String? = null,
+    val availableModeIds: Set<String>? = null,
+    val writable: Boolean = false,
+    val busy: Boolean = false,
+    val failure: String? = null,
+) {
+    val currentTier: com.phonedsh.ui.page.PermissionTier? get() = tierForPermissionMode(currentModeId)
+    val availableTiers: Set<com.phonedsh.ui.page.PermissionTier>? get() = availableModeIds?.mapNotNull(::tierForPermissionMode)?.toSet()
+}
+
+private fun tierForPermissionMode(id: String?): com.phonedsh.ui.page.PermissionTier? = when (id) {
+    "read-only", "phone-read-only" -> com.phonedsh.ui.page.PermissionTier.VIEW_ONLY
+    "workspace-write", "phone" -> com.phonedsh.ui.page.PermissionTier.WORKSPACE_WRITE
+    "danger-full-access", "bypassPermissions" -> com.phonedsh.ui.page.PermissionTier.FULL_ACCESS
+    else -> null
+}
 
 /**
  * Owns the one engine **and** the one host across configuration changes.
@@ -610,8 +630,8 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     /** The resolved preferences; a write publishes a new value. */
     internal val preferenceState: StateFlow<Preferences> = preferenceStore.state
-    private val mutableDefaultPermissionTier = MutableStateFlow<com.phonedsh.ui.page.PermissionTier?>(null)
-    internal val defaultPermissionTier: StateFlow<com.phonedsh.ui.page.PermissionTier?> = mutableDefaultPermissionTier.asStateFlow()
+    private val mutablePermissionDefaults = MutableStateFlow(PermissionDefaultsHostState())
+    internal val permissionDefaults: StateFlow<PermissionDefaultsHostState> = mutablePermissionDefaults.asStateFlow()
 
     private val host: DefaultPhoneDshHost = DefaultPhoneDshHost(
         engine = engine,
@@ -830,14 +850,39 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     /** Refreshes the source-backed permission namespace for SettingsRoute. */
     internal suspend fun refreshDefaultPermissionTier(): String? = withContext(Dispatchers.IO) {
-        runCatching { readDefaultPermissionTier(DshTurnClient(host.channel, ::logTurn)) }
-            .onSuccess { mutableDefaultPermissionTier.value = tierForPermissionMode(it) }
-            .exceptionOrNull()?.message?.substringBefore('\n')?.take(180)
+        try {
+            val client = DshTurnClient(host.channel, ::logTurn)
+            val catalog = client.call("permissionPresets/catalog", timeoutMillis = 5_000) as? JsonObject
+                ?: error("permission preset catalog was unreadable")
+            val described = client.call("settings/describe", timeoutMillis = 5_000) as? JsonObject
+                ?: error("settings description was unreadable")
+            val namespace = permissionNamespace(described)
+            val hasRevision = (namespace?.get("revision") as? JsonNumber)?.asLongOrNull() != null
+            val options = (catalog["defaultOptions"] as? JsonArray)?.values?.mapNotNull { raw ->
+                ((raw as? JsonObject)?.get("value") as? JsonString)?.value
+            }?.toSet()
+            mutablePermissionDefaults.value = PermissionDefaultsHostState(
+                currentModeId = (catalog["defaultPreset"] as? JsonString)?.value,
+                availableModeIds = options,
+                writable = (described["writable"] as? JsonBool)?.value == true && namespace != null && hasRevision,
+            )
+            null
+        } catch (failure: Exception) {
+            val message = failure.message?.substringBefore('\n')?.take(180) ?: "权限默认值读取失败"
+            mutablePermissionDefaults.value = mutablePermissionDefaults.value.copy(
+                busy = false,
+                writable = false,
+                failure = message,
+            )
+            message
+        }
     }
 
     /** Writes the same DSH permission namespace used by iOS and confirms by readback. */
     internal suspend fun writeDefaultPermissionTier(tier: com.phonedsh.ui.page.PermissionTier) {
         val client = DshTurnClient(host.channel, ::logTurn)
+        mutablePermissionDefaults.value = mutablePermissionDefaults.value.copy(busy = true, failure = null)
+        try {
         val catalog = client.call("permissionPresets/catalog", timeoutMillis = 5_000) as? JsonObject
             ?: error("permission preset catalog was unreadable")
         val candidates = when (tier) {
@@ -865,12 +910,22 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         check((after["defaultPreset"] as? JsonString)?.value == mode) {
             "permission default was not confirmed by permission catalog readback"
         }
-        mutableDefaultPermissionTier.value = tier
-    }
-
-    private suspend fun readDefaultPermissionTier(client: DshTurnClient): String? {
-        val catalog = client.call("permissionPresets/catalog", timeoutMillis = 5_000) as? JsonObject ?: return null
-        return (catalog["defaultPreset"] as? JsonString)?.value
+        val available = (after["defaultOptions"] as? JsonArray)?.values.orEmpty().mapNotNull { raw ->
+            ((raw as? JsonObject)?.get("value") as? JsonString)?.value
+        }.toSet()
+        mutablePermissionDefaults.value = PermissionDefaultsHostState(
+            currentModeId = mode,
+            availableModeIds = available,
+            writable = (before["writable"] as? JsonBool)?.value == true,
+        )
+        } catch (failure: Exception) {
+            mutablePermissionDefaults.value = mutablePermissionDefaults.value.copy(
+                busy = false,
+                writable = false,
+                failure = failure.message?.substringBefore('\n')?.take(180) ?: "权限默认值保存失败",
+            )
+            throw failure
+        }
     }
 
     private fun permissionNamespace(description: JsonObject): JsonObject? =
@@ -878,12 +933,6 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             .mapNotNull { it as? JsonObject }
             .firstOrNull { (it["ns"] as? JsonString)?.value == "permission" }
 
-    private fun tierForPermissionMode(id: String?): com.phonedsh.ui.page.PermissionTier? = when (id) {
-        "read-only", "phone-read-only" -> com.phonedsh.ui.page.PermissionTier.VIEW_ONLY
-        "workspace-write", "phone" -> com.phonedsh.ui.page.PermissionTier.WORKSPACE_WRITE
-        "danger-full-access", "bypassPermissions" -> com.phonedsh.ui.page.PermissionTier.FULL_ACCESS
-        else -> null
-    }
 
     /** 显示代码工作视图. */
     internal fun setDeveloperTools(value: Boolean) {
@@ -1877,30 +1926,17 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /** Create a conversation only after its durable record has been read back. */
-    internal suspend fun newChatSessionConfirmed(requestId: com.phonedsh.ui.state.StateRequestId):
+    internal suspend fun newChatSessionConfirmed(
+        requestId: com.phonedsh.ui.state.StateRequestId,
+        workspaceGroupId: String? = ChatSessionStore.DEFAULT_WORKSPACE_GROUP_ID,
+    ):
         com.phonedsh.ui.nav.PdshActionReceipt {
         val at = clock.nowMillis()
         val id = "chat-$at-${++chatOrdinal}"
-        val record = ChatRecord(id, "", at, emptyList(), emptyList())
-        val revision = withContext(Dispatchers.IO) {
-            runCatching {
-                val groupReceipt = chatStore.ensureDefaultWorkspaceGroup(
-                    com.phonedsh.ui.state.StateRequestId("default-folder:$id"),
-                )
-                check(groupReceipt.outcome is ChatWriteOutcome.Persisted)
-                chatStore.save(record)
-                chatStore.load(id)?.takeIf { it.copy(revision = 0L) == record }?.revision
-            }.getOrNull()
+        val receipt = withContext(Dispatchers.IO) {
+            createHostChatSession(chatStore, id, at, workspaceGroupId, requestId)
         }
-        if (revision == null) return com.phonedsh.ui.nav.PdshActionReceipt(
-            requestId, id, null, com.phonedsh.ui.nav.PdshActionOutcome.FAILED,
-        )
-        val receipt = com.phonedsh.ui.nav.PdshActionReceipt(
-            requestId = requestId,
-            sessionId = id,
-            revision = com.phonedsh.ui.state.StateRevision(revision),
-            outcome = com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED,
-        )
+        if (!receipt.confirms(requestId, id, null)) return receipt
         sessionArtifacts.clear()
         mutableSessions.update { snapshot ->
             snapshot.copy(

@@ -12,12 +12,16 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.activity.OnBackPressedDispatcherOwner
 import androidx.activity.ComponentActivity
 import kotlinx.coroutines.CompletableDeferred
 import com.phonedsh.ui.theme.PdshTheme
+import com.phonedsh.ui.state.StateRequestId
+import com.phonedsh.ui.state.StateRevision
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Rule
@@ -126,7 +130,7 @@ class HomeDrawerStateTest {
         )
         compose.setContent {
             PdshTheme(darkTheme = false) {
-                HomeDrawer(facts, onClose = {}, onRenameSession = { _, _ -> }, onArchiveSession = { request ->
+                HomeDrawer(facts, onClose = {}, onArchiveSession = { request ->
                     archived = request.sessionId
                     HomeDrawerArchiveResult.Archived(request.requestId, request.sessionId)
                 })
@@ -148,7 +152,7 @@ class HomeDrawerStateTest {
         )
         compose.setContent {
             PdshTheme(darkTheme = false) {
-                HomeDrawer(facts, onClose = {}, onRenameSession = { _, _ -> }, onArchiveSession = { request ->
+                HomeDrawer(facts, onClose = {}, onArchiveSession = { request ->
                     calls++
                     if (calls == 1) {
                         firstRequest = request
@@ -192,7 +196,6 @@ class HomeDrawerStateTest {
                                 unassignedSessions = emptyList(),
                             ),
                             onClose = { open.value = false },
-                            onRenameSession = { _, _ -> },
                             onArchiveSession = { archiveRequest -> request = archiveRequest; response.await() },
                         )
                     }
@@ -206,5 +209,105 @@ class HomeDrawerStateTest {
         response.complete(HomeDrawerArchiveResult.Archived(archiveRequest.requestId, archiveRequest.sessionId))
         compose.waitForIdle()
         compose.onNodeWithText("已归档，可在 设置 › 已归档会话 里找回").assertDoesNotExist()
+    }
+
+    @Test fun folderCreationUsesConfirmedHostMutationAndShowsFailedReceipt() {
+        var command: PdshUiHostCommand? = null
+        compose.setContent {
+            PdshTheme {
+                HomeDrawer(
+                    facts = HomeDrawerFacts(folders = emptyList(), unassignedSessions = emptyList()),
+                    onClose = {},
+                    onMutation = { request ->
+                        command = request
+                        val id = (request as PdshUiHostCommand.WorkspaceFolderCreate).requestId
+                        PdshActionReceipt(id, null, null, PdshActionOutcome.FAILED)
+                    },
+                    onRetry = {},
+                )
+            }
+        }
+        compose.onNodeWithTag(HomeDrawerTags.CREATE_FOLDER).performClick()
+        compose.onNodeWithText("新建文件夹").performClick()
+        compose.onNodeWithTag(HomeDrawerTags.EDITOR).performTextInput("Research")
+        compose.onNodeWithText("创建").performClick()
+        compose.waitForIdle()
+        val create = command as? PdshUiHostCommand.WorkspaceFolderCreate
+        assertEquals("Research", create?.name)
+        assertNotNull(create?.requestId?.value)
+        compose.onNodeWithTag(HomeDrawerTags.FAILURE).assertIsDisplayed()
+        compose.onNodeWithTag(HomeDrawerTags.RETRY).assertIsDisplayed()
+    }
+
+    @Test fun renameSessionIsRequestBoundAndDoesNotHideRowAfterFailedReceipt() {
+        var command: PdshUiHostCommand? = null
+        val facts = HomeDrawerFacts(
+            folders = listOf(HomeDrawerFolder("folder-1", "Research", listOf(HomeDrawerSession("session-1", "Before")))),
+            unassignedSessions = emptyList(),
+        )
+        compose.setContent {
+            PdshTheme {
+                HomeDrawer(
+                    facts = facts,
+                    onClose = {},
+                    onMutation = { request ->
+                        command = request
+                        val rename = request as PdshUiHostCommand.SessionRename
+                        PdshActionReceipt(rename.requestId, rename.sessionId, null, PdshActionOutcome.FAILED)
+                    },
+                )
+            }
+        }
+        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "session-1").performTouchInput { longClick() }
+        compose.onNodeWithText("编辑名称").performClick()
+        compose.onNodeWithTag(HomeDrawerTags.EDITOR).performTextClearance()
+        compose.onNodeWithTag(HomeDrawerTags.EDITOR).performTextInput("After")
+        compose.onNodeWithText("保存").performClick()
+        compose.waitForIdle()
+        val rename = command as? PdshUiHostCommand.SessionRename
+        assertEquals("session-1", rename?.sessionId)
+        assertEquals("After", rename?.title)
+        compose.onNodeWithTag(HomeDrawerTags.FAILURE).assertIsDisplayed()
+        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "session-1").assertIsDisplayed()
+    }
+
+    @Test fun folderContextMenuCreatesSessionWithExactFolderId() {
+        var requestedFolder: String? = null
+        var closed = false
+        compose.setContent {
+            PdshTheme {
+                HomeDrawer(
+                    facts = HomeDrawerFacts(
+                        folders = listOf(HomeDrawerFolder("stable-folder-9", "Research", isDefault = false)),
+                        unassignedSessions = emptyList(),
+                    ),
+                    onClose = { closed = true },
+                    onCreateSessionInFolder = { folderId -> requestedFolder = folderId; true },
+                )
+            }
+        }
+        compose.onNodeWithTag(HomeDrawerTags.FOLDER_PREFIX + "stable-folder-9").performTouchInput { longClick() }
+        compose.onNodeWithText("在这里新建会话").performClick()
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals("stable-folder-9", requestedFolder)
+            assertEquals(true, closed)
+        }
+    }
+
+    @Test fun drawerRetryCallsHostSnapshotRefreshAndDisplaysReadError() {
+        var retries = 0
+        compose.setContent {
+            PdshTheme {
+                HomeDrawer(
+                    facts = HomeDrawerFacts(failure = "实际读取失败"),
+                    onClose = {},
+                    onRetry = { retries++ },
+                )
+            }
+        }
+        compose.onNodeWithTag(HomeDrawerTags.FAILURE).assertIsDisplayed()
+        compose.onNodeWithTag(HomeDrawerTags.RETRY).performClick()
+        compose.runOnIdle { assertEquals(1, retries) }
     }
 }

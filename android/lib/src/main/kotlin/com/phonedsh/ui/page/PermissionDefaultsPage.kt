@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
@@ -42,12 +43,21 @@ public fun PermissionDefaultsPage(
             item(key = "permission-defaults") {
                 Column {
                     com.phonedsh.ui.surface.SettingsSectionLabel(title = state.note, modifier = Modifier.testTag(PERMISSION_DEFAULTS_NOTE_TAG))
+                    state.statusMessage?.let { message ->
+                        androidx.compose.foundation.text.BasicText(
+                            text = message,
+                            style = com.phonedsh.ui.theme.LocalUiType.current.secondary.copy(
+                                color = if (state.failure != null) LocalUiTokens.current.colors.danger else LocalUiTokens.current.colors.textSecondary,
+                            ),
+                            modifier = Modifier.fillMaxWidth().testTag(PERMISSION_DEFAULTS_STATUS_TAG),
+                        )
+                    }
                     SettingsGroupCard {
                         state.options.forEachIndexed { index, option ->
                             SettingsRowFrame(
                                 dividerBelow = index != state.options.lastIndex,
                                 role = Role.RadioButton,
-                                enabled = onSelect != null,
+                                enabled = onSelect != null && state.writable && !state.busy && option.enabled,
                                 onClick = onSelect?.let { callback -> ({ callback(option.tier) }) },
                                 modifier = Modifier.testTag("$PERMISSION_DEFAULTS_OPTION_PREFIX${option.tier.name}"),
                                 stateValue = if (option.selected) "已选择" else null,
@@ -76,4 +86,5 @@ public fun PermissionDefaultsPage(
 
 internal const val PERMISSION_DEFAULTS_PAGE_TAG: String = "pdsh.settings.permission-defaults"
 internal const val PERMISSION_DEFAULTS_NOTE_TAG: String = "pdsh.settings.permission-defaults.note"
+internal const val PERMISSION_DEFAULTS_STATUS_TAG: String = "pdsh.settings.permission-defaults.status"
 internal const val PERMISSION_DEFAULTS_OPTION_PREFIX: String = "pdsh.settings.permission-defaults.option."

@@ -57,6 +57,8 @@ import com.phonedsh.ui.theme.PdshThemeValues
 import com.phonedsh.ui.nav.PdshActionOutcome
 import com.phonedsh.ui.nav.PdshActionReceipt
 import com.phonedsh.ui.nav.PdshUiHostCommand
+import com.phonedsh.ui.state.StateRequestId
+import com.phonedsh.ui.state.StateRevision
 import java.time.ZoneId
 
 /**
@@ -90,6 +92,40 @@ internal fun applyHostSessionCommand(
             PdshActionOutcome.FAILED
         },
     )
+}
+
+/** Persists one new session into the requested real folder group and reads it back. */
+internal fun createHostChatSession(
+    store: ChatSessionStore,
+    sessionId: String,
+    updatedAtMs: Long,
+    workspaceGroupId: String?,
+    requestId: StateRequestId,
+): PdshActionReceipt {
+    return try {
+        if (workspaceGroupId == ChatSessionStore.DEFAULT_WORKSPACE_GROUP_ID) {
+            val seeded = store.ensureDefaultWorkspaceGroup(StateRequestId("default-folder:$sessionId"))
+            check(seeded.outcome is ChatWriteOutcome.Persisted)
+        } else if (workspaceGroupId != null) {
+            check(store.loadWorkspaceGroups().any { it.id == workspaceGroupId }) {
+                "workspace folder no longer exists"
+            }
+        }
+        val record = ChatRecord(
+            id = sessionId,
+            title = "",
+            updatedAtMs = updatedAtMs,
+            workerSessionIds = emptyList(),
+            nodes = emptyList(),
+            workspaceGroupId = workspaceGroupId,
+        )
+        store.save(record)
+        val stored = store.load(sessionId)
+        check(stored == record.copy(revision = stored?.revision ?: 0L)) { "new session readback mismatch" }
+        PdshActionReceipt(requestId, sessionId, StateRevision(stored!!.revision), PdshActionOutcome.SUCCEEDED)
+    } catch (_: Exception) {
+        PdshActionReceipt(requestId, sessionId, null, PdshActionOutcome.FAILED)
+    }
 }
 
 /**

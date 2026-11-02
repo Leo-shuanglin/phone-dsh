@@ -54,10 +54,14 @@ class SettingsSubpagesTest {
         licenseEntries: List<AndroidLicenseNotice>? = null,
         onSelectDefaultPermission: ((PermissionTier) -> Unit)? = null,
     ) {
+        val hostFacts = if (onSelectDefaultPermission != null) facts.copy(
+            defaultPermissionAvailableTiers = PermissionTier.entries.toSet(),
+            defaultPermissionWritable = true,
+        ) else facts
         compose.setContent {
             PdshTheme {
                 SettingsPage(
-                    state = SettingsScreenState.from(facts),
+                    state = SettingsScreenState.from(hostFacts),
                     onNavigate = {},
                     onToggleBackgroundKeepAlive = {},
                     onSelectBusyEnterMode = onSelectBusy ?: {},

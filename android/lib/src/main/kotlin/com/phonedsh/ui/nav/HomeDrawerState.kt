@@ -32,6 +32,8 @@ public data class HomeDrawerFacts(
     public val scheduleCount: Int? = null,
     public val engine: HomeDrawerEngineState = HomeDrawerEngineState.UNKNOWN,
     public val newSessionBlockedReason: String? = null,
+    /** Actual session/folder snapshot failure, if the host read failed. */
+    public val failure: String? = null,
 )
 
 /** One archive request passed from the drawer to its host adapter. */
@@ -77,6 +79,9 @@ public sealed interface HomeDrawerArchiveResult {
  * [HomeDrawerArchiveResult] matching both request id and session id.
  */
 public typealias HomeDrawerArchiveAction = suspend (HomeDrawerArchiveRequest) -> HomeDrawerArchiveResult
+
+/** Typed host mutation callback used for durable folder and session metadata edits. */
+public typealias HomeDrawerMutationAction = suspend (PdshUiHostCommand) -> PdshActionReceipt?
 
 /**
  * Stable preference key shared with the app's canonical PreferenceStore.

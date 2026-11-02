@@ -5,6 +5,7 @@ package com.phonedsh.ui.page
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -35,7 +36,10 @@ class SettingsNavigationTest {
         compose.setContent {
             PdshTheme {
                 SettingsPage(
-                    state = SettingsScreenState.from(SettingsFacts()),
+                    state = SettingsScreenState.from(SettingsFacts(
+                        defaultPermissionAvailableTiers = PermissionTier.entries.toSet(),
+                        defaultPermissionWritable = true,
+                    )),
                     onNavigate = onNavigate,
                     onToggleBackgroundKeepAlive = {},
                     onSelectBusyEnterMode = {},
@@ -120,6 +124,49 @@ class SettingsNavigationTest {
         compose.onNodeWithTag(com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "permissionDefaults").performClick()
         compose.onNodeWithTag(PERMISSION_DEFAULTS_OPTION_PREFIX + PermissionTier.FULL_ACCESS.name).performClick()
         assertEquals(listOf(PermissionTier.FULL_ACCESS), selected)
+    }
+
+    @Test
+    fun `permission choices follow measured catalog and write availability`() {
+        val selected = mutableListOf<PermissionTier>()
+        compose.setContent {
+            PdshTheme {
+                PermissionDefaultsPage(
+                    state = PermissionDefaultsState.from(
+                        selected = PermissionTier.VIEW_ONLY,
+                        languageId = "zh",
+                        availableTiers = setOf(PermissionTier.VIEW_ONLY),
+                        writable = true,
+                    ),
+                    onSelect = selected::add,
+                    onBack = {},
+                )
+            }
+        }
+        compose.onNodeWithTag(PERMISSION_DEFAULTS_OPTION_PREFIX + PermissionTier.VIEW_ONLY.name).performClick()
+        compose.onNodeWithTag(PERMISSION_DEFAULTS_OPTION_PREFIX + PermissionTier.WORKSPACE_WRITE.name).assertIsNotEnabled()
+        compose.runOnIdle { assertEquals(listOf(PermissionTier.VIEW_ONLY), selected) }
+    }
+
+    @Test
+    fun `permission read error is visible and disables all writes`() {
+        compose.setContent {
+            PdshTheme {
+                PermissionDefaultsPage(
+                    state = PermissionDefaultsState.from(
+                        selected = null,
+                        languageId = "zh",
+                        availableTiers = null,
+                        writable = false,
+                        failure = "permission catalog unavailable",
+                    ),
+                    onSelect = {},
+                    onBack = {},
+                )
+            }
+        }
+        compose.onNodeWithTag(PERMISSION_DEFAULTS_OPTION_PREFIX + PermissionTier.VIEW_ONLY.name).assertIsNotEnabled()
+        compose.onNodeWithText("permission catalog unavailable").assertIsDisplayed()
     }
 
     @Test

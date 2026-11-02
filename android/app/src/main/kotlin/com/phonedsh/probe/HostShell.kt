@@ -212,7 +212,7 @@ internal fun HostShell(
     // The user preferences, collected so the theme and the facts follow a write.
     // The store is the view model's; this shell never reads the file itself.
     val preferences by engine.preferenceState.collectAsState()
-    val defaultPermissionTier by engine.defaultPermissionTier.collectAsState()
+    val permissionDefaults by engine.permissionDefaults.collectAsState()
     val context = LocalContext.current
     val systemDark = isSystemInDarkTheme()
     // L69: the chat page's one state. Collected here so a Worker event rebuilds the
@@ -231,7 +231,8 @@ internal fun HostShell(
     val automationFacts by engine.automation.collectAsState()
     var drawerRecords by remember { mutableStateOf<List<ChatRecord>?>(null) }
     var drawerFolders by remember { mutableStateOf<List<ChatWorkspaceGroup>?>(null) }
-    LaunchedEffect(settingsRevision, chatUi.chatId, chatUi.updatedAtMs, sessionSnapshot.sessions) {
+    var drawerSnapshotFailure by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(settingsRevision, chatUi.chatId, chatUi.updatedAtMs, sessionSnapshot.sessions, sessionSnapshot.archivedSessions) {
         val loaded = withContext(Dispatchers.IO) {
             runCatching {
                 val groups = engine.chatStore.loadWorkspaceGroups()
@@ -242,11 +243,15 @@ internal fun HostShell(
                     check(receipt.outcome is ChatWriteOutcome.Persisted)
                 }
                 engine.chatStore.loadAll() to engine.chatStore.loadWorkspaceGroups()
-            }.getOrNull()
+            }
         }
-        if (loaded != null) {
-            drawerRecords = loaded.first
-            drawerFolders = loaded.second
+        loaded.onSuccess { (records, folders) ->
+            drawerRecords = records
+            drawerFolders = folders
+            drawerSnapshotFailure = null
+        }.onFailure { failure ->
+            drawerSnapshotFailure = failure.message?.substringBefore('\n')?.take(180)
+                ?: "会话和文件夹列表读取失败，请重试"
         }
     }
     var providerConnectionTest by remember {
@@ -297,7 +302,7 @@ internal fun HostShell(
         providerConnectionTest,
         providerSave,
         providerModels,
-        defaultPermissionTier,
+        permissionDefaults,
         sessionSnapshot,
         nav,
     ) {
@@ -654,7 +659,16 @@ internal fun HostShell(
             sessionsWaiting = sessionSnapshot.waiting,
             sessionsFailure = sessionSnapshot.failure,
             settings = measured.settings.copy(
-                defaultPermissionTier = defaultPermissionTier,
+                providerSetupRequired = when (chatScreenState.empty) {
+                    com.phonedsh.ui.state.ChatEmpty.PROVIDER_SETUP -> true
+                    com.phonedsh.ui.state.ChatEmpty.READY -> false
+                    com.phonedsh.ui.state.ChatEmpty.ENGINE_NOT_STARTED -> measured.settings.providerSetupRequired
+                },
+                defaultPermissionTier = permissionDefaults.currentTier,
+                defaultPermissionAvailableTiers = permissionDefaults.availableTiers,
+                defaultPermissionWritable = permissionDefaults.writable,
+                defaultPermissionBusy = permissionDefaults.busy,
+                defaultPermissionFailure = permissionDefaults.failure,
                 archivedSessionCount = if (sessionSnapshot.waiting) null else sessionSnapshot.archivedSessions.size,
             ),
             automation = automationFacts.copy(currentSessionID = chatUi.workerSessionId),
@@ -1123,11 +1137,13 @@ internal fun HostShell(
                     activeSessionId = chatUi.chatId.takeIf(String::isNotBlank),
                     scheduleCount = automationFacts.snapshot?.schedules?.size,
                     engine = when {
+                        chatScreenState.empty == com.phonedsh.ui.state.ChatEmpty.PROVIDER_SETUP -> HomeDrawerEngineState.CONFIGURATION_REQUIRED
                         state is EngineHostState.Running -> HomeDrawerEngineState.READY
                         state == EngineHostState.Starting -> HomeDrawerEngineState.STARTING
                         state == EngineHostState.Stopped -> if (providerConfigured) HomeDrawerEngineState.STOPPED else HomeDrawerEngineState.CONFIGURATION_REQUIRED
                         else -> HomeDrawerEngineState.UNKNOWN
                     },
+                    failure = drawerSnapshotFailure,
                 )
                 val legacyCollapsed = remember(preferences.collapsedWorkspaceFolders) {
                     if (preferences.collapsedWorkspaceFolders == null) {
@@ -1168,9 +1184,50 @@ internal fun HostShell(
                             notice = null
                             nav = PdshNavState(listOf(PdshRoute.Chat))
                             settingsRevision++
+                        } else {
+                            drawerSnapshotFailure = "新会话没有创建成功，列表未改变。请重试。"
                         }
                         created
                     },
+                    onCreateSessionInFolder = { folderId ->
+                        val requestId = StateRequestId("ui.drawer.new-session.${UUID.randomUUID()}")
+                        val receipt = engine.newChatSessionConfirmed(requestId, folderId)
+                        val created = receipt.confirms(requestId, receipt.sessionId, null)
+                        if (created) {
+                            notice = null
+                            drawerSnapshotFailure = null
+                            nav = PdshNavState(listOf(PdshRoute.Chat))
+                            settingsRevision++
+                        }
+                        created
+                    },
+                    onMutation = { command ->
+                        val receipt = withContext(Dispatchers.IO) {
+                            when (command) {
+                                is com.phonedsh.ui.nav.PdshUiHostCommand.WorkspaceFolderCreate,
+                                is com.phonedsh.ui.nav.PdshUiHostCommand.WorkspaceFolderRename,
+                                is com.phonedsh.ui.nav.PdshUiHostCommand.WorkspaceFolderDelete ->
+                                    applyHostWorkspaceCommand(engine.chatStore, command)
+                                is com.phonedsh.ui.nav.PdshUiHostCommand.SessionRename ->
+                                    applyHostSessionCommand(engine.chatStore, command)
+                                else -> null
+                            }
+                        }
+                        val expectedRequestId = when (command) {
+                            is com.phonedsh.ui.nav.PdshUiHostCommand.WorkspaceFolderCreate -> command.requestId
+                            is com.phonedsh.ui.nav.PdshUiHostCommand.WorkspaceFolderRename -> command.requestId
+                            is com.phonedsh.ui.nav.PdshUiHostCommand.WorkspaceFolderDelete -> command.requestId
+                            is com.phonedsh.ui.nav.PdshUiHostCommand.SessionRename -> command.requestId
+                            else -> null
+                        }
+                        val expectedSessionId = (command as? com.phonedsh.ui.nav.PdshUiHostCommand.SessionRename)?.sessionId
+                        if (expectedRequestId != null && receipt?.confirms(expectedRequestId, expectedSessionId, null) == true) {
+                            settingsRevision++
+                            drawerSnapshotFailure = null
+                        }
+                        receipt
+                    },
+                    onRetry = { settingsRevision++ },
                     onOpenSession = { id ->
                         engine.openChatSession(id)
                         notice = null

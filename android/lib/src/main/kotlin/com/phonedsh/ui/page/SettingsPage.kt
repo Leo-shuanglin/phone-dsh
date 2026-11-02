@@ -351,6 +351,14 @@ public data class SettingsPreferences(
 @Immutable
 public data class SettingsFacts(
     public val defaultPermissionTier: PermissionTier? = null,
+    /** Permission modes actually reported by `permissionPresets/catalog`; null means unread. */
+    public val defaultPermissionAvailableTiers: Set<PermissionTier>? = null,
+    /** Whether `settings/describe` reported a writable permission namespace. */
+    public val defaultPermissionWritable: Boolean = false,
+    /** A confirmed permission default write is in flight. */
+    public val defaultPermissionBusy: Boolean = false,
+    /** Actual source read/write failure, if reported. */
+    public val defaultPermissionFailure: String? = null,
     public val preferences: SettingsPreferences = SettingsPreferences(),
     public val backgroundKeepAlive: FactState = FactState.UNKNOWN,
     public val busyEnterMode: BusyEnterMode? = null,
@@ -445,6 +453,10 @@ public data class SettingsScreenState(
     public val versionName: String? = null,
     public val preferences: SettingsPreferences = SettingsPreferences(),
     public val defaultPermissionTier: PermissionTier? = null,
+    public val defaultPermissionAvailableTiers: Set<PermissionTier>? = null,
+    public val defaultPermissionWritable: Boolean = false,
+    public val defaultPermissionBusy: Boolean = false,
+    public val defaultPermissionFailure: String? = null,
     public val busyEnterMode: BusyEnterMode? = null,
 ) {
     /** One row by id. */
@@ -801,6 +813,10 @@ public data class SettingsScreenState(
                 versionName = facts.versionName,
                 preferences = preferences,
                 defaultPermissionTier = facts.defaultPermissionTier,
+                defaultPermissionAvailableTiers = facts.defaultPermissionAvailableTiers,
+                defaultPermissionWritable = facts.defaultPermissionWritable,
+                defaultPermissionBusy = facts.defaultPermissionBusy,
+                defaultPermissionFailure = facts.defaultPermissionFailure,
                 busyEnterMode = facts.busyEnterMode,
             )
         }
@@ -954,6 +970,7 @@ public data class PermissionOptionView(
     public val tier: PermissionTier,
     public val title: String,
     public val selected: Boolean,
+    public val enabled: Boolean = true,
 )
 
 /**
@@ -967,15 +984,43 @@ public data class PermissionOptionView(
 public data class PermissionDefaultsState(
     public val note: String = UiStrings.PERMISSION_DEFAULTS_NOTE,
     public val options: List<PermissionOptionView> = emptyList(),
+    public val busy: Boolean = false,
+    public val writable: Boolean = false,
+    public val failure: String? = null,
+    public val statusMessage: String? = null,
 ) {
     public companion object {
         /** Projects the host's current preset into the three option rows. */
-        public fun from(selected: PermissionTier?, languageId: String? = null): PermissionDefaultsState = PermissionDefaultsState(
+        public fun from(
+            selected: PermissionTier?,
+            languageId: String? = null,
+            availableTiers: Set<PermissionTier>? = null,
+            writable: Boolean = false,
+            busy: Boolean = false,
+            failure: String? = null,
+        ): PermissionDefaultsState = PermissionDefaultsState(
             note = UiStrings.settingsNativeText(
                 languageId,
                 UiStrings.PERMISSION_DEFAULTS_NOTE,
                 UiStrings.PERMISSION_DEFAULTS_SCOPE_EN,
             ),
+            busy = busy,
+            writable = writable,
+            failure = failure,
+            statusMessage = failure ?: when {
+                busy -> UiStrings.settingsNativeText(languageId, "正在保存…", "Saving…")
+                !writable -> UiStrings.settingsNativeText(
+                    languageId,
+                    "此主机未提供可写的未来会话权限默认值。",
+                    "This host does not expose a writable default for future sessions.",
+                )
+                availableTiers != null && availableTiers.isEmpty() -> UiStrings.settingsNativeText(
+                    languageId,
+                    "主机未提供本页支持的未来会话权限选项。",
+                    "The host did not offer any default permission options supported here.",
+                )
+                else -> null
+            },
             options = listOf(
                 PermissionTier.VIEW_ONLY,
                 PermissionTier.WORKSPACE_WRITE,
@@ -989,6 +1034,7 @@ public data class PermissionDefaultsState(
                         PermissionTier.FULL_ACCESS -> "Full access"
                     }),
                     selected = tier == selected,
+                    enabled = writable && !busy && availableTiers?.contains(tier) == true,
                 )
             },
         )
@@ -1073,7 +1119,7 @@ public fun SettingsPage(
     }
     val folderValue = state.folderCount?.toString() ?: UiStrings.UNAVAILABLE
     val archivedValue = state.archivedSessionCount?.toString() ?: UiStrings.UNAVAILABLE
-    val permissionSummary = state.phonePermissionSummary ?: UiStrings.UNAVAILABLE
+    val permissionSummary = state.phonePermissionSummary ?: UiStrings.UNKNOWN
 
     androidx.compose.foundation.layout.Column(
         modifier = modifier
@@ -1151,7 +1197,14 @@ public fun SettingsPage(
                 onToggleDeveloperTools = onToggleDeveloperTools,
             )
             SettingsIndexPage.PERMISSION_DEFAULTS -> PermissionDefaultsPage(
-                state = PermissionDefaultsState.from(state.defaultPermissionTier, state.preferences.language?.id),
+                state = PermissionDefaultsState.from(
+                    selected = state.defaultPermissionTier,
+                    languageId = state.preferences.language?.id,
+                    availableTiers = state.defaultPermissionAvailableTiers,
+                    writable = state.defaultPermissionWritable,
+                    busy = state.defaultPermissionBusy,
+                    failure = state.defaultPermissionFailure,
+                ),
                 onSelect = onSelectDefaultPermission,
                 onBack = { page = SettingsIndexPage.ROOT },
                 embedded = true,
