@@ -7,6 +7,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -94,6 +97,45 @@ class ToolRowSurfaceTest {
         compose.onNodeWithTag(TOOL_ROW_CHEVRON_TAG, useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag(UiTags.TOOL_ROW)
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.ContentDescription, listOf("exec · ${UiStrings.TOOL_OK}")))
+    }
+
+    @Test
+    fun `a list-card row uses compact dimensions and its requested category icon`() {
+        compose.setContent {
+            PdshTheme {
+                ToolRow(
+                    title = "read",
+                    summary = "2 files",
+                    state = ToolRowState.OK,
+                    expanded = false,
+                    onToggle = {},
+                    detail = { androidx.compose.foundation.text.BasicText("file detail") },
+                    inListCard = true,
+                    categoryIcon = com.phonedsh.ui.icon.PdshIcon.READ,
+                )
+            }
+        }
+        val row = compose.onNodeWithTag(UiTags.TOOL_ROW).fetchSemanticsNode().boundsInRoot
+        val iconBox = compose.onNodeWithTag(
+            TOOL_ROW_CATEGORY_ICON_TAG,
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val icon = compose.onNodeWithTag(
+            "$TOOL_ROW_CATEGORY_ICON_TAG.read",
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val titleNode = compose.onNodeWithText("read", useUnmergedTree = true).fetchSemanticsNode()
+        val titleLayouts = mutableListOf<TextLayoutResult>()
+        titleNode.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(titleLayouts)
+        val titleStyle = titleLayouts.single().layoutInput.style
+        assertEquals(22f, row.height, 0.5f)
+        assertEquals(16f, iconBox.width, 0.5f)
+        assertEquals(16f, iconBox.height, 0.5f)
+        assertEquals(14f, icon.width, 0.5f)
+        assertEquals(14f, icon.height, 0.5f)
+        assertEquals(8f, titleNode.boundsInRoot.left - iconBox.right, 0.5f)
+        assertEquals(14f, titleStyle.fontSize.value, 0f)
+        assertEquals(22f, titleStyle.lineHeight.value, 0f)
     }
 
     @Test

@@ -7,6 +7,7 @@
 package com.phonedsh.ui.surface
 
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertHasNoClickAction
@@ -15,6 +16,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -266,6 +268,74 @@ class MarkdownBodyTest {
         val codeSpan = requireNotNull(results.singleOrNull()).layoutInput.text.spanStyles.single().item
         assertEquals(18.sp, codeSpan.fontSize)
         assertEquals(fontFamily, codeSpan.fontFamily)
+    }
+
+    @Test
+    fun `compact markdown uses native 13pt secondary typography and natural leading`() {
+        var style: TextStyle? = null
+        compose.setContent {
+            PdshTheme {
+                style = markdownBodyStyle(MarkdownVariant.COMPACT)
+            }
+        }
+        compose.waitForIdle()
+        val compact = requireNotNull(style)
+        assertEquals(13.sp, compact.fontSize)
+        assertEquals(TextUnit.Unspecified, compact.lineHeight)
+    }
+
+    @Test
+    fun `compact markdown renders headings lists quotes and tables`() {
+        compose.setContent {
+            PdshTheme {
+                MarkdownBody(
+                    markdown = """# Compact heading
+
+compact paragraph
+
+- compact list item
+
+> compact quote
+
+| Name | Value |
+| --- | --- |
+| mode | compact |
+""".trimIndent(),
+                    variant = MarkdownVariant.COMPACT,
+                )
+            }
+        }
+        compose.onNodeWithText("Compact heading").assertIsDisplayed()
+        compose.onNodeWithText("compact paragraph").assertIsDisplayed()
+        compose.onNodeWithText("compact list item").assertIsDisplayed()
+        compose.onNodeWithText("compact quote").assertIsDisplayed()
+        compose.onNodeWithText("compact").assertIsDisplayed()
+    }
+
+    @Test
+    fun `compact inline code uses fixed 13pt monospaced type`() {
+        compose.setContent {
+            PdshTheme {
+                val base = UiType.fromSpec()
+                CompositionLocalProvider(
+                    LocalUiType provides base.copy(
+                        code = base.code.copy(fontSize = 17.sp, fontFamily = FontFamily.Serif),
+                    ),
+                ) {
+                    MarkdownInlineText(
+                        inlines = listOf(MarkdownInline.Code("let x = 1")),
+                        style = markdownBodyStyle(MarkdownVariant.COMPACT),
+                        variant = MarkdownVariant.COMPACT,
+                    )
+                }
+            }
+        }
+        val results = mutableListOf<TextLayoutResult>()
+        val node = compose.onNodeWithText("let x = 1").fetchSemanticsNode()
+        node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(results)
+        val codeSpan = requireNotNull(results.singleOrNull()).layoutInput.text.spanStyles.single().item
+        assertEquals(13.sp, codeSpan.fontSize)
+        assertEquals(FontFamily.Monospace, codeSpan.fontFamily)
     }
 
     @Test

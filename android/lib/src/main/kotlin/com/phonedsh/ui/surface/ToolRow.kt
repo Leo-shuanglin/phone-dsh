@@ -17,15 +17,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -78,8 +82,10 @@ public enum class ToolRowState {
 public object ToolRowTokens {
     public val refs: List<String> = listOf(
         UiTokenNames.COLORS_PRIMARY,
+        UiTokenNames.COLORS_TEXT_PRIMARY,
         UiTokenNames.COLORS_TEXT_SECONDARY,
         UiTokenNames.COLORS_TEXT_TERTIARY,
+        UiTokenNames.COLORS_TEXT_PLACEHOLDER,
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_SUCCESS,
         UiTokenNames.COLORS_DANGER,
@@ -88,9 +94,10 @@ public object ToolRowTokens {
         UiTokenNames.COLORS_BORDER,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
         UiTokenNames.TYPOGRAPHY_PROCESS,
+        UiTokenNames.TYPOGRAPHY_LIST_ITEM,
+        UiTokenNames.TYPOGRAPHY_CAPTION,
         UiTokenNames.TYPOGRAPHY_CODE,
         UiTokenNames.TYPOGRAPHY_CODE_LABEL,
-        UiTokenNames.TYPOGRAPHY_CODE_ACTION,
         UiTokenNames.RADIUS_CODE_BLOCK,
         UiTokenNames.STROKE_HAIRLINE,
         UiTokenNames.MOTION_DISCLOSURE,
@@ -98,11 +105,13 @@ public object ToolRowTokens {
         UiTokenNames.GEOMETRY_DISCLOSURE_ICON_GAP,
         UiTokenNames.GEOMETRY_PROCESS_ROW_HEIGHT,
         UiTokenNames.GEOMETRY_PROCESS_ICON,
+        UiTokenNames.GEOMETRY_LIST_ROW_HEIGHT,
         UiTokenNames.GEOMETRY_TOOL_DETAIL_INDENT,
         UiTokenNames.GEOMETRY_TOOL_DETAIL_VERTICAL,
         UiTokenNames.GEOMETRY_TOOL_CARD_INSET,
         UiTokenNames.GEOMETRY_TERMINAL_CARD_MAX_HEIGHT,
         UiTokenNames.SPACING_ICON_TEXT,
+        UiTokenNames.SPACING_DISCLOSURE_GAP,
     )
 }
 
@@ -116,6 +125,9 @@ public object ToolRowTokens {
  * @param onToggle expand/collapse; disabled when [detail] is `null`.
  * @param detail the expanded body; `null` means "nothing to show", which makes
  *   the toggle disabled instead of opening an empty card.
+ * @param inListCard use the compact disclosure metrics for rows inside the
+ *   native white list card.
+ * @param categoryIcon the tool category artwork shown while collapsed.
  */
 @Composable
 public fun ToolRow(
@@ -127,15 +139,26 @@ public fun ToolRow(
     modifier: Modifier = Modifier,
     showsSummaryWhenExpanded: Boolean = false,
     detail: (@Composable () -> Unit)? = null,
+    inListCard: Boolean = false,
+    categoryIcon: PdshIcon = PdshIcon.SPARKLE,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     val canExpand = detail != null
     val showsSummary = summary.isNotEmpty() && (showsSummaryWhenExpanded || !expanded)
-    val summaryColor = tokens.colors.textSecondary
+    val ink = if (state == ToolRowState.RUNNING || !inListCard) {
+        tokens.colors.textSecondary
+    } else {
+        tokens.colors.textTertiary
+    }
+    val rowFont = if (inListCard) type.listItem else type.processBody
+    val iconBoxSize = if (inListCard) ChatMetrics.DISCLOSURE_LIST_ICON_BOX_PT.dp else HomeMetrics.processIcon
+    val rowHeight = if (inListCard) HomeMetrics.listRowHeight else HomeMetrics.processRowHeight
+    val iconTitleGap = if (inListCard) ChatMetrics.DISCLOSURE_LIST_ICON_GAP_PT.dp
+    else ChatMetrics.DISCLOSURE_ICON_GAP_PT.dp
 
-    // PR22's NativeDisclosureRow is a 24pt HomeSpec process row with an 18pt
-    // leading glyph and 15/24 title and summary. Keep each text node addressable.
+    // PR22's NativeDisclosureRow has two source variants: 15/24 with an 18pt
+    // icon box outside a list card, 14/22 with a 16pt box inside one.
     //
     // The tag sits on the merged, clickable row: a semantics assertion on
     // `TOOL_ROW` must see the title, the summary, the state and the click action.
@@ -143,8 +166,7 @@ public fun ToolRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .defaultMinSize(minHeight = HomeMetrics.processRowHeight)
-                .clip(RoundedCornerShape(tokens.radius.codeBlock))
+                .height(rowHeight)
                 .clickable(
                     enabled = canExpand,
                     role = Role.Button,
@@ -159,44 +181,51 @@ public fun ToolRow(
                 }
                 .testTag(UiTags.TOOL_ROW),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(tokens.geometry.disclosureIconGap),
         ) {
             androidx.compose.foundation.layout.Box(
-                modifier = Modifier.size(HomeMetrics.processIcon),
+                modifier = Modifier
+                    .size(iconBoxSize)
+                    .testTag(if (canExpand && expanded) TOOL_ROW_CHEVRON_TAG else TOOL_ROW_CATEGORY_ICON_TAG),
                 contentAlignment = Alignment.Center,
             ) {
                 PdshIconView(
-                    icon = if (canExpand && expanded) PdshIcon.CHEVRON_UP else PdshIcon.SPARKLE,
+                    icon = if (canExpand && expanded) PdshIcon.CHEVRON_UP else categoryIcon,
                     size = if (canExpand && expanded) {
                         ChatMetrics.DISCLOSURE_CHEVRON_ICON_PT.dp
+                    } else if (inListCard) {
+                        ChatMetrics.DISCLOSURE_LIST_CATEGORY_ICON_PT.dp
                     } else {
                         ChatMetrics.DISCLOSURE_CATEGORY_ICON_PT.dp
                     },
-                    tint = tokens.colors.textSecondary,
+                    tint = ink,
                     contentDescription = null,
                     modifier = Modifier.testTag(
-                        if (canExpand && expanded) TOOL_ROW_CHEVRON_TAG else TOOL_ROW_CATEGORY_ICON_TAG,
+                        if (canExpand && expanded) TOOL_ROW_CHEVRON_ART_TAG
+                        else "$TOOL_ROW_CATEGORY_ICON_TAG.${categoryIcon.name.lowercase()}",
                     ),
                 )
             }
+            Spacer(modifier = Modifier.width(iconTitleGap))
             BasicText(
                 text = title,
-                style = type.processBody.copy(color = tokens.colors.textSecondary),
+                style = rowFont.copy(color = ink),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
             if (showsSummary) {
-                BasicText(
-                    text = UiStrings.DOT_SEPARATOR,
-                    style = type.processBody.copy(color = tokens.colors.textSecondary),
-                    maxLines = 1,
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 6.dp)
+                        .size(2.dp)
+                        .clip(CircleShape)
+                        .background(tokens.colors.textPlaceholder),
                 )
                 if (state == ToolRowState.RUNNING) {
                     ShimmerLine(
                         text = summary,
-                        style = type.processBody,
-                        base = summaryColor,
+                        style = rowFont,
+                        base = ink,
                         sweep = tokens.colors.textTertiary,
                         durationMs = tokens.motion.shimmerMs,
                         easing = tokens.motion.shimmerEasing,
@@ -206,7 +235,7 @@ public fun ToolRow(
                 } else {
                     BasicText(
                         text = summary,
-                        style = type.processBody.copy(color = summaryColor),
+                        style = rowFont.copy(color = ink),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
@@ -440,3 +469,4 @@ private val TOOL_METADATA_FIELDS = setOf(
 
 internal const val TOOL_ROW_CATEGORY_ICON_TAG: String = "pdsh.surface.tool-row.category-icon"
 internal const val TOOL_ROW_CHEVRON_TAG: String = "pdsh.surface.tool-row.chevron"
+internal const val TOOL_ROW_CHEVRON_ART_TAG: String = "pdsh.surface.tool-row.chevron-art"

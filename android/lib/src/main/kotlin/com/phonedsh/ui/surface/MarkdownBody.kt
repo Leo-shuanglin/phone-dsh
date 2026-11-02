@@ -87,6 +87,7 @@ public fun MarkdownBody(
     modifier: Modifier = Modifier,
     onOpenFile: ((String) -> Unit)? = null,
     onOpenResource: ((String) -> Unit)? = null,
+    variant: MarkdownVariant = MarkdownVariant.NORMAL,
 ) {
     val blocks = remember(markdown) { MarkdownParser.parse(markdown) }
     MarkdownBlocks(
@@ -94,6 +95,7 @@ public fun MarkdownBody(
         modifier = modifier,
         onOpenFile = onOpenFile,
         onOpenResource = onOpenResource,
+        variant = variant,
     )
 }
 
@@ -107,12 +109,16 @@ internal fun MarkdownBlocks(
     modifier: Modifier = Modifier,
     onOpenFile: ((String) -> Unit)? = null,
     onOpenResource: ((String) -> Unit)? = null,
+    variant: MarkdownVariant = MarkdownVariant.NORMAL,
 ) {
     Column(
         modifier = modifier.fillMaxWidth().testTag(MARKDOWN_BODY_TAG),
-        verticalArrangement = Arrangement.spacedBy(ChatMetrics.MARKDOWN_BLOCK_SPACING_PT.dp),
+        verticalArrangement = Arrangement.spacedBy(
+            if (variant == MarkdownVariant.COMPACT) ChatMetrics.MARKDOWN_COMPACT_BLOCK_SPACING_PT.dp
+            else ChatMetrics.MARKDOWN_BLOCK_SPACING_PT.dp,
+        ),
     ) {
-        blocks.forEach { block -> MarkdownBlockView(block, onOpenFile, onOpenResource) }
+        blocks.forEach { block -> MarkdownBlockView(block, onOpenFile, onOpenResource, variant) }
     }
 }
 
@@ -122,27 +128,29 @@ private fun MarkdownBlockView(
     block: MarkdownBlock,
     onOpenFile: ((String) -> Unit)?,
     onOpenResource: ((String) -> Unit)?,
+    variant: MarkdownVariant,
 ) {
     val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
     when (block) {
         is MarkdownBlock.Paragraph -> MarkdownInlineText(
             inlines = block.inlines,
-            style = markdownBodyStyle(),
+            style = markdownBodyStyle(variant),
             onOpenFile = onOpenFile,
             onOpenResource = onOpenResource,
+            variant = variant,
         )
 
         is MarkdownBlock.Heading -> MarkdownInlineText(
             inlines = block.inlines,
-            style = headingStyle(block.level),
+            style = headingStyle(block.level, variant),
             onOpenFile = onOpenFile,
             onOpenResource = onOpenResource,
+            variant = variant,
         )
 
         is MarkdownBlock.Code -> CodeBlock(language = block.language, body = block.body)
 
-        is MarkdownBlock.Math -> DisplayMath(latex = block.latex)
+        is MarkdownBlock.Math -> DisplayMath(latex = block.latex, variant = variant)
 
         is MarkdownBlock.Table -> MarkdownTable(
             header = block.header,
@@ -150,17 +158,21 @@ private fun MarkdownBlockView(
             alignments = block.alignments,
             onOpenFile = onOpenFile,
             onOpenResource = onOpenResource,
+            variant = variant,
         )
 
         is MarkdownBlock.ListBlock -> Column(
-            modifier = Modifier.fillMaxWidth().padding(start = ChatMetrics.MARKDOWN_LIST_INDENT_PT.dp),
-            verticalArrangement = Arrangement.spacedBy(ChatMetrics.MESSAGE_LIST_SPACING_PT.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = listIndent(variant)),
+            verticalArrangement = Arrangement.spacedBy(listSpacing(variant)),
         ) {
             block.items.forEachIndexed { index, item ->
-                Column(verticalArrangement = Arrangement.spacedBy(ChatMetrics.MESSAGE_LIST_SPACING_PT.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(listSpacing(variant))) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(ChatMetrics.MESSAGE_LIST_SPACING_PT.dp),
+                        horizontalArrangement = Arrangement.spacedBy(
+                            if (variant == MarkdownVariant.COMPACT) ChatMetrics.MARKDOWN_COMPACT_LIST_ITEM_GAP_PT.dp
+                            else ChatMetrics.MESSAGE_LIST_SPACING_PT.dp,
+                        ),
                     ) {
                         val marker = when {
                             item.checked == true -> MARKER_CHECKED
@@ -170,7 +182,7 @@ private fun MarkdownBlockView(
                         }
                         BasicText(
                             text = marker,
-                        style = type.homeBody.copy(color = tokens.colors.secondary),
+                            style = markdownBodyStyle(variant).copy(color = tokens.colors.secondary),
                             modifier = Modifier
                                 .widthIn(
                                     min = if (block.ordered) {
@@ -184,12 +196,15 @@ private fun MarkdownBlockView(
                         )
                         MarkdownInlineText(
                             inlines = item.inlines,
-                            style = markdownBodyStyle(),
+                            style = markdownBodyStyle(variant),
                             onOpenFile = onOpenFile,
                             onOpenResource = onOpenResource,
+                            variant = variant,
                         )
                     }
-                    item.children.forEach { child -> MarkdownBlockView(child, onOpenFile, onOpenResource) }
+                    item.children.forEach { child ->
+                        MarkdownBlockView(child, onOpenFile, onOpenResource, variant)
+                    }
                 }
             }
         }
@@ -208,29 +223,51 @@ private fun MarkdownBlockView(
                         topLeft = Offset.Zero,
                     )
                 }
-                .padding(start = ChatMetrics.MARKDOWN_QUOTE_INSET_PT.dp),
-            verticalArrangement = Arrangement.spacedBy(ChatMetrics.MARKDOWN_QUOTE_CHILD_GAP_PT.dp),
+                .padding(
+                    start = if (variant == MarkdownVariant.COMPACT) {
+                        ChatMetrics.MARKDOWN_QUOTE_COMPACT_INSET_PT.dp
+                    } else {
+                        ChatMetrics.MARKDOWN_QUOTE_INSET_PT.dp
+                    },
+                ),
+            verticalArrangement = Arrangement.spacedBy(
+                if (variant == MarkdownVariant.COMPACT) ChatMetrics.MARKDOWN_QUOTE_COMPACT_CHILD_GAP_PT.dp
+                else ChatMetrics.MARKDOWN_QUOTE_CHILD_GAP_PT.dp,
+            ),
         ) {
-            block.blocks.forEach { child -> MarkdownBlockView(child, onOpenFile, onOpenResource) }
+            block.blocks.forEach { child ->
+                MarkdownBlockView(child, onOpenFile, onOpenResource, variant)
+            }
         }
 
         MarkdownBlock.Rule -> Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = ChatMetrics.MARKDOWN_RULE_INSET_V_PT.dp)
+                .padding(
+                    vertical = if (variant == MarkdownVariant.COMPACT) {
+                        ChatMetrics.MARKDOWN_RULE_COMPACT_INSET_V_PT.dp
+                    } else {
+                        ChatMetrics.MARKDOWN_RULE_INSET_V_PT.dp
+                    },
+                )
                 .height(ChatMetrics.MARKDOWN_RULE_HEIGHT_PT.dp)
                 .background(tokens.colors.border),
         )
     }
 }
 
-/** The PR22 markdown prose uses the HomeSpec 16/24 body style. */
+/** Normal messages use the provider body role; compact thinking uses native 13pt leading. */
 @Composable
-private fun markdownBodyStyle(): TextStyle {
+internal fun markdownBodyStyle(variant: MarkdownVariant = MarkdownVariant.NORMAL): TextStyle {
     val tokens = LocalUiTokens.current
-    // NativeMarkdownBody.swift applies NativeChatTheme.primary; the HomeSpec
-    // textPrimary dark value belongs to HomeSpec-owned surfaces such as bubbles.
-    return bubbleBodyStyle().copy(color = tokens.colors.primary)
+    val type = LocalUiType.current
+    return when (variant) {
+        MarkdownVariant.NORMAL -> type.homeBody.copy(color = tokens.colors.primary)
+        MarkdownVariant.COMPACT -> type.secondary.copy(
+            color = tokens.colors.tertiary,
+            lineHeight = TextUnit.Unspecified,
+        )
+    }
 }
 
 /**
@@ -239,9 +276,16 @@ private fun markdownBodyStyle(): TextStyle {
  * heading metrics are added to ChatMetrics.
  */
 @Composable
-private fun headingStyle(level: Int): TextStyle {
+private fun headingStyle(level: Int, variant: MarkdownVariant): TextStyle {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
+    if (variant == MarkdownVariant.COMPACT) {
+        return type.secondary.copy(
+            color = tokens.colors.primary,
+            fontWeight = FontWeight.SemiBold,
+            lineHeight = TextUnit.Unspecified,
+        )
+    }
     return when (level) {
         1 -> type.homeBody.copy(
             color = tokens.colors.primary,
@@ -269,9 +313,11 @@ private fun headingStyle(level: Int): TextStyle {
 
 /** One table cell's text, with the GFM column alignment (`:227-241`). */
 @Composable
-private fun cellStyle(align: MarkdownTableAlign?, header: Boolean): TextStyle {
-    return markdownBodyStyle().copy(
+private fun cellStyle(align: MarkdownTableAlign?, header: Boolean, variant: MarkdownVariant): TextStyle {
+    val tokens = LocalUiTokens.current
+    return markdownBodyStyle(variant).copy(
         fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
+        color = tokens.colors.primary,
         textAlign = when (align) {
             MarkdownTableAlign.CENTER -> TextAlign.Center
             MarkdownTableAlign.RIGHT -> TextAlign.End
@@ -284,9 +330,8 @@ private fun cellStyle(align: MarkdownTableAlign?, header: Boolean): TextStyle {
  * A GFM table (`NativeMarkdownTable`): header row on the selector fill, one
  * hairline under every cell, every column the same weight.
  *
- * iOS picks between a grid and a per-row card stack with `ViewThatFits` (`:145-149`).
- * A Compose `Row` cannot ask "did it fit"; the phone-width baseline always takes
- * the grid branch, so only the grid is drawn.
+ * iOS picks between a grid and per-row cards with `ViewThatFits` (`:145-149`).
+ * Android uses the minimum grid width to choose the matching representation.
  */
 @Composable
 internal fun MarkdownTable(
@@ -295,13 +340,14 @@ internal fun MarkdownTable(
     alignments: List<MarkdownTableAlign?>,
     onOpenFile: ((String) -> Unit)? = null,
     onOpenResource: ((String) -> Unit)? = null,
+    variant: MarkdownVariant = MarkdownVariant.NORMAL,
 ) {
     val tokens = LocalUiTokens.current
     val columns = maxOf(header.size, rows.maxOfOrNull { it.size } ?: 0)
     BoxWithConstraints(modifier = Modifier.fillMaxWidth().testTag(MARKDOWN_TABLE_TAG)) {
         val minimumGridWidth = ChatMetrics.MARKDOWN_TABLE_COLUMN_MIN_WIDTH_PT.dp * columns.toFloat()
         if (minimumGridWidth > maxWidth) {
-            MarkdownTableCards(header, rows, columns, onOpenFile, onOpenResource)
+            MarkdownTableCards(header, rows, columns, onOpenFile, onOpenResource, variant)
         } else {
             @Composable
             fun row(cells: List<List<MarkdownInline>>, isHeader: Boolean) {
@@ -319,10 +365,18 @@ internal fun MarkdownTable(
                                     min = ChatMetrics.MARKDOWN_TABLE_COLUMN_MIN_WIDTH_PT.dp,
                                     max = ChatMetrics.MARKDOWN_TABLE_COLUMN_MAX_WIDTH_PT.dp,
                                 )
-                                // Regular table inset is 16 h / 10 v (`:219-220`).
+                                // Native grid cells use 16/10 in body mode and 8/4 in compact.
                                 .padding(
-                                    horizontal = ChatMetrics.MARKDOWN_TABLE_CELL_INSET_H_PT.dp,
-                                    vertical = ChatMetrics.MARKDOWN_TABLE_CELL_INSET_V_PT.dp,
+                                    horizontal = if (variant == MarkdownVariant.COMPACT) {
+                                        ChatMetrics.MARKDOWN_TABLE_COMPACT_CELL_INSET_H_PT.dp
+                                    } else {
+                                        ChatMetrics.MARKDOWN_TABLE_CELL_INSET_H_PT.dp
+                                    },
+                                    vertical = if (variant == MarkdownVariant.COMPACT) {
+                                        ChatMetrics.MARKDOWN_TABLE_COMPACT_CELL_INSET_V_PT.dp
+                                    } else {
+                                        ChatMetrics.MARKDOWN_TABLE_CELL_INSET_V_PT.dp
+                                    },
                                 )
                                 .drawBehind {
                                     val stroke = tokens.stroke.hairline.toPx()
@@ -336,9 +390,10 @@ internal fun MarkdownTable(
                         ) {
                             MarkdownInlineText(
                                 inlines = cells.getOrNull(index).orEmpty(),
-                                style = cellStyle(alignments.getOrNull(index), isHeader),
+                                style = cellStyle(alignments.getOrNull(index), isHeader, variant),
                                 onOpenFile = onOpenFile,
                                 onOpenResource = onOpenResource,
+                                variant = variant,
                             )
                         }
                     }
@@ -359,6 +414,7 @@ private fun MarkdownTableCards(
     columns: Int,
     onOpenFile: ((String) -> Unit)?,
     onOpenResource: ((String) -> Unit)?,
+    variant: MarkdownVariant,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -388,9 +444,10 @@ private fun MarkdownTableCards(
                         )
                         MarkdownInlineText(
                             inlines = cells.getOrNull(index).orEmpty(),
-                            style = markdownBodyStyle(),
+                            style = markdownBodyStyle(variant).copy(color = tokens.colors.primary),
                             onOpenFile = onOpenFile,
                             onOpenResource = onOpenResource,
+                            variant = variant,
                         )
                     }
                 }
@@ -419,9 +476,9 @@ private fun plainMarkdownText(inlines: List<MarkdownInline>): String = inlines.j
  * wrapping.
  */
 @Composable
-private fun DisplayMath(latex: String) {
+private fun DisplayMath(latex: String, variant: MarkdownVariant) {
     val scroll = rememberScrollState()
-    val style = markdownBodyStyle()
+    val style = markdownBodyStyle(variant)
     val text = remember(latex, style) { mathAnnotatedString(latex, style.fontSize) }
     BasicText(
         text = text,
@@ -440,16 +497,27 @@ internal fun MarkdownInlineText(
     modifier: Modifier = Modifier,
     onOpenFile: ((String) -> Unit)? = null,
     onOpenResource: ((String) -> Unit)? = null,
+    variant: MarkdownVariant = MarkdownVariant.NORMAL,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     val uriHandler = LocalUriHandler.current
-    val codeFontSize = (type.code.fontSize.value + 1f).sp
+    val codeFontFamily = if (variant == MarkdownVariant.COMPACT) {
+        FontFamily.Monospace
+    } else {
+        type.code.fontFamily
+    }
+    val codeFontSize = if (variant == MarkdownVariant.COMPACT) {
+        ChatMetrics.MARKDOWN_COMPACT_INLINE_CODE_SIZE_PT.sp
+    } else {
+        (type.code.fontSize.value + ChatMetrics.MARKDOWN_INLINE_CODE_SIZE_OFFSET_PT).sp
+    }
     val text = remember(
         inlines,
         style,
         codeFontSize,
-        type.code.fontFamily,
+        codeFontFamily,
+        variant,
         tokens,
         uriHandler,
         onOpenFile,
@@ -458,7 +526,7 @@ internal fun MarkdownInlineText(
         annotatedInlines(
             inlines,
             style,
-            type.code.fontFamily,
+            codeFontFamily,
             codeFontSize,
             tokens,
             uriHandler,
@@ -773,6 +841,21 @@ private const val SCRIPT_RAISE: Float = 0.32f
 private const val MARKER_BULLET: String = "•"
 private const val MARKER_CHECKED: String = "[x]"
 private const val MARKER_UNCHECKED: String = "[ ]"
+
+// NativeMarkdownBody.swift compact variant: VStack spacing 4, list spacing 2,
+// list item HStack spacing 8, fixed inline-code font 13.
+
+private fun listIndent(variant: MarkdownVariant) = if (variant == MarkdownVariant.COMPACT) {
+    ChatMetrics.MARKDOWN_LIST_COMPACT_INDENT_PT.dp
+} else {
+    ChatMetrics.MARKDOWN_LIST_INDENT_PT.dp
+}
+
+private fun listSpacing(variant: MarkdownVariant) = if (variant == MarkdownVariant.COMPACT) {
+    ChatMetrics.MARKDOWN_COMPACT_LIST_STACK_SPACING_PT.dp
+} else {
+    ChatMetrics.MESSAGE_LIST_SPACING_PT.dp
+}
 
 /** The TeX commands the renderer maps to a glyph; everything else stays verbatim. */
 private val MATH_SYMBOLS: Map<String, String> = mapOf(

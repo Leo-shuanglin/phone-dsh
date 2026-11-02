@@ -86,8 +86,11 @@ public object ThinkingPillTokens {
  *   turns the sweep on.
  * @param expanded whether the full reasoning is visible.
  * @param onToggle expand/collapse.
- * @param detail the full reasoning text; `null` or the summary itself disables
- *   the toggle because there is nothing more to reveal.
+ * @param detail the actual full reasoning source; `null` means the source is
+ *   unknown or unavailable. A one-line full source can still be expanded.
+ * @param onOpenFile host router for relative workspace links in compact reasoning.
+ * @param onOpenResource host router for scoped file/sandbox resource URIs.
+ * @param detailTruncated true only when the host reports a bounded source excerpt.
  */
 @Composable
 public fun ThinkingPill(
@@ -97,10 +100,13 @@ public fun ThinkingPill(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
     detail: String? = null,
+    onOpenFile: ((String) -> Unit)? = null,
+    onOpenResource: ((String) -> Unit)? = null,
+    detailTruncated: Boolean? = null,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    val canExpand = detail != null && detail != summary
+    val canExpand = detail != null
     val showsSummary = summary.isNotEmpty() && !expanded
 
     // The tag sits on the merged, clickable row (see ToolRow).
@@ -187,9 +193,7 @@ public fun ThinkingPill(
                 animationSpec = tween(tokens.motion.disclosureMs, easing = tokens.motion.disclosureEasing),
             ) + fadeOut(tween(tokens.motion.disclosureMs, easing = tokens.motion.disclosureEasing)),
         ) {
-            BasicText(
-                text = detail.orEmpty(),
-                style = type.secondary.copy(color = tokens.colors.tertiary),
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(
@@ -197,7 +201,20 @@ public fun ThinkingPill(
                         top = tokens.geometry.thinkingContentVertical,
                         bottom = tokens.geometry.thinkingContentVertical,
                     ),
-            )
+            ) {
+                MarkdownBody(
+                    markdown = detail.orEmpty().ifEmpty { "…" },
+                    onOpenFile = onOpenFile,
+                    onOpenResource = onOpenResource,
+                    variant = MarkdownVariant.COMPACT,
+                )
+                if (detailTruncated == true) {
+                    BasicText(
+                        text = "仅显示部分思考内容",
+                        style = type.caption.copy(color = tokens.colors.textSecondary),
+                    )
+                }
+            }
         }
     }
 }

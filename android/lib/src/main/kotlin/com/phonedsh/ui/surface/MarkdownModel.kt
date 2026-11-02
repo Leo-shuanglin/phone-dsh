@@ -21,6 +21,15 @@ package com.phonedsh.ui.surface
 
 import java.net.URI
 
+/** Native markdown presentation variant; compact is used for expanded thinking. */
+public enum class MarkdownVariant {
+    /** Full transcript typography and spacing. */
+    NORMAL,
+
+    /** Compact disclosure-body typography and spacing. */
+    COMPACT,
+}
+
 /** A GFM table column alignment (`NativeMarkdownTableAlignment`). */
 public enum class MarkdownTableAlign {
     /** `:--` — leading. */
