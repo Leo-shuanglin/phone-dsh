@@ -109,6 +109,8 @@ internal data class ChatUiState(
     val lastPromptRequestId: String? = null,
     /** New requests accepted locally but not yet matched to the durable inbox projection. */
     val localQueueItems: List<com.phonedsh.ui.state.ManagedQueueItemState> = emptyList(),
+    /** Stable prompt identity reused only while retrying this unchanged failed busy submission. */
+    val retryBusyPromptRequestId: com.phonedsh.ui.state.StateRequestId? = null,
     val imeVisible: Boolean = false,
     val pendingExpanded: Boolean = false,
     val expandedRowIds: Set<String> = emptySet(),

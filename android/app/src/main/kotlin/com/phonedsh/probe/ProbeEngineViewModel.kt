@@ -1351,7 +1351,9 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     /** What the person typed. Local state; the page never stores it. */
     internal fun chatDraftChanged(text: String) {
-        mutableChat.update { it.copy(draft = text) }
+        mutableChat.update { current ->
+            if (current.draft == text) current else current.copy(draft = text, retryBusyPromptRequestId = null)
+        }
     }
 
     internal fun chatWorkspaceSnapshot(): Pair<Boolean, String?> =
@@ -2143,12 +2145,13 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         if (workerSessionId.isBlank() || current.workerSessionId != workerSessionId || !current.running ||
             trimmed.isEmpty() || (mode == com.phonedsh.ui.state.EnterMode.STEER && current.attachments.isNotEmpty())
         ) return false
-        val existing = current.localQueueItems.firstOrNull { local ->
-            local.text == trimmed && local.receipt?.outcome == com.phonedsh.ui.state.CommandOutcome.FAILED
-        }
-        val promptRequestId = existing?.promptRequestId
+        // A retry of an ambiguous busy submission reuses its own backend prompt
+        // identity. Matching by text would conflate duplicate messages.
+        val promptRequestId = current.retryBusyPromptRequestId
             ?: com.phonedsh.ui.state.StateRequestId("pdsh-prompt-" + java.util.UUID.randomUUID().toString())
+        val existing = current.localQueueItems.firstOrNull { it.promptRequestId == promptRequestId }
         val localId = existing?.id ?: com.phonedsh.ui.state.QueueItemId.Local(promptRequestId.value)
+        val localItemId = (localId as? com.phonedsh.ui.state.QueueItemId.Local)?.value ?: return false
         val queueAction = if (mode == com.phonedsh.ui.state.EnterMode.STEER)
             com.phonedsh.ui.state.QueueAction.STEER else com.phonedsh.ui.state.QueueAction.QUEUE
         val localItem = com.phonedsh.ui.state.ManagedQueueItemState(
@@ -2169,40 +2172,54 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         val prompt = composeChatPrompt(trimmed, attachments)
         mutableChat.update { live ->
             if (live.chatId != current.chatId || live.workerSessionId != workerSessionId || !live.running) live else {
-                live.copy(localQueueItems = live.localQueueItems.filterNot { it.id == localId } + localItem)
+                live.copy(
+                    localQueueItems = live.localQueueItems.filterNot { it.id == localId } + localItem,
+                    retryBusyPromptRequestId = null,
+                )
             }
         }
         turnScope.launch(Dispatchers.IO) {
             try {
-                DshTurnClient(host.channel, ::logTurn).prompt(
+                val client = DshTurnClient(host.channel, ::logTurn)
+                suspend fun readQueueProjection(): List<com.phonedsh.ui.state.ManagedQueueItemState> =
+                    sessionSnapshotOf(
+                        client.call("session/projections", JsonObject(mapOf(
+                            "request" to JsonObject(mapOf("sessionId" to JsonString(workerSessionId))),
+                        ))),
+                        catalog = null,
+                        commandCatalog = null,
+                        sessionId = workerSessionId,
+                    ).queueItems ?: error("inbox projection unavailable")
+
+                val before = readQueueProjection()
+                client.prompt(
                     sessionId = workerSessionId,
                     text = prompt,
                     requestId = promptRequestId.value,
                     mode = if (mode == com.phonedsh.ui.state.EnterMode.STEER) "steer" else "queue",
                 )
+                val after = readQueueProjection()
+                if (mode == com.phonedsh.ui.state.EnterMode.QUEUE) {
+                    val beforeIds = before.mapNotNull { (it.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value }.toSet()
+                    val acceptedRows = after.filter { row ->
+                        row.text == prompt &&
+                            (row.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value?.let { it !in beforeIds } == true
+                    }
+                    check(acceptedRows.size == 1) { "queued prompt did not produce one new durable inbox row" }
+                }
                 mutableChat.update { live ->
                     if (live.chatId != current.chatId || live.workerSessionId != workerSessionId) live else {
-                        val rows = live.localQueueItems.map { item ->
-                            if (item.id == localId && item.actionRequestId == requestId) item.copy(
-                                busy = false,
-                                state = if (mode == com.phonedsh.ui.state.EnterMode.STEER)
-                                    com.phonedsh.ui.state.QueueItemStatus.STEERED else com.phonedsh.ui.state.QueueItemStatus.QUEUED,
-                                receipt = com.phonedsh.ui.state.QueueActionReceipt(
-                                    requestId = requestId,
-                                    action = queueAction,
-                                    outcome = com.phonedsh.ui.state.CommandOutcome.SUCCEEDED,
-                                    message = "请求已由 DSH 接受",
-                                    sessionId = workerSessionId,
-                                    itemId = localId.value,
-                                ),
-                            ) else item
-                        }
                         live.copy(
                             draft = if (live.draft.trim() == trimmed) "" else live.draft,
                             attachments = if (live.attachments == attachments) emptyList() else live.attachments,
                             lastSubmission = trimmed,
                             lastAttachments = attachments,
-                            localQueueItems = rows,
+                            localQueueItems = com.phonedsh.ui.state.retireAcceptedQueuePrompt(
+                                live.localQueueItems,
+                                promptRequestId,
+                            ),
+                            retryBusyPromptRequestId = null,
+                            sessionSnapshot = live.sessionSnapshot.copy(queueItems = after),
                         )
                     }
                 }
@@ -2221,9 +2238,12 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                                     outcome = com.phonedsh.ui.state.CommandOutcome.FAILED,
                                     message = failure.message?.substringBefore('\n')?.take(180) ?: "请求结果未确认",
                                     sessionId = workerSessionId,
-                                    itemId = localId.value,
+                                    itemId = localItemId,
                                 ),
                             ) else item
+                        },
+                        retryBusyPromptRequestId = promptRequestId.takeIf {
+                            live.draft.trim() == trimmed && live.attachments == attachments
                         },
                     )
                 }

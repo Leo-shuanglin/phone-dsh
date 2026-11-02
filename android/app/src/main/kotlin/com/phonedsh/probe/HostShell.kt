@@ -73,6 +73,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.rememberCoroutineScope
 import com.phonedsh.engine.ChannelStatus
 import com.phonedsh.engine.EngineState
@@ -95,10 +96,12 @@ import com.phonedsh.ui.nav.HomeDrawerArchiveRequest
 import com.phonedsh.ui.nav.rememberHomeDrawerUiState
 import com.phonedsh.ui.nav.PdshNavState
 import com.phonedsh.ui.nav.PdshRoute
+import com.phonedsh.ui.nav.confirms
 import com.phonedsh.ui.page.FactState
 import com.phonedsh.ui.page.PhoneCapability
 import com.phonedsh.ui.page.ProviderDraft
 import com.phonedsh.ui.page.ProviderKeyStatus
+import com.phonedsh.ui.page.BusyEnterMode
 import com.phonedsh.ui.page.SettingsScreenState
 import com.phonedsh.ui.page.WorkbenchSection
 import com.phonedsh.ui.page.ShellRun
@@ -188,7 +191,7 @@ internal fun HostShell(
     backgroundRevision: Int,
     permissionRevision: Int,
     filesImportReceipt: Pair<String, com.phonedsh.ui.page.FilesImportReceipt>?,
-    onSpeakText: ((String) -> Unit)?,
+    onSpeakText: ((String) -> Boolean)?,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onRunTurn: () -> Unit,
@@ -259,6 +262,7 @@ internal fun HostShell(
     val providerProbeScope = rememberCoroutineScope()
     var nav by remember { mutableStateOf(initialHostNavState(engine.probeFaceOnLaunch())) }
     var shellRun by remember { mutableStateOf(ShellRun()) }
+    var speechNotice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(state is EngineHostState.Running, chatUi.workerSessionId) {
         if (state is EngineHostState.Running) engine.refreshAutomation()
     }
@@ -282,6 +286,7 @@ internal fun HostShell(
         chatScreenState.queueItems,
         onSpeakText,
         shellRun,
+        speechNotice,
         providerConnectionTest,
         providerSave,
         providerModels,
@@ -474,16 +479,13 @@ internal fun HostShell(
                 ) engine.dismissChatQuestion(visiblePlan)
             }
         }
-        val latestAssistantReply = chatScreenState.rows.asReversed().firstNotNullOfOrNull { row ->
-            (row as? com.phonedsh.ui.state.ChatRow.Assistant)
-                ?.takeIf { !it.streaming && it.text.isNotBlank() }
-                ?.text
-        }
         if (onSpeakText != null && latestAssistantReply != null && chatUi.chatId.isNotBlank()) {
             available(com.phonedsh.ui.nav.PdshActionKey.SPEAK_RECENT_REPLY) { request ->
                 if (request is com.phonedsh.ui.nav.PdshUiHostCommand.SpeakRecentReply &&
                     request.sessionId == chatUi.chatId && request.text == latestAssistantReply
-                ) onSpeakText.invoke(request.text)
+                ) {
+                    if (!onSpeakText.invoke(request.text)) speechNotice = "系统语音服务未能启动朗读。"
+                }
             }
         }
         available(com.phonedsh.ui.nav.PdshActionKey.SESSION_RENAME) { request ->
@@ -557,6 +559,7 @@ internal fun HostShell(
                     operation = com.phonedsh.ui.nav.PdshProviderOperation.GET_MODELS,
                     requestId = request.requestId,
                     profileId = draft.id.takeIf(String::isNotBlank),
+                    receipt = null,
                 )
                 providerProbeScope.launch {
                     val result = getProviderModels(draft, requestId)
@@ -677,6 +680,12 @@ internal fun HostShell(
             notice = null
         }
     }
+    LaunchedEffect(speechNotice) {
+        if (speechNotice != null) {
+            delay(NOTICE_MILLIS)
+            speechNotice = null
+        }
+    }
 
     // 外观 is a real preference here: the stored choice picks the token table for
     // every surface above the page (the probe face draws its own theme and is
@@ -726,7 +735,7 @@ internal fun HostShell(
                 else -> nav = nav.pop()
             }
         }
-        val note = notice ?: routeNote
+        val note = notice ?: speechNotice ?: routeNote
         val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         Box(Modifier.fillMaxSize().background(tokens.colors.selector)) {
             Column(

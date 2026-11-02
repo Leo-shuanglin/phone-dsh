@@ -122,6 +122,30 @@ class ChatScreenStateTest {
     }
 
     @Test
+    fun `retiring one confirmed local prompt preserves durable and identical unrelated rows`() {
+        val prompt = StateRequestId("prompt-one")
+        val otherPrompt = StateRequestId("prompt-two")
+        val durable = listOf(
+            ManagedQueueItemState(QueueItemId.Durable("d1"), "same text", QueueItemStatus.QUEUED),
+            ManagedQueueItemState(QueueItemId.Durable("d2"), "same text", QueueItemStatus.QUEUED),
+        )
+        val local = listOf(
+            ManagedQueueItemState(
+                id = QueueItemId.Local("local-one"), text = "same text", state = QueueItemStatus.QUEUED,
+                promptRequestId = prompt,
+            ),
+            ManagedQueueItemState(
+                id = QueueItemId.Local("local-two"), text = "same text", state = QueueItemStatus.QUEUED,
+                promptRequestId = otherPrompt,
+            ),
+        )
+
+        val afterOneAck = reconcileQueueRows(durable, retireAcceptedQueuePrompt(local, prompt))
+        assertEquals(listOf(QueueItemId.Durable("d1"), QueueItemId.Durable("d2"), QueueItemId.Local("local-two")), afterOneAck.map { it.id })
+        assertEquals(otherPrompt, afterOneAck.last().promptRequestId)
+    }
+
+    @Test
     fun `host receipts and scopes remain explicit and unknown facts stay null`() {
         val host = ChatHostFacts(
             plan = PlanApprovalState(StateRequestId("plan"), "# Plan", PlanApprovalStatus.PENDING),

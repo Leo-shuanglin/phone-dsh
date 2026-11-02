@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -265,7 +266,7 @@ class MainActivity : ComponentActivity() {
                 permissionRevision = permissionRevision,
                 filesImportReceipt = workspaceImport,
                 onSpeakText = if (speechReady) { text ->
-                    textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "pdsh-${System.nanoTime()}")
+                    textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "pdsh-${System.nanoTime()}") == TextToSpeech.SUCCESS
                 } else null,
                 onStart = engine::start,
                 // Stopping the local engine ends every DSH session it hosts, so

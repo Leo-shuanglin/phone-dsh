@@ -150,7 +150,7 @@ class HostSessionArtifactsTest {
         )
 
         assertEquals(
-            listOf("same.md", "new.md"),
+            listOf("new.md", "same.md"),
             HostSessionArtifacts.addedOrChanged(before, after),
         )
     }

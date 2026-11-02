@@ -79,11 +79,21 @@ class ChatTurnRunnerTest {
         val host = testHost()
         peer.attach(host)
         peer.connect()
-        DshTurnClient(host).prompt(
-            sessionId = "worker-running",
-            text = "steer this turn",
-            requestId = "ui.steer.action-1",
-            mode = "steer",
+        peer.turnEndDelayMillis = 1
+        val runner = ChatTurnRunner(
+            channel = host,
+            client = DshTurnClient(host),
+            firstEventTimeoutMillis = 500,
+            nextReadTimeoutMillis = 20,
+        )
+        runner.run(
+            workerSessionId = "worker-running",
+            prompt = "steer this turn",
+            onSession = {},
+            onEvent = {},
+            onDelta = {},
+            promptRequestId = "ui.steer.action-1",
+            promptMode = "steer",
         )
         assertEquals(listOf("ui.steer.action-1"), peer.promptRequestIds)
         assertEquals(listOf("steer"), peer.promptModes)
