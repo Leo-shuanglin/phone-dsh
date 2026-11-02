@@ -927,18 +927,6 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     @Volatile
     private var chatRunner: ChatTurnRunner? = null
 
-    /**
-     * The Worker session this *process* created, or `null`.
-     *
-     * Deliberately not persisted: a Worker session id is only valid while the
-     * Worker page that minted it is alive, and every App start (and every import's
-     * host restart) replaces that page. Reusing a stored id would spend the first
-     * message after a launch waiting for a turn that can never start; the stored
-     * id stays in the chat record for the session list's claim, not for sending.
-     */
-    @Volatile
-    private var liveWorkerSessionId: String? = null
-
     /** A monotonic counter for node ordinals; never reset, so ids stay unique. */
     private var chatOrdinal: Int = 0
 
@@ -1641,8 +1629,12 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 val runner = ChatTurnRunner(host.channel, DshTurnClient(host.channel, ::logTurn), ::logTurn)
                 chatRunner = runner
                 outcome = runner.run(
-                    // The live id, never the stored one: see [liveWorkerSessionId].
-                    workerSessionId = liveWorkerSessionId,
+                    // The conversation's own Worker session, persisted in the chat
+                    // record. It survives a Worker page reload and a cold start:
+                    // `session/prompt` resumes it from the Worker's JSONL log
+                    // (`/dsh/home/sessions`, repacked into every boot overlay), so
+                    // the model keeps the earlier turns instead of starting blind.
+                    workerSessionId = sending.workerSessionId,
                     prompt = prompt,
                     onSession = { workerSessionId -> claimWorkerSession(chatId, workerSessionId) },
                     onEvent = { event -> onChatEvent(chatId, event) },
@@ -1651,6 +1643,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                             if (live.chatId == chatId) live.copy(streaming = live.streaming + text) else live
                         }
                     },
+                    onContextLost = { message -> recordContextLost(chatId, message) },
                 )
                 finishChatTurn(chatId, outcome)
             } catch (timeout: TimeoutCancellationException) {
@@ -1739,7 +1732,6 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
      * conversation and the list does not show it twice.
      */
     private fun claimWorkerSession(chatId: String, workerSessionId: String) {
-        liveWorkerSessionId = workerSessionId
         chatWorkerClaims = chatWorkerClaims + workerSessionId
         mutableChat.update {
             if (it.chatId == chatId) it.copy(workerSessionId = workerSessionId) else it
@@ -1758,7 +1750,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             LogcatHostLog.info(
                 "APP_CHAT_TURN_OK session=$chatId worker=${mutableChat.value.workerSessionId ?: "-"} " +
                     "kinds=$kinds reason=completed streamed=${outcome.liveText.length} chars " +
-                    "text=${outcome.assistantText.length} chars",
+                    "text=${outcome.assistantText.length} chars context_reset=${outcome.contextReset}",
             )
         } else if (outcome.endReason == null) {
             failChatTurn(chatId, "the turn ended without a turn_ended edge (kinds=$kinds)")
@@ -1825,6 +1817,37 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             )
         }
         persistChat(chatId)
+    }
+
+    /**
+     * Tells the person that this conversation lost the model's earlier context.
+     *
+     * The send itself can still succeed — a new Worker session is the only way to
+     * send at all once the old one is gone — but the transcript now shows bubbles
+     * the model can no longer see. This writes that fact **into the transcript**
+     * (a durable `status` row, so reopening the chat cannot present the earlier
+     * messages as shared context) and raises the transient banner so it is visible
+     * the moment it happens. Never a log-only path: `budgets.md` §5 / the lane's
+     * rule is that the UI record and the model context must not disagree silently.
+     */
+    private fun recordContextLost(chatId: String, message: String) {
+        val at = clock.nowMillis()
+        val scopeTurn = mutableChat.value.turnToken.ifEmpty { "t$at" }
+        val node = contextLostNode(chatId, scopeTurn, message)
+        mutableChat.update {
+            if (it.chatId != chatId) {
+                it
+            } else {
+                it.copy(
+                    nodes = it.nodes + node,
+                    error = message,
+                    bannerDismissed = false,
+                    updatedAtMs = at,
+                )
+            }
+        }
+        persistChat(chatId)
+        LogcatHostLog.warn("APP_CHAT_CONTEXT_LOST session=$chatId")
     }
 
     /**

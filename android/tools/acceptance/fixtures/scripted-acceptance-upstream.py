@@ -212,12 +212,61 @@ class Plan:
         self.tool_call = tool_call
 
 
+RECALL_MARK = "recall:"
+"""The chat-context driver's recall question marker (`run-chat-context-flow.sh`)."""
+
+CONTEXT_ANSWER = "CONTEXT-OK 323"
+"""What the fixture answers when the request transcript still carries the secret."""
+
+SECRET = "PR14CHATOK"
+"""The fact the driver asked the model to remember at the start of the chat."""
+
+
+def earlier_user_texts(payload: dict) -> str:
+    """Every user-authored text the request transcript carries, joined."""
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return ""
+    parts: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") in (None, "text"):
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+    return "\n".join(parts)
+
+
 def plan_for(payload: dict, body: str, args) -> Plan:
     if is_title_request(body):
         return Plan([TITLE_TEXT])
 
     results = tool_results(payload)
     said = user_text(payload)
+
+    # The chat-context lane (step 8) runs FIRST: once a CSV is in the
+    # transcript, every later request would otherwise take the CSV lane. The
+    # answer is decided from the *request transcript* only, so it is evidence
+    # that the Worker resumed the same Session with its durable history: the App
+    # re-sends no history of its own.
+    if RECALL_MARK in said.lower():
+        carried = SECRET in earlier_user_texts(payload)
+        audit("lane=recall carried={} messages={}".format(carried, len(payload.get("messages") or [])))
+        return Plan([CONTEXT_ANSWER if carried else "UNKNOWN"])
+
+    # The fact the conversation must remember (the flow's first prompt). The answer
+    # carries it, so the later recall question has something the model itself
+    # said as well as the user's own message.
+    if SECRET in said:
+        audit("lane=secret messages={}".format(len(payload.get("messages") or [])))
+        return Plan([SECRET + " 323"])
+
     wants_csv = args.csv_name.lower() in said.lower() or args.csv_name.lower() in body.lower()
     if not wants_csv:
         audit(f"lane=stream chunks={len(STREAM_SEGMENTS)} round=0")

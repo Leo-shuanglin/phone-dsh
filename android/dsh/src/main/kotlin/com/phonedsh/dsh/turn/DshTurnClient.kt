@@ -40,6 +40,7 @@ import com.phonedsh.hostevents.HostEvent
 import com.phonedsh.hostevents.HostEventKind
 import com.phonedsh.hostevents.HostEventProjection
 import java.security.SecureRandom
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -85,7 +86,6 @@ class DshTurnClient(
     private val log: (String) -> Unit = {},
 ) {
     private val rpcIds = AtomicInteger(0)
-    private val promptIds = AtomicInteger(0)
     private val random = SecureRandom()
 
     /**
@@ -193,15 +193,27 @@ class DshTurnClient(
         ).also { if (last != null) it.initCause(last) }
     }
 
-    /** `session/prompt` in `queue` mode: the user message that starts the turn. */
+    /**
+     * `session/prompt` in `queue` mode: the user message that starts the turn.
+     *
+     * @param requestId the client-minted identity DSH persists on the accepted
+     *   `user/message`. It must be **new for every submission**: the Worker
+     *   answers `{accepted: true}` without delivering anything when the durable
+     *   Session already holds a prompt with the same id
+     *   (`hasPromptRequest`, `dsh-api-session-controller` `lib/index.js`), which
+     *   looks exactly like a turn that never starts (`no_turn_started` after the
+     *   first-event deadline) and was the P0 defect of the chat lane. Pass an id
+     *   only to retry *the same* submission.
+     */
     suspend fun prompt(
         sessionId: String,
         text: String,
+        requestId: String = newPromptRequestId(),
         timeoutMillis: Long = CALL_TIMEOUT_MILLIS,
     ) {
         val request = JsonObject(
             linkedMapOf(
-                "requestId" to JsonString("pdsh-prompt-${promptIds.incrementAndGet()}"),
+                "requestId" to JsonString(requestId),
                 "sessionId" to JsonString(sessionId),
                 "mode" to JsonString("queue"),
                 "content" to JsonArray(
@@ -463,6 +475,19 @@ class DshTurnClient(
         const val HEX = "0123456789abcdef"
     }
 }
+
+/**
+ * A fresh `session/prompt` identity for one submission.
+ *
+ * The Worker deduplicates a prompt by this value against the Session's durable
+ * `user/message` sources, so a value that repeats inside one Session is
+ * swallowed (`{accepted: true}`, no turn, no events). A per-client counter is
+ * not enough: the chat builds a new client for every send, so every send used
+ * to be `pdsh-prompt-1` and the second turn of a conversation never reached the
+ * model. The official Web client mints `randomUUID()` per submission for the
+ * same reason.
+ */
+internal fun newPromptRequestId(): String = "pdsh-prompt-${UUID.randomUUID()}"
 
 /**
  * The `session/create` retry schedule: 250 ms, doubling to a 2 s cap.

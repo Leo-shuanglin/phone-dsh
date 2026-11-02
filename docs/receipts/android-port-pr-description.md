@@ -1700,3 +1700,82 @@ PASS 步骤6: 产物 orders-summary.md（78 B）在产物页可打开，预览�
 
 **顺带一条环境坑**（值得记）：`avdmanager create avd` 默认给 **320×640**，
 第 1 步会挂在「编辑器滚不到 API 密钥」——必须把 `hw.lcd` 改成 1080×2400/420。
+
+---
+
+## 二十六、P0：文件导入后模型上下文丢失 —— 已修，六场景全过
+
+### 真机复现（需求方提供，基线 `0b732a7f`，小米 M2102K1C / Android 14 / 真实 DeepSeek）
+
+```
+1. 新建会话 → 2. "Reply with PR14CHATOK and the result of 17 times 19" → 收到 323
+3. 点 + → 添加文件 → 系统选择器选 CSV → 让模型统计 → 成功，净额 123.00
+4. "Without tools or guessing, what exact multiplication did I request at the start
+   of this chat?" → 模型答 UNKNOWN，而原生聊天里 323 还在
+```
+
+日志：
+```
+17:57:30 Renderer process crash detected code -1
+17:59:51 stored session ... not usable (no_turn_started); opening a new one
+18:02:09 回忆问题回合完成 → UNKNOWN
+```
+
+### 根因：一条不该丢弃会话的错误被当成「会话过期」
+
+旧代码在 `ChatTurnRunner.run` 里：**任何**异常都开新 session。
+
+```kotlin
+} catch (failure: Exception) {
+    log("stored session=$requested not usable; opening a new one")
+}
+val created = client.createSessionWhenReady(cwd = WORKSPACE)
+return oneTurn(created, prompt, ...)   // ← 只发本轮 prompt，历史留在旧 session
+```
+
+**但 `no_turn_started` 不代表会话没了**——它是「这一轮没起来」（prompt 被去重、或模型失败）。
+
+**这个 Worker 的 session 是可恢复的**（这一条是查出来的，不是假设）：
+
+- phone profile 把 `session-persistence-journaled` 挂在 `$DSH_HOME/sessions`（明文 JSONL）；
+- `/dsh/home/**` 由宿主持久化并重新打进每次 boot overlay（`wal.md` §8）；
+- `session/prompt` 会从那份日志 resume 一个非活跃 session（`AgentSessionService.resolve` → `agents.resume`）。
+
+**只有 Worker 自己的 `session/not-found` 才说明日志真的没了。**
+
+### 修法
+
+**只有 `session/not-found` 允许丢弃会话**；其他任何失败（`no_turn_started` / `stream_error` /
+`invalid_response` / `session_create_unavailable` / `session/writer-held` / `gateway/internal` /
+超时 / 通道错误）**都保留会话并把真实原因报给用户**。
+
+**并且不许静默**：确实无法恢复时，`onContextLost` 会在聊天里写一句
+「上一段上下文已丢失：……这条消息开了一个新会话，模型看不到本对话更早的内容。」，
+同时记 `APP_CHAT_CONTEXT_LOST`。
+
+### 六场景验收（`android/tools/acceptance/run-chat-context-flow.sh`，scripted upstream）
+
+```
+PASS 场景1: SAF 选完 CSV 并处理之后，追问「之前的乘法」→ CONTEXT-OK 323（上游从请求 transcript 判定）
+PASS 场景2: 取消系统文件选择器返回后 → CONTEXT-OK 323
+PASS 场景3: 切后台 8s 返回后 → CONTEXT-OK 323
+PASS 场景4: 分享选择器取消返回后 → CONTEXT-OK 323
+PASS 场景5: 冷启动重开同一对话后 → CONTEXT-OK 323
+PASS 场景6: 删掉会话日志并重建 Worker 后 → 聊天里明确写了「上一段上下文已丢失」并开新会话
+
+6 通过 / 0 失败
+```
+
+**判据不是「模型说记得」**：scripted upstream 从**请求 transcript** 里判定前文在不在，
+所以「上下文在」是读出来的，不是模型自报的。
+
+### 一条方法论
+
+需求方提的三个细节我原样保留在实现里：
+
+1. **「不许静默」**——UI 有历史、模型没有，是最坏的状态；要么恢复，要么明说。
+2. **SAF 会杀 WebView**——所以验收必须覆盖「取消选择 / 后台返回 / 分享返回 / 冷启动」四条路径，
+   不能只验成功导入那一条。
+3. **判据要来自请求**，不是模型的回答——模型说自己记得，可能是在编。
+
+18/18 门禁 PASS。

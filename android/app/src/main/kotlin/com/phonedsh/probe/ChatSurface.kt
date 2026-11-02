@@ -69,13 +69,22 @@ internal data class ChatUiState(
     val title: String = "",
     val draft: String = "",
     val nodes: List<UiStateNode> = emptyList(),
-    /** The Worker session this conversation last used, or `null` before the first send. */
+    /**
+     * The Worker session the next turn continues, or `null` before the first
+     * send.
+     *
+     * Persisted in the chat record, so it also survives a cold start. It is a
+     * *resumable* id, not just a claim: the Worker keeps its session log under
+     * `/dsh/home/sessions`, repacks it into every boot overlay, and
+     * `session/prompt` resumes a non-live session from it — which is what keeps
+     * the model's context equal to the transcript (`ChatTurnRunner`).
+     */
     val workerSessionId: String? = null,
     /**
      * The prefix of this send's turn ids (`t<n>-`).
      *
-     * A Worker session that was replaced (a new page after a restart) starts its
-     * turn numbering at `turn-0001` again, so the Worker's own turn id is not
+     * A Worker session that had to be replaced (the stored log was really gone)
+     * starts its turn numbering at `turn-0001` again, so the Worker's own turn id is not
      * unique inside one conversation. Prefixing it per send keeps every row's
      * nodeID unique — the page uses the id as its list key, and a duplicate key
      * crashed the frame (`IllegalArgumentException: Key ... was already used`,
@@ -335,6 +344,38 @@ internal fun chatNodeOf(
 
         else -> null
     }
+}
+
+/**
+ * The durable row that says this conversation's earlier model context is gone.
+ *
+ * Written when the Worker answers `session/not-found` for the conversation's
+ * stored session and the send has to open a new one. It is a `status` node, not
+ * a banner: a transcript that still shows the earlier bubbles must say, in the
+ * transcript itself, that the model can no longer see them — otherwise reopening
+ * the chat presents two different histories as one (`ChatTurnRunner`).
+ *
+ * @param chatId this App's conversation id.
+ * @param turnToken the send's turn prefix, so the row's id is unique per send.
+ * @param message the user-facing sentence; also the row's `detail`.
+ */
+internal fun contextLostNode(chatId: String, turnToken: String, message: String): UiStateNode {
+    val turnId = "${turnToken.ifEmpty { "context" }}-context-lost"
+    return UiStateNode(
+        kind = UiStateKind.STATUS,
+        nodeID = "session/$chatId/turn/$turnId/event/0/context-lost",
+        parentID = "session/$chatId/turn/$turnId",
+        sessionID = chatId,
+        turnID = turnId,
+        seq = 0,
+        text = message,
+        props = JsonObject(
+            linkedMapOf(
+                "reason" to JsonString("context_lost"),
+                "detail" to JsonString(message),
+            ),
+        ),
+    )
 }
 
 /** The bubble the person's own message becomes, created before the Worker echoes it. */

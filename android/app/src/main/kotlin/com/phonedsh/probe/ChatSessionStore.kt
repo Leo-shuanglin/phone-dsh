@@ -48,7 +48,9 @@ import com.phonedsh.ui.projection.encodeCanonical
  * @param updatedAtMs the wall-clock instant of its last change, for the list order.
  * @param workerSessionIds every Worker `session/create` id this conversation has
  *   used, oldest first. Each one is a journal row; keeping the list lets the
- *   session list claim them all so one conversation never lists twice.
+ *   session list claim them all so one conversation never lists twice. The last
+ *   one is the id the next turn resumes (the Worker persists its session log in
+ *   `/dsh/home/sessions`, so a cold start continues the same model history).
  * @param nodes the rendered `ui-state/1` sequence, in order.
  */
 internal data class ChatRecord(

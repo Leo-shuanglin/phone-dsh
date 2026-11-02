@@ -18,6 +18,28 @@
 // it (`call("session/cancel", ...)`), and projects durable items with `:core`'s
 // `HostEventProjection`. Only the mux open and the NDJSON line reader are local.
 //
+// ---- the Worker session survives the Worker page (P0/L85) ------------------
+// A Worker `session/create` id used to be treated as valid only while the page
+// that minted it lived, so every App start and every renderer rebuild opened a
+// new session and left the previous model history behind: the transcript still
+// showed the earlier messages, the model did not, and a follow-up question was
+// answered `UNKNOWN`. That premise is wrong for this Worker:
+//
+//   * the phone profile mounts `session-persistence-journaled` at
+//     `$DSH_HOME/sessions` (plaintext JSONL, `phone.worker.cordis.patch.yml`);
+//   * `/dsh/home/**` is host-persisted and repacked into every boot
+//     (`wal.md` §8, `BootOverlay`), so a reloaded page mounts the same log;
+//   * `session/prompt` resumes a non-live session from that log
+//     (`AgentSessionService.resolve` → `agents.resume`, which seeds the new
+//     Agent with the whole persisted prefix), and only answers
+//     `session/not-found` when the log is really gone.
+//
+// So the stored id is the *primary* path, across renderer rebuilds and cold
+// starts, and a new session is opened only on the Worker's own `not-found`
+// verdict — in which case the caller is told, because a transcript that still
+// shows the old messages while the model no longer has them is the one state
+// this file must never produce silently.
+//
 // ---- what it may not claim ------------------------------------------------
 // The model behind the Worker is scripted in the acceptance lane. Streaming proves
 // the App renders the Worker's live frames as they arrive; it does not prove an
@@ -52,11 +74,15 @@ import kotlinx.coroutines.withTimeoutOrNull
  * @param liveText the text the Worker streamed before the durable message; kept
  *   so a caller can tell "the stream carried text" from "it carried none" even
  *   after the settled message replaced it.
+ * @param contextReset true when this turn could not continue the stored Worker
+ *   session and was sent into a new one, so the model did **not** see the earlier
+ *   messages of this conversation. The user was told ([run]'s `onContextLost`).
  */
 internal data class ChatTurnOutcome(
     val events: List<HostEvent>,
     val endReason: String?,
     val liveText: String,
+    val contextReset: Boolean = false,
 ) {
     /** The settled assistant text the turn produced, if it produced one. */
     val assistantText: String
@@ -86,16 +112,22 @@ internal class ChatTurnRunner(
      * Runs one turn.
      *
      * @param workerSessionId the Worker session to continue, or `null` to create
-     *   one. A stored id from a previous process is gone after the Worker
-     *   restarted; that is reported by the first call and retried once with a
-     *   fresh session, so "send after a cold start" continues in the same chat
-     *   record instead of failing.
+     *   one. A stored id is the normal case, not a stale one: this Worker
+     *   persists its session log under `/dsh/home/sessions`, the host repacks
+     *   that tree into every boot, and `session/prompt` resumes a non-live
+     *   session from it. The id is therefore tried **first** even after a cold
+     *   start or a renderer rebuild, and only the Worker's own `session/not-found`
+     *   answer opens a new one.
      * @param prompt the complete user text (attachments are named in it).
      * @param onSession called as soon as the Worker session id is known, before
      *   the prompt is sent, so the chat record can claim it (and the session list
      *   can show it) even when the turn later fails.
      * @param onEvent one durable event, in wire order.
      * @param onDelta one live text fragment, in arrival order.
+     * @param onContextLost called with a user-facing sentence when the stored
+     *   session is gone and this turn runs in a new one. Never omitted by the
+     *   chat: "the transcript has the earlier messages, the model does not" is
+     *   the state this callback exists to make impossible to hide.
      * @throws DshTurnException with a stable code when the lane fails.
      */
     suspend fun run(
@@ -104,23 +136,40 @@ internal class ChatTurnRunner(
         onSession: (String) -> Unit,
         onEvent: (HostEvent) -> Unit,
         onDelta: (String) -> Unit,
+        onContextLost: (String) -> Unit = {},
     ): ChatTurnOutcome {
         val requested = workerSessionId
         if (requested != null) {
+            // Only the session's own verdict may discard it. A channel failure, a
+            // model failure, a timeout or a `no_turn_started` stream says nothing
+            // about whether the log still exists, and opening a fresh session on
+            // one of those is what silently amputated the model's history.
+            var sawEvent = false
             try {
-                return oneTurn(requested, prompt, onSession, onEvent, onDelta)
+                return oneTurn(
+                    requested,
+                    prompt,
+                    onSession,
+                    { event -> sawEvent = true; onEvent(event) },
+                    onDelta,
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                // A Worker session id only lives as long as the Worker page. After a
-                // cold start (or an engine reload) the stored id is unknown to it;
-                // the honest recovery is a new Worker session in the same chat, not
-                // an error on the first message of a reopened conversation.
-                log("chat turn: stored session=$requested not usable (${reasonOf(failure)}); opening a new one")
+                val reason = reasonOf(failure)
+                if (sawEvent || !workerSessionGone(reason)) throw failure
+                // The Worker answered `session/not-found`: its persisted log does
+                // not hold this id (a wiped home, or a record this Worker never
+                // wrote). A new session is the only way to send at all, and the
+                // person is told exactly what that costs.
+                log("chat turn: worker session=$requested is gone ($reason); opening a new one")
+                onContextLost(CONTEXT_LOST)
             }
         }
         val created = client.createSessionWhenReady(cwd = WORKSPACE)
+        log("chat turn: new worker session=$created (previous=${requested ?: "none"})")
         return oneTurn(created, prompt, onSession, onEvent, onDelta)
+            .copy(contextReset = requested != null)
     }
 
     /**
@@ -398,6 +447,11 @@ internal class ChatTurnRunner(
         const val MUX_PATH = "/api/remote.mux"
         const val CANCEL_ENDPOINT = "session/cancel"
 
+        /** What the person is told when the earlier context could not be kept. */
+        const val CONTEXT_LOST =
+            "上一段上下文已丢失：之前那轮对话的 Worker 会话已经无法恢复（session/not-found），" +
+                "这条消息开了一个新会话，模型看不到本对话更早的内容。"
+
         /** The Worker's session cwd: the workspace the App's files page also shows. */
         const val WORKSPACE = "/dsh/workspace"
         const val MAX_MESSAGES = 64
@@ -412,6 +466,20 @@ internal class ChatTurnRunner(
         const val HEX = "0123456789abcdef"
     }
 }
+
+/**
+ * True when [code] is the Worker saying the stored session does not exist.
+ *
+ * This is the **only** reason this lane may open a new Worker session for a
+ * conversation that already has one: every other failure (`no_turn_started`,
+ * `stream_error`, a channel error, a timeout) leaves the durable log intact and
+ * is reported to the person instead of being "recovered" into a contextless
+ * session.
+ */
+internal fun workerSessionGone(code: String?): Boolean = code == SESSION_NOT_FOUND_CODE
+
+/** The Worker's own verdict that a persisted session is not there. */
+private const val SESSION_NOT_FOUND_CODE: String = "session/not-found"
 
 /**
  * The text of one settled `assistant/message` event.
