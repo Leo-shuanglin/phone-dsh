@@ -55,8 +55,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -452,7 +458,11 @@ public data class FilesLocalState(
  * @param onQueryChange the search text changed (`:56`).
  * @param onNavigateUp go to the parent directory (the baseline's back button).
  * @param onBack leave the page.
- * @param onOpenDemo the toolbar's 「3D 示例」 (`:79`–`:86`); `null` hides it.
+ * @param onOpenDemo the toolbar's 「3D 示例」 (`:79`–`:86`). The entry is always
+ *   drawn, because the baseline always draws it (`FilesPage.swift:79`): when the
+ *   host supplies no demo surface the page opens its own sheet, so a null
+ *   callback can no longer make a labelled control exist in the source and never
+ *   render — the hole `page_structure_check.py` could not see.
  */
 @Composable
 public fun FilesPage(
@@ -468,6 +478,13 @@ public fun FilesPage(
     // back-gesture (§5): a sub-directory is one level below its parent, so the
     // header's back walks the same stack the baseline's NavigationStack walks.
     val onHeaderBack = if (state.canNavigateUp) onNavigateUp else onBack
+    // The toolbar entry is drawn unconditionally; this sheet is the destination
+    // when the host passes no `onOpenDemo`. iOS presents the bundled
+    // `demo/spin.html` in a `PDSHPageView`; `:lib` ships no WebView and no
+    // bundled library page, so the sheet carries the app's own 3D answer
+    // (`UiStrings.PREVIEW_REASON_MODEL`) instead of pretending to render a cube.
+    var showingDemo by rememberSaveable { mutableStateOf(false) }
+    val openDemo: () -> Unit = onOpenDemo ?: { showingDemo = true }
 
     PageFrame(
         title = state.groupTitle,
@@ -475,14 +492,12 @@ public fun FilesPage(
         rootTag = UiPageTags.FILES_ROOT,
         modifier = modifier,
         actions = {
-            if (onOpenDemo != null) {
-                HeaderAction(
-                    label = UiStrings.FILES_DEMO,
-                    tag = UiPageTags.FILES_DEMO,
-                    onClick = onOpenDemo,
-                    description = UiStrings.FILES_DEMO_OPEN,
-                )
-            }
+            HeaderAction(
+                label = UiStrings.FILES_DEMO,
+                tag = UiPageTags.FILES_DEMO,
+                onClick = openDemo,
+                description = UiStrings.FILES_DEMO_OPEN,
+            )
         },
     ) {
         ListingBody(
@@ -492,6 +507,48 @@ public fun FilesPage(
             onQueryChange = onQueryChange,
         )
     }
+    if (showingDemo) {
+        DemoSheet(onDismiss = { showingDemo = false })
+    }
+}
+
+/**
+ * The 「3D 示例」 sheet (`FilesPage.swift:62`–`:75`).
+ *
+ * The baseline's sheet is a `NavigationStack` titled 3D 示例 with a 完成 cancel
+ * key; the body is a bundled web page. Android keeps the sheet, its title and
+ * its cancel key, and puts the app's documented 3D answer in the body.
+ */
+@Composable
+private fun DemoSheet(onDismiss: () -> Unit) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            BasicText(
+                text = UiStrings.FILES_PREVIEW_DONE,
+                style = type.secondary.copy(color = tokens.colors.accent),
+                modifier = Modifier
+                    .testTag(UiPageTags.FILES_DEMO_DONE)
+                    .clickable(role = Role.Button, onClick = onDismiss)
+                    .padding(tokens.spacing.iconText),
+            )
+        },
+        title = {
+            BasicText(
+                text = UiStrings.FILES_DEMO,
+                style = type.rowLabel.copy(color = tokens.colors.primary),
+            )
+        },
+        text = {
+            BasicText(
+                text = UiStrings.PREVIEW_REASON_MODEL,
+                style = type.secondary.copy(color = tokens.colors.secondary),
+            )
+        },
+        containerColor = tokens.colors.input,
+    )
 }
 
 /** The listing: the search field above the one section (`FilesPage.swift:100`). */
@@ -897,7 +954,9 @@ internal object FilesPageTokens {
         UiTokenNames.COLORS_TERTIARY,
         UiTokenNames.COLORS_ACCENT,
         UiTokenNames.COLORS_SELECTOR,
+        UiTokenNames.COLORS_INPUT,
         UiTokenNames.TYPOGRAPHY_BODY,
+        UiTokenNames.TYPOGRAPHY_ROW_LABEL,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
         UiTokenNames.TYPOGRAPHY_CAPTION,
         UiTokenNames.TYPOGRAPHY_HEADLINE,

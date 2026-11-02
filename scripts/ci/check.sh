@@ -44,7 +44,7 @@ stage_desc() {
         phone-android-structure) echo "android/tools structure_check (11 checks, incl. nested-comments and the two 16 KB page-alignment gates) + its tool unit tests + the packaged-APK 16 KB gate's mutation suite" ;;
         phone-android-tests)   echo "cargo build -p pdsh-jni, then every test-bearing Gradle module's JVM tests; 0 tests counted = FAIL" ;;
         phone-rust-tests)      echo "cargo test --workspace over shell/: the host read policy, the WAL planner and the accelerators; the JVM suite exercises them through JNI, but the authoritative policy tests live only here" ;;
-        phone-android-release) echo "the :lib AAR deliverable + the consumer probe compiled from its bytes, then assembleRelease + 16 KB proof of the arm64-v8a libpdsh_jni.so and of the .so packaged in the APK (the AAR half never SKIPs; the APK half SKIPs without the gitignored worker bundle/NDK product)" ;;
+        phone-android-release) echo "the published com.phonedsh:lib:0.1.0 coordinate (8 artifacts + POM api closure) + the consumer probe resolved from it by coordinate, then assembleRelease + 16 KB proof of the arm64-v8a libpdsh_jni.so and of the .so packaged in the APK (the AAR/publication half never SKIPs; the APK half SKIPs without the gitignored worker bundle/NDK product)" ;;
         phone-xcode-resolve)   echo "xcodegen + Xcode package resolution of examples/probe-app (no simulator; SKIP if XcodeGen is absent)" ;;
         *)                     return 1 ;;
     esac
@@ -481,19 +481,114 @@ stage_phone_android_tests() {
 stage_phone_android_release() {
     [ -f "$ROOT/android/gradlew" ] || { echo "missing android/gradlew (committed wrapper)"; return 1; }
 
-    # ---- the deliverable: the AAR, and a consumer built from its bytes ----
+    # ---- the deliverable: the published coordinates, and a consumer that
+    #      resolves them the way an external app would ----
     android_require_jdk
     rc=$?
     [ "$rc" = 0 ] || return "$rc"
 
     gradle_args="--configure-on-demand --console=plain"
     [ "${CI_GRADLE_OFFLINE:-0}" = 1 ] && gradle_args="$gradle_args --offline"
+    # `publishLocalRepository` is the eight `com.phonedsh` artifacts into
+    # android/build/repo. The consumer probe resolves `com.phonedsh:lib:0.1.0`
+    # from there through its POM — no file dependency, no hand-supplied sibling
+    # list — so the publication has to exist before it builds. A real consumer
+    # publishes once and then only consumes; this stage does both because the
+    # deliverable *is* the pair (artifact + the proof someone else can use it).
     ( cd "$ROOT/android" && bash ./gradlew $gradle_args ${CI_GRADLE_ARGS:-} \
-        :lib:assembleRelease :lib-consumer-test:assembleDebug :lib-consumer-test:assembleRelease ) || {
-        echo "the AAR deliverable or its consumer probe did not build:"
-        echo "  cd android && ./gradlew :lib:assembleRelease :lib-consumer-test:assembleDebug :lib-consumer-test:assembleRelease"
+        :publishLocalRepository :lib-consumer-test:assembleDebug :lib-consumer-test:assembleRelease ) || {
+        echo "the published artifacts or the consumer probe built against them did not build:"
+        echo "  cd android && ./gradlew :publishLocalRepository :lib-consumer-test:assembleDebug :lib-consumer-test:assembleRelease"
         return 1
     }
+
+    # The publication is the fix for L63's finding (a bare AAR left R8 with 44
+    # missing classes because a file dependency has no POM). "The consumer built"
+    # alone would not protect that: the probe could pass again on a hand-supplied
+    # closure. So assert the POM itself carries the split it must carry —
+    # `api` -> compile, `implementation` -> runtime, and the Compose BOM as an
+    # import — and that all eight artifacts really exist.
+    repo="$ROOT/android/build/repo"
+    if ! publish_summary=$("$PYTHON" - "$repo" <<'PY'
+import pathlib
+import re
+import sys
+
+repo = pathlib.Path(sys.argv[1])
+version = "0.1.0"
+# artifact -> binary extension. Five AAR (Android libraries), three JAR (JVM).
+required = {
+    "lib": "aar",
+    "dsh": "aar",
+    "domain": "aar",
+    "controller": "aar",
+    "shell": "aar",
+    "core": "jar",
+    "net": "jar",
+    "platform": "jar",
+}
+problems = []
+for artifact, extension in required.items():
+    base = repo / "com" / "phonedsh" / artifact / version
+    pom = base / "{}-{}.pom".format(artifact, version)
+    binary = base / "{}-{}.{}".format(artifact, version, extension)
+    if not pom.is_file():
+        problems.append("missing {} (publishLocalRepository did not write it)".format(pom.relative_to(repo)))
+    if not binary.is_file():
+        problems.append("missing {} ({})".format(binary.relative_to(repo), extension))
+if problems:
+    sys.exit("; ".join(problems[:6]))
+
+pom = (repo / "com" / "phonedsh" / "lib" / version / "lib-{}.pom".format(version)).read_text()
+
+def scope_of(sibling):
+    match = re.search(
+        r"<artifactId>{}</artifactId>\s*<version>{}</version>\s*<scope>(\w+)</scope>".format(
+            re.escape(sibling), re.escape(version)
+        ),
+        pom,
+    )
+    return match.group(1) if match else None
+
+# :lib's `api` edges: the seven siblings on its closure arrive through these.
+for sibling in ("dsh", "domain", "platform"):
+    if scope_of(sibling) != "compile":
+        problems.append(
+            "lib POM: com.phonedsh:{} is {} scope, not compile — an `api` edge "
+            "did not reach the POM".format(sibling, scope_of(sibling) or "absent")
+        )
+# :dsh is the facade and it is `api`, so its own api edges must be compile too.
+dsh_pom = (repo / "com" / "phonedsh" / "dsh" / version / "dsh-{}.pom".format(version)).read_text()
+for sibling in ("core", "net", "controller", "shell", "platform"):
+    if not re.search(
+        r"<artifactId>{}</artifactId>\s*<version>{}</version>\s*<scope>compile</scope>".format(
+            re.escape(sibling), re.escape(version)
+        ),
+        dsh_pom,
+    ):
+        problems.append("dsh POM: com.phonedsh:{} is not compile scope".format(sibling))
+
+# `implementation` must NOT be on the consumer's compile surface.
+core_ktx = re.search(r"<artifactId>core-ktx</artifactId>.*?<scope>(\w+)</scope>", pom, re.S)
+if core_ktx and core_ktx.group(1) != "runtime":
+    problems.append("lib POM: core-ktx is {} scope, so an `implementation` edge leaked into the compile surface".format(core_ktx.group(1)))
+
+# :lib's Compose dependencies are declared without a version (the BOM owns it),
+# so a POM that loses the BOM import is unresolvable, not merely imprecise.
+if "<scope>import</scope>" not in pom or "<artifactId>compose-bom</artifactId>" not in pom:
+    problems.append("lib POM: the Compose BOM is not imported; :lib's versionless Compose dependencies cannot resolve")
+
+if problems:
+    sys.exit("; ".join(problems[:6]))
+print(
+    "publication: 8 com.phonedsh:{} artifacts, :lib POM carries the api closure "
+    "(compile) and the Compose BOM import".format(version)
+)
+PY
+    ); then
+        return 1
+    fi
+    log "$publish_summary"
 
     # Existence is not the assertion: the AAR must carry the documented consumer
     # entry points and the R8 rules that make it survivable in a minified app.
@@ -558,7 +653,7 @@ PY
         echo "  the AAR may exist while nothing in the tree consumes it; that is the failure this probe exists for"
         return 1
     }
-    log "consumer probe packaged ${consumer_apk#"$ROOT"/} against the AAR file (no project dependency)"
+    log "consumer probe packaged ${consumer_apk#"$ROOT"/} against com.phonedsh:lib:0.1.0 (Maven coordinate, no file dependency)"
 
     # ---- the demo APK: needs the NDK product and the worker bundle ----
     so="${CI_ANDROID_SO:-$ROOT/shell/target/aarch64-linux-android/debug/libpdsh_jni.so}"

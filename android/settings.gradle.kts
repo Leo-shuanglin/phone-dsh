@@ -14,6 +14,22 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // The in-tree publish repository. `./gradlew publishLocalRepository`
+        // (android/build.gradle.kts) writes the eight `com.phonedsh` artifacts
+        // here, and `:lib-consumer-test` resolves `com.phonedsh:lib:0.1.0` from
+        // it — the same way an external app would from a real repository.
+        //
+        // It is a path inside the build tree, not a URL and not ~/.m2: the
+        // artifact is a product of this checkout (the root .gitignore rule
+        // `build/` covers it), resolving needs no network, nothing is written
+        // outside the tree, and no stale 0.1.0 from another project on the
+        // machine can satisfy a resolve. The content filter keeps Gradle from
+        // asking this directory about androidx/google artifacts.
+        maven {
+            name = "pdshLocal"
+            url = uri(rootDir.resolve("build/repo"))
+            content { includeGroup("com.phonedsh") }
+        }
     }
 }
 

@@ -37,6 +37,7 @@ import com.phonedsh.dsh.localexec.UbuntuApproval
 import android.util.Log
 import android.view.View
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,6 +53,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -85,9 +87,11 @@ import com.phonedsh.ui.nav.PdshNavFacts
 import com.phonedsh.ui.nav.PdshNavHost
 import com.phonedsh.ui.nav.PdshNavState
 import com.phonedsh.ui.nav.PdshRoute
+import com.phonedsh.ui.page.FactState
 import com.phonedsh.ui.page.PhoneCapability
 import com.phonedsh.ui.page.ProviderDraft
 import com.phonedsh.ui.page.ProviderKeyStatus
+import com.phonedsh.ui.page.SettingsScreenState
 import com.phonedsh.ui.page.WorkbenchSection
 import com.phonedsh.ui.theme.PdshTheme
 import com.phonedsh.ui.theme.PdshThemeValues
@@ -145,6 +149,10 @@ internal fun HostShell(
     // the device store changed, so the walk must run again — the facts themselves
     // still come only from reads.
     var settingsRevision by remember { mutableIntStateOf(0) }
+    // The user preferences, collected so the theme and the facts follow a write.
+    // The store is the view model's; this shell never reads the file itself.
+    val preferences by engine.preferenceState.collectAsState()
+    val systemDark = isSystemInDarkTheme()
     val facts: PdshNavFacts = remember(
         state,
         handshake,
@@ -152,6 +160,7 @@ internal fun HostShell(
         backgroundRevision,
         permissionRevision,
         settingsRevision,
+        preferences,
     ) {
         engine.navFacts(state, handshake, turn)
     }
@@ -195,7 +204,10 @@ internal fun HostShell(
         }
     }
 
-    PdshTheme {
+    // 外观 is a real preference here: the stored choice picks the token table for
+    // every surface above the page (the probe face draws its own theme and is
+    // handed the same resolved answer below). `system` follows the platform.
+    PdshTheme(darkTheme = preferences.darkTheme(systemDark)) {
         val tokens = PdshThemeValues.tokens
         // §1 says the Web surface is 引擎就绪时的默认面. This host makes that
         // opt-in (`pdsh.face.web`) instead of unconditional: the demo acceptance
@@ -270,12 +282,56 @@ internal fun HostShell(
                             )
                             if (feedback != null) notice = feedback
                         },
-                        // The mirrored settings index has three write gestures and
-                        // this host has no settings write: say so instead of leaving
-                        // a switch that moves and changes nothing.
+                        // The settings index's writes reach the one preference store.
+                        // 后台运行 and 繁忙时的发送行为 have typed handoffs; 新会话默认权限
+                        // still has no consumer on this host (nothing derives a new
+                        // session's permission tier from a preset), so it keeps the
+                        // honest refusal instead of storing a value no path reads.
                         onSettingsWrite = { write ->
-                            notice = "宿主未实现：${settingsWriteLabel(write)}，本次未保存"
+                            val applied = when (write) {
+                                is SettingsWrite.BackgroundKeepAlive -> {
+                                    engine.setBackgroundKeepAlive(write.value)
+                                    true
+                                }
+
+                                is SettingsWrite.BusyEnter -> {
+                                    engine.setBusyEnterMode(write.mode)
+                                    true
+                                }
+
+                                is SettingsWrite.DefaultPermissionTier -> false
+                            }
+                            if (applied) {
+                                Log.i(TAG_NAV, "PREF_WRITE ${write.wire}")
+                                settingsRevision++
+                            } else {
+                                notice = "宿主未实现：${settingsWriteLabel(write)}，本次未保存"
+                            }
                         },
+                        // The four generic pickers (语言 / 外观 / 工作步骤展示 / 收起时机 /
+                        // 性能与用量) and the 显示代码工作视图 switch: the row id and the
+                        // option id are the store's own vocabulary.
+                        onPreferenceWrite = { choice ->
+                            if (engine.applyPreference(choice.rowId, choice.optionId)) {
+                                Log.i(
+                                    TAG_NAV,
+                                    "PREF_WRITE ${choice.rowId}=${choice.optionId}",
+                                )
+                                settingsRevision++
+                            } else {
+                                notice = "宿主未实现：${preferenceRowLabel(choice.rowId)}，本次未保存"
+                            }
+                        },
+                        onToggleDeveloperTools = { value ->
+                            engine.setDeveloperTools(value)
+                            Log.i(TAG_NAV, "PREF_WRITE ${SettingsScreenState.DEVELOPER_TOOLS_ROW_ID}=$value")
+                            settingsRevision++
+                        },
+                        // The preference pages' own capability. This host owns a
+                        // preference store, so the chat-appearance page's pickers and
+                        // steppers are live; the session-config page keeps its own
+                        // (still NO) `settingsWritable` fact.
+                        preferencesWritable = FactState.YES,
                         // The two hosted gestures of the phone-permissions page: a real
                         // system request, and the settings page that can change the
                         // grant. Both are the Activity's, because a permission prompt
@@ -296,6 +352,7 @@ internal fun HostShell(
                                     channel = channel,
                                     turn = turn,
                                     notice = recoveryNotice,
+                                    darkTheme = preferences.darkTheme(systemDark),
                                     onStart = onStart,
                                     onStop = onStop,
                                     onRunTurn = onRunTurn,
@@ -738,6 +795,26 @@ private fun settingsWriteLabel(write: SettingsWrite): String = when (write) {
     is SettingsWrite.BackgroundKeepAlive -> "后台运行开关"
     is SettingsWrite.BusyEnter -> "发送消息时的排队方式"
     is SettingsWrite.DefaultPermissionTier -> "新会话默认权限"
+}
+
+/**
+ * The user-facing name of a preference row this host could not write.
+ *
+ * Only the rows the preference store really answers are wired, so the refusal is
+ * the store's own `false` — this label exists so a future row cannot be handed
+ * back as a bare id.
+ */
+private fun preferenceRowLabel(rowId: String): String = when (rowId) {
+    SettingsScreenState.LANGUAGE_ROW_ID -> "语言"
+    SettingsScreenState.APPEARANCE_ROW_ID -> "外观"
+    SettingsScreenState.FONT_SIZE_ROW_ID -> "字号大小"
+    SettingsScreenState.TRANSCRIPT_VIEW_ROW_ID -> "工作步骤展示"
+    SettingsScreenState.COLLAPSE_TIMING_ROW_ID -> "工作步骤收起时机"
+    SettingsScreenState.PERFORMANCE_ROW_ID -> "性能与用量"
+    SettingsScreenState.TEXT_FONT_SIZE_ROW_ID,
+    SettingsScreenState.CODE_FONT_SIZE_ROW_ID,
+    SettingsScreenState.TERMINAL_FONT_SIZE_ROW_ID -> "字号大小"
+    else -> rowId
 }
 
 /** One host-owned line above the page: a disclosure, then a gesture's outcome. */

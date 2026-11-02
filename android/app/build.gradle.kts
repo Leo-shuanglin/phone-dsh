@@ -438,6 +438,13 @@ androidComponents {
 }
 
 dependencies {
+    // The local DomainStore and the transcript cache over it. `:app` is the
+    // composition root and therefore the only module allowed to choose a backend:
+    // `:domain` declares the `ConnectionFactory` seam and ships both the SQLite
+    // factory and the in-memory fake, and this module is where one of them is
+    // picked. The edge does not exist in `:dsh` on purpose — a library that chose
+    // a backend would take the decision away from every app that links it.
+    implementation(project(":domain"))
     implementation(project(":engine"))
     // The real host. DefaultPhoneDshHost owns the host HELLO, the WAL seam
     // (wal/1) and the exec/1 bridge; :app constructs it and hands its

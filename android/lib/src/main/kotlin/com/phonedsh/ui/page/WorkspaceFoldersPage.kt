@@ -510,7 +510,7 @@ private fun EmptyWorkspace(
                 // Page-level geometry: the CTA is a page control and takes the page
                 // row floor rather than a screen-specific button height.
                 .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-                .background(tokens.colors.accent, RoundedCornerShape(tokens.radius.card))
+                .background(tokens.colors.pageAccent, RoundedCornerShape(tokens.radius.card))
                 .clickable(enabled = canWrite, role = Role.Button, onClick = onCreate)
                 .testTag(UiPageTags.WORKSPACE_ADD_FOLDER)
                 .semantics { contentDescription = UiStrings.WORKSPACE_ADD_FOLDER },
@@ -887,6 +887,7 @@ internal object WorkspaceFoldersPageTokens {
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_TERTIARY,
         UiTokenNames.COLORS_ACCENT,
+        UiTokenNames.COLORS_PAGE_ACCENT,
         UiTokenNames.COLORS_ON_ACCENT,
         UiTokenNames.COLORS_WARNING,
         UiTokenNames.RADIUS_CARD,

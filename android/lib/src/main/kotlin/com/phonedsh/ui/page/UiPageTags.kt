@@ -427,6 +427,9 @@ public object UiPageTags {
     public const val FILES_FILE_ROW: String = "pdsh.files.row"
     public const val FILES_NONE: String = "pdsh.files.none"
     public const val FILES_DEMO: String = "pdsh.files.demo"
+
+    /** The 3D 示例 sheet's 完成 key (the page owns the sheet's own destination). */
+    public const val FILES_DEMO_DONE: String = "pdsh.files.demo.done"
     public const val FILES_PREVIEW_TEXT: String = "pdsh.files.preview.text"
     public const val FILES_PREVIEW_CARD: String = "pdsh.files.preview.card"
     public const val FILES_PREVIEW_SURFACE: String = "pdsh.files.preview.surface"

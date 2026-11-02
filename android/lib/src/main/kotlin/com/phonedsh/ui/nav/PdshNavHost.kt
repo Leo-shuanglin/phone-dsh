@@ -88,6 +88,7 @@ import com.phonedsh.ui.page.RuntimeDetailsScreenState
 import com.phonedsh.ui.page.RuntimeLocalState
 import com.phonedsh.ui.page.RuntimeUiEvent
 import com.phonedsh.ui.page.SettingsDestination
+import com.phonedsh.ui.page.SettingsPreferenceChoice
 import com.phonedsh.ui.page.SettingsTab
 import com.phonedsh.ui.page.SessionListing
 import com.phonedsh.ui.page.SessionsLocalState
@@ -328,6 +329,16 @@ private fun RouteBackLevel(
  *   system gesture leaves that level instead of closing the whole route. The
  *   default is `null` because a host that renders these pages without a back
  *   gesture is still a valid host.
+ * @param onPreferenceWrite a preference picker or stepper reported a choice. The
+ *   host owns the store; this router only names the row and the option, exactly
+ *   as the phone-permission gestures are handed back. Empty by default, so a host
+ *   without a preference store keeps rendering the pages read-only.
+ * @param onToggleDeveloperTools 显示代码工作视图 was flipped.
+ * @param preferencesWritable whether this host accepts a preference write. It is
+ *   separate from `ConfigurationSnapshot.settingsWritable` on purpose: that field
+ *   is the session/plugin configuration page's capability, and a host can own a
+ *   preference store without owning a session-config write. `UNKNOWN` keeps the
+ *   chat-appearance page read-only, which is the honest default.
  */
 @Composable
 public fun PdshNavHost(
@@ -341,6 +352,9 @@ public fun PdshNavHost(
     webSurface: @Composable () -> Unit,
     sessions: (@Composable () -> Unit)? = null,
     onSettingsWrite: (SettingsWrite) -> Unit = {},
+    onPreferenceWrite: (SettingsPreferenceChoice) -> Unit = {},
+    onToggleDeveloperTools: (Boolean) -> Unit = {},
+    preferencesWritable: FactState = FactState.UNKNOWN,
     chatSubpages: ChatSubpageFacts = ChatSubpageFacts(),
     workspaceRoot: File? = null,
     backLevel: PdshBackLevel? = null,
@@ -373,6 +387,8 @@ public fun PdshNavHost(
                 onNavigate = onNavigate,
                 onHostAction = onHostAction,
                 onSettingsWrite = onSettingsWrite,
+                onPreferenceWrite = onPreferenceWrite,
+                onToggleDeveloperTools = onToggleDeveloperTools,
                 backLevel = backLevel,
                 onPhonePermissionRequest = onPhonePermissionRequest,
                 onPhonePermissionSettings = onPhonePermissionSettings,
@@ -401,7 +417,8 @@ public fun PdshNavHost(
                 onOpenPermissionSettings = onPhonePermissionSettings,
                 backLevel = backLevel,
             )
-            PdshRoute.ChatPreferences -> ChatPreferencesRoute(facts, onBack)
+            PdshRoute.ChatPreferences ->
+                ChatPreferencesRoute(facts, onBack, preferencesWritable, onPreferenceWrite)
             PdshRoute.SettingsDocument -> SettingsDocumentRoute(onBack)
             PdshRoute.Shortcuts -> ShortcutsRoute(onBack)
             PdshRoute.CommandResult -> CommandResultRoute(chatSubpages, onBack)
@@ -860,6 +877,8 @@ private fun SettingsRoute(
     onNavigate: (PdshRoute) -> Unit,
     onHostAction: (PdshHostAction) -> Unit,
     onSettingsWrite: (SettingsWrite) -> Unit,
+    onPreferenceWrite: (SettingsPreferenceChoice) -> Unit,
+    onToggleDeveloperTools: (Boolean) -> Unit,
     backLevel: PdshBackLevel?,
     // 手机权限 is a *tab* of this sheet as well as a route (§1 names both entry
     // points), so the two hosted gestures reach it here too — a tab whose 请求 did
@@ -918,6 +937,8 @@ private fun SettingsRoute(
                 onSettingsWrite(SettingsWrite.BackgroundKeepAlive(value))
             },
             onSelectBusyEnterMode = { mode -> onSettingsWrite(SettingsWrite.BusyEnter(mode)) },
+            onSelectPreference = onPreferenceWrite,
+            onToggleDeveloperTools = onToggleDeveloperTools,
             onBack = onBack,
             tab = tab,
             onSelectTab = { selected -> tab = selected },
@@ -1659,27 +1680,71 @@ private fun PhonePermissionsRoute(
  *
  * The values are the host's one preference read — `PdshNavFacts.settings.preferences`,
  * the same snapshot the settings index's 通用 tab draws — and the write capability
- * is the measured `ConfigurationSnapshot.settingsWritable`. This host reports
- * `NO`, so the page disables its pickers and steppers and prints the family's
- * read-only line instead of accepting a change it cannot persist; the five
- * callbacks therefore never fire here, and they are empty rather than pretending
- * a write succeeded.
+ * is [preferencesWritable], the host's own preference-store capability. It used to
+ * read `ConfigurationSnapshot.settingsWritable`, which is the session-config page's
+ * fact: a host that owns a preference store but no session-config write would have
+ * had its appearance controls disabled for the wrong reason. The two capabilities
+ * are separate on purpose.
+ *
+ * Every control hands its row id and the chosen value back through
+ * [onPreferenceWrite]; the host writes and re-reads, so the page still never
+ * mutates its facts. The steppers report the *new* size as decimal text, with the
+ * same `preference.fontSize.*` row ids the index's 字号大小 row owns.
  */
 @Composable
-private fun ChatPreferencesRoute(facts: PdshNavFacts, onBack: () -> Unit) {
-    val configuration = facts.configuration.snapshot
+private fun ChatPreferencesRoute(
+    facts: PdshNavFacts,
+    onBack: () -> Unit,
+    preferencesWritable: FactState,
+    onPreferenceWrite: (SettingsPreferenceChoice) -> Unit,
+) {
     ChatPreferencesPage(
         state = ChatPreferencesScreenState.from(
             ChatPreferencesFacts.from(
                 preferences = facts.settings.preferences,
-                writable = configuration?.settingsWritable ?: FactState.UNKNOWN,
+                writable = preferencesWritable,
             ),
         ),
-        onSelectAppearance = {},
-        onSelectCollapseTiming = {},
-        onSelectTranscriptView = {},
-        onSetTextFontSize = {},
-        onSetCodeFontSize = {},
+        onSelectAppearance = { appearance ->
+            onPreferenceWrite(
+                SettingsPreferenceChoice(
+                    rowId = SettingsScreenState.APPEARANCE_ROW_ID,
+                    optionId = appearance.id,
+                ),
+            )
+        },
+        onSelectCollapseTiming = { timing ->
+            onPreferenceWrite(
+                SettingsPreferenceChoice(
+                    rowId = SettingsScreenState.COLLAPSE_TIMING_ROW_ID,
+                    optionId = timing.id,
+                ),
+            )
+        },
+        onSelectTranscriptView = { view ->
+            onPreferenceWrite(
+                SettingsPreferenceChoice(
+                    rowId = SettingsScreenState.TRANSCRIPT_VIEW_ROW_ID,
+                    optionId = view.id,
+                ),
+            )
+        },
+        onSetTextFontSize = { size ->
+            onPreferenceWrite(
+                SettingsPreferenceChoice(
+                    rowId = SettingsScreenState.TEXT_FONT_SIZE_ROW_ID,
+                    optionId = size.toString(),
+                ),
+            )
+        },
+        onSetCodeFontSize = { size ->
+            onPreferenceWrite(
+                SettingsPreferenceChoice(
+                    rowId = SettingsScreenState.CODE_FONT_SIZE_ROW_ID,
+                    optionId = size.toString(),
+                ),
+            )
+        },
         onDone = onBack,
     )
 }

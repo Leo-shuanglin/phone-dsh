@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -105,9 +106,25 @@ public fun CodeBlock(
                     .padding(tokens.spacing.iconText),
             )
         }
+        // iOS paints the block with `NativeCodeHighlighter` and a
+        // `.secondary` base ink (NativeCodeHighlighter.swift:19-27); the four
+        // token classes are the theme's success / caption / warning / accent.
+        // A block with no recognised token therefore changes ink from primary
+        // to secondary, which is what the baseline shows.
+        val highlighted = remember(body, tokens.dark) {
+            highlightCode(
+                body,
+                CodeInks(
+                    string = tokens.colors.success,
+                    comment = tokens.colors.caption,
+                    number = tokens.colors.warning,
+                    keyword = tokens.colors.accent,
+                ),
+            )
+        }
         BasicText(
-            text = body,
-            style = type.code.copy(color = tokens.colors.primary),
+            text = highlighted,
+            style = type.code.copy(color = tokens.colors.secondary),
             modifier = Modifier.padding(tokens.geometry.toolCardInset),
         )
     }

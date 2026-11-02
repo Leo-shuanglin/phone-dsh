@@ -254,8 +254,8 @@ tier 默认从 `sandbox` 改成 `local`，测试还断言 `sandbox`）。`.githu
 - **11 个 `public fun *Page(` 零生产调用点**：`SessionQueuePage`、`MemoryPage`、
   `SessionHistoryPage`、`TaskScreenPage`、`AboutPage`、`GoalDetailPage`、`ToolsPage`、
   `BackgroundPage`、`ProbesPage`、`SessionActivityPage`、`DailyBriefPage`
-- **`IngressQueue`（435 行）零生产消费者**
-- **2,160 行模块层零生产消费者**（DomainStore 1,019 + 设备能力契约/解码器 1,141，见下）
+- ~~**`IngressQueue`（435 行）零生产消费者**~~ —— **已删**（2026-11-02），判据见第十节
+- **1,141 行模块层零生产消费者**（设备能力契约/解码器；~~DomainStore 1,019~~ 已于 2026-11-02 接线，见下）
 - **1 条 spec 漂移**（`wal.md §8` 的「uncompressed ustar」vs 实现的 gzip 外壳，无安全含义，见下）
 
 其中一条特别值得记：
@@ -264,25 +264,112 @@ tier 默认从 `sandbox` 改成 `local`，测试还断言 `sandbox`）。`.githu
 
 **门禁在绿的，而它绿的原因是两个完全不同的控件标签相同。**
 
-### 模块层：DomainStore 零消费者，设备能力契约/解码器仍无生产入口
+### 模块层：DomainStore 已接线（1,019 行不再是死代码），设备能力契约/解码器仍无生产入口
 
 `android/README.md` 把 `:domain` 写成两块招牌：「P6：DomainStore（framework SQLite）+ DeviceCapabilities」。
-复核 HEAD + 2026-11-01 20:45 工作树：DomainStore 零消费者；DeviceCapabilities 的测量半边已被本轮电话权限
-改动接进 `:app`，契约/解码半边仍为零。
+2026-11-01 20:45 的工作树：DomainStore 零消费者；DeviceCapabilities 的测量半边已被本轮电话权限
+改动接进 `:app`，契约/解码半边仍为零。**DomainStore 那一半已在 2026-11-02 接上，见下。**
 
-**1. DomainStore：1,019 行，零生产消费者。**
+**1. DomainStore：已接线。1,019 行不再是死代码。**
+
+> **先更正一条前提。** 本车道开始时收到的需求原话是「iOS 基线有持久化层（GRDB/SQLite），Android 没有——
+> 没有持久化层就不可能对齐」。**这条是错的，而且错在承重处：**
+>
+> ```text
+> $ rg -n "GRDB|DatabaseQueue|DatabasePool|import SQLite|sqlite3_" examples/probe-app/
+> （空）
+> ```
+>
+> `examples/probe-app/project.yml` 的 SwiftPM 依赖只有 `PhoneDSH`（path）和 `SwiftMarkdown`，
+> 根 `Package.swift` 也没有任何 SQL 包。**iOS 基线一行 SQL 都没有。** 它的持久化是三层：
+>
+> | iOS 层 | 机制 | Android 等价物 |
+> | --- | --- | --- |
+> | 权威会话/消息 | Rust `pdsh-wal`，经 `loadSessionHistory(after:)` 读回（`ChatModel.swift:1044-1055`、`1176-1185`） | **已有**：`WalPaths` / `WorkspaceLog` / `JournalStore`（`ProbeEngineViewModel.kt:445-481`） |
+> | App 级转写快照 | `transcript-snapshots/<sessionID>.json`，原子写、只存 settled `suffix(400)`，供冷启动首屏（`ChatModel.swift:2512-2599`） | **本轮之前：无** |
+> | 当前 session 指针 | `UserDefaults` 键 `chat.dsh.currentSessionID` | **本轮之前：无** |
+>
+> 所以「全面对齐 iOS 基线」**推不出**「必须有 SQLite 持久化层」。DomainStore 的正当性来自另一处：
+> `docs/design/phone-dsh-app/PRD.md:169`「原始证据、转写、Main 过程、任务引用和 Memory 均指向同一个本地
+> DomainStore」——**这是 PRD 要求，不是基线对齐要求**。本轮按 PRD 做，两个来源分开记。
+
+删它的那次 commit 对了一半：它自己写着「正确做法是**先命名第一个真实消费者**（memory / session 持久化），
+再按那个功能的需求重写」。本轮做的就是补上被跳过的第一步再重接。
+
+**消费者的命名：`SessionArchive`（`android/domain/src/main/kotlin/com/phonedsh/domain/session/SessionArchive.kt`，448 行）。**
+它只做一件事——把 app **自己已经渲染过的**一个完成回合按 session 存下来，外加一条「本 app 最后打开的
+session」指针。`session` 域里两类键：`current` 与 `turn/<sessionId>`，一次事务同时写两行。
+
+**为什么这不是第三个 authority。** 它不写、也写不了会话事件：权威事件日志仍是 WAL + journal（上表第一层），
+`SessionArchive` 只缓存投影（kinds / 命令 / 写出路径），即 iOS 那一层缓存的位置。删 DomainStore 的
+commit 担心的「多出第三个写路径和第二个 authority」在**接线到会话列表**时会成立（journal 已经是会话
+列表的 authority），所以本车道**没有**把持久化会话并进 `HostSessionSnapshot.sessions`；只并了
+`currentSessionID`——那是 app 自己的决定（「我上次开的是哪个」），journal 不记。
+
+**1,019 行的恢复方式。** `git checkout 9d46fc3c -- android/domain/src/main` 捞回 12 个文件 1,078 行
+（含 `DomainStoreException` 59），再逐文件核对与 HEAD 的漂移：**只回退了漏捞的两个接口变更**——
+`AndroidDeviceCapabilities.kt`（+152/-67 重写）与 `DeviceManifestException.kt`（+4/-4）在 PR13 之后被
+改过，原样覆盖会回退电话权限接线的成果，因此这两个明确恢复到 HEAD，其余 10 个原样保留。
+编译期零改动：`Connection` / `DomainStore` / `DomainStoreCore` / `KeyRange` / `QuotaPolicy` / `DomainText` /
+`DomainStoreException` / `sqlite/SqliteConnection` / `testing/InMemoryConnection` 一行未改即通过，
+说明这一年的时间没有动到这层 SPI。测试也一并捞回：`DomainStoreContract`（22 条 contract，两个驱动）、
+`InMemoryDomainStoreTest`、`KeyRangeTest`、`SqliteDomainStoreTest`、`SqliteDomainStoreDeviceTest`。
+
+**接线点：`:app` 的组合根（`ProbeEngineViewModel`），不是 `:dsh`。** 理由不是方便，是分层：
+`:domain` 声明 `ConnectionFactory` 这个后端 seam 并同时提供 `SqliteConnectionFactory` 与
+`InMemoryConnectionFactory`，**选择哪一个只能是组合根的事**。`:dsh` 是库，它一旦依赖 `:domain` 就等于
+替所有链接它的 app 选了后端；`:app` 是唯一知道「这是一台设备」的地方。所以新增的边只有
+`android/app/build.gradle.kts` 的 `implementation(project(":domain"))`，`:dsh` 不动。
+
+**落盘证据（设备，2026-11-02，android-35 AVD 5730，用完已删）。** 三步，每一步的 PID 都不同：
 
 ```text
-$ grep -rn "\bDomainStore\b" android/*/src/main --include="*.kt" | grep -v "android/domain/"
-（空）
+# 1. 真回合：scripted upstream + 「跑一轮」，Worker 自己报 completed
+I PDSHHost: session archive: empty (no session recorded yet)
+I PDSHAppTurn: APP_TURN_OK session=session-6acb6996-3ba4-4643-a8c5-7d3018f52d9e ... reason=completed
+I PDSHHost: session archive: saved session=session-6acb6996-3ba4-4643-a8c5-7d3018f52d9e commands=1 writes=0
+
+# 2. kill：pid 5151 → 空
+$ adb shell am force-stop com.phonedsh.app
+$ adb shell pidof com.phonedsh.app        # （空）
+$ adb shell run-as com.phonedsh.app ls -l databases/
+-rw-rw---- 1 u0_a208 u0_a208 20480 2026-11-02 13:04 phonedsh-domain.db    # 文件在 kill 之后仍在
+
+# 3. 冷启动，**不带任何 launch extra**：新进程 5361
+I PDSHHost: session archive: restored session=session-6acb6996-3ba4-4643-a8c5-7d3018f52d9e completed_at=1793595857541 kinds=12 commands=1 writes=0
 ```
 
-8 个文件 1,019 行：`DomainStore.kt` 191、`DomainStoreCore.kt` 211、`sqlite/SqliteConnection.kt` 220、
-`testing/InMemoryConnection.kt` 123、`Connection.kt` 95、`KeyRange.kt` 56、`QuotaPolicy.kt` 64、
-`DomainText.kt` 59（同簇的 `DomainStoreException.kt` 59 行是错误类型，未计入这 1,019）。调用它的只有测试：
-`DomainStoreContract` 的 22 条用例分别跑在 JVM 内存假实现和 instrumented SQLite 上，另有
-`SqliteDomainStoreDeviceTest` 的 2 条设备级用例。**生产零入口**——这一簇唯一的调用者就是测试
-（`android/README.md` 的 2026-10-31 快照把 `:domain` 记为 79 条测试，本轮未复跑）。
+设备上的文件是真的 SQLite，行也在里面：
+
+```text
+$ adb exec-out run-as com.phonedsh.app cat databases/phonedsh-domain.db | head -c 16
+00000000: 5351 4c69 7465 2066 6f72 6d61 7420 3300  SQLite format 3.
+$ strings phonedsh-domain.db | grep -E "^(session|turn/|pdsh-session)"
+sessionturn/session-6acb6996-...-7d3018f52d9epdsh-session-archive/1
+session-6acb6996-...-7d3018f52d9e
+sessioncurrentsession-6acb6996-...-7d3018f52d9e
+```
+
+界面证据：冷启动后「回合」卡片直接是上一次的 `完成 / session / 12 个事件 / 工具命令 · phone info`
+（`/tmp/l65/restored-turn-card.png`，截图时刻进程 5495，同样是 kill 之后新起的）。
+
+**进程级证据不靠一条 instrumented 用例自证。** `SessionArchiveDeviceTest` 拆成 `writePhase` /
+`readPhase` 两个方法，各自**拒绝**在对方的文件状态下运行，因此必须在两次 `am instrument` 之间跑，
+中间夹一条 `am force-stop`；一次跑完整类会失败而不是悄悄通过。两次都已实测通过。
+
+**测试与限额。** `SessionArchiveTest` 23 条 JVM 用例（`InMemoryConnectionFactory`，关闭再打开
+模拟重启）：字段级往返、含 tab/换行/反斜杠/中文/emoji 的转义、400 上限（`ArchivedTurn` 构造期
+拒绝 401，不静默截断）、配额（拒绝且域内容不变，指针不残留）、损坏/截断/谎报计数的 payload 一律
+`null` 而不是半个回合、指针与 payload 不同步时 `null`、跨域隔离。`domain` 模块 JVM 用例 125 条全绿。
+
+**已知边界（不藏）。**
+- iOS 在恢复时会写一行状态 `显示上次对话，引擎在后台启动…`。Android **做不到**，因为
+  `AppTurnState.kt` / `ProbeScreen.kt` 不在本车道的可写范围内，`Completed` 没有「这是恢复的」位。
+  屏幕说「完成」是真的（那个回合确实完成过），但**读者分不出它是这一进程还是上一进程**，只能从
+  logcat 的 `session archive: restored` 看出来。这是本车道交付物里唯一一处「行为对齐了、措辞没对齐」。
+- 缓存**不淘汰**：每个会话一行，配额（`session` 域 4 MiB）满了就显式拒绝并记日志，不静默删旧。
+  这与 iOS 的 `transcript-snapshots/` 一样（那边也从不清理），是两边共有的缺口。
+- 掉电（level-2）没有验证，SQLite 只提供自身的崩溃恢复，`DomainStore` 的头部明确不承诺 WAL 语义。
 
 **2. DeviceCapabilities：契约/解码半边仍是死的，测量半边刚被接上。** `device/` 当前 10 个文件 1,964 行
 （2026-11-01 20:45 工作树）。生产代码引用到的有 4 个：`DeviceManifest` 226 + `CapabilityValue` 134 是
@@ -309,7 +396,7 @@ $ grep -rn "\bDomainStore\b" android/*/src/main --include="*.kt" | grep -v "andr
 
 | 簇 | 位置 | 行数 | 生产引用 |
 | --- | --- | --- | --- |
-| DomainStore | `domain/{DomainStore,DomainStoreCore,Connection,KeyRange,QuotaPolicy,DomainText}.kt` + `sqlite/` + `testing/` | 1,019 | **0** |
+| ~~DomainStore~~ | `domain/{DomainStore,DomainStoreCore,Connection,KeyRange,QuotaPolicy,DomainText}.kt` + `sqlite/` + `testing/` | 1,078 | **已接线**（2026-11-02，`SessionArchive` ← `ProbeEngineViewModel`，见上） |
 | 解码器家族 | `device/{DeviceManifestDecoder,DeviceManifestJson,DeviceManifestException,LocalDeviceManifest}.kt` | 887 | **0**（`DeviceManifest.parse` 无生产调用点） |
 | 设备能力 SPI 接口 | `device/DeviceCapabilities.kt` | 130 | **0** |
 | 能力词表 | `device/DeviceCapability.kt` | 124 | 仅被上面两个死簇引用 |
@@ -454,9 +541,9 @@ transcript 值类型被 `:lib` 页面真实引用，`PdshNavHost.kt` 用 `InMemo
 
 ---
 
-## 十、`DomainStore` 的去留仍需要 owner 拍
+## 十、`DomainStore` 的处置：已接线（2026-11-02），不再需要 owner 拍
 
-审计建议「该删除，不应现在接线」，理由我复核后认同：
+这里原来写着「去留仍需要 owner 拍」，理由是审计建议「该删除，不应现在接线」：
 
 - 生产零消费者，唯一调用者是测试（22 条 contract × 2 驱动 + 2 条设备级）
 - 它要服务的功能（session / memory / task 持久化）在 Android 上**尚未实现**
@@ -464,9 +551,28 @@ transcript 值类型被 `:lib` 页面真实引用，`PdshNavHost.kt` 用 `InMemo
   硬接进去只会多出第三个 authority
 - 保留 1,019 行会让下一个人以为 P6 已交付
 
-**但我没有删**——删 1,019 行 + 25 条测试是不可逆的产品决定，不是代码清理。
-若要保住 P6 承诺，正确做法是**同时命名那个消费者**（memory / session 持久化），
-那是一条功能车道，不是这一轮。
+**这四条都没有被推翻，被推翻的是「所以只能二选一」。** 当时的两条路是「现在硬接」和「现在删」，
+而正确的第三条是那条 commit 自己写下的：**先命名第一个真实消费者，再按那个功能的需求接**。
+2026-11-02 那一步做了，消费者是 `SessionArchive`（转写缓存 + 当前 session 指针），接线点是
+`:app` 组合根。上面四条逐条对上：
+
+- 零消费者 → 现在有三个生产调用点：boot 恢复、回合完成写入、会话页当前行
+- 功能未实现 → 转写缓存与 `chat.dsh.currentSessionID` 这两项**是**本轮新实现的功能，不是占位
+- 第三个 authority → **没有新增**。权威事件日志仍是 WAL + journal；缓存只存 app 自己渲染过的投影，
+  而且**没有**并进 `HostSessionSnapshot.sessions`（那才会与 journal 撞车）
+- 1,019 行让人误以为 P6 已交付 → 现在它真的有一个已交付的功能，而且边界（无 WAL 语义、
+  不淘汰、掉电未验）写在 `SessionArchive` 的文件头和本节里
+
+恢复与接线的全部细节、以及设备上的 kill→重启→读回证据，见第六节「模块层：DomainStore 已接线」。
+
+同一轮里删掉的是另一个零消费者模块，判据不同，一并记在这里：
+
+- `IngressQueue`（435 行，`android/core/.../agentcore/IngressQueue.kt`）——**已删**，连同
+  `IngressQueueTest`。判据是「iOS 基线里有没有对应的东西」：没有。`spec/host/v1/README.md:250`
+  把它列在 **§9 Not fixed here**，理由「host behaviour above this contract; a connector must not
+  write the WAL directly」，来源 `PLAN §13.7 J2`（计划中、未实现）。iOS 的 `parked` 指 host 状态机的
+  Parked，与入口队列无关。给定判据是「没有 → 删，并说明」，那就删。真要实现 J2 时，正确做法与
+  DomainStore 这次相同：先有一个真实的异步入口（设备连接 / 语音触发）再写，而不是先写队列。
 
 ---
 
@@ -1263,7 +1369,7 @@ LaunchState: COLD   TotalTime: 879
 
 ### AAR 那条路（L63 的结论）
 
-计划 §176 说「组合根（TonoAI-App）消费 AAR」。L63 建了一个真消费工程验证，结论是
+计划 §176 说「组合根（另一个 App）消费 AAR」。L63 建了一个真消费工程验证，结论是
 **编译面成立、运行面不成立**：
 
 - 编译能过（10.6 MB APK 产出）

@@ -93,11 +93,18 @@ import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.Canvas
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -1174,14 +1181,7 @@ private fun SessionItem(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_GLYPH_GAP_PT.dp),
             ) {
-                BasicText(
-                    text = MESSAGE_GLYPH,
-                    style = type.headline.copy(
-                        fontWeight = FontWeight.Normal,
-                        color = tokens.colors.secondary,
-                    ),
-                    modifier = Modifier.width(SessionsMetrics.SESSION_GLYPH_BOX_PT.dp),
-                )
+                SessionRowGlyph(ink = tokens.colors.secondary)
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_TEXT_GAP_PT.dp),
@@ -1309,9 +1309,11 @@ private fun CompletelyEmptyBlock(onCreateWorkspace: () -> Unit) {
                 .fillMaxWidth()
                 .padding(top = SessionsMetrics.EMPTY_STATE_CTA_TOP_PT.dp)
                 .clip(RoundedCornerShape(SessionsMetrics.ctaRadius))
-                // The baseline's CTA fill is the page-layer override, not the
-                // theme accent (the same inconsistency the approval card mirrors).
-                .background(tokens.colors.ctaOverride)
+                // The baseline's CTA fill is the page-layer blue
+                // (`NativePagePalette.accentFill` #2F5BFF), not the theme accent
+                // and not the approval card's ctaOverride: measured
+                // ios-sessions-nothing.png CTA = #2F5BFF.
+                .background(tokens.colors.pageAccent)
                 .defaultMinSize(minHeight = SessionsMetrics.ctaHeight)
                 .clickable(role = Role.Button, onClick = onCreateWorkspace)
                 .padding(
@@ -1926,7 +1928,7 @@ internal object SessionsPageTokens {
     val refs: List<String> = listOf(
         UiTokenNames.COLORS_ACCENT,
         UiTokenNames.COLORS_BORDER_LIGHT,
-        UiTokenNames.COLORS_CTA_OVERRIDE,
+        UiTokenNames.COLORS_PAGE_ACCENT,
         UiTokenNames.COLORS_DANGER,
         UiTokenNames.COLORS_INPUT,
         UiTokenNames.COLORS_ON_ACCENT,
@@ -2092,6 +2094,57 @@ private const val CHEVRON_GLYPH: String = "›"
 private const val CHECK_GLYPH: String = "✓"
 private const val SEPARATOR_GLYPH: String = "·"
 
-/** The row glyph standing in for the baseline's `bubble.left` icon. */
-private const val MESSAGE_GLYPH: String = "▢"
 private const val ELLIPSIS: String = "…"
+
+/**
+ * The session row's leading glyph: the baseline's `bubble.left`
+ * (`SessionsPage.swift:549`: `Image(systemName: "bubble.left")` at 15 pt in a
+ * 17 x 17 pt frame, secondary ink).
+ *
+ * It used to be the text glyph "▢", which renders as a 10.3 pt hollow square
+ * sitting 5.3 pt below the row's optical centre — a different shape, size and
+ * baseline from the baseline's speech balloon (`ios-sessions-many.png` measures
+ * the balloon's ink at 15.3 x 15.3 pt inside the 17 pt box). `:lib` carries no
+ * icon dependency (there is no `material-icons` artifact on its classpath and no
+ * asset pipeline for an SF Symbol), so the balloon is drawn here as a vector
+ * proportioned to the one box the metric file already owns. Replace this with a
+ * real `bubble.left` asset when one lands; nothing outside this composable
+ * depends on the drawing.
+ */
+@Composable
+private fun SessionRowGlyph(ink: Color) {
+    Canvas(
+        modifier = Modifier.size(
+            width = SessionsMetrics.SESSION_GLYPH_BOX_PT.dp,
+            height = SessionsMetrics.SESSION_GLYPH_BOX_PT.dp,
+        ),
+    ) {
+        val stroke = size.minDimension * GLYPH_STROKE_RATIO
+        val bodyTop = size.height * 0.10f
+        val bodyBottom = size.height * 0.68f
+        val radius = size.minDimension * 0.22f
+        val body = Path().apply {
+            addRoundRect(
+                RoundRect(
+                    left = stroke / 2f,
+                    top = bodyTop,
+                    right = size.width - stroke / 2f,
+                    bottom = bodyBottom,
+                    cornerRadius = CornerRadius(radius, radius),
+                ),
+            )
+        }
+        // The tail: down from the body's lower-left, then back up into it. A
+        // separate stroke, so the two shapes read as one balloon at this size.
+        val tail = Path().apply {
+            moveTo(size.width * 0.22f, bodyBottom - stroke / 2f)
+            lineTo(size.width * 0.17f, size.height * 0.88f)
+            lineTo(size.width * 0.46f, bodyBottom - stroke / 2f)
+        }
+        drawPath(body, color = ink, style = Stroke(width = stroke))
+        drawPath(tail, color = ink, style = Stroke(width = stroke, cap = StrokeCap.Round))
+    }
+}
+
+/** Balloon outline width as a fraction of the 17 pt box (`bubble.left` at 15 pt ≈ 1.5 pt). */
+private const val GLYPH_STROKE_RATIO: Float = 0.085f

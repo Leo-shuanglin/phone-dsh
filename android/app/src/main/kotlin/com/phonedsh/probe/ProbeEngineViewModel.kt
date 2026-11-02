@@ -27,8 +27,16 @@ import com.phonedsh.dsh.host.ModelRoute
 import com.phonedsh.dsh.host.ModelRouteFact
 import com.phonedsh.dsh.host.PhoneDshHost
 import com.phonedsh.dsh.host.asHostWal
+import com.phonedsh.domain.DomainStore
+import com.phonedsh.domain.DomainStoreCore
+import com.phonedsh.domain.QuotaPolicy
 import com.phonedsh.domain.device.AndroidDeviceCapabilities
 import com.phonedsh.domain.device.AndroidHostPermissions
+import com.phonedsh.domain.session.ArchivedCommand
+import com.phonedsh.domain.session.ArchivedTurn
+import com.phonedsh.domain.session.ArchivedWrite
+import com.phonedsh.domain.session.SessionArchive
+import com.phonedsh.domain.sqlite.SqliteConnectionFactory
 import com.phonedsh.dsh.journal.JournalException
 import com.phonedsh.dsh.journal.JournalPaths
 import com.phonedsh.dsh.journal.JournalStore
@@ -72,6 +80,7 @@ import com.phonedsh.platform.android.AndroidDurability
 import com.phonedsh.platform.android.AndroidLifecycleSignals
 import com.phonedsh.shell.AcceleratorMount
 import com.phonedsh.ui.nav.PdshNavFacts
+import com.phonedsh.ui.page.BusyEnterMode
 import com.phonedsh.ui.page.FactState
 import java.io.File
 import java.net.HttpURLConnection
@@ -498,6 +507,59 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         clock = clock,
     )
 
+    /**
+     * The local DomainStore (`PRD.md:169`), constructed here and nowhere else.
+     *
+     * `:domain` owns the contract and the two backends; this root is the one
+     * place allowed to pick one, which is why `:dsh` has no edge to `:domain`.
+     * Opening is lazy — [DomainStoreCore] touches the file on first use — so
+     * constructing it at composition time costs nothing.
+     *
+     * It is deliberately **not** a third writer of the session record. The
+     * authoritative event log stays the WAL and the journal (fields above); this
+     * store holds only the projection cache described in [sessionArchive].
+     */
+    private val domainStore: DomainStore = DomainStoreCore(
+        connections = SqliteConnectionFactory(application, SessionArchive.DATABASE_NAME),
+        quotas = QuotaPolicy.perDomain(
+            mapOf(SessionArchive.DOMAIN to SessionArchive.QUOTA_BYTES),
+        ),
+        clock = clock,
+    )
+
+    /**
+     * The transcript cache: the Android half of the iOS baseline's
+     * `transcript-snapshots/<sessionID>.json` plus its
+     * `currentSessionDefaultsKey`.
+     *
+     * iOS keeps a JSON file per session so a cold start can paint the last
+     * screen before the host is up (`ChatModel.swift:2512-2599`:
+     * `persistTranscriptSnapshot` / `restoreCachedTranscriptIfAvailable`) and
+     * remembers the session it last opened in `UserDefaults`. Android had
+     * neither: [mutableTurn] started at [AppTurnState.Idle] on every launch and
+     * [mutableSessions] learned the current session only from a turn this
+     * process ran, so a kill erased both. This is the consumer the `:domain`
+     * store was missing — see [sessionArchive]'s own file header for why the
+     * payload lives in the domain store and not in a third JSON file.
+     */
+    private val sessionArchive = SessionArchive(domainStore)
+
+    /**
+     * The user preferences (`UserDefaults` parity), constructed here and nowhere
+     * else.
+     *
+     * One `SharedPreferences` file behind one store — the settings index's five
+     * pickers, the chat-appearance page's pickers and steppers, the 后台运行
+     * switch and the 繁忙时的发送行为 menu all read and write this object, so two
+     * pages cannot disagree about a value. It is constructed at composition time
+     * and reads the file once; a write is published through [preferenceState] and
+     * the shell rebuilds the facts on the next frame.
+     */
+    private val preferenceStore = PreferenceStore(SharedPreferenceFile(application))
+
+    /** The resolved preferences; a write publishes a new value. */
+    internal val preferenceState: StateFlow<Preferences> = preferenceStore.state
+
     private val host: PhoneDshHost = DefaultPhoneDshHost(
         engine = engine,
         controller = controller,
@@ -710,7 +772,35 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         if (state is EngineHostState.Running && runningSinceMillis == null) {
             runningSinceMillis = clock.monotonicMillis()
         }
-        return buildNavFacts(hostReadings(), state, handshake, turn)
+        return buildNavFacts(hostReadings(), state, handshake, turn, preferenceStore.snapshot())
+    }
+
+    /**
+     * Performs one settings-page picker or stepper choice.
+     *
+     * The shell hands the row and option ids over unchanged; the store owns the
+     * vocabulary and answers `false` for a row it does not write, so the caller
+     * can say 「宿主未实现」 instead of showing a change that never landed.
+     *
+     * @param rowId `SettingsScreenState`'s row id (or a `preference.fontSize.*` id).
+     * @param optionId the picker's option id, or a size as decimal text.
+     */
+    internal fun applyPreference(rowId: String, optionId: String): Boolean =
+        preferenceStore.apply(rowId, optionId)
+
+    /** 显示代码工作视图. */
+    internal fun setDeveloperTools(value: Boolean) {
+        preferenceStore.setDeveloperTools(value)
+    }
+
+    /** 繁忙时的发送行为. */
+    internal fun setBusyEnterMode(mode: BusyEnterMode) {
+        preferenceStore.setBusyEnterMode(mode)
+    }
+
+    /** 后台运行: whether the next turn should open a background window. */
+    internal fun setBackgroundKeepAlive(value: Boolean) {
+        preferenceStore.setBackgroundKeepAlive(value)
     }
 
     /** The host's wall reading for the sessions page's relative-time labels. */
@@ -799,6 +889,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         // credential". No endpoint and no key appears here.
         LogcatHostLog.info(modelRouteLine())
         channelSeam.attach(host.channelHandler)
+        restoreSessionArchive()
         // Asynchronous by contract: recovery, the final HELLO and engine.start()
         // run on the host's scope. Observe engine.state for the outcome.
         host.start()
@@ -909,11 +1000,22 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         // backgrounded app (plan §7.10-B2) and a foreground service cannot be
         // started from the background on Android 12+. The result is the platform's
         // answer, not an assumption; a foreground-only answer is logged as such.
-        HostBackground.startTurn(
-            getApplication<Application>(),
-            epoch,
-            backgroundDeclaration,
-        )
+        //
+        // 后台运行 is the one preference that changes a turn's behaviour: off
+        // means no window is opened at all and the turn runs foreground-only
+        // (`ChatModel.swift:43-49` is the baseline's switch; on Android the
+        // equivalent of the silent-audio session is this foreground-service
+        // window). The tombstone above is still written either way: a turn can
+        // die without a window, and the next launch must still report it.
+        if (preferenceStore.snapshot().backgroundKeepAlive) {
+            HostBackground.startTurn(
+                getApplication<Application>(),
+                epoch,
+                backgroundDeclaration,
+            )
+        } else {
+            Log.i(TAG_TURN, "BG_TURN_SKIPPED reason=preference backgroundKeepAlive=false")
+        }
         mutableTurn.value = AppTurnState.Running
         turnScope.launch {
             try {
@@ -940,13 +1042,17 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                             "tool_edges=${result.sawTheFourEdges}",
                     )
                     ProbeRecovery.endTurn(getApplication<Application>())
-                    mutableTurn.value = AppTurnState.Completed(
+                    val completed = AppTurnState.Completed(
                         sessionId = result.sessionId,
                         kinds = result.kinds,
                         commands = toolCommands(result.events),
                         writes = toolWrites(result.events),
                     )
+                    mutableTurn.value = completed
                     recordCompletedTurn(result.sessionId)
+                    // After the screen already has the turn: a store refusal
+                    // must not turn a completed turn into a failed one.
+                    archiveCompletedTurn(completed, clock.nowMillis())
                 } else {
                     failTurn(
                         failureText(
@@ -1155,6 +1261,134 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
+     * Paints the last completed turn and the last session this app opened.
+     *
+     * The Android half of `ChatModel.restoreCachedTranscriptIfAvailable()`: a
+     * cold start shows what the previous process rendered instead of 未开始, and
+     * the sessions page marks the session it last opened instead of forgetting
+     * it. Both come from one row, read on [Dispatchers.IO] because
+     * `DomainStore`'s contract forbids a main-thread call.
+     *
+     * Three rules keep this honest:
+     *
+     *  * a store that cannot be read leaves the screen at [AppTurnState.Idle] —
+     *    the cache is an optimisation, and a cache failure must never look like
+     *    "the last turn is still running" or like a fabricated one;
+     *  * the restore only applies while the process has not started a turn of its
+     *    own ([turnRunning] false and still [AppTurnState.Idle]), so a slow restore
+     *    can never overwrite a turn this process really ran;
+     *  * nothing is deleted on failure. A damaged row stays for the next save to
+     *    replace, because silently dropping data is what `budgets.md` §5 forbids.
+     */
+    private fun restoreSessionArchive() {
+        turnScope.launch {
+            val restored = withContext(Dispatchers.IO) {
+                runCatching {
+                    sessionArchive.currentSessionId() to sessionArchive.latest()
+                }
+            }
+            val (sessionId, archived) = restored.getOrElse { failure ->
+                // Recovery evidence, not an error path: a fresh install has no
+                // row, and this line is how a reader tells "nothing was saved"
+                // from "the store refused to open".
+                LogcatHostLog.warn("session archive: not restored (${archiveReasonOf(failure)})")
+                return@launch
+            }
+            if (sessionId == null) {
+                LogcatHostLog.info("session archive: empty (no session recorded yet)")
+                return@launch
+            }
+            // The current-session mark is a separate fact from the payload: a
+            // session whose turn row is gone still names the session this app
+            // opened, exactly as `currentSessionDefaultsKey` survives on iOS.
+            //
+            // Guarded by `currentSessionID == null` for the same reason the turn
+            // restore is guarded by `Idle`: a turn this process completed before
+            // the read landed has already marked its own session, and the stored
+            // one is older by definition. Letting the restore win would move the
+            // check mark backwards.
+            mutableSessions.update { snapshot ->
+                if (turnRunning.get() || snapshot.currentSessionID != null) {
+                    snapshot
+                } else {
+                    snapshot.copy(
+                        currentSessionID = sessionId,
+                        sessions = mergeSessions(
+                            emptyList(),
+                            snapshot.sessions + HostSessionRecord(sessionId, archived?.completedAtMs),
+                        ),
+                    )
+                }
+            }
+            if (archived == null) {
+                LogcatHostLog.warn(
+                    "session archive: session=$sessionId restored without a readable turn; " +
+                        "the screen keeps 未开始",
+                )
+                return@launch
+            }
+            var applied = false
+            mutableTurn.update { current ->
+                if (turnRunning.get() || current !is AppTurnState.Idle) {
+                    current
+                } else {
+                    applied = true
+                    archived.toRestoredCompleted()
+                }
+            }
+            if (!applied) return@launch
+            LogcatHostLog.info(
+                "session archive: restored session=${archived.sessionId} " +
+                    "completed_at=${archived.completedAtMs} kinds=${archived.kinds.size} " +
+                    "commands=${archived.commands.size} writes=${archived.writes.size} " +
+                    "restored=true",
+            )
+        }
+    }
+
+    /**
+     * Writes the turn [runTurn] just completed, so the next launch can paint it.
+     *
+     * Called after the UI already shows the completed turn: a store write must
+     * never turn a completed turn into a failed one, so a refusal is logged and
+     * swallowed. The one case worth naming is the quota
+     * (`QuotaExceededException`): it means the cache is full, and the write is
+     * refused rather than silently trimming older sessions — the same rule the
+     * WAL and the journal follow.
+     */
+    private suspend fun archiveCompletedTurn(completed: AppTurnState.Completed, atMillis: Long) {
+        val turn = ArchivedTurn(
+            sessionId = completed.sessionId,
+            completedAtMs = atMillis,
+            // The iOS baseline keeps the settled tail (`suffix(400)`); the same
+            // bound here means a restored screen holds the same tail on both
+            // platforms. `kinds` is the projection the screen already drew.
+            kinds = completed.kinds.takeLast(SessionArchive.CAPACITY),
+            commands = completed.commands
+                .takeLast(SessionArchive.CAPACITY)
+                .map { ArchivedCommand(it.id, it.command) },
+            writes = completed.writes
+                .takeLast(SessionArchive.CAPACITY)
+                .map { ArchivedWrite(it.path, it.toolName) },
+        )
+        val outcome = withContext(Dispatchers.IO) { runCatching { sessionArchive.save(turn) } }
+        outcome.fold(
+            onSuccess = {
+                LogcatHostLog.info(
+                    "session archive: saved session=${turn.sessionId} " +
+                        "commands=${turn.commands.size} writes=${turn.writes.size}",
+                )
+            },
+            onFailure = { failure ->
+                LogcatHostLog.warn(
+                    "session archive: save refused session=${turn.sessionId} " +
+                        "(${archiveReasonOf(failure)})",
+                )
+            },
+        )
+    }
+
+    /**
      * Merges two session reads without losing the newer timestamp of either.
      *
      * The store scan and the turn observation can name the same session; the
@@ -1203,6 +1437,12 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     private fun logTurn(message: String) {
         Log.i(TAG_TURN, message)
+    }
+
+    private fun archiveReasonOf(failure: Throwable): String = when (failure) {
+        is com.phonedsh.domain.QuotaExceededException -> "quota_exceeded(${failure.domain})"
+        is Exception -> reasonOf(failure)
+        else -> failure.javaClass.simpleName
     }
 
     private fun reasonOf(failure: Exception): String = when (failure) {

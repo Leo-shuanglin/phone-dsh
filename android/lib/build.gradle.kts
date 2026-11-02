@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
-// :lib is the only published AAR entry point:
-//   com.phonedsh:lib:0.0.0-SNAPSHOT
-// The composition-root app depends on this coordinate only; sibling modules
-// are transitive POM entries with the same version. Android library.
+// :lib is the published AAR entry point:
+//   com.phonedsh:lib:0.1.0
+// The composition-root app depends on this coordinate only; the seven sibling
+// modules on the `api` closure are transitive POM entries with the same version
+// (android/build.gradle.kts applies maven-publish to all eight at once, so the
+// coordinate cannot drift between :lib and the POM that names them). Android
+// library.
 //
 // Compose is declared `api` because the AAR's public surface is a composable
 // UI package (com.phonedsh.ui): a consumer that wants to embed a page must be
@@ -11,12 +14,19 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    id("maven-publish")
 }
 
 group = "com.phonedsh"
-version = "0.0.0-SNAPSHOT"
-// The maven-publish block (release component + POM) lands when the first AAR
-// is cut; P0 fixes only the coordinate and the public api surface.
+// Same number as the app's `versionName`: a consumer pinning this coordinate is
+// asking for the code version 0.1.0 of the app was built from.
+version = "0.1.0"
+// `maven-publish` is applied from android/build.gradle.kts (release component +
+// POM for the AAR modules, `java` component for the JAR ones, one repository,
+// one version). The publication this module produces is:
+//   com.phonedsh:lib:0.1.0              packaging=aar
+// and its POM's `compile` scope is exactly this block's `api` edges, which is
+// what makes the seven siblings arrive for a consumer that declares one line.
 
 android {
     namespace = "com.phonedsh.lib"
@@ -41,6 +51,17 @@ android {
     buildFeatures {
         buildConfig = false
         compose = true
+    }
+
+    // Declare the one variant this module publishes, and nothing else. Besides
+    // pinning the release variant, this is what keeps the `-sources` jar out of
+    // the publication: AGP builds one when it is asked for it, and for this
+    // module that jar would be malformed — the token codegen directory sits in
+    // both the kotlin and the java source set, so the archive is assembled from
+    // every source file twice (measured on the first publish: 248 entries, 78
+    // duplicated). A consumer needs the AAR and the POM.
+    publishing {
+        singleVariant("release")
     }
 
     compileOptions {
@@ -356,4 +377,50 @@ dependencies {
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:core:1.6.1")
+}
+
+// ---- the published coordinate ------------------------------------------------
+// `com.phonedsh:lib:0.1.0`, packaging=aar. Version, repository and POM metadata
+// come from android/build.gradle.kts (root `subprojects` block); this module
+// only names the software component. `afterEvaluate` is required, not
+// defensive: AGP creates the `release` component from its variant API after this
+// script has been evaluated, so a script-level
+// `from(components["release"])` fails with
+// "SoftwareComponent with name 'release' not found".
+publishing {
+    publications {
+        create<MavenPublication>("release") {
+            afterEvaluate { from(components["release"]) }
+        }
+    }
+}
+
+// ---- the local-only switch can never become a published artifact -------------
+// `-Ppdsh.uiCoreOnly=true` (line ~325) narrows this module's `api` edge from
+// `:dsh` to `:core` + `:platform` so a mid-flight compile break in a sibling lane
+// cannot block the UI contract. That is a diagnostic build, not a product.
+//
+// Publishing it would write a `com.phonedsh:lib:0.1.0` POM whose `compile` scope
+// is `:core` + `:platform` only — missing `dsh`, `controller`, `shell`, `net` and
+// through `dsh` no `domain` either: five of the eight artifacts — under the SAME
+// version number as the complete publication. The consumer would then fail in R8
+// exactly the way L63 measured (44 missing classes), with nothing on disk saying
+// which of the two 0.1.0 POMs it resolved.
+//
+// So the POM/publish tasks fail loudly instead of writing it. The flag stays
+// usable for `assembleDebug` / `test`, which is all it was ever for.
+tasks.matching {
+    it.name.startsWith("generatePomFileFor") || it.name.startsWith("publish")
+}.configureEach {
+    doFirst {
+        if (uiCoreOnly) {
+            throw org.gradle.api.GradleException(
+                "refusing to publish :lib with -Ppdsh.uiCoreOnly=true: that build's api edge is " +
+                    ":core + :platform only, so the POM would be missing dsh, controller, shell, " +
+                    "net and the domain edge — five of the eight com.phonedsh artifacts — while " +
+                    "carrying the same 0.1.0 coordinate as the complete publication. Re-run " +
+                    "without the flag to produce the real artifact.",
+            )
+        }
+    }
 }

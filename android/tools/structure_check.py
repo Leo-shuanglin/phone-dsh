@@ -12,7 +12,8 @@ Checks:
   sdk-levels          :lib and :app declare minSdk 26 and targetSdk 35
   readme-map          all 11 Sources/PhoneDSH* modules appear once in README
   kotlin-stubs        no TODO()/not-implemented stub left in src/main Kotlin
-  repositories        only google() and mavenCentral() are allowed
+  repositories        only google()/mavenCentral() are allowed, plus the in-tree
+                      publish repository (a path, never a URL)
   absolute-paths      no hard-coded home/SDK/toolchain absolute paths
   catalog-pins        every [versions] entry is marked "# unverified pin"
   android-16k-link-arg shell/crates/pdsh-jni/build.rs pins 16 KB pages for
@@ -83,10 +84,30 @@ PACKAGE_RE = re.compile(r"^package\s+[A-Za-z_][\w.]*\s*;?$")
 IMPORT_RE = re.compile(r"^import\s+(?:static\s+)?[A-Za-z_][\w.*]*\s*;?$")
 MIN_SDK_RE = re.compile(r"\bminSdk\s*=\s*(\d+)\b")
 TARGET_SDK_RE = re.compile(r"\btargetSdk\s*=\s*(\d+)\b")
-FORBIDDEN_REPO_RE = re.compile(
+# Repository policy: a *network* repository must be google() or mavenCentral().
+# The one other thing a build in this tree may declare is the in-tree publish
+# repository (`android/build/repo`), because a published coordinate cannot be
+# declared without a `maven { }` block, and a path inside the build tree is not a
+# network dependency: it is a product of this checkout (root `.gitignore` rule
+# `build/`, so it never ships), resolving from it needs no network, and it writes
+# nothing outside the tree.
+#
+# The exception is narrow on purpose, and the tests pin BOTH directions:
+#   * `maven { }`/`ivy { }` is admitted only in a file that points its url at a
+#     path containing `build/repo` through `uri(...)` — i.e. a path, not a URL;
+#     a `maven { }` naming any URL still fails on the `://` rule below, which is
+#     what keeps `test_external_maven_url_still_fails` red;
+#   * `mavenLocal()`, `gradlePluginPortal()`, `jcenter()` and `flatDir { }` stay
+#     forbidden outright: they resolve against machine state or a dead
+#     repository, which is exactly what this check exists to keep out.
+HARD_FORBIDDEN_REPO_RE = re.compile(
     r"\b(?:mavenLocal|gradlePluginPortal|jcenter|flatDir)\s*\("
-    r"|\b(?:maven|ivy)\s*[({]"
 )
+PATH_REPO_RE = re.compile(r"\b(?:maven|ivy)\s*[({]")
+# Both markers must appear in the file that declares the path repository: the
+# path itself, and `uri(...)` rather than a string literal (a `file:` URL is
+# rejected too — the rule below fails on its `://`).
+IN_TREE_REPO_MARKERS = ("build/repo", "url = uri(")
 # `-Wl,-z,max-page-size=16384` (the value is checked, not assumed).
 MAX_PAGE_RE = re.compile(r"max-page-size=(\d+)")
 # An absolute path starts a token. A slash that follows a path-join character is a
@@ -330,15 +351,22 @@ def check_repositories(root):
         if any(part in SKIP_DIR_NAMES for part in path.parts):
             continue
         cleaned = strip_comments(read_text(path))
+        declares_in_tree_repo = all(marker in cleaned for marker in IN_TREE_REPO_MARKERS)
         for number, line in enumerate(cleaned.splitlines(), start=1):
             if not line.strip():
                 continue
-            if FORBIDDEN_REPO_RE.search(line) or "://" in line:
+            # A URL is never admitted: not for google()/mavenCentral() (they are
+            # function calls), not for the in-tree repo, and not for `file:`.
+            if HARD_FORBIDDEN_REPO_RE.search(line):
+                problems.append("{}:{}: {}".format(path.relative_to(root), number, line.strip()[:80]))
+            elif PATH_REPO_RE.search(line) and not declares_in_tree_repo:
+                problems.append("{}:{}: {}".format(path.relative_to(root), number, line.strip()[:80]))
+            elif "://" in line:
                 problems.append("{}:{}: {}".format(path.relative_to(root), number, line.strip()[:80]))
             allowed += len(re.findall(r"\bgoogle\(\)|\bmavenCentral\(\)", line))
     if problems:
         return False, "non-allowlisted repository: " + "; ".join(problems[:5])
-    return True, "only google()/mavenCentral() ({} declarations)".format(allowed)
+    return True, "only google()/mavenCentral() plus the in-tree publish repo ({} declarations)".format(allowed)
 
 
 def iter_text_files(root):

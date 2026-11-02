@@ -64,7 +64,9 @@ class BubbleSurfaceTest {
         assertTrue("the theme must emit sp, not px/dp", body.fontSize.isSp)
         val atOne = with(Density(1f, fontScale = 1f)) { body.fontSize.toPx() }
         val atTwo = with(Density(1f, fontScale = 2f)) { body.fontSize.toPx() }
-        assertEquals("typography.body base size", 14f, atOne, 0.01f)
+        // 17 pt: iOS renders the message body with `.font(.body)` (`ChatPage.swift:4010`).
+        // The 14 pt "text preference" role moved to `typography.controlBody`.
+        assertEquals("typography.body base size", 17f, atOne, 0.01f)
         // Android 14+ maps the scale through a non-linear font-scale converter, so
         // the growth is monotonic rather than exactly 2x; it must still be large.
         assertTrue("fontScale must grow the rendered size: $atOne -> $atTwo", atTwo > atOne * 1.5f)

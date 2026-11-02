@@ -98,13 +98,21 @@ archived one.
 ## Coverage
 
 [`metrics.txt`](metrics.txt) is the index: one row per registered parity state
-with the iOS size, the Android size, `Δw` / `Δh`, the sheet's scale, and whether a
-sheet exists. `paired=no` rows are states with no Android capture at this
-revision — a visible gap, not a silent omission.
+with the iOS size, the Android size, `Δw` / `Δh`, the sheet's scale, whether a
+sheet exists, and **where the Android side came from** (`device` = a Compose
+harness capture in the parity baseline directory, `adb` = a hand `adb screencap`).
+`paired=no` rows are states with no Android capture at this revision — a visible
+gap, not a silent omission.
 
-* **26 of 27** parity states are paired as of the L43 capture; **`env-home` is
-  not paired on purpose**: it is an `adb screencap` of the launcher, not a
-  Compose page, so it has no parity baseline PNG to lay next to the iOS one.
+* **27 of 27** parity states are paired as of the 2026-11-02 L64 pass: 26 from
+  the Compose harness plus **`env-home`**, which is an `adb screencap` of the
+  launcher and therefore lives in [`adb/env-home.png`](adb/env-home.png) instead
+  of the page baseline directory. The registry keeps that row `pending` on
+  purpose: a launcher screenshot is an environment proof, not a page, and must
+  not be frozen into the page regression baseline. What its sheet can prove is
+  the frame (1206 × 2622 px, Δ 0) and which OS surface is on each side; it cannot
+  prove that Android's own render drifted, because that capture is not in the
+  gate.
 * The three `androidOnly` states (`page-device-connection`,
   `page-device-session`, `page-session-artifacts`) have no iOS baseline and are
   out of scope: there is nothing to lay them next to.
@@ -113,12 +121,27 @@ revision — a visible gap, not a silent omission.
   "stable". Only the human review this directory exists to support can catch
   that.
 
+[`DIFFS.md`](DIFFS.md) is that review, written down: one section per state, every
+visible difference as `control / iOS value / Android value / delta` in points
+(`pt = px / 3`), plus what was fixed (before → after), what could not be fixed and
+why, and the places where the structural gate is green while the pixels disagree.
+
 ## Regenerating
 
 ```bash
 python3 android/tools/ui-parity-sheet.py                 # all paired states
 python3 android/tools/ui-parity-sheet.py --state page-chat-permission
 python3 android/tools/ui-parity-sheet.py --panel-height 900 --out /tmp/sheets
+```
+
+The `adb` capture is refreshed by hand, at the parity frame, on a booted
+emulator (the capture tool resets the display when it exits, so set it again):
+
+```bash
+adb shell wm size 1206x2622 && adb shell wm density 480
+adb shell input keyevent KEYCODE_HOME
+adb -s <serial> exec-out screencap -p > docs/receipts/ui-parity-sheet/adb/env-home.png
+python3 android/tools/ui-parity-sheet.py --state env-home
 ```
 
 Needs `sips` (macOS, used for the resample) and Pillow (used for the canvas;

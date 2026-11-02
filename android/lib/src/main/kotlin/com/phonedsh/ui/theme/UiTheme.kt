@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.sp
 import com.phonedsh.ui.theme.generated.TokenType
 import com.phonedsh.ui.theme.generated.UiTokenData
 
-/** The fourteen typography tokens as ready-to-use text styles. */
+/** The sixteen typography tokens as ready-to-use text styles. */
 @Immutable
 public data class UiType(
     public val body: TextStyle,
@@ -56,6 +56,17 @@ public data class UiType(
      * @see largeTitle for why the new fields are appended, not inserted.
      */
     public val rowLabel: TextStyle,
+    /**
+     * 14 pt "text preference" role (`NativeParityTokens.bodySize`): tool rows,
+     * folds and in-card copy use `.system(size: 14)` on iOS. Appended for the
+     * same positional reason as [largeTitle].
+     */
+    public val controlBody: TextStyle,
+    /**
+     * The empty-state title: iOS `ContentUnavailableView` draws it at ~20 pt
+     * (measured ink 19.7 against Android's 17). Appended, never inserted.
+     */
+    public val emptyStateTitle: TextStyle,
 ) {
     public companion object {
         /** Builds the styles from `typography.styles`; `sp` carries the system font scale. */
@@ -74,6 +85,8 @@ public data class UiType(
             subheadline = UiTokenData.typeSubheadline.style(),
             largeTitle = UiTokenData.typeLargeTitle.style(),
             rowLabel = UiTokenData.typeRowLabel.style(),
+            controlBody = UiTokenData.typeControlBody.style(),
+            emptyStateTitle = UiTokenData.typeEmptyStateTitle.style(),
         )
     }
 }

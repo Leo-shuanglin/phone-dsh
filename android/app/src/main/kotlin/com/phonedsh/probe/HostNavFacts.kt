@@ -130,12 +130,17 @@ internal data class HostReadings(
  * @param state the engine lifecycle state.
  * @param handshake the merged HELLO, or `null` before the page handshook.
  * @param turn the one turn's UI state (the workbench's tool output comes from it).
+ * @param preferences the values the host stores for the settings index and the
+ *   chat-appearance page (`PreferenceStore`). They are the one non-measured input
+ *   this function takes, and they are still a *read*: the store load, not a
+ *   default invented here.
  */
 internal fun buildNavFacts(
     readings: HostReadings,
     state: EngineState,
     handshake: HandshakeSummary?,
     turn: AppTurnState,
+    preferences: Preferences,
 ): PdshNavFacts {
     val running = state is EngineHostState.Running
     // The background window is not a host opinion: it is the conjunction of what
@@ -274,9 +279,11 @@ internal fun buildNavFacts(
         ),
         // No scheduler exists on this host.
         automation = AutomationFacts(),
-        // The page's own read-only mechanism: this host knows the settings are
-        // not writable (it has no write command) even though it cannot read them,
-        // so `settingsWritable = NO` is a measured fact rather than a claim.
+        // `settingsWritable` is about the **session/plugin configuration** page,
+        // not the preference pages: this host still has no session-config write
+        // command, so NO stays the measured answer. The preference pages carry
+        // their own capability (`PdshNavHost`'s `preferencesWritable`), which this
+        // app now reports YES because it owns a preference store.
         configuration = ConfigurationFacts(
             snapshot = ConfigurationSnapshot(settingsWritable = FactState.NO),
         ),
@@ -303,14 +310,26 @@ internal fun buildNavFacts(
                     ProviderKeyStatus.CONFIGURED, ProviderKeyStatus.INVALID -> LOCAL_PROVIDER_NAME
                     ProviderKeyStatus.NOT_CONFIGURED, ProviderKeyStatus.UNKNOWN -> null
                 },
+            // The five 通用-tab pickers plus the three font sizes are the values
+            // this host now stores (`PreferenceStore`): every field is a real read,
+            // so the page shows the stored choice instead of 未设置.
+            preferences = preferences.toSettingsPreferences(),
             // No MCP registry, web-search setting or composer preference is read.
             mcpServerCount = null,
-            backgroundKeepAlive = foregroundService,
+            // 后台运行 is the stored preference, not the platform's capability: the
+            // switch position is the user's choice, and the runtime page keeps
+            // reporting whether the mechanism can actually open a window
+            // (`foregroundService` + its measured reason below).
+            backgroundKeepAlive = if (preferences.backgroundKeepAlive) {
+                FactState.YES
+            } else {
+                FactState.NO
+            },
             webSearch = null,
             // The launch grant is this App's own /v1/http rule, not the engine's
             // effective allow list, so the address count stays unread, not 1.
             egressAddressCount = null,
-            busyEnterMode = null,
+            busyEnterMode = preferences.busyEnterMode,
             // The 关于 page's 版本 row. Both halves are build facts, not device
             // reads: the version name is this APK's `versionName`, and the
             // signature sentence is the one the build baked in

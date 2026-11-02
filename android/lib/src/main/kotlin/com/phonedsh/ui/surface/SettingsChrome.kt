@@ -588,6 +588,47 @@ public fun SettingsGroupedRow(
     }
 }
 
+/**
+ * One body-copy row inside a card: 17 pt secondary ink, same 52.33 pt pitch.
+ *
+ * SwiftUI's bare `Text("…")` in a `List` row is `.body` = 17 pt, while
+ * `.font(.footnote)` is 13 pt; both appear in the settings sub-pages and they
+ * are not interchangeable. `ios-settings-search.png` measures the three
+ * under-还要知道 paragraphs at 630.7-647.0 pt and 653.0-669.3 pt (ink 16.7 pt,
+ * line pitch 22.3 pt), i.e. the 17 pt role, and measures the explicitly-sized
+ * 13 pt lines (现在这个模型服务自带搜索…) at ink 13.0 pt.
+ */
+@Composable
+public fun SettingsBodyRow(
+    text: String,
+    modifier: Modifier = Modifier,
+    dividerBelow: Boolean = false,
+) {
+    val tokens = LocalUiTokens.current
+    Box(modifier = modifier.fillMaxWidth()) {
+        BasicText(
+            text = text,
+            style = settingsLabelStyle().copy(color = tokens.colors.secondary),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = SettingsGroupedRowHeight)
+                .padding(
+                    start = SettingsMetrics.ROW_CONTENT_INSET_PT.dp,
+                    end = SettingsMetrics.ROW_CONTENT_INSET_PT.dp,
+                    top = tokens.spacing.iconText,
+                    bottom = tokens.spacing.iconText,
+                ),
+        )
+        if (dividerBelow) {
+            SettingsHairline(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = SettingsSeparatorInset),
+            )
+        }
+    }
+}
+
 /** One footnote row inside a card: 13 pt secondary ink, same 52.33 pt pitch. */
 @Composable
 public fun SettingsFootnoteRow(
@@ -994,6 +1035,13 @@ public fun SettingsLargeTitle(text: String, modifier: Modifier = Modifier) {
  *
  * Kept for callers that lay a row out outside [SettingsGroupCard]; the general
  * tab uses [SettingsGroupedRow].
+ *
+ * @param trailingInset the row's trailing inset inside the card. The baseline
+ *   puts a row's *value* 39.33 pt from the card edge (that slot holds the
+ *   20.67 pt chevron column) but puts the *switch* 14 pt from it
+ *   (`SettingsMetrics.SWITCH_TRAILING_INSET_PT`; `ios-settings.png` switch right
+ *   edge x=1115 px, card right edge 1157 px). A caller whose last child is not
+ *   text must say so, or the control inherits the text slot.
  */
 @Composable
 public fun SettingsRowFrame(
@@ -1003,6 +1051,7 @@ public fun SettingsRowFrame(
     role: Role = Role.Button,
     onClick: (() -> Unit)? = null,
     stateValue: String? = null,
+    trailingInset: Dp = SettingsValueTrailingInset,
     content: @Composable RowScope.() -> Unit,
 ) {
     val tokens = LocalUiTokens.current
@@ -1025,7 +1074,7 @@ public fun SettingsRowFrame(
                 .heightIn(min = SettingsGroupedRowHeight)
                 .padding(
                     start = SettingsMetrics.ROW_CONTENT_INSET_PT.dp,
-                    end = SettingsValueTrailingInset,
+                    end = trailingInset,
                     top = tokens.spacing.iconText,
                     bottom = tokens.spacing.iconText,
                 ),
@@ -1172,7 +1221,9 @@ public fun SettingsSwitch(checked: Boolean, modifier: Modifier = Modifier, enabl
     val tokens = LocalUiTokens.current
     val track = when {
         !enabled -> tokens.colors.border
-        checked -> tokens.colors.accent
+        // iOS draws its default `systemGreen` on-tint here: the baseline's
+        // Toggle has no `.tint()`, so the theme accent was never involved.
+        checked -> tokens.colors.switchOn
         else -> tokens.colors.borderLight
     }
     Canvas(modifier = modifier.size(width = SettingsSwitchWidth, height = SettingsSwitchHeight)) {

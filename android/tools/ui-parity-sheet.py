@@ -51,6 +51,10 @@ DEFAULT_OUT = ROOT / "docs/receipts/ui-parity-sheet"
 DEFAULT_REGISTRY = ROOT / "android/lib/src/test/resources/screenshots/ios-parity/parity-registry.txt"
 DEFAULT_IOS_DIR = ROOT / "docs/receipts/ios-baseline-screens"
 DEFAULT_ANDROID_DIR = ROOT / "android/lib/src/test/resources/screenshots/ios-parity"
+# Captures the Compose harness cannot take: `env-home` is an `adb screencap` of
+# the launcher (a device surface, not a page), so it lives beside the sheets
+# rather than in the page baseline directory.
+DEFAULT_ANDROID_EXTRA_DIR = ROOT / "docs/receipts/ui-parity-sheet/adb"
 
 IOS_FRAME_PT = (402, 874)
 IOS_FRAME_DPR = 3
@@ -175,6 +179,7 @@ def render_pair(
     panel_height: int,
     work: Path,
     destination_dir: Path,
+    source: str = "device",
 ) -> Path:
     from PIL import Image, ImageDraw
 
@@ -233,7 +238,8 @@ def render_pair(
     )
     draw.text(
         (android_x, column_y),
-        f"Android capture \u00b7 {android_png.name} \u00b7 {android_w}\u00d7{android_h} px",
+        f"Android capture \u00b7 {android_png.name} \u00b7 {android_w}\u00d7{android_h} px"
+        + ("" if source == "device" else f" \u00b7 {source}"),
         font=label_font,
         fill=INK,
     )
@@ -342,6 +348,12 @@ parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY, help="pul
 parser.add_argument("--ios-dir", type=Path, default=DEFAULT_IOS_DIR, help="iOS baseline PNGs")
 parser.add_argument("--android-dir", type=Path, default=DEFAULT_ANDROID_DIR, help="Android parity PNGs")
 parser.add_argument(
+    "--android-extra-dir",
+    type=Path,
+    default=DEFAULT_ANDROID_EXTRA_DIR,
+    help="hand-captured Android PNGs for states the Compose harness cannot take",
+)
+parser.add_argument(
     "--panel-height",
     type=int,
     default=1311,
@@ -373,6 +385,11 @@ ios_dir = arguments.ios_dir if arguments.ios_dir.is_absolute() else Path.cwd() /
 android_dir = (
     arguments.android_dir if arguments.android_dir.is_absolute() else Path.cwd() / arguments.android_dir
 )
+android_extra_dir = (
+    arguments.android_extra_dir
+    if arguments.android_extra_dir.is_absolute()
+    else Path.cwd() / arguments.android_extra_dir
+)
 rows = [row for row in read_registry(registry_path) if row["category"] == "parity"]
 if not rows:
     die(f"{registry_path}: no parity rows")
@@ -390,11 +407,23 @@ try:
         state = row["android"]
         ios_png = ios_dir / f"{row['ios']}.png"
         android_png = android_dir / f"{state}.png"
+        source = "device"
+        if not android_png.is_file():
+            # A state whose capture cannot come from the Compose harness (the
+            # environment proof is an `adb screencap` of the launcher, not a
+            # page) may be pulled in from the hand-captured directory instead of
+            # being left unpaired. The registry still calls it `pending`: nothing
+            # about a launcher screenshot can be frozen into a page baseline.
+            adb_png = android_extra_dir / f"{state}.png"
+            if adb_png.is_file():
+                android_png = adb_png
+                source = "adb screencap"
         record = {
             "row": row,
             "state": state,
             "ios_png": ios_png,
             "android_png": android_png,
+            "source": source,
         }
         if not ios_png.is_file():
             die(f"registry names an iOS file that does not exist: {ios_png}")
@@ -414,6 +443,7 @@ try:
             arguments.panel_height,
             work,
             out_dir,
+            source=source,
         )
         record["sheet"] = sheet
         paired.append(record)
@@ -438,6 +468,11 @@ lines.append("# `scale` is the ONE factor both sides of that sheet were resample
 lines.append("# two panels stay comparable and a height difference stays visible.")
 lines.append("# `paired=no` means this revision has no Android capture for the state, so no")
 lines.append("# sheet exists for it \u2014 it is a visible gap, not a silent omission.")
+lines.append("# `source=device` is a Compose harness capture in the parity baseline directory;")
+lines.append("# `source=adb` is a hand `adb screencap` for a device surface the harness cannot")
+lines.append("# reach (the launcher). A sheet's frame comparison is exact either way; what an")
+lines.append("# `adb` sheet cannot claim is that Android's own capture drifted, because that")
+lines.append("# capture is not part of the page regression gate.")
 lines.append("#")
 lines.append(f"# generated    {datetime.datetime.now().astimezone().isoformat(timespec='seconds')}")
 lines.append(f"# registry     {registry_path.relative_to(ROOT) if registry_path.is_relative_to(ROOT) else registry_path}")
@@ -449,10 +484,10 @@ lines.append(f"# sheet dir    {out_dir.relative_to(ROOT) if out_dir.is_relative_
 lines.append("#")
 header = (
     f"{'state':<30} {'ios_px':<11} {'android_px':<11} {'dw':>4} {'dh':>5} {'dh_pt':>6} "
-    f"{'scale':>6}  {'paired':<6} sheet"
+    f"{'scale':>6}  {'paired':<6} {'source':<7} sheet"
 )
 lines.append(header)
-lines.append("-" * 108)
+lines.append("-" * 118)
 for record in paired:
     row = record["row"]
     ios_w, ios_h = record["ios_size"]  # type: ignore[misc]
@@ -462,7 +497,7 @@ for record in paired:
     ios_text = f"{ios_w}x{ios_h}"
     android_text = f"{android_w}x{android_h}"
     lines.append(
-        "%-30s %-11s %-11s %4d %5d %6.1f %6.3f  %-6s %s"
+        "%-30s %-11s %-11s %4d %5d %6.1f %6.3f  %-6s %-7s %s"
         % (
             record["state"],
             ios_text,
@@ -472,6 +507,7 @@ for record in paired:
             dh / IOS_FRAME_DPR,
             scale,
             "yes",
+            record["source"],
             Path(record["sheet"]).name,
         )
     )
@@ -480,8 +516,8 @@ for record in unpaired:
     ios_w, ios_h = sips_size(record["ios_png"])  # type: ignore[arg-type]
     ios_text = f"{ios_w}x{ios_h}"
     lines.append(
-        "%-30s %-11s %-11s %4s %5s %6s %6s  %-6s %s"
-        % (record["state"], ios_text, "-", "-", "-", "-", "-", "no", record["why"])
+        "%-30s %-11s %-11s %4s %5s %6s %6s  %-6s %-7s %s"
+        % (record["state"], ios_text, "-", "-", "-", "-", "-", "no", "-", record["why"])
     )
 lines.append("")
 lines.append(
@@ -495,9 +531,11 @@ lines.append(
 )
 lines.append("# page-session-artifacts) have no iOS baseline, so there is nothing to lay them next to.")
 lines.append(
-    "# also out of scope: `env-home` is an `adb screencap` of the launcher, not a Compose page,"
+    "# `env-home` stays `pending` in the registry: it is an `adb screencap` of the launcher,"
 )
-lines.append("# and has no Android capture in the parity baseline directory.")
+lines.append(
+    "# not a Compose page, so it is paired from the adb directory and never frozen as a page baseline."
+)
 (out_dir / "metrics.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 print(

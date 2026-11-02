@@ -194,10 +194,24 @@ class FilesPageTest {
         assertEquals(0, backs)
     }
 
+    // The baseline always draws the toolbar entry (`FilesPage.swift:79`), and a
+    // labelled control that the page draws only when a nullable host callback
+    // exists is *absent*, not "implemented": the page-structure gate counted the
+    // label in the source while the pixels had no cube. The entry is therefore
+    // unconditional; without a host demo the page opens its own sheet.
     @Test
-    fun `the demo entry is absent when the host offers no demo`() {
+    fun `the demo entry is drawn even when the host offers no demo`() {
         show(FilesScreenState.from(FilesSource(files = files)))
-        compose.onNodeWithTag(UiPageTags.FILES_DEMO).assertDoesNotExist()
+        compose.onNodeWithTag(UiPageTags.FILES_DEMO).assertIsDisplayed()
+    }
+
+    @Test
+    fun `the demo entry opens the page's own sheet when the host offers none`() {
+        show(FilesScreenState.from(FilesSource(files = files)))
+        compose.onNodeWithContentDescription(UiStrings.FILES_DEMO_OPEN).performClick()
+        compose.onNodeWithText(UiStrings.PREVIEW_REASON_MODEL).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.FILES_DEMO_DONE).performClick()
+        compose.onNodeWithText(UiStrings.PREVIEW_REASON_MODEL).assertDoesNotExist()
     }
 
     @Test

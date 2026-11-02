@@ -61,6 +61,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
+import com.phonedsh.ui.surface.SettingsBodyRow
 import com.phonedsh.ui.surface.SettingsFootnoteRow
 import com.phonedsh.ui.surface.SettingsFormRow
 import com.phonedsh.ui.surface.SettingsSectionHeader
@@ -667,14 +668,20 @@ private fun LazyListScope.notesGroup(
         )
     }
     if (state.notesExpanded) {
+        // The baseline renders these three as bare `Text` rows in a `List`
+        // section, i.e. `.body` at 17 pt, not a `.footnote` footer:
+        // `ios-settings-search.png` measures them at ink 16.7 pt with a 22.3 pt
+        // line pitch. Every other line on this page is an explicit
+        // `.font(.system(size: 13))` in `WebSearchSettingsPage.swift` (measured
+        // ink 13.0 pt), which is why they stay footnotes.
         item(key = "notes.model") {
-            SettingsFootnoteRow(text = UiStrings.WEB_SEARCH_NOTE_MODEL)
+            SettingsBodyRow(text = UiStrings.WEB_SEARCH_NOTE_MODEL)
         }
         item(key = "notes.key") {
-            SettingsFootnoteRow(text = UiStrings.WEB_SEARCH_NOTE_KEY)
+            SettingsBodyRow(text = UiStrings.WEB_SEARCH_NOTE_KEY)
         }
         item(key = "notes.restart") {
-            SettingsFootnoteRow(text = UiStrings.WEB_SEARCH_NOTE_RESTART)
+            SettingsBodyRow(text = UiStrings.WEB_SEARCH_NOTE_RESTART)
         }
     }
 }

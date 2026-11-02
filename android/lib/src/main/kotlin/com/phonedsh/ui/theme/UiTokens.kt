@@ -16,7 +16,7 @@ import com.phonedsh.ui.theme.generated.TokenDp
 import com.phonedsh.ui.theme.generated.TokenGeometry
 import com.phonedsh.ui.theme.generated.UiTokenData
 
-/** The eighteen colour tokens, resolved for one mode. */
+/** The twenty-two colour tokens, resolved for one mode. */
 @Immutable
 public data class UiColors(
     public val primary: Color,
@@ -39,6 +39,19 @@ public data class UiColors(
     public val onAccent: Color,
     /** Page-layer override for the approval CTA (baseline inconsistency, mirrored on purpose). */
     public val ctaOverride: Color,
+    /**
+     * The page-layer fixed blue (`NativePagePalette.accentFill`). iOS has two
+     * blues: the theme `accent` #3964FE on the approval card, and this one on
+     * the sessions / schedules / draft / workspace CTAs. Appended, not inserted:
+     * a positional construction that predates it cannot silently shift.
+     */
+    public val pageAccent: Color,
+    /** The switch's on-track (`UIColor.systemGreen`). */
+    public val switchOn: Color,
+    /** System `.primary` (label): the ink iOS gives page rows. */
+    public val systemLabel: Color,
+    /** System `.secondary` (secondaryLabel): the ink iOS gives page captions. */
+    public val systemSecondary: Color,
 ) {
     /** True when the spec could not measure `colors.background` (it never could: a dynamic system colour). */
     public val backgroundUnmeasured: Boolean get() = background == Color.Unspecified
@@ -211,6 +224,10 @@ public data class UiTokens(
                 warning = UiTokenData.colorWarning.color(dark),
                 onAccent = UiTokenData.colorOnAccent.color(dark),
                 ctaOverride = UiTokenData.colorCtaOverride.color(dark),
+                pageAccent = UiTokenData.colorPageAccent.color(dark),
+                switchOn = UiTokenData.colorSwitchOn.color(dark),
+                systemLabel = UiTokenData.colorSystemLabel.color(dark),
+                systemSecondary = UiTokenData.colorSystemSecondary.color(dark),
             ),
             spacing = UiSpacing(
                 iconText = UiTokenData.spacingIconText.dp(),

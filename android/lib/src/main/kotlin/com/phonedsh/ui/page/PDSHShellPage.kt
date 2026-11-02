@@ -255,7 +255,9 @@ private fun ShellSectionView(
         if (title != null) {
             BasicText(
                 text = title,
-                style = type.caption.copy(color = tokens.colors.secondary),
+                // `ios-shell.png` draws the section caption ("这台手机") at ink
+                // 15.3 pt — the 17 pt role — not at the 12 pt caption size.
+                style = type.rowLabel.copy(color = tokens.colors.secondary),
                 modifier = Modifier
                     .padding(horizontal = tokens.geometry.pageOuterMarginH * 2)
                     .testTag(titleTag)
@@ -295,14 +297,16 @@ private fun ShellInfoRow(label: String, value: String, tag: String) {
     ) {
         BasicText(
             text = label,
-            style = type.body.copy(color = tokens.colors.primary),
+            // A `LabeledContent` row in the baseline is `.body` = 17 pt:
+            // `ios-shell.png` measures 状态 / 网络 / 工作区 at ink 15.3 pt.
+            style = type.rowLabel.copy(color = tokens.colors.primary),
             modifier = Modifier.weight(1f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         BasicText(
             text = value,
-            style = type.body.copy(color = tokens.colors.secondary),
+            style = type.rowLabel.copy(color = tokens.colors.secondary),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -397,7 +401,9 @@ private fun ShellUnavailableCard() {
         ) {
             BasicText(
                 text = UiStrings.SHELL_EMPTY,
-                style = type.headline.copy(
+                // iOS draws this inside `ContentUnavailableView`, whose title is
+                // ~20 pt (ios-shell.png ink 19.7) — not a 17 pt headline.
+                style = type.emptyStateTitle.copy(
                     color = tokens.colors.primary,
                     textAlign = TextAlign.Center,
                 ),

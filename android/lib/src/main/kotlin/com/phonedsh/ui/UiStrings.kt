@@ -530,7 +530,10 @@ public object UiStrings {
      * 与设置行文案一致，见 `spec/ui/v1/README.md` §1（设置内「运行时详情」）：
      * 同一个名字既是设置行的入口文案，也是本页标题，两处不再各写一套。
      */
-    public const val RUNTIME_TITLE: String = "运行时详情"
+    // The page title is the contract's `运行状态` (`ChatPage.swift:4242`
+    // `.navigationTitle("运行状态")`), not the settings row's wording: the
+    // baseline has no "运行时详情" string anywhere.
+    public const val RUNTIME_TITLE: String = "运行状态"
     public const val RUNTIME_SECTION_ENGINE: String = "引擎"
     public const val RUNTIME_SECTION_WEBVIEW: String = "WebView"
     public const val RUNTIME_SECTION_MEMORY: String = "内存"
@@ -610,7 +613,9 @@ public object UiStrings {
      * 与设置行文案一致，见 `spec/ui/v1/README.md` §1（设置内「出网白名单」）：
      * 同一个名字既是设置行的入口文案，也是本页标题，两处不再各写一套。
      */
-    public const val EGRESS_TITLE: String = "出网白名单"
+    // `NativeShell.swift:541` `.navigationTitle("网络访问")`; the allow-list
+    // wording stays in the body copy (`EGRESS_FAILED`…), never in the title.
+    public const val EGRESS_TITLE: String = "网络访问"
     public const val EGRESS_RULES: String = "地址"
     public const val EGRESS_RULE_COUNT: String = "%d 个地址"
     public const val EGRESS_POLICY: String = "当前策略"
@@ -719,7 +724,10 @@ public object UiStrings {
 
     // NativeConfigurationPage: the session-level settings groups and the plugin
     // inventory. Values are host-formatted; an unread value is 未知.
-    public const val CONFIGURATION_TITLE: String = "本会话设置"
+    // `NativeConfigurationPage.swift:28` `.navigationTitle("插件")`; the iOS
+    // page never titles itself 本会话设置 (that is only a menu item wording,
+    // `ChatPage.swift:274`).
+    public const val CONFIGURATION_TITLE: String = "插件"
     public const val CONFIGURATION_DONE: String = "完成"
     public const val CONFIGURATION_REFRESH: String = "刷新"
     public const val CONFIGURATION_INTRO: String = "安装、启用和配置插件"

@@ -1465,7 +1465,9 @@ private fun EngineNotStartedState(
                 .fillMaxWidth()
                 .padding(top = tokens.geometry.composerOuterMarginTop)
                 .defaultMinSize(minHeight = tokens.geometry.primaryButtonHeight)
-                .background(tokens.colors.accent, RoundedCornerShape(tokens.radius.card))
+                // iOS `Self.accent` = ChatPage's own #2F5BFF (`ChatPage.swift:1058`,
+                // applied at `:1343`), not the theme accent.
+                .background(tokens.colors.pageAccent, RoundedCornerShape(tokens.radius.card))
                 .clickable(enabled = !busy, role = Role.Button, onClick = onStartEngine)
                 .testTag(UiPageTags.CHAT_START_ENGINE),
             contentAlignment = Alignment.Center,
@@ -1514,7 +1516,9 @@ private fun ProviderSetupState(
                 .fillMaxWidth()
                 .padding(top = tokens.spacing.codeToolbar)
                 .defaultMinSize(minHeight = tokens.geometry.primaryButtonHeight)
-                .background(tokens.colors.accent, RoundedCornerShape(tokens.radius.card))
+                // iOS `Self.accent` = ChatPage's own #2F5BFF (`ChatPage.swift:1058`,
+                // applied at `:1343`), not the theme accent.
+                .background(tokens.colors.pageAccent, RoundedCornerShape(tokens.radius.card))
                 .clickable(role = Role.Button, onClick = onConfigureProvider)
                 .testTag(UiPageTags.CHAT_PROVIDER_SETUP),
             contentAlignment = Alignment.Center,
@@ -2406,6 +2410,7 @@ internal object ChatPageTokens {
         UiTokenNames.COLORS_BORDER,
         UiTokenNames.COLORS_CODE,
         UiTokenNames.COLORS_CTA_OVERRIDE,
+        UiTokenNames.COLORS_PAGE_ACCENT,
         UiTokenNames.COLORS_DANGER,
         UiTokenNames.COLORS_INPUT,
         UiTokenNames.COLORS_ON_ACCENT,

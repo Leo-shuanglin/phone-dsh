@@ -11,7 +11,6 @@
 // that is the finding — not something to patch with a project dependency.
 package com.phonedsh.consumer
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -53,20 +52,25 @@ public fun ProbeConsumer() {
     PdshTheme {
         var nav by remember { mutableStateOf(PdshNavState()) }
         val facts: PdshNavFacts = remember { PdshNavFacts() }
-        // The back chain the library documents: the top route's own inner level
-        // first, then the route stack. At the root no callback is registered, so
-        // the platform's default (finish the Activity) runs — that is the
-        // documented "back at the start of the task" behaviour, not an oversight.
-        // The library ships PdshBackLevel but no handler; :app's predictive-back
-        // handler is an app-level file, so a consumer writes this itself.
+        // The measurement is a projection, not a write: `measured` re-reads the
+        // platform observation on every composition and returns the same value
+        // when nothing new arrived.
+        val shownFacts: PdshNavFacts = PredictiveBack.measured(facts)
+        // The back chain: the top route's own inner level first, then the route
+        // stack. At the root no callback is registered, so the platform's default
+        // (finish the Activity) runs — the documented "back at the start of the
+        // task" behaviour, and the one the predictive back-to-home animation is
+        // attached to. `PdshBackHandler` is the reference implementation from
+        // docs/design/android-aar-consumer-api-2026-11-02.md §5.2 (compiled here
+        // so the doc cannot drift); `:lib` itself ships only `PdshBackLevel`.
         val backLevel = remember { PdshBackLevel() }
-        BackHandler(enabled = backLevel.available || nav.canGoBack) {
+        PdshBackHandler(enabled = backLevel.available || nav.canGoBack) {
             if (!backLevel.consume()) nav = nav.pop()
         }
 
         PdshNavHost(
             nav = nav,
-            facts = facts,
+            facts = shownFacts,
             onNavigate = { route -> nav = nav.push(route) },
             onBack = { nav = nav.pop() },
             onHome = { nav = nav.popToHome() },

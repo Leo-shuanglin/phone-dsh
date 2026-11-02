@@ -325,6 +325,58 @@ class StructureCheckMutationTests(unittest.TestCase):
         path.write_text(path.read_text(encoding="utf-8") + "\nmavenLocal()\n", encoding="utf-8")
         self.assert_fails("repositories")
 
+    # ---- the one admitted repository --------------------------------------
+    # `com.phonedsh:lib` can only be consumed by coordinate if the build names a
+    # repository for it, and a local file repository can only be declared with a
+    # `maven { }` block. The exception is a path inside the build tree; these
+    # three tests pin that it admits exactly that and nothing else.
+
+    def add_in_tree_repository(self):
+        path = self.root / "android" / "settings.gradle.kts"
+        text = path.read_text(encoding="utf-8")
+        block = (
+            "        maven {\n"
+            '            name = "pdshLocal"\n'
+            '            url = uri(rootDir.resolve("build/repo"))\n'
+            "        }\n"
+        )
+        self.assertIn("        google()\n", text)
+        path.write_text(text.replace("        google()\n", block + "        google()\n", 1), encoding="utf-8")
+
+    def test_in_tree_publish_repository_passes(self):
+        self.add_in_tree_repository()
+        self.assert_passes("repositories")
+
+    def test_external_maven_url_still_fails(self):
+        # Same file, same markers as the admitted repository — a `maven { }`
+        # block that names a network URL must still be rejected. Without this
+        # test the exception would be a hole: the marker check is per file, and
+        # a file can hold more than one block.
+        self.add_in_tree_repository()
+        path = self.root / "android" / "settings.gradle.kts"
+        text = path.read_text(encoding="utf-8")
+        path.write_text(
+            text.replace(
+                "        mavenCentral()\n",
+                "        mavenCentral()\n"
+                "        maven {\n"
+                '            name = "mirror"\n'
+                '            url = "https://evil.example.com/build/repo"\n'
+                "        }\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assert_fails("repositories")
+
+    def test_maven_local_next_to_in_tree_repository_fails(self):
+        # A file-wide allowance must not launder a second, machine-state
+        # repository: mavenLocal() stays forbidden even beside the admitted one.
+        self.add_in_tree_repository()
+        path = self.root / "android" / "settings.gradle.kts"
+        path.write_text(path.read_text(encoding="utf-8") + "\nmavenLocal()\n", encoding="utf-8")
+        self.assert_fails("repositories")
+
     def test_absolute_path_fails(self):
         bad_path = "/" + "Users" + "/someone" + "/sdk"
         write(self.root / "android" / "abspath-note.md", "bad = \"{}\"\n".format(bad_path))

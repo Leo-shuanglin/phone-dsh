@@ -89,8 +89,21 @@ public object SettingsMetrics {
      */
     public const val CARD_RADIUS_PT: Int = 26
 
-    /** Vertical gap between two cards. Source: PNG check card 1 bottom y=914 px, card 2 top y=1030 px (and 1647→1763, 2380→2496) → 116 px = 38.7 pt. Confidence: measured. */
-    public const val SECTION_GAP_PT: Float = 38.67f
+    /**
+     * Vertical gap between two cards: 35.0 pt.
+     *
+     * Source: `docs/receipts/ios-baseline-screens/ios-settings.png`, the PNG the
+     * parity sheet lays beside the Android capture. Card 1's last white row is
+     * y=919 px and card 2's first white row is y=1025 px, so the empty band
+     * between the two cards is 105 px = 35.0 pt; the same 105 px band repeats
+     * three times (920→1024, 1653→1757, 2386→2490).
+     *
+     * The previous 38.67 pt cited "card 1 bottom y=914 px, card 2 top y=1030 px"
+     * (116 px). Those rows are not card edges in the cited file and 116 px is not
+     * the gap that file draws; the Android render then carried the 3.67 pt error
+     * into every successive card. Confidence: measured (four bands).
+     */
+    public const val SECTION_GAP_PT: Float = 35f
 
     /** Top inset from the list's top edge to the first card. Source: PNG check grouped list background starts y=502 px, card 1 top y=606 px → 104 px = 34.7 pt. Confidence: measured. */
     public const val FIRST_CARD_TOP_INSET_PT: Float = 34.67f

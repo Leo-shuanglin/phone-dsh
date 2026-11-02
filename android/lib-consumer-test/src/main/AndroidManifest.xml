@@ -11,7 +11,15 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+      `android:enableOnBackInvokedCallback` is the host's half of predictive
+      back. `:lib` cannot declare it: it belongs on the consumer's <application>,
+      which is why `BackHandler.kt` also owns the `declared` reading. Declaring
+      it is not optional if the settings sheet's 返回手势 row is to be measured
+      rather than guessed — without it the row is a measured NO.
+    -->
     <application
+        android:enableOnBackInvokedCallback="true"
         android:label="PDSH AAR consumer probe"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 

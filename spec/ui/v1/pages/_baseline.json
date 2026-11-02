@@ -4,12 +4,6 @@
  "contracts": 33,
  "divergences": [
   {
-   "page": "files",
-   "kind": "missing-action",
-   "name": "完成",
-   "reason": "`FilesPage.swift:70` is the cancel key of the `3D 示例` sheet (`sheet-62`), and that sheet is a product surface, not a debug tool: `FilesPage.swift` contains no `#if DEBUG` (every debug-only path in the probe is wrapped — `ChatPage.swift:17,28,155,…`), the toolbar entry and the sheet compile into every build, and `examples/probe-app/project.yml:61-63` ships `Web3DLib` (which holds `demo/spin.html`) as a resource folder in release builds too. So the iOS baseline really does render 「3D 示例」 → 「完成」. Android cannot host it yet, and not for lack of trying: the 2026-11-01 decision in `docs/design/android-single-webview-invariant-2026-11-01.md:63` keeps ONE WebView per process (`spec/v1/bridge.md:156`) and routes HTML/3D/OGV to the honest card + per-file reason + share path instead, so a page-surface sheet whose only content is `pdsh-page://lib/demo/spin.html` would be exactly the second WebView that decision forbids. The Android page already models the entry (`FilesPage.kt:454,465`: `onOpenDemo` hides it when null) and `PdshNavHost.kt`'s `FilesRoute` never passes it. Landing the sheet needs (1) the page-surface module, (2) the Web3DLib assets on the Android side, (3) the nav wiring — none of which this lane may touch. The row is the work item, and it is not a preview-host or demo-only affordance."
-  },
-  {
    "page": "mcp-editor",
    "kind": "missing-action",
    "name": "保存修改并重连",

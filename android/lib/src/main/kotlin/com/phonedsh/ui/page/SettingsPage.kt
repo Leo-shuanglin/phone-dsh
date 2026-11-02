@@ -101,6 +101,7 @@ import com.phonedsh.ui.surface.SettingsSegmentPaddingV
 import com.phonedsh.ui.surface.SettingsSegmentTopGap
 import com.phonedsh.ui.surface.SettingsSubPageFrame
 import com.phonedsh.ui.surface.SettingsSwitch
+import com.phonedsh.ui.surface.SettingsSwitchTrailingInset
 import com.phonedsh.ui.surface.SettingsTrailingSlot
 import com.phonedsh.ui.surface.settingsLabelStyle
 import com.phonedsh.ui.theme.LocalUiTokens
@@ -473,6 +474,29 @@ public data class SettingsScreenState(
         public const val APPEARANCE_ROW_ID: String = "preference.appearance"
         public const val FONT_SIZE_ROW_ID: String = "preference.fontSize"
         public const val FONT_NOTE_ROW_ID: String = "preference.fontNote"
+
+        /**
+         * 字号大小 › 正文: the chat-appearance page's text-size stepper.
+         *
+         * The index's 字号大小 row is one navigation row; the steppers live on
+         * `ChatPreferencesPage`, so a size write needs a row id of its own. The
+         * option id is the new size as decimal text, and the host clamps it to
+         * the baseline's range (10...22, `NativeChatPreferences.swift:41`).
+         */
+        public const val TEXT_FONT_SIZE_ROW_ID: String = "preference.fontSize.text"
+
+        /** 字号大小 › 代码 (10...16); same shape as [TEXT_FONT_SIZE_ROW_ID]. */
+        public const val CODE_FONT_SIZE_ROW_ID: String = "preference.fontSize.code"
+
+        /**
+         * 字号大小 › 终端 (10...20).
+         *
+         * No stepper draws this row today: the index reports all three sizes and
+         * the chat-appearance page has 正文 / 代码 controls only. The id exists so
+         * the host's stored terminal size has one write vocabulary with the other
+         * two, and so a future 终端 control needs no new seam.
+         */
+        public const val TERMINAL_FONT_SIZE_ROW_ID: String = "preference.fontSize.terminal"
         public const val TRANSCRIPT_VIEW_ROW_ID: String = "work.transcriptView"
         public const val COLLAPSE_TIMING_ROW_ID: String = "work.collapseTiming"
         public const val DEVELOPER_TOOLS_ROW_ID: String = "work.developerTools"
@@ -1151,6 +1175,11 @@ private fun SettingsSwitchCardRow(
         role = Role.Switch,
         onClick = { onToggle(!row.checked) },
         stateValue = row.value,
+        // The baseline tracks the switch to the card edge, not to the text
+        // column: `ios-settings.png` puts the switch's right edge at x=1115 px
+        // and the card's at x=1157 px (14 pt), while a row's value stops 39.33 pt
+        // short to leave room for the chevron column.
+        trailingInset = SettingsSwitchTrailingInset,
         modifier = modifier.testTag(UiPageTags.SETTINGS_ROW_TOGGLE),
     ) {
         SettingsRowLabel(text = row.title, enabled = row.enabled, modifier = Modifier.weight(1f))

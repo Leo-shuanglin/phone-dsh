@@ -1249,7 +1249,8 @@ private fun AutomationEmptyBlock(onNewSchedule: (() -> Unit)?) {
                     .padding(top = ShellFilesMetrics.EMPTY_STATE_GAP_PT.dp)
                     .testTag(UiPageTags.AUTOMATION_CTA)
                     .clip(RoundedCornerShape(tokens.radius.card))
-                    .background(tokens.colors.ctaOverride)
+                    // ios-sessions-schedules.png 新建任务 = #2F5BFF (page blue).
+                    .background(tokens.colors.pageAccent)
                     .defaultMinSize(minHeight = SessionsMetrics.ctaHeight)
                     .clickable(role = Role.Button, onClick = onNewSchedule)
                     .padding(
@@ -2285,7 +2286,7 @@ internal object NativeAutomationPageTokens {
     val refs: List<String> = listOf(
         "colors.accent",
         "colors.background",
-        "colors.ctaOverride",
+        "colors.pageAccent",
         "colors.danger",
         "colors.input",
         "colors.onAccent",

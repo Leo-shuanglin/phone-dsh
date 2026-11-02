@@ -177,8 +177,15 @@ class TokenReferenceTest {
         val dark = UiTokens.resolve(dark = true)
         assertEquals(Color(0xFF3964FE), light.colors.accent)
         assertEquals(Color(0xFF679EFE), dark.colors.accent)
-        assertEquals(Color(0xFF2F5BFF), light.colors.ctaOverride)
-        assertEquals(Color(0xFF2F5BFF), dark.colors.ctaOverride)
+        // 2026-11-02: the approval card's CTA is the theme accent (#3964FE,
+        // `ChatPage.swift:4459`); the page-layer #2F5BFF moved to `pageAccent`.
+        assertEquals(Color(0xFF3964FE), light.colors.ctaOverride)
+        assertEquals(Color(0xFF3964FE), dark.colors.ctaOverride)
+        assertEquals(Color(0xFF2F5BFF), light.colors.pageAccent)
+        assertEquals(Color(0xFF34C759), light.colors.switchOn)
+        assertEquals(Color(0xFF000000), light.colors.systemLabel)
+        assertEquals(Color(0xFFFFFFFF), dark.colors.systemLabel)
+        assertEquals(Color(0xFF8A8A8E), light.colors.systemSecondary)
         // The values the resolved theme must carry are the *current* spec's, not the
         // ones this test was written against: L9 re-based the two radii and the bubble
         // cap on the iOS implementation (`NativeParityTokens.swift:115-116` radiusXL =
