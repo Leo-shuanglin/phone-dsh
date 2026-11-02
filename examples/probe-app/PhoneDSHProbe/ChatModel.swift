@@ -919,6 +919,8 @@ final class ChatModel {
         busy = true
         defer { busy = false }
         guard let launch = makeHostLaunch() else { return }
+        // Show the last conversation from disk immediately; the engine boots
+        // in the background and replaces it when the host history arrives.
         restoreCachedTranscriptIfAvailable()
         statusLine = "Booting the Worker…"
         appendStatus("Booting the host (Worker bundle + image)…")
@@ -968,12 +970,19 @@ final class ChatModel {
         }
 
         let egressHosts = Self.egressHosts(from: egressAllow)
-        // The provider document is read for every new host, including reset.
+        // The provider document is the only model configuration authority.
+        // It is read for every new host — including the rebuild a reset does —
+        // so deleting or switching a service can never leave the previous
+        // endpoint/key active in this process. A missing selection still boots
+        // the complete Web surface: model calls fail later with the host
+        // credential provider's unauthorized error, and Settings → 模型服务
+        // stays reachable.
         var selectedProfile: ProviderProfile?
         var allowedModelHosts = Set<String>()
         var credentialProvider: any CredentialProvider = PhoneModelProviderSettings.shared
             .makeEgressOnlyCredentialProvider(egressAllowHosts: egressHosts)
         var environment: [String: String] = [
+            // The host gateway injects the real key; the Worker never holds it.
             "DEEPSEEK_API_KEY": "phone-host-injects-key",
             "DSH_TELEMETRY_DISABLED": "1",
         ]
@@ -995,6 +1004,10 @@ final class ChatModel {
             modelName = ""
             appendStatus("Model service settings are invalid; booting without a model route: \(error.localizedDescription)")
         }
+        // The same independent-search plan the Web surface uses: independent
+        // mode adds its exact gateway host rule and wraps only the search
+        // paths with the dedicated Keychain; follow-model is limited to the
+        // official DeepSeek Messages endpoint the shipped provider supports.
         var launchPlan = ModelProviderLaunchPlan(allowedModelHosts: allowedModelHosts,
                                                  credentialProvider: credentialProvider,
                                                  environment: environment)
@@ -1014,12 +1027,17 @@ final class ChatModel {
         allowedModelHosts = launchPlan.allowedModelHosts
         credentialProvider = launchPlan.credentialProvider
         environment = launchPlan.environment
+        // Model POSTs keep the gateway's 429/5xx backoff; egress POSTs do not
+        // (PR #1 review finding). Only the selected profile's standard model
+        // endpoints are replay-safe, so expand its base URL here.
         let replaySafeModelEndpoints = selectedProfile?.endpointURL
             .map { PhoneDSHConfiguration.standardModelEndpoints(baseURL: $0) } ?? []
         var configuration = PhoneDSHConfiguration(
             workspaceRoot: workspaceRoot,
             token: "",
             origin: URL(string: "http://127.0.0.1:1")!,
+            // Budgets follow the device: the 12 GiB row is selected only at or
+            // above 12 GiB (budgets.md §4).
             deviceTier: DeviceTier.forPhysicalMemory(ProcessInfo.processInfo.physicalMemory),
             bundle: bundle,
             allowedModelHosts: allowedModelHosts,
@@ -1029,11 +1047,21 @@ final class ChatModel {
             egressAuthorizer: mcpPolicy,
             drainDeadline: ChatHostConfiguration.defaultDrainDeadline,
             helloTimeout: ChatHostConfiguration.defaultHelloTimeout)
+        // One line states what the host actually enforces. The Worker's
+        // published manifest can lag behind a rebuilt bundle; this is the
+        // number the write path uses.
         appendStatus("Engine budgets: tier=\(configuration.deviceTier) "
             + "workspace=\(configuration.budgets.workspaceBytes / 1_048_576) MiB "
             + "vfs=\(configuration.budgets.vfsLogicalBytes / 1_048_576) MiB "
             + "single=\(configuration.budgets.singleFileBytes / 1_048_576) MiB "
             + "hot=\(configuration.budgets.wasiHotInstanceBytes / 1_048_576) MiB")
+        // Publish the real read-only accelerators only when the linked Rust
+        // library advertises them. Without the XCFramework `acceleratorNames`
+        // is empty, so the host keeps advertising none instead of faking a
+        // capability. `phone`/`ctx` are registered by the library but need an
+        // injected PhoneToolBridge (there is no MCP bridge in this host yet),
+        // so `channelAcceleratorNames` keeps them out of the host HELLO and the
+        // EXEC_REQ whitelist instead of advertising commands that would exit 69.
         let toolBridge = CompositePhoneToolBridge(
             office: OfficeToolBridge(presenter: OfficePresenter()),
             phone: PhoneCapabilityBridge())
@@ -1073,8 +1101,20 @@ final class ChatModel {
         await start(autoRecover: true)
     }
 
-    /// Rebuilds with the latest settings, acknowledges the persisted failure,
-    /// and then follows the same session-adoption path as a normal start.
+    /// The explicit user acknowledgement D14 requires before a persisted
+    /// `Failed` controller may boot again.
+    ///
+    /// It stops the failed host and builds a new one with the current settings
+    /// rather than reusing the failed instance: the host captures its provider
+    /// credential, search plan, MCP policy and budget at construction, so a
+    /// person who fixed an API key and retried would otherwise keep booting
+    /// with the stale document. The persisted `Failed` state is still acked
+    /// with `reset()` — the new host's first `start()` refuses it, so the
+    /// engine is rebuilt and then reset — and the session is adopted through
+    /// the same path a normal start uses.
+    ///
+    /// A failure that survives this stays fail-loud: the host is kept in
+    /// ``failedHost`` and ``engineNeedsReset`` stays true.
     func restartEngine() async {
         guard host == nil, !busy else { return }
         guard let failed = failedHost else {
@@ -1091,9 +1131,12 @@ final class ChatModel {
             reportError("引擎无法重新启动：\(Self.condensed(String(describing: error)))")
             return
         }
+        // Build the replacement first: `makeHostLaunch` can refuse (bundle
+        // missing, anchor not in a window) and clearing the reset state before
+        // that would drop the only path back to a working engine.
+        guard let launch = makeHostLaunch() else { return }
         failedHost = nil
         engineNeedsReset = false
-        guard let launch = makeHostLaunch() else { return }
         restoreCachedTranscriptIfAvailable()
         observeHost(launch.host)
         do {
