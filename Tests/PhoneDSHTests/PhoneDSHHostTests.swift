@@ -831,6 +831,54 @@ final class PhoneDSHHostTests: XCTestCase {
         try await host.stop()
     }
 
+    func testWebContentTerminationRetriesOneTransientBootFailure() async throws {
+        let fixture = try FacadeFixture()
+        defer { fixture.cleanup() }
+        let engine = MockEngine(worker: MockWorker())
+        let host = try makeHost(fixture, engine: engine)
+        try await host.start()
+
+        // WebKit kills the page process and the reload issued in the same turn
+        // loses the race against the replacement WebContent process. The one
+        // retry must turn that into a normal recovery instead of a persisted
+        // `Failed` controller.
+        engine.setBootError(WebEngineError.navigationFailed("无法连接服务器"), times: 1)
+        engine.emit(.terminated(1))
+        try await waitUntil(timeout: 10) {
+            let diagnostics = await host.diagnostics()
+            return diagnostics.state == .running && engine.bootCount >= 3
+        }
+        let diagnostics = await host.diagnostics()
+        XCTAssertEqual(diagnostics.hostState, .running)
+        XCTAssertEqual(diagnostics.admission, .open)
+        XCTAssertNil(diagnostics.lastError)
+        XCTAssertGreaterThanOrEqual(engine.bootCount, 3,
+                                    "the replacement Worker must have been retried")
+        try await host.stop()
+    }
+
+    func testWebContentTerminationFailedRetryStillFailsLoud() async throws {
+        let fixture = try FacadeFixture()
+        defer { fixture.cleanup() }
+        let engine = MockEngine(worker: MockWorker())
+        let host = try makeHost(fixture, engine: engine)
+        try await host.start()
+
+        // A failure that survives the retry is not a race: the host must still
+        // fail loud exactly as before, so a persistent fault is never hidden.
+        engine.setBootError(WebEngineError.navigationFailed("无法连接服务器"))
+        engine.emit(.terminated(1))
+        try await waitUntil(timeout: 10) {
+            let diagnostics = await host.diagnostics()
+            return diagnostics.state == .failed
+        }
+        let diagnostics = await host.diagnostics()
+        XCTAssertEqual(diagnostics.hostState, .failed)
+        XCTAssertEqual(diagnostics.admission, .closed)
+        XCTAssertEqual(engine.bootCount, 3, "one boot plus the retried recovery attempt")
+        try? await host.stop()
+    }
+
     func testWebContentTerminationPublishesExactlyOneRestartedEvent() async throws {
         let fixture = try FacadeFixture()
         defer { fixture.cleanup() }

@@ -529,6 +529,17 @@ final class ChatModel {
     private var restartPolicyHighSamples = 0
     private var restartPolicySawTermination = false
     private var restartPolicyBudget: BudgetTable?
+    /// The host whose `start()` refused a persisted `Failed` controller.
+    ///
+    /// D14 only leaves `Failed` through an explicit user acknowledgement
+    /// (`PhoneDSHHost.reset()`), and that acknowledgement needs the very host
+    /// instance `start()` just threw from. The App used to drop it, which made
+    /// the escape hatch unreachable: one failure — for example the transient
+    /// navigation error WebKit returns while it rebuilds its page process —
+    /// kept the engine down on every later launch.
+    private var failedHost: PhoneDSHHost?
+    /// True while ``failedHost`` waits for the user's acknowledgement.
+    private(set) var engineNeedsReset = false
     private var foregroundResumeRequested = false
     private var backgroundParkRequested = false
     var canSend: Bool { harness != nil && sessionID != nil && transcriptReady && !busy && !parked && !hostLifecycleTransition }
@@ -909,7 +920,7 @@ final class ChatModel {
             return
         }
 
-        let egressHosts = Set(egressAllow.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
+        let egressHosts = Self.egressHosts(from: egressAllow)
         // The provider document is the only model configuration authority.
         // It is read at every start, so deleting or switching a service can
         // never leave the previous endpoint/key active in this process. A
@@ -1032,11 +1043,78 @@ final class ChatModel {
             Self.appendDiagnostic("host start failed: \(error)")
             reportError("引擎停了：\(Self.condensed(String(describing: error)))")
             hostEventTask?.cancel(); hostEventTask = nil
+            // Keep the failed host instead of discarding it: it is the only
+            // object that can perform the explicit reset a persisted `Failed`
+            // controller needs before it may boot again.
+            failedHost = newHost
+            engineNeedsReset = true
             return
         }
+        await adoptRunningHost(newHost,
+                               budgets: configuration.budgets,
+                               selectedProfile: selectedProfile,
+                               egressHosts: egressHosts)
+    }
+
+    /// The explicit user acknowledgement D14 requires before a persisted
+    /// `Failed` controller may boot again.
+    ///
+    /// A failed host refuses every plain ``start()``, so without this the App
+    /// could stay dead until someone edited `Documents/chat-host/host-state.json`
+    /// by hand. The engine is not "broken" in that state: the same build boots
+    /// normally once the acknowledgement is recorded.
+    ///
+    /// - Note: does nothing while a boot is in flight or the host is running;
+    ///   ``engineNeedsReset`` is the flag the UI keys its button off.
+    func restartEngine() async {
+        guard host == nil, !busy else { return }
+        guard let failed = failedHost else {
+            await start()
+            return
+        }
+        busy = true
+        defer { busy = false }
+        statusLine = "Restarting the engine…"
+        appendStatus("User reset: clearing the persisted failed controller")
+        do {
+            try await failed.reset()
+        } catch {
+            reportError("引擎无法重新启动：\(Self.condensed(String(describing: error)))")
+            failedHost = failed
+            engineNeedsReset = true
+            return
+        }
+        observeHost(failed)
+        let profile = (try? PhoneModelProviderSettings.shared.load())?.selected
+        await adoptRunningHost(
+            failed,
+            budgets: BudgetTable.table(for: DeviceTier.forPhysicalMemory(
+                ProcessInfo.processInfo.physicalMemory)),
+            selectedProfile: profile,
+            egressHosts: Self.egressHosts(from: egressAllow))
+    }
+
+    /// Parses the comma-separated egress allow list the settings page stores.
+    static func egressHosts(from list: String) -> Set<String> {
+        Set(list.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty })
+    }
+
+    /// Adopts a host that has finished booting: opens the persisted (or a
+    /// fresh) session, loads its history and starts the pumps.
+    ///
+    /// Shared by ``start()`` and ``restartEngine()`` so the user-reset path
+    /// lands in exactly the state a normal boot produces.
+    private func adoptRunningHost(_ newHost: PhoneDSHHost,
+                                  budgets: BudgetTable,
+                                  selectedProfile: ProviderProfile?,
+                                  egressHosts: Set<String>) async {
         host = newHost
+        failedHost = nil
+        engineNeedsReset = false
         startedAt = Date()
-        restartPolicyBudget = configuration.budgets
+        restartPolicyBudget = budgets
         startRestartPolicyMonitor()
         do {
             let harness = try await newHost.harness()
@@ -1560,6 +1638,12 @@ final class ChatModel {
     /// in a window and, when `PDSH_CHAT_AUTOPROMPT` is set, sends that prompt.
     /// `devicectl device process launch --environment-variables` supplies
     /// both; the model key still comes from the provider settings.
+    ///
+    /// `PDSH_CHAT_AUTORESTART=1` adds the user-reset step: after a start that
+    /// left `engineNeedsReset`, it performs exactly what the
+    /// 「重新启动引擎」button does. A persisted `Failed` controller cannot boot
+    /// any other way, and `devicectl` cannot tap the button, so an unattended
+    /// run needs this to prove the escape hatch works on a device.
     private var autostartDone = false
 
     func autostartIfRequested() {
@@ -1568,6 +1652,7 @@ final class ChatModel {
         guard environment["PDSH_CHAT_AUTOSTART"] == "1" else { return }
         autostartDone = true
         let prompt = environment["PDSH_CHAT_AUTOPROMPT"]
+        let autoRestart = environment["PDSH_CHAT_AUTORESTART"] == "1"
         Task { [weak self] in
             // The anchor view attaches to its window a moment after onAppear.
             for _ in 0..<20 {
@@ -1577,6 +1662,22 @@ final class ChatModel {
             guard let self else { return }
             appendStatus("Autostart requested by the launch environment")
             await start()
+            if autoRestart {
+                // The page starts the host on appear as well, and that start
+                // owns the gate: wait for it to settle before judging the
+                // outcome instead of reading `engineNeedsReset` too early.
+                for _ in 0..<40 {
+                    if !busy { break }
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+                if !isStarted, !engineNeedsReset, !busy {
+                    await start()
+                }
+                if engineNeedsReset {
+                    appendStatus("Auto restart requested by the launch environment")
+                    await restartEngine()
+                }
+            }
             if let prompt, !prompt.isEmpty, isStarted {
                 await send(prompt)
             }

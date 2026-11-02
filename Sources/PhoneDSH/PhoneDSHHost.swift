@@ -3572,19 +3572,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             // Pick up every acknowledged mutation since the last epoch before
             // the page reloads; the overlay route serves this file.
             _ = try await runtime.log.overlay(bootID: bootID)
-            if let requesting = runtime.engine as? WebEngineRestartRequesting {
-                let report = try await requesting.restart(reason: .webContentTerminated)
-                // The engine normally publishes the same report on its own
-                // stream; publishRestart drops the copy that arrives second,
-                // and an engine whose event is late still gets exactly one.
-                publishRestart(report)
-            } else if let engine = runtime.engine {
-                try await engine.bootWorker(runtime.engineConfiguration)
-            } else {
-                throw PhoneDSHError.notStarted
-            }
-            let hello = try await runtime.coordinator.waitForHello(
-                timeout: configuration.helloTimeout)
+            let hello = try await bootReplacementWorker(runtime)
             // G2-FIX-93: the replacement Worker gets a bounded chance to
             // reconcile the interrupted step itself. DSH only reconciles the
             // tool journal when a stored session is opened for writing, so the
@@ -3608,6 +3596,81 @@ public actor PhoneDSHHost: PhoneDSHHosting {
                 // The recovery failure below is the actionable error.
             }
             await fail(error)
+        }
+    }
+
+    /// Boots the replacement Worker for a WebContent termination, retrying once.
+    ///
+    /// WebKit kills its page process asynchronously, and a load issued in the
+    /// same turn as the kill can lose the race against the replacement
+    /// WebContent process: the navigation fails with
+    /// "无法连接服务器" even though the loopback listener is up and the host's
+    /// durable state is intact. Observed on iOS 27 (2026-10-30 12:24:45Z):
+    /// `WebContent terminated (1)` was followed immediately by
+    /// `navigation failed`, the host failed loud, and the persisted `Failed`
+    /// controller then refused every later boot until the state file was
+    /// edited by hand (D14 leaves `Failed` only through an explicit reset).
+    ///
+    /// One retry turns that race into an ordinary recovery. A failure that
+    /// survives the retry still fails loud, so a persistent fault is never
+    /// hidden behind a retry loop.
+    private func bootReplacementWorker(
+        _ runtime: RuntimeServices
+    ) async throws -> PhoneDSHHelloResult {
+        var attempt = 1
+        while true {
+            do {
+                if let requesting = runtime.engine as? WebEngineRestartRequesting {
+                    let report = try await requesting.restart(reason: .webContentTerminated)
+                    // The engine normally publishes the same report on its own
+                    // stream; publishRestart drops the copy that arrives second,
+                    // and an engine whose event is late still gets exactly one.
+                    publishRestart(report)
+                } else if let engine = runtime.engine {
+                    try await engine.bootWorker(runtime.engineConfiguration)
+                } else {
+                    throw PhoneDSHError.notStarted
+                }
+                return try await runtime.coordinator.waitForHello(
+                    timeout: configuration.helloTimeout)
+            } catch {
+                guard attempt < Self.replacementWorkerAttempts,
+                      Self.isTransientReplacementFailure(error) else { throw error }
+                // A connection or HELLO registered by the failed attempt must
+                // not be mistaken for the replacement Worker's.
+                _ = await runtime.coordinator.prepareForReboot()
+                try? await Task.sleep(
+                    for: .milliseconds(Self.replacementWorkerRetryDelayMilliseconds))
+                attempt += 1
+            }
+        }
+    }
+
+    /// Attempts for one WebContent-termination recovery: the first boot plus
+    /// exactly one retry for a transient page-process failure.
+    private static let replacementWorkerAttempts = 2
+    /// Delay before the retry. Long enough for the replacement WebContent
+    /// process to answer a TCP load, short enough to stay inside the App's
+    /// `helloTimeout` budget.
+    private static let replacementWorkerRetryDelayMilliseconds = 250
+
+    /// Whether a replacement-Worker boot failed for a reason a second attempt
+    /// can plausibly clear.
+    ///
+    /// The engine's navigation and bootstrap failures describe the page
+    /// process that WebKit is still rebuilding, not the host's durable state.
+    /// Configuration and script errors are deterministic, and a superseded
+    /// navigation or boot means a newer attempt already owns the page, so
+    /// those are never retried.
+    private static func isTransientReplacementFailure(_ error: Error) -> Bool {
+        guard let engineError = error as? WebEngineError else { return false }
+        switch engineError {
+        case .navigationFailed, .navigationTimedOut, .bootFailed, .bootTimedOut,
+             .contentProcessTerminated:
+            return true
+        case .invalidConfiguration, .invalidOrigin, .navigationSuperseded,
+             .bootSuperseded, .scriptEvaluationFailed:
+            return false
         }
     }
 

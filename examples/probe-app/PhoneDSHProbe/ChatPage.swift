@@ -990,6 +990,14 @@ struct ChatPage: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(ChatPage.accent)
             }
+            // A host that failed loud stays down until the user acknowledges it
+            // (D14). Without this button that acknowledgement was unreachable,
+            // so one failure kept the engine from ever booting again.
+            if model.engineNeedsReset {
+                Button("重新启动引擎") { Task { await model.restartEngine() } }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ChatPage.accent)
+            }
             Button { model.clearError() } label: { Image(systemName: "xmark").font(.caption.weight(.bold)) }
                 .accessibilityLabel("关闭提示")
                 .foregroundStyle(ChatPage.inkSecondary)
