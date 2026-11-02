@@ -1,6 +1,6 @@
 {
  "schema": "pdsh.ui.page-structure-baseline/1",
- "note": "Re-frozen against iOS PR22 edd687463cd24b9c969914a13fa1da268df016fe (HomeSpec 430x932 home, grouped SettingsPage, HomeDrawer) and Android PR14 8c2eeab + the reusable candidate. Before this re-baseline the file held 1 row (mcp-editor missing-action 保存修改并重连, now fixed by the PR22 wording); after review it holds 90 rows on 12 pages. Every row is a current observed divergence with kind/name/reason and its owning lane C chat, D composer, E drawer/sessions, F settings/provider, G secondary files/device/workbench. This ratchet only shrinks: fix one, delete its row. `--write-baseline` writes new rows as UNREVIEWED, which this file refuses to load. Final integration removes three source-resolved chat entries (read-aloud, collapse glyph and dynamic label); no new divergence is added.",
+ "note": "Reconciled against iOS PR22 and the current Android source inventory. This ratchet now holds 48 observed divergences on 9 pages; it only shrinks. Removed the obsolete HomeDrawer comparison against legacy SessionsPage, the resolved grouped Settings index labels, NativeWorkbench picker options now represented by its source-extracted Picker, and source-resolved chat drawer action. No divergence or whitelist entry was added. Newly exposed HomeDrawer source gaps and other strict findings remain visible until their owning lane closes them.",
  "contracts": 34,
  "divergences": [
   {
@@ -27,121 +27,9 @@
   {
    "page": "chat",
    "kind": "missing-action",
-   "name": "打开会话列表",
-   "lane": "C",
-   "reason": "PR22 makes ChatPage the home and draws the HomeSpec header/menu: drawer button, session title + folder subtitle, 设备+更多 (工作区/插件与工具/产物/运行状态/导出), and the composer's voice/collapse controls. Android ChatPage.kt still renders the pre-PR22 header/menu, so this control is not the PR22 one. Lane C owns the home/header/menu; lane D owns the composer/voice controls. The PR22 home exposes `打开会话列表`; Android does not render it."
-  },
-  {
-   "page": "chat",
-   "kind": "missing-action",
    "name": "插件与工具",
    "lane": "C",
    "reason": "PR22 makes ChatPage the home and draws the HomeSpec header/menu: drawer button, session title + folder subtitle, 设备+更多 (工作区/插件与工具/产物/运行状态/导出), and the composer's voice/collapse controls. Android ChatPage.kt still renders the pre-PR22 header/menu, so this control is not the PR22 one. Lane C owns the home/header/menu; lane D owns the composer/voice controls. The PR22 home exposes `插件与工具`; Android does not render it."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "extra-action",
-   "name": "删除工作文件夹",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. Android's legacy sessions drawer renders an extra `删除工作文件夹` that HomeDrawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "extra-action",
-   "name": "归档会话",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. Android's legacy sessions drawer renders an extra `归档会话` that HomeDrawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "extra-action",
-   "name": "恢复",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. Android's legacy sessions drawer renders an extra `恢复` that HomeDrawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "extra-action",
-   "name": "搜索会话",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. Android's legacy sessions drawer renders an extra `搜索会话` that HomeDrawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "extra-action",
-   "name": "新建会话",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. Android's legacy sessions drawer renders an extra `新建会话` that HomeDrawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "extra-action",
-   "name": "新建工作文件夹",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. Android's legacy sessions drawer renders an extra `新建工作文件夹` that HomeDrawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "extra-action",
-   "name": "添加工作文件夹",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. Android's legacy sessions drawer renders an extra `添加工作文件夹` that HomeDrawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "extra-action",
-   "name": "重命名会话",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. Android's legacy sessions drawer renders an extra `重命名会话` that HomeDrawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "missing-action",
-   "name": "删除文件夹",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. HomeDrawer has `删除文件夹`; Android's legacy sessions drawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "missing-action",
-   "name": "定时任务",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. HomeDrawer has `定时任务`; Android's legacy sessions drawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "missing-action",
-   "name": "归档",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. HomeDrawer has `归档`; Android's legacy sessions drawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "missing-action",
-   "name": "新会话",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. HomeDrawer has `新会话`; Android's legacy sessions drawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "missing-action",
-   "name": "新建文件夹",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. HomeDrawer has `新建文件夹`; Android's legacy sessions drawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "missing-action",
-   "name": "编辑名称",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. HomeDrawer has `编辑名称`; Android's legacy sessions drawer does not."
-  },
-  {
-   "page": "home-drawer",
-   "kind": "missing-action",
-   "name": "设置",
-   "lane": "E",
-   "reason": "PR22's product drawer is HomeDrawer (new会话/定时任务, 文件夹 groups incl. default 日常, long-press rename/archive, bottom settings bar). Android's drawer body is still the pre-PR22 SessionsPage.kt session list, so this control exists on only one side. Lane E ports the drawer and its archived/rename semantics. HomeDrawer has `设置`; Android's legacy sessions drawer does not."
   },
   {
    "page": "model-provider-settings",
@@ -389,20 +277,6 @@
    "reason": "PR22 reaches NativePluginInventoryPage from 插件与工具 and titles it 已加载插件; Android NativePluginInventoryPage.kt still has the older 内置插件 title and 插件列表 header/插件配置 action. Lane F aligns the plugin inventory entry and chrome. This row is `已加载插件` (title-mismatch)."
   },
   {
-   "page": "native-workbench",
-   "kind": "extra-action",
-   "name": "命令",
-   "lane": "G",
-   "reason": "PR22's workbench is the two content segments (文件 / 命令) inside the sheet. Android NativeWorkbenchPage.kt still renders the pre-PR22 segmented mode switch with 文件/命令 labels, so the action set differs. Lane G owns the workbench. This row is `命令` (extra-action)."
-  },
-  {
-   "page": "native-workbench",
-   "kind": "extra-action",
-   "name": "文件",
-   "lane": "G",
-   "reason": "PR22's workbench is the two content segments (文件 / 命令) inside the sheet. Android NativeWorkbenchPage.kt still renders the pre-PR22 segmented mode switch with 文件/命令 labels, so the action set differs. Lane G owns the workbench. This row is `文件` (extra-action)."
-  },
-  {
    "page": "pdsh-shell",
    "kind": "extra-action",
    "name": "取消",
@@ -443,153 +317,6 @@
    "name": "本会话产物",
    "lane": "G",
    "reason": "PR22 renamed the artifacts page to 本会话产物 / 本会话 and added the attributed-artifacts empty copy. Android SessionArtifactsPage.kt still says 本 session and 本 session 产物, so the title and rows differ. Lane G owns artifacts/preview/share. This row is `本会话产物` (title-mismatch)."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "Agent 预设",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `Agent 预设` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "关于 Phone DSH",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `关于 Phone DSH` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "字号",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `字号` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "工作过程",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `工作过程` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "已归档会话",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `已归档会话` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "开源许可",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `开源许可` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "快捷键",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `快捷键` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "手机权限",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `手机权限` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "插件与工具",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `插件与工具` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "文件夹",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `文件夹` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "新会话默认权限",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `新会话默认权限` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "模型服务",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `模型服务` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "网络访问",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `网络访问` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "运行状态",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `运行状态` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-action",
-   "name": "重新启动引擎",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `重新启动引擎` is one of the index rows the PR22 grouped SettingsPage opens."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-section",
-   "name": "会话与文件",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `会话与文件` is one of the PR22 grouping headers the five-tab Android shell does not declare."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-section",
-   "name": "关于",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `关于` is one of the PR22 grouping headers the five-tab Android shell does not declare."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-section",
-   "name": "对话",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `对话` is one of the PR22 grouping headers the five-tab Android shell does not declare."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-section",
-   "name": "引擎",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `引擎` is one of the PR22 grouping headers the five-tab Android shell does not declare."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-section",
-   "name": "权限与隐私",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `权限与隐私` is one of the PR22 grouping headers the five-tab Android shell does not declare."
-  },
-  {
-   "page": "settings",
-   "kind": "missing-section",
-   "name": "模型与智能体",
-   "lane": "F",
-   "reason": "PR22 replaced the five-tab settings shell with one grouped index (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于) and inline pickers. Android SettingsPage.kt is still the PR13 five-tab shell, so this settings row/section has no PR22 counterpart. Lane F rebuilds the settings index and provider pages. `模型与智能体` is one of the PR22 grouping headers the five-tab Android shell does not declare."
   },
   {
    "page": "settings-about",

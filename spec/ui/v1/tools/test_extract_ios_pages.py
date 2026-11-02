@@ -27,6 +27,98 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import extract_ios_pages as E  # noqa: E402
 
 
+class ToolbarPickerTests(unittest.TestCase):
+    def test_picker_in_toolbar_is_extracted_without_duplicating_body_pickers(self) -> None:
+        swift = '''import SwiftUI
+struct NativeWorkbenchPage: View {
+    @State private var section = 0
+    var body: some View {
+        NavigationStack {
+            Section("Controls") {
+                Picker("普通选项", selection: $section) {
+                    Text("普通值").tag(2)
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Picker("工作区", selection: $section) {
+                        Text("文件").tag(0)
+                        Text("命令").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                }
+            }
+        }
+    }
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path = root / "examples/probe-app/PhoneDSHProbe/NativeWorkbenchPage.swift"
+            source_path.parent.mkdir(parents=True)
+            source_path.write_text(swift, encoding="utf-8")
+            source = E.Source(source_path, root)
+            page = E.PageExtractor(source, "NativeWorkbenchPage").run(E.page_structs(source))
+
+        picker_actions = [action for action in page["actions"] if action["kind"] == "picker"]
+        self.assertEqual(len(picker_actions), 2)
+        ordinary = [action for action in picker_actions if action["label"] == "普通选项"]
+        toolbar = [action for action in picker_actions if action["label"] == "工作区"]
+        self.assertEqual(len(ordinary), 1, "ordinary body Picker must not be re-added by the toolbar scan")
+        self.assertEqual(len(toolbar), 1)
+        self.assertEqual(toolbar[0]["items"], ["工作区", "文件", "命令"])
+        self.assertEqual(toolbar[0]["style"], "segmented")
+
+
+class TitledSectionHelperTests(unittest.TestCase):
+    def _extract(self, swift: str) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path = root / "examples/probe-app/PhoneDSHProbe/SettingsPage.swift"
+            source_path.parent.mkdir(parents=True)
+            source_path.write_text(swift, encoding="utf-8")
+            source = E.Source(source_path, root)
+            return E.PageExtractor(source, "FontSizeSettingsPage").run(E.page_structs(source))
+
+    def test_native_font_role_section_call_sites_keep_their_own_titles_and_lines(self) -> None:
+        swift = '''import SwiftUI
+struct FontSizeSettingsPage: View {
+    var body: some View {
+        List {
+            section(.text, NativeText("会话内容", "Conversation"))
+            section(.code, NativeText("代码", "Code"))
+            section(.terminal, NativeText("终端", "Terminal"))
+        }
+    }
+    private func section(_ role: NativeFontRole, _ title: String) -> some View {
+        return Section {
+            Text("Size")
+        } header: { Text(title) }
+    }
+}
+'''
+        page = self._extract(swift)
+        self.assertEqual(["会话内容", "代码", "终端"], [section["title"] for section in page["sections"]])
+        self.assertEqual([
+            "SettingsPage.swift:5", "SettingsPage.swift:6", "SettingsPage.swift:7",
+        ], [section["provenance"] for section in page["sections"]])
+        self.assertEqual(3, page["extraction"]["sectionKeywordsInPage"])
+
+    def test_dynamic_call_site_title_is_not_guessed_or_expanded(self) -> None:
+        swift = '''import SwiftUI
+struct FontSizeSettingsPage: View {
+    var body: some View { List { section(.text, role.title) } }
+    private func section(_ role: NativeFontRole, _ title: String) -> some View {
+        return Section { Text("Size") } header: { Text(title) }
+    }
+}
+'''
+        page = self._extract(swift)
+        self.assertEqual(1, len(page["sections"]))
+        self.assertIsNone(page["sections"][0]["title"])
+        self.assertEqual("title", page["sections"][0]["titleExpression"])
+
+
 SIBLING_SHEET = """\
 import SwiftUI
 

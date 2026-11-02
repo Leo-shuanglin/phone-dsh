@@ -538,6 +538,43 @@ def resolve_kotlin_expr(expr: str, strings: dict, consts: dict | None = None) ->
     return None, True
 
 
+def kotlin_label_variants(expr: str, strings: dict, consts: dict) -> list[str]:
+    """Resolve the literal alternatives of a small Compose label expression.
+
+    Supports only a `when` whose every branch returns one static label, plus an
+    availability ternary whose unavailable branch explicitly says `不可用`. Other
+    expressions remain unresolved; this keeps state-derived wording out of the
+    static action inventory.
+    """
+    value = strip_kotlin_comments(collapse(expr))
+    when = re.fullmatch(r"when\s*\([^{}]*\)\s*\{(.*)\}", value, re.S)
+    if when:
+        body = when.group(1)
+        branches = re.findall(r"->\s*(\"(?:[^\"\\]|\\.)*\"|UiStrings\.[A-Z][A-Z0-9_]*)", body)
+        if len(branches) != body.count("->"):
+            return []
+        out = []
+        for branch in branches:
+            resolved, dynamic = resolve_kotlin_expr(branch, strings, consts)
+            if dynamic or not resolved:
+                return []
+            if resolved not in out:
+                out.append(resolved)
+        return out
+    conditional = re.fullmatch(
+        r"if\s*\((.+)\)\s*(\"(?:[^\"\\]|\\.)*\")\s*else\s*(\"(?:[^\"\\]|\\.)*\")",
+        value, re.S)
+    if conditional:
+        branches = [resolve_kotlin_expr(conditional.group(index), strings, consts)
+                    for index in (2, 3)]
+        if all(not dynamic and label for label, dynamic in branches):
+            # A fallback such as `归档不可用` is a disabled-state explanation, not
+            # the label of the action the user can perform.
+            available = [label for label, _ in branches if "不可用" not in label]
+            return available or [label for label, _ in branches]
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Contract loading and validation.
 # ---------------------------------------------------------------------------
@@ -996,6 +1033,178 @@ def android_sections(text: str, masked: str, strings: dict, consts: dict,
     return titles, unresolved
 
 
+def verified_settings_index_model(text: str, masked: str, strings: dict,
+                                  consts: dict) -> tuple | None:
+    """Read the PR22 Settings index's data model only when its renderer owns it.
+
+    This is deliberately tied to the source's `SettingsIndexSection` /
+    `SettingsIndexEntry` model. A random `SectionLabel(section.title)` is not enough:
+    the screen must call `SettingsIndexList`, the list must construct its own typed
+    sections, and that same list must render each title and entry through the named
+    row components. The returned positions remain at the model call sites so normal
+    conditional/action accounting still applies.
+    """
+    functions = function_spans(masked)
+    page = next((fn for fn in functions if fn["name"] == "SettingsPage"), None)
+    renderer = next((fn for fn in functions if fn["name"] == "SettingsIndexList"), None)
+    if page is None or renderer is None:
+        return None
+
+    # Verify the declared model types, rather than trusting constructor-shaped text.
+    for name, required in (
+        ("SettingsIndexSection", (r"\bval\s+title\s*:\s*String\b",
+                                   r"\bval\s+entries\s*:\s*List\s*<\s*SettingsIndexEntry\s*>")),
+        ("SettingsIndexEntry", (r"\bval\s+title\s*:\s*String\b",)),
+    ):
+        declaration = re.search(rf"\bdata\s+class\s+{name}\s*\(", masked)
+        if declaration is None:
+            return None
+        close = match_paren(masked, declaration.end() - 1)
+        if close < 0 or any(re.search(pattern, masked[declaration.end():close]) is None
+                            for pattern in required):
+            return None
+
+    page_body = masked[page["body_start"]:page["body_end"]]
+    if re.search(r"\bSettingsIndexList\s*\(", page_body) is None:
+        return None
+
+    body_start, body_end = renderer["body_start"], renderer["body_end"]
+    renderer_body = masked[body_start:body_end]
+    list_match = re.search(r"\bval\s+sections\s*=\s*listOf\s*\(", renderer_body)
+    loop_match = re.search(r"\bsections\s*\.\s*forEach\s*\{\s*section\s*->", renderer_body)
+    if list_match is None or loop_match is None:
+        return None
+    loop_open = body_start + renderer_body.find("{", loop_match.start(), loop_match.end())
+    loop_close = match_delim(masked, loop_open, "{", "}")
+    if loop_close < 0:
+        return None
+    loop_body = masked[loop_open + 1:loop_close]
+    if re.search(r"\bSettingsSectionLabel\s*\(\s*section\s*\.\s*title\b", loop_body) is None:
+        return None
+    entry_loop = re.search(r"\bsection\s*\.\s*entries\s*\.\s*forEach(?:Indexed)?\s*\{\s*(?:index\s*,\s*)?entry\s*->", loop_body)
+    if entry_loop is None:
+        return None
+    entry_open = loop_open + 1 + loop_body.find("{", entry_loop.start(), entry_loop.end())
+    entry_close = match_delim(masked, entry_open, "{", "}")
+    if entry_close < 0 or re.search(r"\bSettingsIndexRow\s*\(\s*entry\b",
+                                    masked[entry_open + 1:entry_close]) is None:
+        return None
+
+    list_open = body_start + list_match.end() - 1
+    list_close = match_paren(masked, list_open)
+    if list_close < 0:
+        return None
+
+    titles, title_positions = [], []
+    for match in re.finditer(r"\bSettingsIndexSection\s*\(", masked[list_open + 1:list_close]):
+        pos = list_open + 1 + match.start()
+        if is_declaration(masked, pos):
+            continue
+        open_paren = pos + match.group(0).rfind("(")
+        close = match_paren(masked, open_paren)
+        if close < 0 or close > list_close:
+            continue
+        named, positional = named_args(masked, open_paren, close)
+        span = named.get("title") or (positional[1] if len(positional) > 1 else None)
+        if span is None:
+            continue
+        value, dynamic = resolve_kotlin_expr(text[span[0]:span[1]], strings, consts)
+        if dynamic:
+            continue
+        if value and value.strip():
+            titles.append(value)
+            title_positions.append((value, span[0]))
+
+    actions, action_positions = [], []
+    entry_pattern = re.compile(r"\b(SettingsIndexEntry(?:\.menu)?)\s*\(")
+    for match in entry_pattern.finditer(masked[list_open + 1:list_close]):
+        pos = list_open + 1 + match.start()
+        if is_declaration(masked, pos):
+            continue
+        callee = match.group(1)
+        open_paren = pos + match.group(0).rfind("(")
+        close = match_paren(masked, open_paren)
+        if close < 0 or close > list_close:
+            continue
+        named, positional = named_args(masked, open_paren, close)
+        interactive = callee.endswith(".menu") or any(
+            name in named for name in ("callback", "onToggle", "options"))
+        if not interactive:
+            continue
+        span = named.get("title") or (positional[1] if len(positional) > 1 else None)
+        if span is None:
+            continue
+        value, dynamic = resolve_kotlin_expr(text[span[0]:span[1]], strings, consts)
+        if dynamic:
+            continue
+        if value and value.strip():
+            actions.append(value)
+            action_positions.append((value, span[0]))
+    return titles, title_positions, actions, action_positions
+
+
+def verified_font_size_role_model(text: str, masked: str, strings: dict,
+                                  consts: dict) -> tuple | None:
+    """Resolve FontSizeSettingsPage's role titles through its verified role renderer."""
+    page = next((fn for fn in function_spans(masked)
+                 if fn["name"] == "FontSizeSettingsPage"), None)
+    if page is None:
+        return None
+    declaration = re.search(r"\bdata\s+class\s+FontSizeRole\s*\(", masked)
+    if declaration is None:
+        return None
+    model_end = match_paren(masked, declaration.end() - 1)
+    if model_end < 0 or re.search(r"\bval\s+title\s*:\s*String\b",
+                                  masked[declaration.end():model_end]) is None:
+        return None
+    body_start, body_end = page["body_start"], page["body_end"]
+    body = masked[body_start:body_end]
+    content = re.search(r"\bval\s+content\s*:[^=]+?=\s*\{", body)
+    values = re.search(r"\bval\s+values\s*=\s*listOf\s*\(", body)
+    loop = re.search(r"\bvalues\s*\.\s*forEach\s*\{\s*role\s*->", body)
+    if (content is None or values is None or loop is None
+            or re.search(r"if\s*\(embedded\)\s*content\s*\(\)", body) is None):
+        return None
+    content_open = body_start + body.find("{", content.start(), content.end())
+    content_close = match_delim(masked, content_open, "{", "}")
+    if content_open < 0 or content_close < 0:
+        return None
+    if not (content_open < body_start + values.start() < content_close
+            and content_open < body_start + loop.start() < content_close):
+        return None
+    loop_open = body_start + body.find("{", loop.start(), loop.end())
+    if loop_open < 0:
+        return None
+    loop_close = match_delim(masked, loop_open, "{", "}")
+    if loop_close < 0:
+        return None
+    loop_body = masked[loop_open + 1:loop_close]
+    if re.search(r"\bSettingsSectionLabel\s*\(\s*role\s*\.\s*title\b", loop_body) is None:
+        return None
+    if re.search(r"\bFontSizeStepper\s*\(\s*role\s*=\s*role\b", loop_body) is None:
+        return None
+    list_open = body_start + values.end() - 1
+    list_close = match_paren(masked, list_open)
+    if list_close < 0:
+        return None
+    titles, positions = [], []
+    for match in re.finditer(r"\bFontSizeRole\s*\(", masked[list_open + 1:list_close]):
+        pos = list_open + 1 + match.start()
+        open_paren = pos + match.group(0).rfind("(")
+        close = match_paren(masked, open_paren)
+        if close < 0 or close > list_close:
+            continue
+        named, positional = named_args(masked, open_paren, close)
+        span = named.get("title") or (positional[0] if positional else None)
+        if span is None:
+            continue
+        value, dynamic = resolve_kotlin_expr(text[span[0]:span[1]], strings, consts)
+        if not dynamic and value and value.strip():
+            titles.append(value)
+            positions.append((value, span[0]))
+    return titles, positions
+
+
 
 # ---------------------------------------------------------------------------
 # Compose control idioms (the label is visible in the source).
@@ -1250,9 +1459,12 @@ def button_wrappers(masked: str, spans: list) -> set:
             continue
         body = masked[span["body_body_start"]: span["body_end"]] if "body_body_start" in span \
             else masked[span["body_start"]: span["body_end"]]
+        content_description = bool(re.search(
+            rf"contentDescription\s*=\s*{re.escape(span['params'][0])}\b", body))
         tappable = bool(re.search(
             r"\b(Button|OutlinedButton|TextButton|FilledTonalButton|ElevatedButton|SegmentedButton)\s*\(",
-            body)) or (bool(re.search(r"\b(BasicText|Text)\s*\(", body)) and ".clickable(" in body)
+            body)) or (bool(re.search(r"\b(BasicText|Text)\s*\(", body)) and ".clickable(" in body) \
+            or (content_description and ".clickable(" in body)
         if tappable:
             out.add(span["name"])
     return out
@@ -1415,14 +1627,18 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             ccl = match_paren(masked, cop)
             if ccl < 0:
                 continue
-            c_named, _ = named_args(masked, cop, ccl)
-            span = c_named.get("text")
+            c_named, c_positional = named_args(masked, cop, ccl)
+            span = c_named.get("text") or (c_positional[0] if c_positional else None)
             if span is None:
                 continue
             value, dynamic = resolve_kotlin_expr(text[span[0]:span[1]], strings, consts)
             if value is not None and is_chrome_label(value):
                 continue
             if dynamic:
+                expression = strip_kotlin_comments(collapse(text[span[0]:span[1]]))
+                enc = enclosing_function(function_spans(masked), child.start())
+                if enc and expression in enc["params"]:
+                    continue
                 break
             label = value
             break
@@ -1466,6 +1682,14 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
 
     def record(value, dynamic, idiom: str, pos: int = 0) -> None:
         if dynamic:
+            variants = kotlin_label_variants(dynamic, strings, consts)
+            if variants:
+                for variant in variants:
+                    labels.append(variant)
+                    found.append((variant, pos))
+                    if positions is not None:
+                        positions.append((variant, pos))
+                return
             unresolved.append(strip_kotlin_comments(dynamic)[:DYN_EXPR_MAX])
             if stats is not None:
                 stats[idiom + ".unresolved"] = stats.get(idiom + ".unresolved", 0) + 1
@@ -1488,7 +1712,9 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             continue
         enc = enclosing_function(spans, m.start())
         skip = set(enc["params"]) if enc else set()
-        closure = call["trailing"]
+        # For page-local wrappers such as EntryRow(label, …) { onClick() }, the
+        # trailing closure is the click handler, not visible button content.
+        closure = call["trailing"] if callee in MATERIAL_BUTTONS + CHIP_CONTROLS + ("DropdownMenuItem",) else None
         if closure is None:
             for key in ("content", "label", "text"):
                 if key in call["named"]:
@@ -1508,7 +1734,8 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             # still tappable UI, so it stays (a no-op button is a bug, not a label).
         if closure is not None:
             value, dynamic = text_label_in(text, masked, closure[0], closure[1], strings, consts, skip)
-            if callee == "DropdownMenuItem" and value is None and dynamic:
+            if (callee == "DropdownMenuItem" and value is None and dynamic
+                    and not kotlin_label_variants(dynamic, strings, consts)):
                 continue  # a data row: DropdownMenuItem(text = { Text(expr) }) is not a named action
             # A segmented control often renders only its value; the caption in the
             # same Row/Column is its label (`Text("方向"); SegmentedButton { … }`).
@@ -2053,6 +2280,24 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
     android_labels, unresolved_labels, action_occurrences = android_actions(
         text, masked, strings, consts, wrappers=wrappers, positions=action_positions,
         fold_labels=fold_labels)
+    verified_model = verified_settings_index_model(text, masked, strings, consts)
+    if verified_model is not None:
+        model_titles, model_section_positions, model_labels, model_action_positions = verified_model
+        android_titles.extend(model_titles)
+        section_positions.extend(model_section_positions)
+        # The generic label scan sees the rendered projection `section.title`, which
+        # is dynamic by itself. The verified constructor→renderer path above supplies
+        # the literal titles from the model and makes only that projection resolvable.
+        unresolved_titles = [expr for expr in unresolved_titles if expr != "section.title"]
+        android_labels.extend(model_labels)
+        action_occurrences.extend(model_action_positions)
+        action_positions.extend(model_action_positions)
+    verified_font_roles = verified_font_size_role_model(text, masked, strings, consts)
+    if verified_font_roles is not None:
+        role_titles, role_positions = verified_font_roles
+        android_titles.extend(role_titles)
+        section_positions.extend(role_positions)
+        unresolved_titles = [expr for expr in unresolved_titles if expr != "role.title"]
     android_labels = [label for label in android_labels if not is_chrome_label(label)]
     action_occurrences = [(label, pos) for label, pos in action_occurrences
                           if not is_chrome_label(label)]

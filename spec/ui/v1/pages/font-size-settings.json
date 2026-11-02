@@ -28,12 +28,12 @@
   },
   "sections": [
     {
-      "id": "section-245",
-      "title": null,
+      "id": "会话内容",
+      "title": "会话内容",
       "titleTemplate": null,
       "dynamicTitle": false,
-      "titleExpression": "title",
-      "titleSource": "expression",
+      "titleExpression": null,
+      "titleSource": "literal",
       "condition": null,
       "collection": null,
       "rows": [
@@ -69,14 +69,115 @@
           "extraction": "syntax"
         }
       ],
-      "provenance": "SettingsPage.swift:256",
-      "anchor": "Text(title)",
+      "provenance": "SettingsPage.swift:234",
+      "anchor": "section(.text, NativeText(\"会话内容\", \"Conversation\"))",
       "extraction": "syntax",
-      "criterion": {
-        "kind": "first-clickable-row",
-        "label": "字体（留空使用系统默认）",
-        "provenance": "SettingsPage.swift:250"
-      },
+      "hasHeader": true,
+      "footer": {
+        "text": "未安装字体 %@，将使用系统回退字体",
+        "labelExpr": null,
+        "provenance": "SettingsPage.swift:259",
+        "anchor": "Text(String(format: NativeText(\"未安装字体 %@，将使用系统回退字体\", \"Font %@ is unavailable; sy"
+      }
+    },
+    {
+      "id": "代码",
+      "title": "代码",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "literal",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "custom-246",
+          "label": null,
+          "labelExpr": "Stepper",
+          "kind": "custom",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "SettingsPage.swift:246",
+          "anchor": "Stepper(value: Binding(get: { size }, set: { preferences.setFontSize(role, $0) }",
+          "extraction": "manual",
+          "template": "Stepper"
+        },
+        {
+          "id": "字体-留空使用系统默认",
+          "label": "字体（留空使用系统默认）",
+          "labelExpr": null,
+          "kind": "input",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "SettingsPage.swift:250",
+          "anchor": "TextField(NativeText(\"字体（留空使用系统默认）\", \"Font family (system default)\"), text: Bind",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "SettingsPage.swift:235",
+      "anchor": "section(.code, NativeText(\"代码\", \"Code\"))",
+      "extraction": "syntax",
+      "hasHeader": true,
+      "footer": {
+        "text": "未安装字体 %@，将使用系统回退字体",
+        "labelExpr": null,
+        "provenance": "SettingsPage.swift:259",
+        "anchor": "Text(String(format: NativeText(\"未安装字体 %@，将使用系统回退字体\", \"Font %@ is unavailable; sy"
+      }
+    },
+    {
+      "id": "终端",
+      "title": "终端",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "literal",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "custom-246",
+          "label": null,
+          "labelExpr": "Stepper",
+          "kind": "custom",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "SettingsPage.swift:246",
+          "anchor": "Stepper(value: Binding(get: { size }, set: { preferences.setFontSize(role, $0) }",
+          "extraction": "manual",
+          "template": "Stepper"
+        },
+        {
+          "id": "字体-留空使用系统默认",
+          "label": "字体（留空使用系统默认）",
+          "labelExpr": null,
+          "kind": "input",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "SettingsPage.swift:250",
+          "anchor": "TextField(NativeText(\"字体（留空使用系统默认）\", \"Font family (system default)\"), text: Bind",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "SettingsPage.swift:236",
+      "anchor": "section(.terminal, NativeText(\"终端\", \"Terminal\"))",
+      "extraction": "syntax",
       "hasHeader": true,
       "footer": {
         "text": "未安装字体 %@，将使用系统回退字体",
@@ -95,7 +196,7 @@
       "empty": [],
       "data": [
         {
-          "renders": "untitled section at 256",
+          "renders": "会话内容 | 代码 | 终端",
           "when": null,
           "provenance": "SettingsPage.swift:229",
           "anchor": "private struct FontSizeSettingsPage: View {",
@@ -205,9 +306,9 @@
   "extraction": {
     "tool": "extract_ios_pages.py",
     "mode": "syntax",
-    "sectionKeywordsInPage": 1,
+    "sectionKeywordsInPage": 3,
     "regionsExtracted": 0,
-    "sectionsExtracted": 1,
+    "sectionsExtracted": 3,
     "warnings": []
   }
 }

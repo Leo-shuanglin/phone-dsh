@@ -57,6 +57,26 @@
       "extraction": "syntax"
     },
     {
+      "id": "工作区",
+      "label": "工作区",
+      "labelExpr": null,
+      "kind": "picker",
+      "trigger": "tap",
+      "semantic": "binding:$section",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativeWorkbenchPage.swift:27",
+      "anchor": "Picker(\"工作区\", selection: $section) {",
+      "extraction": "syntax",
+      "items": [
+        "工作区",
+        "文件",
+        "命令"
+      ],
+      "style": "segmented"
+    },
+    {
       "id": "重试",
       "label": "重试",
       "labelExpr": null,

@@ -46,6 +46,7 @@ Exit code 0 on success, 1 when --check finds a stale contract, 2 on usage/I-O er
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 import sys
@@ -820,6 +821,7 @@ class PageExtractor:
                     continue
                 seen.append((kw_pos, section.pop("_content_end")))
                 self.sections.append(section)
+            self.sections = self._expand_titled_section_helpers(self.sections)
             self._scan_page_actions()
             if not self.sections:
                 if self.name in SINGLE_REGION_PAGES:
@@ -947,6 +949,7 @@ class PageExtractor:
             "anchor": None,
             "extraction": "syntax",
             "_content_end": content[1],
+            "_section_pos": kw_pos,
         }
         prov, anchor = source.provenance(title_pos if title_pos is not None else kw_pos)
         section["provenance"], section["anchor"] = prov, anchor
@@ -982,6 +985,64 @@ class PageExtractor:
         if footer:
             section["footer"] = self._footer_text(footer)
         return section
+
+    def _expand_titled_section_helpers(self, sections: list) -> list:
+        """Expand the bounded font-size helper whose Section header is `Text(title)`."""
+        source = self.source
+        masked = source.masked
+        expanded = []
+        for section in sections:
+            section_pos = section.pop("_section_pos", None)
+            helper = next((member for member in self.members.values()
+                           if member["kind"] == "func" and section_pos is not None
+                           and member["body_start"] < section_pos < member["body_end"]), None)
+            if helper is None:
+                expanded.append(section)
+                continue
+            # Only this verified helper signature and header binding are expanded;
+            # other helper-defined Sections keep their existing unresolved contract.
+            if re.search(
+                    r"func\s+section\s*\(\s*_\s*role\s*:\s*NativeFontRole\s*,\s*_\s*title\s*:\s*String\s*\)",
+                    helper["head"]) is None:
+                expanded.append(section)
+                continue
+            helper_body = masked[helper["body_start"]:helper["body_end"]]
+            if re.search(r"header\s*:\s*\{\s*Text\s*\(\s*title\s*\)\s*\}", helper_body) is None:
+                expanded.append(section)
+                continue
+
+            call_sites = []
+            for match in re.finditer(r"\bsection\s*\(", masked[self.body_start:self.body_end]):
+                call_pos = self.body_start + match.start()
+                if helper["body_start"] < call_pos < helper["body_end"] or not self._live(call_pos):
+                    continue
+                call = call_parts(source, call_pos, self._statement_end(call_pos, self.body_end + 1))
+                if call is None or len(call["positional"]) < 2:
+                    continue
+                title, title_pos = first_label(source, *call["positional"][1])
+                if title is not None and title_pos is not None:
+                    call_sites.append((title, title_pos, call_pos))
+            if not call_sites:
+                expanded.append(section)
+                continue
+            self.section_total += len(call_sites) - 1
+
+            for title, title_pos, call_pos in call_sites:
+                resolved = copy.deepcopy(section)
+                resolved["id"] = slug(title)
+                resolved["title"] = title
+                resolved["titleTemplate"] = None
+                resolved["dynamicTitle"] = False
+                resolved["titleExpression"] = None
+                resolved["titleSource"] = "literal"
+                resolved["condition"] = innermost_condition(self.if_scopes, call_pos)
+                resolved["collection"] = enclosing_for_each(self.for_each_scopes, call_pos)
+                resolved.pop("criterion", None)
+                resolved.pop("suppressed", None)
+                resolved.pop("suppressReason", None)
+                resolved["provenance"], resolved["anchor"] = source.provenance(title_pos)
+                expanded.append(resolved)
+        return expanded
 
     def _first_labeled_text(self, closure: tuple) -> tuple:
         """First literal inside a header/footer closure, skipping symbol names."""
@@ -1624,6 +1685,46 @@ class PageExtractor:
                     label_pos = pos + acc.start(1)
             self._add_action(action_of(source, pos, label, label_pos, "menu", "tap", writes=False,
                                        extraction="syntax" if label else "manual"))
+        # A toolbar Picker is page chrome rather than a child reached while walking
+        # the body rows. Limit this pass to ToolbarItem content so ordinary body
+        # Pickers remain the responsibility of the existing row traversal.
+        toolbar_contents = []
+        for m in re.finditer(r"\bToolbarItem(?:Group)?[ \t]*\(", masked[start:end]):
+            pos = start + m.start()
+            if not self._live(pos):
+                continue
+            toolbar_item = call_parts(source, pos, end)
+            if not toolbar_item:
+                continue
+            content = toolbar_item.get("trailing") or toolbar_item.get("named", {}).get("content")
+            if content:
+                toolbar_contents.append((content[0] + 1, content[1]))
+        for content_start, content_end in toolbar_contents:
+            for m in re.finditer(r"\bPicker[ \t]*[({]", masked[content_start:content_end]):
+                pos = content_start + m.start()
+                if not self._live(pos):
+                    continue
+                stmt_end = self._statement_end(pos, content_end)
+                call = call_parts(source, pos, stmt_end)
+                if not call:
+                    continue
+                label, label_pos = (first_label(source, *call["positional"][0])
+                                    if call["positional"] else (None, None))
+                option_spans = [(call["args_start"], call["args_end"])]
+                if call["trailing"]:
+                    option_spans.append((call["trailing"][0] + 1, call["trailing"][1]))
+                options = [unescape(value) for a, b in option_spans
+                           for value, _ in source.literals(a, b)
+                           if unescape(value).strip() and not SYMBOL_LITERAL_RE.match(unescape(value))]
+                binding = source.statement_lines(*call["named"]["selection"]) \
+                    if "selection" in call["named"] else None
+                tail_start = call["trailing"][1] if call["trailing"] else call["end"]
+                tail = source.text[tail_start: tail_start + 120]
+                style = "segmented" if ".segmented" in tail else ("menu" if ".menu" in tail else "default")
+                self._add_action(action_of(source, label_pos if label_pos is not None else pos, label,
+                                           label_pos, "picker", "tap", writes=True, items=options,
+                                           style=style, semantic=f"binding:{binding}" if binding else None,
+                                           extraction="syntax" if label else "manual"))
         seen_presentations = set()
         for m in re.finditer(r"\.(alert|confirmationDialog|sheet|navigationDestination)[ \t]*\(", masked[start:end]):
             pos = start + m.start()

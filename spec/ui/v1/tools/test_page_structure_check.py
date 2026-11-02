@@ -137,6 +137,127 @@ class PositionalClickableLabelTests(unittest.TestCase):
         self.assertEqual({"IMPORT_LABEL": "导入文件"}, check.local_constants(source))
 
 
+SETTINGS_INDEX_MODEL = '''
+private data class SettingsIndexSection(val id: String, val title: String,
+    val entries: List<SettingsIndexEntry>)
+private data class SettingsIndexEntry(val id: String, val title: String,
+    val callback: (() -> Unit)? = null)
+@Composable public fun SettingsPage() { SettingsIndexList() }
+@Composable private fun SettingsIndexList() {
+    val sections = listOf(
+        SettingsIndexSection("general", "General", listOf(
+            SettingsIndexEntry("providers", "Providers", callback = {}),
+        )),
+    )
+    LazyColumn {
+        sections.forEach { section ->
+            item {
+                SettingsSectionLabel(section.title)
+                section.entries.forEachIndexed { index, entry ->
+                    SettingsIndexRow(entry, dividerBelow = false)
+                }
+            }
+        }
+    }
+}
+'''
+
+
+class VerifiedSettingsIndexModelTests(unittest.TestCase):
+    def _read(self, source: str):
+        return check.verified_settings_index_model(
+            source, check.mask_kotlin(source), {}, {})
+
+    def test_extracts_only_titles_and_actions_from_a_verified_rendered_model(self):
+        model = self._read(SETTINGS_INDEX_MODEL)
+        self.assertIsNotNone(model)
+        self.assertEqual(["General"], model[0])
+        self.assertEqual(["Providers"], model[2])
+
+    def test_arbitrary_section_title_projection_is_not_treated_as_a_model(self):
+        unrelated = '''
+@Composable public fun SettingsPage() { SettingsIndexList() }
+@Composable private fun SettingsIndexList() {
+    val sections = listOf(OtherSection("General"))
+    sections.forEach { section -> SettingsSectionLabel(section.title) }
+}
+'''
+        self.assertIsNone(self._read(unrelated))
+
+    def test_model_must_render_its_entries_through_the_owned_row(self):
+        source = SETTINGS_INDEX_MODEL.replace(
+            "SettingsIndexRow(entry, dividerBelow = false)",
+            "Text(entry.title)")
+        self.assertIsNone(self._read(source))
+
+
+class DrawerActionExtractionTests(unittest.TestCase):
+    def test_wrapper_trailing_click_lambda_does_not_hide_its_first_label(self):
+        source = '''
+private fun EntryRow(label: String, action: () -> Unit) {
+    Row(Modifier.clickable(onClick = action)) { Text(label) }
+}
+fun HomeDrawer() { EntryRow("新会话") { create() } }
+'''
+        labels, unresolved, _ = check.android_actions(
+            source, check.mask_kotlin(source), {}, {}, wrappers=frozenset())
+        self.assertEqual(["新会话"], labels)
+        self.assertEqual([], unresolved)
+
+    def test_semantics_labeled_clickable_icon_wrapper_supplies_action_label(self):
+        source = '''
+private fun IconAction(label: String, action: () -> Unit) {
+    Box(Modifier.clickable(onClick = action).semantics { contentDescription = label })
+}
+fun HomeDrawer() { IconAction("新建文件夹") { create() } }
+'''
+        labels, unresolved, _ = check.android_actions(
+            source, check.mask_kotlin(source), {}, {}, wrappers=frozenset())
+        self.assertEqual(["新建文件夹"], labels)
+        self.assertEqual([], unresolved)
+
+    def test_clickable_row_reads_positional_child_text(self):
+        source = 'Row(Modifier.clickable { open() }) { Text("设置") }'
+        labels, _, _ = check.android_actions(source, check.mask_kotlin(source), {}, {})
+        self.assertEqual(["设置"], labels)
+
+    def test_known_when_and_unavailable_label_branches_are_not_unresolved(self):
+        self.assertEqual(["创建", "删除", "保存"], check.kotlin_label_variants(
+            'when (dialog) { "create" -> "创建"; "delete" -> "删除"; else -> "保存" }', {}, {}))
+        self.assertEqual(["归档"], check.kotlin_label_variants(
+            'if (onArchive == null) "归档不可用" else "归档"', {}, {}))
+
+
+FONT_SIZE_ROLE_MODEL = '''
+private data class FontSizeRole(val title: String, val rowId: String)
+@Composable fun FontSizeSettingsPage(embedded: Boolean) {
+    val content: @Composable () -> Unit = {
+        val values = listOf(FontSizeRole("Conversation", "conversation"))
+        values.forEach { role ->
+            SettingsSectionLabel(role.title)
+            FontSizeStepper(role = role)
+        }
+    }
+    if (embedded) content() else SettingsSubPageFrame { content() }
+}
+'''
+
+
+class VerifiedFontSizeRoleModelTests(unittest.TestCase):
+    def _read(self, source: str):
+        return check.verified_font_size_role_model(source, check.mask_kotlin(source), {}, {})
+
+    def test_resolves_roles_only_when_the_page_builds_and_renders_the_role_model(self):
+        model = self._read(FONT_SIZE_ROLE_MODEL)
+        self.assertIsNotNone(model)
+        self.assertEqual(["Conversation"], model[0])
+
+    def test_unrelated_role_title_projection_stays_unresolved(self):
+        source = FONT_SIZE_ROLE_MODEL.replace(
+            "FontSizeStepper(role = role)", "Text(role.title)")
+        self.assertIsNone(self._read(source))
+
+
 class LocalizedLabelResolutionTests(unittest.TestCase):
     def test_known_translation_keeps_chinese_contract_label(self):
         value, dynamic = check.resolve_kotlin_expr(

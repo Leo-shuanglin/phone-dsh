@@ -28,10 +28,10 @@
     "sectionOrder": "declaration order inside the page struct"
   },
   "android": {
-    "screen": "SessionsPage",
-    "file": "android/lib/src/main/kotlin/com/phonedsh/ui/page/SessionsPage.kt",
-    "match": "alias",
-    "note": "the Apple source names the drawer HomeDrawer; Android's session drawer body is still `public fun SessionsPage(` in `ui/page/SessionsPage.kt`. `PdshDrawer` (`ui/nav/PdshDrawer.kt`) is only the overlay/scrim container and does not own these rows, so it is not the screen this contract can judge"
+    "screen": "HomeDrawer",
+    "file": "android/lib/src/main/kotlin/com/phonedsh/ui/nav/HomeDrawer.kt",
+    "match": "composable",
+    "note": "the Android PR22 drawer body is HomeDrawer; PdshDrawer owns only the overlay/scrim container"
   },
   "handRegistered": {
     "reason": "HomeDrawer is not a `*Page` struct, so `extract_ios_pages.py` does not generate a contract for it. PR22 made it the product drawer (`NativeShell.swift:238` `SessionsDrawerPanel` → `HomeDrawer`), which is a real surface with its own session/folder/settings controls, so it must not disappear from the gate.",
