@@ -643,10 +643,17 @@ class HostChannel(
                 throw ChannelLoss.failure(reason, exchange.reqId)
             }
             val head = if (exchange.head.isCompleted) exchange.head.await() else null
-            return HostApiResponse(
-                head = head ?: HostApiHead(status = 0, headers = emptyMap()),
-                body = exchange.drain(),
-            )
+            if (head == null) {
+                // channel.md §3.8: the first API_RES chunk carries the head. An
+                // API_END with no head is a protocol violation; returning a
+                // fabricated status 0 would make the caller believe it has a
+                // response it never received.
+                throw HostApiException(
+                    "invalid_response",
+                    "API_END ${exchange.reqId} arrived before the first API_RES head",
+                )
+            }
+            return HostApiResponse(head = head, body = exchange.drain())
         } catch (failure: Throwable) {
             apiExchanges.remove(exchange.reqId)
             throw failure
