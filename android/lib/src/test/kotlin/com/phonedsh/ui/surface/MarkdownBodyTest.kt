@@ -6,12 +6,35 @@
 // plus the section it appends, and a fenced code block.
 package com.phonedsh.ui.surface
 
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.assertHasNoClickAction
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.phonedsh.ui.theme.LocalUiType
+import com.phonedsh.ui.theme.PdshTheme
+import com.phonedsh.ui.theme.UiType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
 
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34])
 class MarkdownBodyTest {
+    @get:Rule
+    val compose = createComposeRule()
+
     @Test
     fun `a GFM table keeps its header, rows and column alignment`() {
         val blocks = MarkdownParser.parse(
@@ -71,16 +94,13 @@ class MarkdownBodyTest {
         )
         val paragraph = blocks[0] as MarkdownBlock.Paragraph
         assertEquals(listOf(MarkdownInline.Footnote("note")), paragraph.inlines.drop(1))
-        // The definition line is lifted out of the body, not drawn in place.
+        // The definition line is lifted out of the body and appended afterward.
         assertTrue(plainText(paragraph.inlines).contains("正文。"))
         assertFalse(plainText(paragraph.inlines).contains("流式"))
         val heading = blocks[1] as MarkdownBlock.Paragraph
         assertEquals("脚注", plainText(heading.inlines))
         val definition = blocks[2] as MarkdownBlock.Paragraph
-        // iOS' footnote section prints the id only: `:56` hands the definition's
-        // block children to the inline parser, which drops them, and the baseline
-        // shows `[note]` alone. The port matches that output.
-        assertEquals("[note] ", plainText(definition.inlines))
+        assertEquals("[note] 流式与历史恢复使用同一事件投影。", plainText(definition.inlines))
     }
 
     @Test
@@ -100,6 +120,14 @@ class MarkdownBodyTest {
     }
 
     @Test
+    fun `image markdown keeps its alt text without fetching the image`() {
+        val paragraph = MarkdownParser.parse("![架构图](https://example.com/diagram.png)").single()
+            as MarkdownBlock.Paragraph
+        assertEquals(listOf(MarkdownInline.Image("架构图")), paragraph.inlines)
+        assertEquals("架构图", plainText(paragraph.inlines))
+    }
+
+    @Test
     fun `strong, delete and code spans keep their kind`() {
         val paragraph = MarkdownParser.parse("**粗体**、~~删除线~~、`Package.swift`").single()
             as MarkdownBlock.Paragraph
@@ -109,10 +137,26 @@ class MarkdownBodyTest {
     }
 
     @Test
+    fun `soft breaks become spaces and hard breaks remain line breaks`() {
+        val soft = MarkdownParser.parse("first\nsecond").single() as MarkdownBlock.Paragraph
+        assertEquals("first second", plainText(soft.inlines))
+        val hard = MarkdownParser.parse("first  \nsecond").single() as MarkdownBlock.Paragraph
+        assertEquals("first\nsecond", plainText(hard.inlines))
+    }
+
+    @Test
     fun `a task list keeps its checked state`() {
         val list = MarkdownParser.parse("- [x] 完成\n- [ ] 没完成").single() as MarkdownBlock.ListBlock
         assertEquals(false, list.ordered)
         assertEquals(listOf(true, false), list.items.map { it.checked })
+    }
+
+    @Test
+    fun `a nested list stays nested under its parent item`() {
+        val list = MarkdownParser.parse("- parent\n  - child").single() as MarkdownBlock.ListBlock
+        assertEquals(listOf(MarkdownInline.Text("parent")), list.items.single().inlines)
+        val child = list.items.single().children.single() as MarkdownBlock.ListBlock
+        assertEquals(listOf(MarkdownInline.Text("child")), child.items.single().inlines)
     }
 
     @Test
@@ -135,6 +179,112 @@ class MarkdownBodyTest {
         assertEquals("×", mathRuns("\\times").single().text)
     }
 
+    @Test
+    fun `a safe workspace link is routed through the provided callback`() {
+        var opened: String? = null
+        compose.setContent {
+            PdshTheme {
+                MarkdownBody(
+                    markdown = "[Open file](docs/design/PR22.md)",
+                    onOpenFile = { opened = it },
+                )
+            }
+        }
+        compose.onNodeWithText("Open file").performClick()
+        assertEquals("docs/design/PR22.md", opened)
+    }
+
+    @Test
+    fun `native workspace resource URIs preserve their full addresses`() {
+        assertEquals(
+            MarkdownLinkTarget.ResourceUri("file:///dsh/workspace/docs/readme.md"),
+            markdownLinkTarget("file:///dsh/workspace/docs/readme.md"),
+        )
+        assertEquals(
+            MarkdownLinkTarget.ResourceUri("sandbox:docs/file%20name.md"),
+            markdownLinkTarget("sandbox:docs/file%20name.md"),
+        )
+        assertEquals(
+            MarkdownLinkTarget.ResourceUri("dsh-resource://file/session/session-A/dsh/workspace/docs/readme.md"),
+            markdownLinkTarget("dsh-resource://file/session/session-A/dsh/workspace/docs/readme.md"),
+        )
+        assertEquals(null, markdownLinkTarget("file://remote-host/docs/readme.md"))
+        assertEquals(null, markdownLinkTarget("dsh-resource://other/session/turn-1/docs/readme.md"))
+        assertEquals(null, markdownLinkTarget("sandbox:%2e%2e/private.txt"))
+        assertEquals(null, markdownLinkTarget("dsh-resource://file/unknown/turn-1/docs/readme.md"))
+    }
+
+    @Test
+    fun `a session resource link preserves its session through the resource callback`() {
+        val resource = "dsh-resource://file/session/session-A/dsh/workspace/docs/readme.md"
+        var opened: String? = null
+        compose.setContent {
+            PdshTheme {
+                MarkdownBody(
+                    markdown = "[Open file]($resource)",
+                    onOpenResource = { opened = it },
+                )
+            }
+        }
+        compose.onNodeWithText("Open file").performClick()
+        assertEquals(resource, opened)
+    }
+
+    @Test
+    fun `native resource link stays unlinked without a resource callback`() {
+        compose.setContent {
+            PdshTheme {
+                MarkdownBody(
+                    markdown = "[Open file](dsh-resource://file/session/session-A/docs/readme.md)",
+                )
+            }
+        }
+        compose.onNodeWithText("Open file").assertHasNoClickAction()
+    }
+
+    @Test
+    fun `inline code uses the preferred code role plus one point`() {
+        val fontFamily = FontFamily.Serif
+        compose.setContent {
+            PdshTheme {
+                val base = UiType.fromSpec()
+                CompositionLocalProvider(
+                    LocalUiType provides base.copy(
+                        code = base.code.copy(fontSize = 17.sp, fontFamily = fontFamily),
+                    ),
+                ) {
+                    MarkdownInlineText(
+                        inlines = listOf(MarkdownInline.Code("let x = 1")),
+                        style = TextStyle(fontSize = 16.sp),
+                    )
+                }
+            }
+        }
+        val results = mutableListOf<TextLayoutResult>()
+        val node = compose.onNodeWithText("let x = 1").fetchSemanticsNode()
+        node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(results)
+        val codeSpan = requireNotNull(results.singleOrNull()).layoutInput.text.spanStyles.single().item
+        assertEquals(18.sp, codeSpan.fontSize)
+        assertEquals(fontFamily, codeSpan.fontFamily)
+    }
+
+    @Test
+    fun `unsafe markdown URI schemes are not routed`() {
+        assertEquals(null, markdownLinkTarget("javascript:alert(1)"))
+        assertEquals(null, markdownLinkTarget("../../outside.txt"))
+        assertEquals(MarkdownLinkTarget.Uri("https://example.com"), markdownLinkTarget("https://example.com"))
+    }
+
+    @Test
+    fun `workspace resource URI remains inert when no host callback is bound`() {
+        compose.setContent {
+            PdshTheme {
+                MarkdownBody(markdown = "[Open file](file:///dsh/workspace/docs/readme.md)")
+            }
+        }
+        compose.onNodeWithText("Open file").assertHasNoClickAction()
+    }
+
     private fun plainText(inlines: List<MarkdownInline>): String = inlines.joinToString("") { part ->
         when (part) {
             is MarkdownInline.Text -> part.text
@@ -143,6 +293,7 @@ class MarkdownBodyTest {
             is MarkdownInline.Delete -> plainText(part.children)
             is MarkdownInline.Code -> part.code
             is MarkdownInline.Link -> plainText(part.children)
+            is MarkdownInline.Image -> part.alt
             is MarkdownInline.Math -> part.latex
             is MarkdownInline.Footnote -> "[^${part.id}]"
         }

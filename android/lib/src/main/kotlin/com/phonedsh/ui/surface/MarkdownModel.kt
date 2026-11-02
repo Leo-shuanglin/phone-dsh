@@ -19,6 +19,8 @@
 // it, so leaving `<b>` in the paragraph is the faithful behaviour, not a gap.
 package com.phonedsh.ui.surface
 
+import java.net.URI
+
 /** A GFM table column alignment (`NativeMarkdownTableAlignment`). */
 public enum class MarkdownTableAlign {
     /** `:--` — leading. */
@@ -54,6 +56,9 @@ public sealed interface MarkdownInline {
         public val children: List<MarkdownInline>,
     ) : MarkdownInline
 
+    /** Image content is not downloaded; iOS displays its alt text in italics. */
+    public data class Image(public val alt: String) : MarkdownInline
+
     /** `$…$` / `\(…\)` — the TeX source, typeset by the renderer. */
     public data class Math(public val latex: String) : MarkdownInline
 
@@ -69,6 +74,8 @@ public sealed interface MarkdownInline {
 public data class MarkdownListItem(
     public val checked: Boolean?,
     public val inlines: List<MarkdownInline>,
+    /** Nested blocks under this item, preserving the CommonMark/GFM hierarchy. */
+    public val children: List<MarkdownBlock> = emptyList(),
 )
 
 /** One block of an answer (`NativeMarkdownBlock`). */
@@ -132,18 +139,22 @@ public object MarkdownParser {
                 footnotes[match.groupValues[1]] = match.groupValues[2]
             }
         }
-        val blocks = parseBlocks(body).toMutableList()
+        val bodyWithReferences = body.map { line ->
+            footnotes.keys.fold(line) { current, id ->
+                current.replace("[^$id]", "DSHFOOTNOTE${id}END")
+            }
+        }
+        val blocks = parseBlocks(bodyWithReferences).toMutableList()
         if (footnotes.isNotEmpty()) {
             // iOS appends the section after the body (`NativeMarkdownModel.swift:51-59`):
-            // a bold 脚注 line, then one paragraph per definition. The definition
-            // *text* never reaches the screen there: `:56` hands the definition's
-            // block children to the inline parser, which drops them, and the baseline
-            // shows only `[note]`. This copies that output, not the bug's cause.
+            // a bold 脚注 line, then each identifier and its parsed definition.
             blocks.add(MarkdownBlock.Paragraph(listOf(MarkdownInline.Strong(listOf(
                 MarkdownInline.Text(FOOTNOTE_HEADING),
             )))))
-            footnotes.keys.forEach { id ->
-                blocks.add(MarkdownBlock.Paragraph(listOf(MarkdownInline.Text("[$id] "))))
+            footnotes.toSortedMap().forEach { (id, definition) ->
+                blocks.add(MarkdownBlock.Paragraph(
+                    listOf(MarkdownInline.Text("[$id] ")) + inlines(definition),
+                ))
             }
         }
         return blocks
@@ -155,7 +166,15 @@ public object MarkdownParser {
         val paragraph = mutableListOf<String>()
         fun flushParagraph() {
             if (paragraph.isEmpty()) return
-            out.add(MarkdownBlock.Paragraph(inlines(paragraph.joinToString(" "))))
+            val text = buildString {
+                paragraph.forEachIndexed { index, line ->
+                    val trailing = line.length - line.trimEnd(' ', '\t').length
+                    val explicitBreak = line.trimEnd().endsWith('\\')
+                    append(line.trim().trimEnd(' ', '\t').let { if (explicitBreak) it.removeSuffix("\\") else it })
+                    if (index < paragraph.lastIndex) append(if (trailing >= 2 || explicitBreak) '\n' else ' ')
+                }
+            }
+            out.add(MarkdownBlock.Paragraph(inlines(text)))
             paragraph.clear()
         }
 
@@ -274,36 +293,59 @@ public object MarkdownParser {
 
                 BULLET.matches(line) || ORDERED.matches(line) -> {
                     flushParagraph()
+                    val listIndent = leadingIndent(line)
                     val ordered = ORDERED.matches(line)
                     val start = if (ordered) {
                         ORDERED.matchEntire(line)!!.groupValues[1].toIntOrNull() ?: 1
                     } else {
                         1
                     }
-                    val items = mutableListOf<MarkdownListItem>()
+                    val pending = mutableListOf<Pair<MarkdownListItem, MutableList<String>>>()
                     var j = i
-                    while (j < lines.size && (BULLET.matches(lines[j]) || ORDERED.matches(lines[j]))) {
-                        val item = if (ordered) {
-                            ORDERED.matchEntire(lines[j])!!.groupValues[2]
+                    while (j < lines.size) {
+                        val candidate = lines[j]
+                        val candidateIndent = leadingIndent(candidate)
+                        val hasMarker = BULLET.matches(candidate) || ORDERED.matches(candidate)
+                        if (hasMarker && candidateIndent == listIndent) {
+                            val rawItem = if (ordered) {
+                                ORDERED.matchEntire(candidate)?.groupValues?.get(2)
+                            } else {
+                                BULLET.matchEntire(candidate)?.groupValues?.get(1)
+                            } ?: break
+                            var text = rawItem
+                            var checked: Boolean? = null
+                            val task = TASK.matchEntire(rawItem)
+                            if (task != null) {
+                                checked = task.groupValues[1].equals("x", ignoreCase = true)
+                                text = task.groupValues[2]
+                            }
+                            pending.add(MarkdownListItem(checked, inlines(text)) to mutableListOf())
+                            j++
+                        } else if (pending.isNotEmpty() && candidateIndent > listIndent) {
+                            // Strip the parent marker's continuation indent so the
+                            // recursive parser sees the nested list at its own root.
+                            pending.last().second.add(
+                                if (candidate.isBlank()) "" else candidate.drop(minOf(listIndent + 2, candidate.length)),
+                            )
+                            j++
+                        } else if (candidate.isBlank() && pending.isNotEmpty() && j + 1 < lines.size &&
+                            leadingIndent(lines[j + 1]) > listIndent
+                        ) {
+                            pending.last().second.add("")
+                            j++
                         } else {
-                            BULLET.matchEntire(lines[j])!!.groupValues[1]
+                            break
                         }
-                        var text = item
-                        var checked: Boolean? = null
-                        val task = TASK.matchEntire(item)
-                        if (task != null) {
-                            checked = task.groupValues[1].equals("x", ignoreCase = true)
-                            text = task.groupValues[2]
-                        }
-                        items.add(MarkdownListItem(checked, inlines(text)))
-                        j++
+                    }
+                    val items = pending.map { (item, childLines) ->
+                        item.copy(children = parseBlocks(childLines))
                     }
                     out.add(MarkdownBlock.ListBlock(ordered, start, items))
                     i = j
                 }
 
                 else -> {
-                    paragraph.add(trimmed)
+                    paragraph.add(line)
                     i++
                 }
             }
@@ -339,6 +381,8 @@ public object MarkdownParser {
         cell.startsWith(":") -> MarkdownTableAlign.LEFT
         else -> null
     }
+
+    private fun leadingIndent(line: String): Int = line.takeWhile { it == ' ' || it == '\t' }.length
 
     // ------------------------------------------------------------------ inline
 
@@ -388,12 +432,32 @@ public object MarkdownParser {
                     }
                 }
 
-                text.startsWith("[^", i) -> {
-                    val end = text.indexOf(']', i + 2)
-                    if (end > i + 2) {
+                text.startsWith(FOOTNOTE_SENTINEL, i) -> {
+                    val end = text.indexOf(FOOTNOTE_SENTINEL_END, i + FOOTNOTE_SENTINEL.length)
+                    if (end > i) {
                         flush()
-                        out.add(MarkdownInline.Footnote(text.substring(i + 2, end)))
-                        i = end + 1
+                        out.add(
+                            MarkdownInline.Footnote(
+                                text.substring(i + FOOTNOTE_SENTINEL.length, end),
+                            ),
+                        )
+                        i = end + FOOTNOTE_SENTINEL_END.length
+                    } else {
+                        buffer.append(text[i++])
+                    }
+                }
+
+                text.startsWith("![", i) -> {
+                    val label = text.indexOf(']', i + 2)
+                    if (label > i && label + 1 < text.length && text[label + 1] == '(') {
+                        val close = text.indexOf(')', label + 2)
+                        if (close > label) {
+                            flush()
+                            out.add(MarkdownInline.Image(text.substring(i + 2, label)))
+                            i = close + 1
+                        } else {
+                            buffer.append(text[i++])
+                        }
                     } else {
                         buffer.append(text[i++])
                     }
@@ -465,6 +529,8 @@ public object MarkdownParser {
 
     private const val FENCE: String = "```"
     private const val FOOTNOTE_HEADING: String = "脚注"
+    private const val FOOTNOTE_SENTINEL: String = "DSHFOOTNOTE"
+    private const val FOOTNOTE_SENTINEL_END: String = "END"
 
     private val FOOTNOTE_DEFINITION = Regex("""^\[\^([^\]]+)\]:\s*(.*)$""")
     private val DELIMITER_CELL = Regex("""^:?-{1,}:?$""")
@@ -473,4 +539,62 @@ public object MarkdownParser {
     private val BULLET = Regex("""^\s*[-*+]\s+(.*)$""")
     private val ORDERED = Regex("""^\s*(\d{1,9})[.)]\s+(.*)$""")
     private val TASK = Regex("""^\[([ xX])]\s+(.*)$""")
+}
+
+/**
+ * Routes external links, app-resolved resource URIs, and safe relative workspace
+ * paths without converting native resource schemes into guessed local paths.
+ */
+internal fun markdownLinkTarget(destination: String): MarkdownLinkTarget? {
+    val trimmed = destination.trim()
+    if (trimmed.isEmpty() || trimmed.any(Char::isISOControl)) return null
+    val uri = runCatching { URI(trimmed) }.getOrNull() ?: return null
+    val scheme = uri.scheme?.lowercase()
+    if (scheme != null) {
+        if (scheme in EXTERNAL_MARKDOWN_SCHEMES) return MarkdownLinkTarget.Uri(trimmed)
+        if (scheme !in WORKSPACE_MARKDOWN_SCHEMES) return null
+        if (!isSafeWorkspaceUri(uri, scheme)) return null
+        return MarkdownLinkTarget.ResourceUri(trimmed)
+    }
+    if (trimmed.startsWith('/') || trimmed.startsWith('\\') || ':' in trimmed) return null
+    val path = trimmed.replace('\\', '/')
+    if (path.split('/').any { it == ".." || it == "." || it.isEmpty() }) return null
+    return MarkdownLinkTarget.WorkspacePath(path)
+}
+
+internal sealed interface MarkdownLinkTarget {
+    public data class Uri(public val value: String) : MarkdownLinkTarget
+    public data class WorkspacePath(public val value: String) : MarkdownLinkTarget
+    /** A native resource address that only the host can resolve in the right scope. */
+    public data class ResourceUri(public val value: String) : MarkdownLinkTarget
+}
+
+private val EXTERNAL_MARKDOWN_SCHEMES = setOf("http", "https", "mailto")
+private val WORKSPACE_MARKDOWN_SCHEMES = setOf("file", "sandbox", "dsh-resource")
+
+/** Validates native resource URI structure but preserves its complete identity. */
+private fun isSafeWorkspaceUri(uri: URI, scheme: String): Boolean {
+    if (uri.rawQuery != null || uri.rawFragment != null) return false
+    val path = when (scheme) {
+        "file", "sandbox" -> {
+            if (!uri.rawAuthority.isNullOrEmpty()) return false
+            if (scheme == "sandbox" && uri.isOpaque) uri.schemeSpecificPart else uri.path.orEmpty()
+        }
+        "dsh-resource" -> {
+            if (uri.host?.lowercase() != "file") return false
+            val segments = uri.path.orEmpty().split('/').filter(String::isNotEmpty)
+            val tail = when (segments.firstOrNull()) {
+                "session" -> if (segments.size >= 3) segments.drop(2) else return false
+                "absolute" -> if (segments.size >= 2) segments.drop(1) else return false
+                else -> return false
+            }
+            val joined = tail.joinToString("/")
+            if (joined.isEmpty() || joined == "dsh/workspace") return false
+            if (joined.startsWith("dsh/") && !joined.startsWith("dsh/workspace/")) return false
+            uri.path.orEmpty()
+        }
+        else -> return false
+    }
+    val components = path.split('/').filter(String::isNotEmpty)
+    return components.isNotEmpty() && components.none { it == "." || it == ".." }
 }

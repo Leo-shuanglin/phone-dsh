@@ -86,6 +86,21 @@ class ChangedFilesCardSurfaceTest {
     }
 
     @Test
+    fun `a later successful change for one path replaces the earlier row`() {
+        val merged = mergeChangedFiles(
+            listOf(
+                ChatFileChange("a.md", "first display", 1, 2),
+                ChatFileChange("b.md", "second", 2, 3),
+                ChatFileChange("a.md", "latest display", 7, 8),
+            ),
+        )
+        assertEquals(listOf("a.md", "b.md"), merged.map { it.path })
+        assertEquals("latest display", merged.first().display)
+        assertEquals(7, merged.first().added)
+        assertEquals(8, merged.first().deleted)
+    }
+
+    @Test
     fun `an empty change list draws nothing`() {
         compose.setContent {
             PdshTheme { ChangedFilesCard(emptyList()) }

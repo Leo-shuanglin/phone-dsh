@@ -2,19 +2,15 @@
 // SPDX-License-Identifier: MIT
 //
 // Spec: `spec/ui/v1/README.md` §4 "气泡" + `tokens.json`
-// `signatureSurfaces.bubble`. Values come from the theme only; the token list
-// below is the exact set this surface is allowed to read and is asserted
-// against `tokens.json` by `TokenReferenceTest`.
+// `BubbleTokens.refs` is the source inventory of values this component reads.
 //
-// The user bubble's text insets are 16 h / 10 v (`ChatPage.swift:3738-3739`,
-// PR13) and are read from `geometry.bubblePaddingH/V` — the pair this surface
+// The user bubble's text insets are 16 h / 12 v (`ChatPage.swift:3902-3903`,
+// PR22) and are read from `geometry.bubblePaddingH/V` — the pair this surface
 // declares in `signatureSurfaces.bubble.tokens`. The queue label's 6 pt gap is
 // its own token, `geometry.bubbleBadgeGap` (`ChatPage.swift:891`). Surface
 // ownership is what keeps both off `PageGeometryTokenTest`'s "used by two pages"
-// rule (no page file reads the bubble). The old single scalar
-// `geometry.bubblePadding: 12` no longer draws anything in this surface: it stays
-// declared only as the surface-owned home of the 12 pt inset
-// `NativeDeviceSessionPage` reads, so that page does not become an orphan.
+// rule (no page file reads the bubble). The old scalar `bubblePadding` was a
+// misnamed device-session error inset; that page now reads `deviceSessionErrorInset`.
 //
 // The surface is two pieces: `ChatBubble` draws the bubble, `BubbleBadge` draws
 // the queue label a user row puts under it (spec §3 "行下标签"). The row owns
@@ -26,13 +22,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import com.phonedsh.ui.ChatMetrics
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
@@ -41,7 +41,7 @@ import com.phonedsh.ui.theme.generated.UiTokenNames
 
 /** Who spoke. The assistant answer carries no bubble chrome (spec §4 note). */
 public enum class BubbleRole {
-    /** Own message: `colors.selector` fill + `radius.bubble`. */
+    /** Own message: HomeSpec userBubble fill + the 24pt asymmetric shape. */
     USER,
 
     /** Assistant answer: text on the platform background, no fill, no radius. */
@@ -49,63 +49,52 @@ public enum class BubbleRole {
 }
 
 /**
- * The token inventory of this surface; a subset of
- * `signatureSurfaces.bubble.tokens` in `spec/ui/v1/tokens.json`.
+ * Canonical tokens read by the bubble and its queue badge.
+ * `spacing.paragraphGap` stays row-owned by the transcript; it is not claimed
+ * here merely to satisfy the surface-level inventory check.
  */
 public object BubbleTokens {
     public val refs: List<String> = listOf(
-        UiTokenNames.COLORS_SELECTOR,
         UiTokenNames.COLORS_USER_BUBBLE,
-        UiTokenNames.COLORS_PRIMARY,
-        UiTokenNames.COLORS_SECONDARY,
+        UiTokenNames.COLORS_TEXT_PRIMARY,
+        UiTokenNames.COLORS_TEXT_SECONDARY,
         UiTokenNames.TYPOGRAPHY_BODY,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
         UiTokenNames.RADIUS_BUBBLE,
-        // Kept in the inventory (surface-owned) even though this surface no longer
-        // draws it: `NativeDeviceSessionPage` is the only reader left (12 pt inset),
-        // and a page-level `bubblePadding` would be a one-page orphan.
-        UiTokenNames.GEOMETRY_BUBBLE_PADDING,
+        UiTokenNames.GEOMETRY_CONTENT_INSET,
         UiTokenNames.GEOMETRY_BUBBLE_PADDING_H,
         UiTokenNames.GEOMETRY_BUBBLE_PADDING_V,
+        UiTokenNames.GEOMETRY_BUBBLE_MAX_WIDTH_RATIO,
         UiTokenNames.GEOMETRY_BUBBLE_BADGE_GAP,
-        UiTokenNames.GEOMETRY_BUBBLE_LINE_SPACING,
-        UiTokenNames.GEOMETRY_BUBBLE_MAX_WIDTH,
     )
 }
 
-/**
- * The bubble body style: `typography.body` plus `geometry.bubbleLineSpacing`.
- *
- * The extra spacing is a fixed page-layer length, so it is converted to `sp`
- * *through* the current font scale: the text grows with the system scale while
- * the gap between lines keeps its dp size (the token is `scalesWith: null`).
- */
+/** Uses the provider's complete preferred text role, including its line box. */
 @Composable
 public fun bubbleBodyStyle(): TextStyle {
     val type: UiType = LocalUiType.current
     val tokens = LocalUiTokens.current
-    val fontSize = type.body.fontSize
-    if (!fontSize.isSp) return type.body
-    val fontScale = LocalDensity.current.fontScale
-    val extraSp = tokens.geometry.bubbleLineSpacing.value / fontScale
-    return type.body.copy(lineHeight = fontSize.value.plus(extraSp).sp)
+    return type.homeBody.copy(color = tokens.colors.textPrimary)
 }
 
 /**
- * The queue-label style: `typography.secondary` + `colors.secondary` (spec §3
- * "行下标签"; iOS `queueLine` is system 13 pt + `inkSecondary`). The values come
+ * The queue-label style: `typography.secondary` + HomeSpec textSecondary (spec §3
+ * "行下标签"; iOS `queueLine` is system 13 pt + `ChatPage.inkSecondary`). The values come
  * from the theme, never from this file.
  */
 @Composable
 internal fun bubbleBadgeStyle(): TextStyle {
     val type: UiType = LocalUiType.current
     val tokens = LocalUiTokens.current
-    return type.secondary.copy(color = tokens.colors.secondary)
+    return type.secondary.copy(
+        color = tokens.colors.textSecondary,
+        lineHeight = TextUnit.Unspecified,
+    )
 }
 
 /**
  * The queue label of a user row: the row's badge text in `typography.secondary`
- * + `colors.secondary`, 6 pt under the bubble (spec §3 "行下标签").
+ * + HomeSpec.textSecondary, 6 pt under the bubble (spec §3 "行下标签").
  *
  * It is a separate piece on purpose: the chat row places the bubble at its
  * trailing edge and this label at its leading edge, matching the iOS
@@ -144,9 +133,12 @@ public fun ChatBubble(
     role: BubbleRole,
     text: String,
     modifier: Modifier = Modifier,
+    containerWidth: Dp? = null,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
+    val windowWidth = LocalConfiguration.current.screenWidthDp.dp
+    val actualContainerWidth = containerWidth ?: windowWidth
     val common = modifier
         .testTag(UiTags.BUBBLE)
         // One utterance per message: the role and the body are read together.
@@ -155,38 +147,33 @@ public fun ChatBubble(
     when (role) {
         BubbleRole.USER -> BasicText(
             text = text,
-            // `bubbleMaxWidth` is the *bubble's* cap; the assistant answer is a text
-            // column and takes the page's full width (ios-chat-default.png: it starts
-            // at x 16.7 and runs to the trailing page margin).
             modifier = common
-                .widthIn(max = tokens.geometry.bubbleMaxWidth)
-                // iOS draws the bubble in `NativeChatTheme.bubble`
-                // (`NativeParityTokens.userBubble`, #EDF3FE), not in the selector
-                // grey; `ios-chat-assistant.png` samples the fill at #EDF3FE.
+                .widthIn(
+                    max = ChatMetrics.userBubbleMaxWidth(
+                        containerWidth = actualContainerWidth,
+                        contentInset = HomeMetrics.contentInset,
+                    ),
+                )
                 .background(
                     color = tokens.colors.userBubble,
-                    shape = RoundedCornerShape(tokens.radius.bubble),
+                    shape = RoundedCornerShape(
+                        topStart = tokens.radius.bubble,
+                        topEnd = HomeMetrics.BUBBLE_TOP_TRAILING_RADIUS_PT.dp,
+                        bottomEnd = tokens.radius.bubble,
+                        bottomStart = tokens.radius.bubble,
+                    ),
                 )
-                // iOS PR13's pair: 16 horizontal / 10 vertical
-                // (`ChatPage.swift:3738-3739`). Both are read from this surface's
-                // own tokens (`bubblePaddingH/V`), so no `ChatMetrics` bridge and no
-                // documented exception to "theme only" remains.
                 .padding(
                     horizontal = tokens.geometry.bubblePaddingH,
                     vertical = tokens.geometry.bubblePaddingV,
                 ),
-            style = bubbleBodyStyle().copy(color = tokens.colors.primary),
+            style = bubbleBodyStyle(),
         )
 
         BubbleRole.ASSISTANT -> BasicText(
             text = text,
-            // The assistant answer has no bubble chrome and, per the surface note
-            // ("助手回答无气泡底"), no bubble padding and no bubble line spacing: the
-            // measured baseline starts its first glyph at x 16.7 (the page margin the
-            // row already applies) and its line pitch is 16.7 pt, i.e.
-            // `typography.body`'s own line height.
             modifier = common,
-            style = type.body.copy(color = tokens.colors.primary),
+            style = type.homeBody.copy(color = tokens.colors.textPrimary),
         )
     }
 }

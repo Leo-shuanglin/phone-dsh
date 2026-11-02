@@ -11,12 +11,11 @@
 //   chrome        one card, radius 12, 0.5 pt border, 2 pt vertical outer inset
 //   header strip  34 pt tall, fill `#F5F6F7`, language + wrap toggle + copy
 //   copy          min 44 x 28, 13 pt glyph, 11 pt text, `已复制` for 1 s
-//   body          fill `#F9FAFB`, mono 14 pt, 5 pt line spacing (20.7 pt pitch)
+//   body          fill `#F9FAFB`, mono 13 pt, 5 pt line spacing (20.7 pt pitch)
 //   long block    > 24 lines or > 2400 chars: max 300 pt, `展开全部 N 行` tail
 //
-// Every value above comes from `spec/ui/v1/tokens.json`; the two colour token
-// values were corrected to `NativeParityTokens.swift:35-36` in L80 (the old
-// `#F6F6F8` / `#E9E9ED` matched neither the source nor any iOS baseline PNG).
+// Theme values come from `spec/ui/v1/tokens.json`; the source font and collapse cap
+// remain owner-specific ChatMetrics with Components/NativeCodeHighlighter provenance.
 package com.phonedsh.ui.surface
 
 import androidx.compose.foundation.background
@@ -51,10 +50,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.ChatMetrics
+import com.phonedsh.ui.icon.PdshIcon
+import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import kotlinx.coroutines.delay
@@ -109,13 +111,13 @@ public fun CodeBlock(
                 .fillMaxWidth()
                 .height(tokens.spacing.codeHeaderHeight)
                 .background(tokens.colors.codeBanner, headerShape)
-                .padding(horizontal = tokens.geometry.toolCardInset),
+                .padding(horizontal = ChatMetrics.CODE_BLOCK_HEADER_INSET_H_PT.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+            horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CODE_BLOCK_HEADER_GAP_PT.dp),
         ) {
             BasicText(
                 text = language,
-                style = type.codeLabel.copy(color = tokens.colors.secondary),
+                style = type.codeAction.copy(color = tokens.colors.secondary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
@@ -125,7 +127,7 @@ public fun CodeBlock(
             // 28 x 28, plain style.
             Box(
                 modifier = Modifier
-                    .size(tokens.spacing.codeWrapButton)
+                    .size(ChatMetrics.CODE_BLOCK_CONTROL_SIZE_PT.dp)
                     .clickable(role = Role.Button) { wrapped = !wrapped }
                     .semantics {
                         contentDescription = if (wrapped) {
@@ -137,9 +139,12 @@ public fun CodeBlock(
                     .testTag(CODE_WRAP_TAG),
                 contentAlignment = Alignment.Center,
             ) {
-                BasicText(
-                    text = if (wrapped) WRAP_GLYPH else UNWRAP_GLYPH,
-                    style = type.codeAction.copy(color = tokens.colors.secondary),
+                PdshIconView(
+                    icon = if (wrapped) PdshIcon.TEXT_ALIGN_LEFT else PdshIcon.ARROW_LEFT_RIGHT,
+                    size = ChatMetrics.CODE_BLOCK_WRAP_ICON_SIZE_PT.dp,
+                    tint = tokens.colors.secondary,
+                    contentDescription = null,
+                    modifier = Modifier.testTag(CODE_WRAP_ICON_TAG),
                 )
             }
             // `Components.swift:177-192`: icon 13 + 11 pt label, min 44 x 28.
@@ -167,9 +172,11 @@ public fun CodeBlock(
                     Alignment.CenterHorizontally,
                 ),
             ) {
-                BasicText(
-                    text = if (copied) CHECK_GLYPH else COPY_GLYPH,
-                    style = type.codeAction.copy(color = tokens.colors.secondary),
+                PdshIconView(
+                    icon = if (copied) PdshIcon.CHECK else PdshIcon.COPY,
+                    size = ChatMetrics.CODE_BLOCK_COPY_ICON_SIZE_PT.dp,
+                    tint = tokens.colors.secondary,
+                    contentDescription = null,
                 )
                 BasicText(
                     text = if (copied) UiStrings.MESSAGE_COPIED else UiStrings.MESSAGE_COPY,
@@ -193,15 +200,11 @@ public fun CodeBlock(
                 ),
             )
         }
-        // `NativeChatPreferences`: code text defaults to 14 pt; `Components.swift:201`
-        // adds 5 pt line spacing, and ios-code-block.png measures a 20.3-21.3 pt line
-        // pitch. Compose's line height is the whole line box (not an extra spacing),
-        // so it is the 15 pt subheadline box + the 5 pt spacing = 20; using the code
-        // font size itself would produce a 19 pt pitch and drift 6 pt by line 5.
-        val codeSize = type.controlBody.fontSize
-        val codeStyle = type.controlBody.copy(
-            fontFamily = FontFamily.Monospace,
-            fontSize = codeSize,
+        // `NativeCodeHighlighter.swift:18` sets this surface to 13pt mono even
+        // though the user code-preference role defaults to 14pt. Components.swift:201
+        // adds 5pt; the iOS capture measures a 20-21pt pitch.
+        val codeStyle = type.code.copy(
+            fontSize = ChatMetrics.CODE_BLOCK_SOURCE_FONT_SIZE_PT.sp,
             lineHeight = (type.subheadline.fontSize.value + tokens.spacing.codeLineSpacing.value).sp,
             color = tokens.colors.secondary,
         )
@@ -211,21 +214,16 @@ public fun CodeBlock(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                // `Components.swift:207`: a long block is capped at 300 pt until
-                // expanded. No 300 pt geometry token exists, and a one-surface
-                // geometry token would be an orphan under `PageGeometryTokenTest`;
-                // the declared terminal max (224) is the nearest owned length.
-                // `unverified geometry` for that borrow.
+                // `Components.swift:207`: the code block owns a separate 300 pt cap;
+                // it is not the 224 pt cap on a terminal output card.
                 .then(
                     if (collapsible) {
-                        Modifier.heightIn(max = tokens.geometry.terminalCardMaxHeight)
+                        Modifier.heightIn(max = ChatMetrics.CODE_BLOCK_COLLAPSED_MAX_HEIGHT_PT.dp)
                     } else {
                         Modifier
                     },
                 )
-                .then(
-                    if (collapsible) Modifier.verticalScroll(verticalScroll) else Modifier,
-                )
+                .verticalScroll(verticalScroll)
                 .then(
                     if (!wrapped) Modifier.horizontalScroll(horizontalScroll) else Modifier,
                 ),
@@ -234,7 +232,7 @@ public fun CodeBlock(
                 text = highlighted,
                 style = codeStyle,
                 softWrap = wrapped,
-                modifier = Modifier.padding(tokens.geometry.toolCardInset),
+                modifier = Modifier.padding(ChatMetrics.CODE_BLOCK_PADDING_PT.dp),
             )
         }
         if (isLong) {
@@ -274,19 +272,9 @@ public const val CODE_WRAP_TAG: String = "pdsh.surface.code-block.wrap"
 
 /** The expand/collapse tail's stable tag. */
 public const val CODE_EXPAND_TAG: String = "pdsh.surface.code-block.expand"
+/** Artwork size inside the separate 28 pt wrap control. */
+internal const val CODE_WRAP_ICON_TAG: String = "pdsh.surface.code-block.wrap-icon"
 
 /** `Components.swift:156-158`: long is > 24 lines or > 2400 characters. */
 private const val LONG_LINE_COUNT: Int = 24
 private const val LONG_CHAR_COUNT: Int = 2400
-
-/** The copy mark; the iOS icon set is an asset catalog, so Android draws a glyph. */
-private const val COPY_GLYPH: String = "⧉"
-
-/** The copied-state check mark (iOS `check`). */
-private const val CHECK_GLYPH: String = "✓"
-
-/** The wrapped-state glyph (iOS `text.alignleft`). */
-private const val WRAP_GLYPH: String = "≡"
-
-/** The unwrapped-state glyph (iOS `arrow.left.and.right`). */
-private const val UNWRAP_GLYPH: String = "↔"

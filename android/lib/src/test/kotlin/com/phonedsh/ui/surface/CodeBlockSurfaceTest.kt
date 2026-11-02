@@ -16,6 +16,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.PdshTheme
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -52,6 +53,10 @@ class CodeBlockSurfaceTest {
         compose.mainClock.advanceTimeByFrame()
         compose.onNodeWithText(UiStrings.MESSAGE_COPIED).assertIsDisplayed()
         compose.onNodeWithContentDescription(UiStrings.MESSAGE_COPIED).assertExists()
+        compose.mainClock.advanceTimeBy(1_000L)
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText(UiStrings.MESSAGE_COPY).assertIsDisplayed()
+        compose.onNodeWithContentDescription(UiStrings.CODE_COPY_ACTION).assertExists()
     }
 
     @Test

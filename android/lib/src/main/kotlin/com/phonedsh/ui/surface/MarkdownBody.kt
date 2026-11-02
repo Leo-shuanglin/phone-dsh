@@ -7,10 +7,9 @@
 // What iOS actually draws, and what this file therefore draws:
 //
 //   * blocks are a `VStack(spacing: 20)` (`NativeMarkdownBody.swift:27` +
-//     `NativeChatTheme.messageParagraphSpacing`, `NativeChatTheme.swift:55`), so the
+//     `NativeChatTheme.messageParagraphSpacing`, `NativeChatTheme.swift:49`), so the
 //     gap between two blocks is 20 pt, not the 5 pt a prose/code split used to leave;
-//   * the body line pitch is 24 pt: `.lineSpacing(messageLineSpacing)` at `:33`
-//     plus the 17 pt body font is `NativeParityTokens.bodyLineHeight = 24`;
+//   * the PR22 message body is 16/24 from `HomeSpec.swift:47-48`;
 //   * a table is a real table (`NativeMarkdownTable`, `:132-199`): header row in the
 //     selector fill, one hairline under every cell, GFM column alignment;
 //   * math is typeset, not echoed (`:108-111` display, `:285-290` inline). The
@@ -26,13 +25,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -42,8 +44,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.LinkInteractionListener
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -53,6 +59,9 @@ import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.phonedsh.ui.ChatMetrics
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.UiTokens
@@ -76,9 +85,16 @@ internal const val MARKDOWN_MATH_TAG: String = "pdsh.surface.markdown.math"
 public fun MarkdownBody(
     markdown: String,
     modifier: Modifier = Modifier,
+    onOpenFile: ((String) -> Unit)? = null,
+    onOpenResource: ((String) -> Unit)? = null,
 ) {
     val blocks = remember(markdown) { MarkdownParser.parse(markdown) }
-    MarkdownBlocks(blocks = blocks, modifier = modifier)
+    MarkdownBlocks(
+        blocks = blocks,
+        modifier = modifier,
+        onOpenFile = onOpenFile,
+        onOpenResource = onOpenResource,
+    )
 }
 
 /**
@@ -89,33 +105,39 @@ public fun MarkdownBody(
 internal fun MarkdownBlocks(
     blocks: List<MarkdownBlock>,
     modifier: Modifier = Modifier,
+    onOpenFile: ((String) -> Unit)? = null,
+    onOpenResource: ((String) -> Unit)? = null,
 ) {
-    val tokens = LocalUiTokens.current
     Column(
         modifier = modifier.fillMaxWidth().testTag(MARKDOWN_BODY_TAG),
-        // iOS `NativeChatTheme.messageParagraphSpacing` = 20 (`NativeMarkdownBody.swift:27`).
-        // unverified geometry: the 20 pt stat-pill floor is the only 20 pt token;
-        // tokens.json has no markdown block-spacing token.
-        verticalArrangement = Arrangement.spacedBy(tokens.geometry.statPillMinHeight),
+        verticalArrangement = Arrangement.spacedBy(ChatMetrics.MARKDOWN_BLOCK_SPACING_PT.dp),
     ) {
-        blocks.forEach { block -> MarkdownBlockView(block) }
+        blocks.forEach { block -> MarkdownBlockView(block, onOpenFile, onOpenResource) }
     }
 }
 
 /** One block, dispatched exactly as `NativeMarkdownBlockView` dispatches (`:51-118`). */
 @Composable
-private fun MarkdownBlockView(block: MarkdownBlock) {
+private fun MarkdownBlockView(
+    block: MarkdownBlock,
+    onOpenFile: ((String) -> Unit)?,
+    onOpenResource: ((String) -> Unit)?,
+) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     when (block) {
         is MarkdownBlock.Paragraph -> MarkdownInlineText(
             inlines = block.inlines,
             style = markdownBodyStyle(),
+            onOpenFile = onOpenFile,
+            onOpenResource = onOpenResource,
         )
 
         is MarkdownBlock.Heading -> MarkdownInlineText(
             inlines = block.inlines,
             style = headingStyle(block.level),
+            onOpenFile = onOpenFile,
+            onOpenResource = onOpenResource,
         )
 
         is MarkdownBlock.Code -> CodeBlock(language = block.language, body = block.body)
@@ -126,28 +148,48 @@ private fun MarkdownBlockView(block: MarkdownBlock) {
             header = block.header,
             rows = block.rows,
             alignments = block.alignments,
+            onOpenFile = onOpenFile,
+            onOpenResource = onOpenResource,
         )
 
         is MarkdownBlock.ListBlock -> Column(
-            modifier = Modifier.fillMaxWidth().padding(start = tokens.spacing.codeToolbar),
-            verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
+            modifier = Modifier.fillMaxWidth().padding(start = ChatMetrics.MARKDOWN_LIST_INDENT_PT.dp),
+            verticalArrangement = Arrangement.spacedBy(ChatMetrics.MESSAGE_LIST_SPACING_PT.dp),
         ) {
             block.items.forEachIndexed { index, item ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
-                ) {
-                    val marker = when {
-                        item.checked == true -> MARKER_CHECKED
-                        item.checked == false -> MARKER_UNCHECKED
-                        block.ordered -> "${block.start + index}."
-                        else -> MARKER_BULLET
+                Column(verticalArrangement = Arrangement.spacedBy(ChatMetrics.MESSAGE_LIST_SPACING_PT.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(ChatMetrics.MESSAGE_LIST_SPACING_PT.dp),
+                    ) {
+                        val marker = when {
+                            item.checked == true -> MARKER_CHECKED
+                            item.checked == false -> MARKER_UNCHECKED
+                            block.ordered -> "${block.start + index}."
+                            else -> MARKER_BULLET
+                        }
+                        BasicText(
+                            text = marker,
+                        style = type.homeBody.copy(color = tokens.colors.secondary),
+                            modifier = Modifier
+                                .widthIn(
+                                    min = if (block.ordered) {
+                                        ChatMetrics.MARKDOWN_ORDERED_MARKER_MIN_WIDTH_PT.dp
+                                    } else {
+                                        ChatMetrics.MARKDOWN_BULLET_MARKER_MIN_WIDTH_PT.dp
+                                    },
+                                )
+                                .wrapContentWidth(androidx.compose.ui.Alignment.End)
+                                .padding(top = ChatMetrics.MARKDOWN_MARKER_TOP_INSET_PT.dp),
+                        )
+                        MarkdownInlineText(
+                            inlines = item.inlines,
+                            style = markdownBodyStyle(),
+                            onOpenFile = onOpenFile,
+                            onOpenResource = onOpenResource,
+                        )
                     }
-                    BasicText(
-                        text = marker,
-                        style = type.body.copy(color = tokens.colors.secondary),
-                    )
-                    MarkdownInlineText(inlines = item.inlines, style = markdownBodyStyle())
+                    item.children.forEach { child -> MarkdownBlockView(child, onOpenFile, onOpenResource) }
                 }
             }
         }
@@ -159,53 +201,69 @@ private fun MarkdownBlockView(block: MarkdownBlock) {
             modifier = Modifier
                 .fillMaxWidth()
                 .drawBehind {
-                    val width = tokens.geometry.summaryDotDiameter.toPx()
+                    val width = ChatMetrics.MARKDOWN_QUOTE_BAR_WIDTH_PT.dp.toPx()
                     drawRect(
                         color = tokens.colors.caption,
                         size = Size(width, size.height),
                         topLeft = Offset.Zero,
                     )
                 }
-                .padding(start = tokens.spacing.cardInset),
-            verticalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
+                .padding(start = ChatMetrics.MARKDOWN_QUOTE_INSET_PT.dp),
+            verticalArrangement = Arrangement.spacedBy(ChatMetrics.MARKDOWN_QUOTE_CHILD_GAP_PT.dp),
         ) {
-            block.blocks.forEach { child -> MarkdownBlockView(child) }
+            block.blocks.forEach { child -> MarkdownBlockView(child, onOpenFile, onOpenResource) }
         }
 
         MarkdownBlock.Rule -> Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = tokens.spacing.codeToolbar)
-                .height(tokens.stroke.hairline)
+                .padding(vertical = ChatMetrics.MARKDOWN_RULE_INSET_V_PT.dp)
+                .height(ChatMetrics.MARKDOWN_RULE_HEIGHT_PT.dp)
                 .background(tokens.colors.border),
         )
     }
 }
 
-/**
- * The body style: 17 pt with the 24 pt line box the iOS page sets through
- * `.lineSpacing` (`NativeMarkdownBody.swift:33`). [bubbleBodyStyle] is the same
- * `typography.body` + `geometry.bubbleLineSpacing` pair; reusing it keeps one
- * definition of the 24 pt pitch instead of a second one here.
- */
+/** The PR22 markdown prose uses the HomeSpec 16/24 body style. */
 @Composable
 private fun markdownBodyStyle(): TextStyle {
     val tokens = LocalUiTokens.current
+    // NativeMarkdownBody.swift applies NativeChatTheme.primary; the HomeSpec
+    // textPrimary dark value belongs to HomeSpec-owned surfaces such as bubbles.
     return bubbleBodyStyle().copy(color = tokens.colors.primary)
 }
 
 /**
- * Heading roles. iOS uses 24/22/20/17/body-bold (`NativeMarkdownBody.swift:120-129`);
- * tokens.json has no 24 or 22 role, so the two largest headings share the 20 pt
- * `emptyStateTitle` role rather than typing a size here.
+ * Heading roles. iOS uses 24/22/20/17/body-bold (`NativeMarkdownBody.swift:120-129`).
+ * The available JSON-backed roles are used until the remaining owner-specific
+ * heading metrics are added to ChatMetrics.
  */
 @Composable
 private fun headingStyle(level: Int): TextStyle {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     return when (level) {
-        1, 2, 3 -> type.emptyStateTitle.copy(color = tokens.colors.primary)
-        else -> type.headline.copy(color = tokens.colors.primary)
+        1 -> type.homeBody.copy(
+            color = tokens.colors.primary,
+            fontSize = ChatMetrics.MARKDOWN_H1_SIZE_PT.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        2 -> type.homeBody.copy(
+            color = tokens.colors.primary,
+            fontSize = ChatMetrics.MARKDOWN_H2_SIZE_PT.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        3 -> type.homeBody.copy(
+            color = tokens.colors.primary,
+            fontSize = ChatMetrics.MARKDOWN_H3_SIZE_PT.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        4 -> type.homeBody.copy(
+            color = tokens.colors.primary,
+            fontSize = ChatMetrics.MARKDOWN_H4_SIZE_PT.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        else -> type.homeBody.copy(color = tokens.colors.primary, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -235,49 +293,123 @@ internal fun MarkdownTable(
     header: List<List<MarkdownInline>>,
     rows: List<List<List<MarkdownInline>>>,
     alignments: List<MarkdownTableAlign?>,
+    onOpenFile: ((String) -> Unit)? = null,
+    onOpenResource: ((String) -> Unit)? = null,
 ) {
     val tokens = LocalUiTokens.current
     val columns = maxOf(header.size, rows.maxOfOrNull { it.size } ?: 0)
-    @Composable
-    fun row(cells: List<List<MarkdownInline>>, isHeader: Boolean) {
-        Row(
-            modifier = Modifier.fillMaxWidth().background(
-                // iOS header fill is `NativeChatTheme.selector` = #F5F6F7
-                // (`NativeMarkdownBody.swift:224`); `colors.approvalCard` is the
-                // Android token that already carries that value.
-                if (isHeader) tokens.colors.approvalCard else Color.Transparent,
-            ),
-        ) {
-            for (index in 0 until columns) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        // iOS cell inset: 16 h / 10 v (`NativeMarkdownBody.swift:219-220`).
-                        .padding(
-                            horizontal = tokens.geometry.bubblePaddingH,
-                            vertical = tokens.geometry.bubblePaddingV,
-                        )
-                        .drawBehind {
-                            val stroke = tokens.stroke.hairline.toPx()
-                            drawLine(
-                                color = tokens.colors.border,
-                                start = Offset(0f, size.height - stroke / 2),
-                                end = Offset(size.width, size.height - stroke / 2),
-                                strokeWidth = stroke,
-                            )
-                        },
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth().testTag(MARKDOWN_TABLE_TAG)) {
+        val minimumGridWidth = ChatMetrics.MARKDOWN_TABLE_COLUMN_MIN_WIDTH_PT.dp * columns.toFloat()
+        if (minimumGridWidth > maxWidth) {
+            MarkdownTableCards(header, rows, columns, onOpenFile, onOpenResource)
+        } else {
+            @Composable
+            fun row(cells: List<List<MarkdownInline>>, isHeader: Boolean) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().background(
+                        // NativeChatTheme.selector (`NativeMarkdownBody.swift:224`).
+                        if (isHeader) tokens.colors.approvalCard else Color.Transparent,
+                    ),
                 ) {
-                    MarkdownInlineText(
-                        inlines = cells.getOrNull(index).orEmpty(),
-                        style = cellStyle(alignments.getOrNull(index), isHeader),
+                    for (index in 0 until columns) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .widthIn(
+                                    min = ChatMetrics.MARKDOWN_TABLE_COLUMN_MIN_WIDTH_PT.dp,
+                                    max = ChatMetrics.MARKDOWN_TABLE_COLUMN_MAX_WIDTH_PT.dp,
+                                )
+                                // Regular table inset is 16 h / 10 v (`:219-220`).
+                                .padding(
+                                    horizontal = ChatMetrics.MARKDOWN_TABLE_CELL_INSET_H_PT.dp,
+                                    vertical = ChatMetrics.MARKDOWN_TABLE_CELL_INSET_V_PT.dp,
+                                )
+                                .drawBehind {
+                                    val stroke = tokens.stroke.hairline.toPx()
+                                    drawLine(
+                                        color = tokens.colors.border,
+                                        start = Offset(0f, size.height - stroke / 2),
+                                        end = Offset(size.width, size.height - stroke / 2),
+                                        strokeWidth = stroke,
+                                    )
+                                },
+                        ) {
+                            MarkdownInlineText(
+                                inlines = cells.getOrNull(index).orEmpty(),
+                                style = cellStyle(alignments.getOrNull(index), isHeader),
+                                onOpenFile = onOpenFile,
+                                onOpenResource = onOpenResource,
+                            )
+                        }
+                    }
+                }
+            }
+            Column(modifier = Modifier.fillMaxWidth()) {
+                row(header, isHeader = true)
+                rows.forEach { row(it, isHeader = false) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTableCards(
+    header: List<List<MarkdownInline>>,
+    rows: List<List<List<MarkdownInline>>>,
+    columns: Int,
+    onOpenFile: ((String) -> Unit)?,
+    onOpenResource: ((String) -> Unit)?,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(ChatMetrics.MARKDOWN_TABLE_CARD_GAP_PT.dp),
+    ) {
+        rows.forEach { cells ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        tokens.colors.approvalCard,
+                        RoundedCornerShape(ChatMetrics.MARKDOWN_TABLE_CARD_RADIUS_PT.dp),
                     )
+                    .padding(ChatMetrics.MARKDOWN_TABLE_CARD_INSET_PT.dp),
+                verticalArrangement = Arrangement.spacedBy(ChatMetrics.MARKDOWN_TABLE_FIELD_GAP_PT.dp),
+            ) {
+                for (index in 0 until columns) {
+                    Column(verticalArrangement = Arrangement.spacedBy(ChatMetrics.MARKDOWN_TABLE_LABEL_VALUE_GAP_PT.dp)) {
+                        BasicText(
+                            text = plainMarkdownText(header.getOrNull(index).orEmpty()),
+                            style = type.caption.copy(
+                                color = tokens.colors.secondary,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                        )
+                        MarkdownInlineText(
+                            inlines = cells.getOrNull(index).orEmpty(),
+                            style = markdownBodyStyle(),
+                            onOpenFile = onOpenFile,
+                            onOpenResource = onOpenResource,
+                        )
+                    }
                 }
             }
         }
     }
-    Column(modifier = Modifier.fillMaxWidth().testTag(MARKDOWN_TABLE_TAG)) {
-        row(header, isHeader = true)
-        rows.forEach { row(it, isHeader = false) }
+}
+
+private fun plainMarkdownText(inlines: List<MarkdownInline>): String = inlines.joinToString("") { part ->
+    when (part) {
+        is MarkdownInline.Text -> part.text
+        is MarkdownInline.Strong -> plainMarkdownText(part.children)
+        is MarkdownInline.Emphasis -> plainMarkdownText(part.children)
+        is MarkdownInline.Delete -> plainMarkdownText(part.children)
+        is MarkdownInline.Code -> part.code
+        is MarkdownInline.Link -> plainMarkdownText(part.children)
+        is MarkdownInline.Image -> part.alt
+        is MarkdownInline.Math -> part.latex
+        is MarkdownInline.Footnote -> "[${part.id}]"
     }
 }
 
@@ -306,9 +438,34 @@ internal fun MarkdownInlineText(
     inlines: List<MarkdownInline>,
     style: TextStyle,
     modifier: Modifier = Modifier,
+    onOpenFile: ((String) -> Unit)? = null,
+    onOpenResource: ((String) -> Unit)? = null,
 ) {
     val tokens = LocalUiTokens.current
-    val text = remember(inlines, style, tokens) { annotatedInlines(inlines, style, tokens) }
+    val type = LocalUiType.current
+    val uriHandler = LocalUriHandler.current
+    val codeFontSize = (type.code.fontSize.value + 1f).sp
+    val text = remember(
+        inlines,
+        style,
+        codeFontSize,
+        type.code.fontFamily,
+        tokens,
+        uriHandler,
+        onOpenFile,
+        onOpenResource,
+    ) {
+        annotatedInlines(
+            inlines,
+            style,
+            type.code.fontFamily,
+            codeFontSize,
+            tokens,
+            uriHandler,
+            onOpenFile,
+            onOpenResource,
+        )
+    }
     BasicText(text = text, style = style, modifier = modifier)
 }
 
@@ -316,7 +473,12 @@ internal fun MarkdownInlineText(
 private fun annotatedInlines(
     inlines: List<MarkdownInline>,
     style: TextStyle,
+    codeFontFamily: FontFamily?,
+    codeFontSize: TextUnit,
     tokens: UiTokens,
+    uriHandler: androidx.compose.ui.platform.UriHandler,
+    onOpenFile: ((String) -> Unit)?,
+    onOpenResource: ((String) -> Unit)?,
 ): AnnotatedString {
     val builder = AnnotatedString.Builder()
     // The spans must start from the block's own size: the math script and the
@@ -328,14 +490,28 @@ private fun annotatedInlines(
         fontWeight = style.fontWeight,
         fontStyle = style.fontStyle,
     )
-    builder.appendInlines(inlines, base, tokens)
+    builder.appendInlines(
+        inlines,
+        base,
+        codeFontFamily,
+        codeFontSize,
+        tokens,
+        uriHandler,
+        onOpenFile,
+        onOpenResource,
+    )
     return builder.toAnnotatedString()
 }
 
 private fun AnnotatedString.Builder.appendInlines(
     inlines: List<MarkdownInline>,
     span: SpanStyle,
+    codeFontFamily: FontFamily?,
+    codeFontSize: TextUnit,
     tokens: UiTokens,
+    uriHandler: androidx.compose.ui.platform.UriHandler,
+    onOpenFile: ((String) -> Unit)?,
+    onOpenResource: ((String) -> Unit)?,
 ) {
     inlines.forEach { part ->
         when (part) {
@@ -343,41 +519,102 @@ private fun AnnotatedString.Builder.appendInlines(
             is MarkdownInline.Strong -> appendInlines(
                 part.children,
                 span.merge(SpanStyle(fontWeight = FontWeight.SemiBold)),
+                codeFontFamily,
+                codeFontSize,
                 tokens,
+                uriHandler,
+                onOpenFile,
+                onOpenResource,
             )
             is MarkdownInline.Emphasis -> appendInlines(
                 part.children,
                 span.merge(SpanStyle(fontStyle = FontStyle.Italic)),
+                codeFontFamily,
+                codeFontSize,
                 tokens,
+                uriHandler,
+                onOpenFile,
+                onOpenResource,
             )
             is MarkdownInline.Delete -> appendInlines(
                 part.children,
                 span.merge(SpanStyle(textDecoration = TextDecoration.LineThrough)),
+                codeFontFamily,
+                codeFontSize,
                 tokens,
+                uriHandler,
+                onOpenFile,
+                onOpenResource,
             )
             is MarkdownInline.Code -> withStyle(
                 span.merge(
                     SpanStyle(
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = codeFontFamily ?: FontFamily.Monospace,
+                        fontSize = codeFontSize,
                         background = tokens.colors.inlineCode,
                     ),
                 ),
             ) { append(part.code) }
-            is MarkdownInline.Link -> appendInlines(
-                part.children,
-                span.merge(
-                    SpanStyle(
-                        color = tokens.colors.accent,
-                        textDecoration = TextDecoration.Underline,
-                    ),
-                ),
-                tokens,
-            )
+            is MarkdownInline.Link -> {
+                val target = markdownLinkTarget(part.destination)
+                if (
+                    target == null ||
+                    (target is MarkdownLinkTarget.WorkspacePath && onOpenFile == null) ||
+                    (target is MarkdownLinkTarget.ResourceUri && onOpenResource == null)
+                ) {
+                    appendInlines(
+                        part.children,
+                        span,
+                        codeFontFamily,
+                        codeFontSize,
+                        tokens,
+                        uriHandler,
+                        onOpenFile,
+                        onOpenResource,
+                    )
+                } else {
+                    val listener = LinkInteractionListener {
+                        when (target) {
+                            is MarkdownLinkTarget.Uri -> uriHandler.openUri(target.value)
+                            is MarkdownLinkTarget.WorkspacePath -> onOpenFile?.invoke(target.value)
+                            is MarkdownLinkTarget.ResourceUri -> onOpenResource?.invoke(target.value)
+                        }
+                    }
+                    pushLink(
+                        LinkAnnotation.Url(
+                            part.destination,
+                            styles = TextLinkStyles(
+                                style = SpanStyle(
+                                    color = tokens.colors.accent,
+                                    textDecoration = TextDecoration.Underline,
+                                ),
+                            ),
+                            linkInteractionListener = listener,
+                        ),
+                    )
+                    appendInlines(
+                        part.children,
+                        span,
+                        codeFontFamily,
+                        codeFontSize,
+                        tokens,
+                        uriHandler,
+                        onOpenFile,
+                        onOpenResource,
+                    )
+                    pop()
+                }
+            }
+            is MarkdownInline.Image -> withStyle(
+                span.merge(SpanStyle(color = tokens.colors.tertiary, fontStyle = FontStyle.Italic)),
+            ) { append(part.alt) }
             is MarkdownInline.Footnote -> withStyle(
                 span.merge(
                     SpanStyle(
-                        fontSize = scaledSize(span.fontSize, FOOTNOTE_SCALE),
-                        baselineShift = BaselineShift(FOOTNOTE_RAISE),
+                        fontSize = ChatMetrics.MARKDOWN_FOOTNOTE_SIZE_PT.sp,
+                        baselineShift = BaselineShift(
+                            ChatMetrics.MARKDOWN_FOOTNOTE_BASELINE_OFFSET_PT / span.fontSize.value,
+                        ),
                     ),
                 ),
             ) { append("[${part.id}]") }
@@ -526,12 +763,6 @@ internal data class MathRun(
     public val italic: Boolean,
     public val script: Int,
 )
-
-/** The footnote reference's size relative to the body (9 pt / 17 pt, `:292`). */
-private const val FOOTNOTE_SCALE: Float = 9f / 17f
-
-/** The footnote reference's 6 pt raise relative to the 17 pt body (`:292`). */
-private const val FOOTNOTE_RAISE: Float = 6f / 17f
 
 /** A script's size relative to the base run (a typeset script is ~0.68 em). */
 private const val SCRIPT_SCALE: Float = 0.68f

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -38,6 +39,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import com.phonedsh.agentcore.JsonArray
 import com.phonedsh.agentcore.JsonBool
 import com.phonedsh.agentcore.JsonObject
@@ -45,6 +47,10 @@ import com.phonedsh.agentcore.JsonNumber
 import com.phonedsh.agentcore.JsonString
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
+import com.phonedsh.ui.ChatMetrics
+import com.phonedsh.ui.HomeMetrics
+import com.phonedsh.ui.icon.PdshIcon
+import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.state.ToolVariant
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
@@ -68,33 +74,35 @@ public enum class ToolRowState {
         }
 }
 
-/**
- * The token inventory of this surface; exactly
- * `signatureSurfaces.toolRow.tokens`.
- *
- * Note: §2 asks for a sweep on a running summary. The declared list has no
- * `motion.shimmer`, so the sweep is not rendered here (the thinking pill owns
- * it); see the token-gap report.
- */
+/** Active component tokens used alongside the HomeSpec process-row contract. */
 public object ToolRowTokens {
     public val refs: List<String> = listOf(
+        UiTokenNames.COLORS_PRIMARY,
+        UiTokenNames.COLORS_TEXT_SECONDARY,
+        UiTokenNames.COLORS_TEXT_TERTIARY,
         UiTokenNames.COLORS_SECONDARY,
-        UiTokenNames.COLORS_TERTIARY,
+        UiTokenNames.COLORS_SUCCESS,
+        UiTokenNames.COLORS_DANGER,
         UiTokenNames.COLORS_CODE,
         UiTokenNames.COLORS_CODE_BANNER,
         UiTokenNames.COLORS_BORDER,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
+        UiTokenNames.TYPOGRAPHY_PROCESS,
         UiTokenNames.TYPOGRAPHY_CODE,
         UiTokenNames.TYPOGRAPHY_CODE_LABEL,
+        UiTokenNames.TYPOGRAPHY_CODE_ACTION,
         UiTokenNames.RADIUS_CODE_BLOCK,
         UiTokenNames.STROKE_HAIRLINE,
         UiTokenNames.MOTION_DISCLOSURE,
-        UiTokenNames.GEOMETRY_DISCLOSURE_ROW_HEIGHT,
+        UiTokenNames.MOTION_SHIMMER,
         UiTokenNames.GEOMETRY_DISCLOSURE_ICON_GAP,
+        UiTokenNames.GEOMETRY_PROCESS_ROW_HEIGHT,
+        UiTokenNames.GEOMETRY_PROCESS_ICON,
         UiTokenNames.GEOMETRY_TOOL_DETAIL_INDENT,
         UiTokenNames.GEOMETRY_TOOL_DETAIL_VERTICAL,
         UiTokenNames.GEOMETRY_TOOL_CARD_INSET,
         UiTokenNames.GEOMETRY_TERMINAL_CARD_MAX_HEIGHT,
+        UiTokenNames.SPACING_ICON_TEXT,
     )
 }
 
@@ -123,13 +131,11 @@ public fun ToolRow(
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     val canExpand = detail != null
-    val summaryColor = if (state == ToolRowState.RUNNING) tokens.colors.tertiary else tokens.colors.secondary
+    val showsSummary = summary.isNotEmpty() && (showsSummaryWhenExpanded || !expanded)
+    val summaryColor = tokens.colors.textSecondary
 
-    // The baseline's collapsed line is `✦ 工具调用 · <name> · <argument>`: one 13 pt
-    // grey line, no disclosure chevron, ink starting at the page margin. The
-    // prefix, the two separators and the three values are separate text nodes so
-    // each stays addressable (a merged string would hide the tool name from
-    // accessibility and from the structure gate).
+    // PR22's NativeDisclosureRow is a 24pt HomeSpec process row with an 18pt
+    // leading glyph and 15/24 title and summary. Keep each text node addressable.
     //
     // The tag sits on the merged, clickable row: a semantics assertion on
     // `TOOL_ROW` must see the title, the summary, the state and the click action.
@@ -137,7 +143,7 @@ public fun ToolRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .defaultMinSize(minHeight = tokens.geometry.disclosureRowHeight)
+                .defaultMinSize(minHeight = HomeMetrics.processRowHeight)
                 .clip(RoundedCornerShape(tokens.radius.codeBlock))
                 .clickable(
                     enabled = canExpand,
@@ -147,47 +153,65 @@ public fun ToolRow(
                 )
                 .semantics(mergeDescendants = true) {
                     stateDescription = state.label
-                    contentDescription = "$title · ${state.label}"
+                    contentDescription = listOf(title, summary.takeIf { showsSummary }.orEmpty(), state.label)
+                        .filter(String::isNotBlank)
+                        .joinToString(" · ")
                 }
                 .testTag(UiTags.TOOL_ROW),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(tokens.geometry.disclosureIconGap),
         ) {
-            BasicText(
-                text = TOOL_GLYPH,
-                style = type.secondary.copy(color = tokens.colors.secondary),
-                maxLines = 1,
-            )
-            BasicText(
-                text = UiStrings.ACTIVITY_TOOLS,
-                style = type.secondary.copy(color = tokens.colors.secondary),
-                maxLines = 1,
-            )
-            BasicText(
-                text = UiStrings.DOT_SEPARATOR,
-                style = type.secondary.copy(color = tokens.colors.secondary),
-                maxLines = 1,
-            )
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier.size(HomeMetrics.processIcon),
+                contentAlignment = Alignment.Center,
+            ) {
+                PdshIconView(
+                    icon = if (canExpand && expanded) PdshIcon.CHEVRON_UP else PdshIcon.SPARKLE,
+                    size = if (canExpand && expanded) {
+                        ChatMetrics.DISCLOSURE_CHEVRON_ICON_PT.dp
+                    } else {
+                        ChatMetrics.DISCLOSURE_CATEGORY_ICON_PT.dp
+                    },
+                    tint = tokens.colors.textSecondary,
+                    contentDescription = null,
+                    modifier = Modifier.testTag(
+                        if (canExpand && expanded) TOOL_ROW_CHEVRON_TAG else TOOL_ROW_CATEGORY_ICON_TAG,
+                    ),
+                )
+            }
             BasicText(
                 text = title,
-                style = type.secondary.copy(color = tokens.colors.secondary),
+                style = type.processBody.copy(color = tokens.colors.textSecondary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
-            if (summary.isNotEmpty() && (showsSummaryWhenExpanded || !expanded)) {
+            if (showsSummary) {
                 BasicText(
                     text = UiStrings.DOT_SEPARATOR,
-                    style = type.secondary.copy(color = tokens.colors.secondary),
+                    style = type.processBody.copy(color = tokens.colors.textSecondary),
                     maxLines = 1,
                 )
-                BasicText(
-                    text = summary,
-                    style = type.secondary.copy(color = summaryColor),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
+                if (state == ToolRowState.RUNNING) {
+                    ShimmerLine(
+                        text = summary,
+                        style = type.processBody,
+                        base = summaryColor,
+                        sweep = tokens.colors.textTertiary,
+                        durationMs = tokens.motion.shimmerMs,
+                        easing = tokens.motion.shimmerEasing,
+                        repeat = tokens.motion.shimmerRepeat,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    BasicText(
+                        text = summary,
+                        style = type.processBody.copy(color = summaryColor),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
 
@@ -348,21 +372,24 @@ private fun ToolTodoDetails(arguments: JsonObject?) {
         val todo = raw as? JsonObject ?: return@forEach
         val content = todo.text("content") ?: return@forEach
         val status = todo.text("status")
-        val marker = when (status) {
-            "completed" -> "✓"
-            "in_progress" -> "›"
-            else -> "□"
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText)) {
-            BasicText(text = marker, style = type.secondary.copy(color = tokens.colors.secondary))
-            BasicText(text = content, style = type.secondary.copy(color = tokens.colors.primary))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicText(
+                text = content,
+                style = type.listItem.copy(color = tokens.colors.textPrimary),
+                modifier = Modifier.weight(1f),
+            )
             val label = when (status) {
                 "completed" -> "已完成"
                 "in_progress" -> "进行中"
                 "pending" -> "待处理"
                 else -> null
             }
-            if (label != null) BasicText(text = label, style = type.caption.copy(color = tokens.colors.secondary))
+            if (label != null) {
+                BasicText(text = label, style = type.caption.copy(color = tokens.colors.textSecondary))
+            }
         }
     }
 }
@@ -411,5 +438,5 @@ private val TOOL_METADATA_FIELDS = setOf(
     "path", "url", "query", "exitCode", "exit_code", "durationMs", "duration_ms", "bytes", "resultCount",
 )
 
-/** The 工具调用 prefix's mark (iOS `sparkles`, drawn as text because the icon set is an asset catalog). */
-private const val TOOL_GLYPH: String = "✦"
+internal const val TOOL_ROW_CATEGORY_ICON_TAG: String = "pdsh.surface.tool-row.category-icon"
+internal const val TOOL_ROW_CHEVRON_TAG: String = "pdsh.surface.tool-row.chevron"

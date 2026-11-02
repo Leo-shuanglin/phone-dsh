@@ -70,6 +70,30 @@ class ToolRowSurfaceTest {
         compose.onNodeWithTag(UiTags.TOOL_ROW).performClick()
         compose.waitForIdle()
         compose.onNodeWithTag(UiTags.TOOL_ROW_DETAIL).assertIsDisplayed()
+        compose.onNodeWithTag(TOOL_ROW_CHEVRON_TAG, useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag(TOOL_ROW_CATEGORY_ICON_TAG, useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun `the expanded row hides its summary unless the source enables it`() {
+        compose.setContent {
+            PdshTheme {
+                ToolRow(
+                    title = "exec",
+                    summary = "short summary",
+                    state = ToolRowState.OK,
+                    expanded = true,
+                    onToggle = {},
+                    detail = { androidx.compose.foundation.text.BasicText("detail body") },
+                )
+            }
+        }
+        compose.onNodeWithTag(UiTags.TOOL_ROW).assertIsDisplayed()
+        compose.onNodeWithText("detail body").assertIsDisplayed()
+        compose.onNodeWithText("short summary").assertDoesNotExist()
+        compose.onNodeWithTag(TOOL_ROW_CHEVRON_TAG, useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag(UiTags.TOOL_ROW)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.ContentDescription, listOf("exec · ${UiStrings.TOOL_OK}")))
     }
 
     @Test
@@ -108,5 +132,31 @@ class ToolRowSurfaceTest {
         }
         compose.onNodeWithTag(UiTags.TOOL_ROW).performClick()
         assertEquals(1, taps)
+    }
+
+    @Test
+    fun `an error state remains announced and its detail stays readable`() {
+        compose.setContent {
+            PdshTheme {
+                ToolRow(
+                    title = "运行命令",
+                    summary = "permission denied",
+                    state = ToolRowState.ERROR,
+                    expanded = true,
+                    onToggle = {},
+                    detail = {
+                        ToolDetailCard(
+                            banner = "运行命令",
+                            body = "permission denied: /workspace/output",
+                            isError = true,
+                        )
+                    },
+                    showsSummaryWhenExpanded = true,
+                )
+            }
+        }
+        compose.onNodeWithTag(UiTags.TOOL_ROW)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, UiStrings.TOOL_ERROR))
+        compose.onNodeWithText("permission denied: /workspace/output").assertIsDisplayed()
     }
 }

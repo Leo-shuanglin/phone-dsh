@@ -13,10 +13,13 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiTags
+import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.PdshTheme
 import org.junit.Rule
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -74,6 +77,13 @@ class ThinkingPillSurfaceTest {
         compose.onNodeWithTag(UiTags.THINKING_PILL).performClick()
         compose.waitForIdle()
         compose.onNodeWithText("full reasoning body", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag(THINKING_CHEVRON_TAG, useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag(THINKING_CATEGORY_ICON_TAG, useUnmergedTree = true).assertDoesNotExist()
+        assertEquals(
+            listOf(UiStrings.THINKING),
+            compose.onNodeWithTag(UiTags.THINKING_PILL).fetchSemanticsNode()
+                .config[SemanticsProperties.ContentDescription],
+        )
     }
 
     @Test

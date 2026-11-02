@@ -49,7 +49,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.sp
+import com.phonedsh.ui.ChatMetrics
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.icon.PdshIcon
+import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 
@@ -93,15 +99,16 @@ public fun ChangedFilesCard(
     modifier: Modifier = Modifier,
     onOpenFile: (String) -> Unit = {},
 ) {
-    if (changes.isEmpty()) return
+    val files = mergeChangedFiles(changes)
+    if (files.isEmpty()) return
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     val shape = RoundedCornerShape(tokens.radius.card)
     // iOS keeps the fold in local state (`@State private var expanded`), so it is
     // screen state, not a projection: `remember` is the same lifetime.
-    var expanded by remember(changes) { mutableStateOf(false) }
-    val single = changes.singleOrNull()
-    val visible = if (expanded) changes else changes.take(VISIBLE_FILES)
+    var expanded by remember { mutableStateOf(false) }
+    val single = files.singleOrNull()
+    val visible = if (expanded) files else files.take(VISIBLE_FILES)
 
     Column(
         modifier = modifier
@@ -117,51 +124,59 @@ public fun ChangedFilesCard(
                 // iOS header fill = `NativeChatTheme.selector` (#F5F6F7); the
                 // approval-card token already carries that value on this side.
                 .background(tokens.colors.approvalCard)
-                .clickable(role = Role.Button) { onOpenFile(changes.first().path) }
-                // iOS header padding is 10 pt (`:44`) with a 40 pt icon box, which
-                // is what makes its fixed 60 pt height (`:45`).
-                .padding(tokens.spacing.badgeInsetH),
+                .clickable(role = Role.Button) { onOpenFile(files.first().path) }
+                // iOS fixes the header at 60pt with 10pt padding and a 40pt glyph box.
+                .height(ChatMetrics.CHANGED_FILES_HEADER_HEIGHT_PT.dp)
+                .padding(ChatMetrics.CHANGED_FILES_HEADER_INSET_PT.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetH),
+            horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHANGED_FILES_HEADER_GAP_PT.dp),
         ) {
             Box(
                 modifier = Modifier
-                    // unverified geometry: the composer's 40 pt trailing reserve is
-                    // the only 40 pt token; the icon box is 40 x 40 (`:29`).
-                    .size(tokens.geometry.composerTrailingReserve)
-                    .clip(RoundedCornerShape(tokens.radius.card))
+                    .size(ChatMetrics.CHANGED_FILES_HEADER_GLYPH_BOX_PT.dp)
+                    .clip(RoundedCornerShape(ChatMetrics.CHANGED_FILES_HEADER_GLYPH_RADIUS_PT.dp))
                     .background(tokens.colors.input)
                     .border(
                         width = tokens.stroke.hairline,
                         color = tokens.colors.border,
-                        shape = RoundedCornerShape(tokens.radius.card),
+                        shape = RoundedCornerShape(ChatMetrics.CHANGED_FILES_HEADER_GLYPH_RADIUS_PT.dp),
                     ),
                 contentAlignment = Alignment.Center,
             ) {
-                BasicText(
-                    text = FILE_GLYPH,
-                    style = type.caption.copy(color = tokens.colors.tertiary),
+                PdshIconView(
+                    icon = PdshIcon.DOCUMENT,
+                    size = ChatMetrics.CHANGED_FILES_HEADER_GLYPH_SIZE_PT.dp,
+                    tint = tokens.colors.tertiary,
+                    contentDescription = null,
                 )
             }
-            Column(verticalArrangement = Arrangement.spacedBy(tokens.geometry.summaryDotDiameter)) {
+            Column(verticalArrangement = Arrangement.spacedBy(ChatMetrics.CHANGED_FILES_TITLE_STACK_GAP_PT.dp)) {
                 BasicText(
-                    text = single?.let { UiStrings.CHANGED_FILES_SINGLE.format(it.fileName) }
-                        ?: UiStrings.CHANGED_FILES_TITLE.format(changes.size),
+                    text = single?.let {
+                        UiStrings.CHANGED_FILES_SINGLE.format(it.path.substringAfterLast('/'))
+                    } ?: UiStrings.CHANGED_FILES_TITLE.format(files.size),
                     style = type.secondary.copy(
                         color = tokens.colors.primary,
                         fontWeight = FontWeight.Medium,
+                        lineHeight = TextUnit.Unspecified,
                     ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHANGED_FILES_DIFF_COUNT_GAP_PT.dp)) {
                     BasicText(
-                        text = "+${changes.sumOf { it.added }}",
-                        style = type.codeLabel.copy(color = tokens.colors.success),
+                        text = "+${files.sumOf { it.added }}",
+                        style = type.code.copy(
+                            color = tokens.colors.success,
+                            fontSize = ChatMetrics.CHANGED_FILES_HEADER_COUNT_SIZE_PT.sp,
+                        ),
                     )
                     BasicText(
-                        text = "-${changes.sumOf { it.deleted }}",
-                        style = type.codeLabel.copy(color = tokens.colors.danger),
+                        text = "-${files.sumOf { it.deleted }}",
+                        style = type.code.copy(
+                            color = tokens.colors.danger,
+                            fontSize = ChatMetrics.CHANGED_FILES_HEADER_COUNT_SIZE_PT.sp,
+                        ),
                     )
                 }
             }
@@ -182,11 +197,11 @@ public fun ChangedFilesCard(
                         .testTag(CHANGED_FILES_ROW_TAG)
                         // iOS row: 14 h inset and a 44 pt floor *including* it
                         // (`:68-70`), so the floor is outside the padding.
-                        .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-                        .padding(horizontal = tokens.geometry.cardPadding)
-                        .padding(vertical = tokens.spacing.badgeInsetV),
+                        .defaultMinSize(minHeight = ChatMetrics.CHANGED_FILES_ROW_MIN_HEIGHT_PT.dp)
+                        .padding(horizontal = ChatMetrics.CHANGED_FILES_ROW_INSET_H_PT.dp)
+                        .padding(vertical = ChatMetrics.CHANGED_FILES_ROW_INSET_V_PT.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+                    horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHANGED_FILES_ROW_GAP_PT.dp),
                 ) {
                     BasicText(
                         text = file.display,
@@ -195,23 +210,29 @@ public fun ChangedFilesCard(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHANGED_FILES_DIFF_COUNT_GAP_PT.dp)) {
                         BasicText(
                             text = "+${file.added}",
-                            style = type.codeLabel.copy(color = tokens.colors.success),
+                            style = type.code.copy(
+                                color = tokens.colors.success,
+                                fontSize = type.codeAction.fontSize,
+                            ),
                         )
                         BasicText(
                             text = "-${file.deleted}",
-                            style = type.codeLabel.copy(color = tokens.colors.danger),
+                            style = type.code.copy(
+                                color = tokens.colors.danger,
+                                fontSize = type.codeAction.fontSize,
+                            ),
                         )
                     }
                 }
             }
-            if (changes.size > VISIBLE_FILES) {
+            if (files.size > VISIBLE_FILES) {
                 val toggle = if (expanded) {
                     UiStrings.CHANGED_FILES_COLLAPSE
                 } else {
-                    UiStrings.CHANGED_FILES_ALL.format(changes.size)
+                    UiStrings.CHANGED_FILES_ALL.format(files.size)
                 }
                 Row(
                     modifier = Modifier
@@ -227,24 +248,36 @@ public fun ChangedFilesCard(
                             }
                         }
                         // iOS toggle: 14 h / 10 v inset inside a 44 pt floor (`:84-86`).
-                        .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-                        .padding(horizontal = tokens.geometry.cardPadding)
-                        .padding(vertical = tokens.spacing.badgeInsetH),
+                        .defaultMinSize(minHeight = ChatMetrics.CHANGED_FILES_ROW_MIN_HEIGHT_PT.dp)
+                        .padding(horizontal = ChatMetrics.CHANGED_FILES_TOGGLE_INSET_H_PT.dp)
+                        .padding(vertical = ChatMetrics.CHANGED_FILES_TOGGLE_INSET_V_PT.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+                    horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHANGED_FILES_TOGGLE_GAP_PT.dp),
                 ) {
                     BasicText(
                         text = toggle,
                         style = type.caption.copy(color = tokens.colors.tertiary),
                     )
-                    BasicText(
-                        text = if (expanded) CHEVRON_UP else CHEVRON_DOWN,
-                        style = type.caption.copy(color = tokens.colors.tertiary),
+                    PdshIconView(
+                        icon = if (expanded) PdshIcon.CHEVRON_UP else PdshIcon.CHEVRON_DOWN,
+                        size = ChatMetrics.CHANGED_FILES_TOGGLE_CHEVRON_SIZE_PT.dp,
+                        tint = tokens.colors.tertiary,
+                        contentDescription = null,
                     )
                 }
             }
         }
     }
+}
+
+/**
+ * Keep one row per workspace path, preserving first-touch order and the latest
+ * successful write's display and line counts, matching the iOS turn projector.
+ */
+internal fun mergeChangedFiles(changes: List<ChatFileChange>): List<ChatFileChange> {
+    val byPath = LinkedHashMap<String, ChatFileChange>()
+    changes.forEach { change -> byPath[change.path] = change }
+    return byPath.values.toList()
 }
 
 /**
@@ -306,11 +339,6 @@ private const val VISIBLE_FILES: Int = 4
 
 /** Largest old x new line pair matrix this port will allocate. */
 private const val MAX_DIFF_CELLS: Long = 4_000_000
-
-/** The card's glyphs: the iOS side draws asset-catalog icons, Android draws text. */
-private const val FILE_GLYPH: String = "▤"
-private const val CHEVRON_DOWN: String = "⌄"
-private const val CHEVRON_UP: String = "⌃"
 
 /** Foundation `CharacterSet.newlines`. */
 private val NEWLINES: Set<Char> = setOf('\n', '\r', '\u000B', '\u000C', '\u0085', '\u2028', '\u2029')
