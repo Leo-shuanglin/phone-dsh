@@ -82,6 +82,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import com.phonedsh.agentcore.JsonArray
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
@@ -97,6 +98,7 @@ import com.phonedsh.ui.surface.preview.PreviewWorkspace
 import com.phonedsh.ui.surface.preview.WorkspacePreviewSource
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
+import com.phonedsh.ui.theme.UiGeometry
 import com.phonedsh.ui.theme.generated.UiTokenNames
 import java.io.IOException
 import java.nio.file.Path
@@ -799,7 +801,7 @@ private fun SessionArtifactPreviewPage(preview: SessionArtifactPreview, shareFai
             .fillMaxSize()
             .testTag(UiPageTags.ARTIFACTS_PREVIEW_ROOT)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = tokens.geometry.chromeInset,
                 vertical = tokens.geometry.cardOuterMarginV,
             ),
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
@@ -1056,7 +1058,7 @@ private fun ArtifactEmptyBlock() {
             .fillMaxWidth()
             .testTag(UiPageTags.ARTIFACTS_EMPTY)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = tokens.geometry.chromeInset,
                 vertical = tokens.spacing.cardInset,
             )
             .semantics(mergeDescendants = true) {},
@@ -1139,7 +1141,7 @@ private fun ArtifactRow(
             .clickable(enabled = enabled, role = Role.Button, onClick = onOpen)
             .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = tokens.geometry.chromeInset,
                 vertical = tokens.spacing.iconText,
             )
             .semantics(mergeDescendants = true) { contentDescription = artifact.name },
@@ -1219,7 +1221,7 @@ private fun ArtifactHint(title: String, hint: String?, tag: String) {
             .fillMaxWidth()
             .testTag(tag)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = tokens.geometry.chromeInset,
                 vertical = tokens.geometry.cardOuterMarginV,
             )
             .semantics(mergeDescendants = true) {
@@ -1250,7 +1252,7 @@ private fun ArtifactFooter(text: String, tag: String) {
             .fillMaxWidth()
             .testTag(tag)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = tokens.geometry.chromeInset,
                 vertical = tokens.spacing.iconText,
             ),
     )
@@ -1260,6 +1262,10 @@ private fun ArtifactFooter(text: String, tag: String) {
  * The token inventory of this page; `DeviceConnectorPagesTokenTest` fails when a use
  * site reads a token that is not listed here.
  */
+/** HomeSpec.chromeInset is projected as pageOuterMarginH in the shared Android geometry model. */
+private val UiGeometry.chromeInset: Dp
+    get() = pageOuterMarginH
+
 internal object SessionArtifactsPageTokens {
     val refs: List<String> = listOf(
         UiTokenNames.COLORS_PRIMARY,
@@ -1278,7 +1284,7 @@ internal object SessionArtifactsPageTokens {
         UiTokenNames.SPACING_BADGE_INSET_H,
         UiTokenNames.SPACING_BADGE_INSET_V,
         UiTokenNames.SPACING_CARD_INSET,
-        UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
+        UiTokenNames.GEOMETRY_CHROME_INSET,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_CARD_OUTER_MARGIN_V,
         UiTokenNames.GEOMETRY_BANNER_INSET_H,
