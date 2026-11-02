@@ -910,3 +910,74 @@ APK            clean 重建 18 dex，AndroidSecureStore / WindowHold / TurnWindo
 
 **审计对「这套东西在解决什么问题」的回答**：**跑不了任何编译**——`MockUbuntuAdapter` 不执行进程，
 全树无 proot/rootfs。交付物是 §12 纸面契约 + 模型可见的 job 协议 + 一套已验证未接线的安全机制。
+
+---
+
+## 二十、独立审计（GLM 5.3，盲审 AVD 5714）：两条 🔴 已修，五条 🟡 已处理
+
+审计是**只读 + 自建设备实证**做的：`:platform-android` connectedAndroidTest 25/25、
+被 skip 的两个崩溃阶段**手工补跑**、`:dsh` 282/282、同 UID POSIX 语义实测、状态机程序化穷举。
+
+### 🔴 #1 批准门的 session 可被模型伪造 —— **已修**
+
+审计的原话：
+
+> `phone` 是 bash 命令，模型可直接伪造 `--session`。
+> `bash -c 'phone ubuntu run --session <任意ID> -- …'` 的 argv 原样到达 `parseRun`。
+
+**我在提交里写的「模型和脚本无法选择花哪个 session 的批准」是假的。**
+
+修法（两道叠加，缺一不可）：
+1. `--session` 从 argv **彻底删除**（`parseRun` 白名单只剩 4 个词）——现在它只以「**拒绝它**」的形式存在
+2. session 走 `EXEC_REQ` 的 `env` 成员，由 exec bridge 从 `currentToolCall()` 注入并**先删调用方自带值**
+3. **且** `run/status/fetch/close` 没有带外 session 时**在弹窗之前** `REFUSED_UNTRUSTED`
+4. 弹窗显示 session 摘要（8 hex）+「摘要变了就是另一个 session」
+
+设备证据：拒绝后 `phone ubuntu run --session sess-forged-s2` → **SECOND_DIALOG=0**，
+日志恰好一条 approval，`refused: the dispatch carried no trusted tool-call session`。
+
+### 🔴 #2 安全核心只活在测试宇宙里 —— **已接上**
+
+`MockUbuntuSession` 用的是 `MockUbuntuSeal`（注释自己写「opens and closes nothing」），
+真 `BuildSeal`（768 行）在 `:dsh` main 里**只出现在注释中**——**Agent 实际跑的链路里 chmod 一次都没发生。**
+
+新增 `:platform-android/BuildSealUbuntu.kt`（366 行）映射 seam 四方法到
+`BuildSeal` + `BuildSealTripwire` + `recoverIfNeeded`，在 `:app` 组合根注入。
+`HostExec` 的默认值改成 **fail-closed 的 `UbuntuSeal.unwired`**——没注入 seal 的宿主会拒绝每个 job，
+而不是报告一个从未存在的密封窗口。
+
+设备实证：adapter 级 4/4；生产 boot-repair 把 `d---------` 修回 `drwxr-x---`。
+
+### 修 🔴 时发现的**生产回归**（L59 报，我复核并修）
+
+L58 把 `PDSH_TOOL_CALL_SESSION` 写在 `shell-ext/src/bridge.ts`，但**生产 worker 走
+`exec-bridge/src/transport.ts`**——产物里 `grep -c` = **0**，设备上每次 `ubuntu run` 都被 fail-closed 拒绝。
+**重建 bundle 修不好，因为源头不写。**
+
+已补在 `transport.ts`，**并限定只对 `argv[0] === 'phone'`**——
+不限定的话 `rg`/`jaq` 的每条 EXEC_REQ 都会带 session id，三条金标比对立刻挂掉（第一次就是这么红的）。
+
+### 🟡 五条
+
+| # | 处理 |
+|---|---|
+| #3 绊线有零痕迹绕过 | **改措辞不改能力**：预开 fd 与 `/proc/<pid>/fd` 实测读出明文且无 inotify 事件；继承路径挡住是 Android `ProcessBuilder` 挡的，不是我们的代码。设计 §2/§3 把「有意读取**必须**可观察」降级为「**走 open() 这条路**才留痕」，新增「两种零事件读法」表，明写**残余风险不是已缓解** |
+| #4 excuse 窗口 2000ms 写成「微秒」 | 已改成真实数字，并写代价而不是否认（差 3 个数量级） |
+| #6 PR 缺口表 3 条过时 | 按 HEAD 重列 |
+| #7 `onStartJob` 复活已停窗口 | `begin` 返回 `Started/Refused(TURN_ENDED)`；两个组件被拒时 `jobFinished`/`stopSelf`。设备抓到真实拒绝行 |
+| #8 §0.2 待机表与 §3 矛盾 | 拆三档，「数量级更好」只留「未启动」那一行 |
+| **#9 撤销无 UI** | 设置 → 通用 → 开发者工具 → **撤销本地 Ubuntu 授权（本会话）**；`revoke()` 改成返回 `Boolean`，能区分「没授予过」和「撤销了」 |
+
+### 审计的正面结论（同样重要）
+
+> chmod 000 的同 UID 语义、marker-先于-chmod 的崩溃恢复、进程组收割、FileObserver 捕获 guest chmod，
+> **均在独立 AVD 上复验通过**；§12 状态机 9 态/14 边与代码逐边一致；
+> `egress` / `authorityExited` / `internalAccessObserved` 的字段纪律真实存在。
+
+### 审计对「这套东西在解决什么问题」的回答
+
+> **跑不了任何编译。** `MockUbuntuAdapter` 不执行进程，全树无 proot/rootfs。
+> 交付物是 §12 纸面契约 + 模型可见的 job 协议 + **一套已验证未接线的安全机制**。
+
+**这个回答我认。** 它是「诚实的部分够诚实」和「三处把边界说得比实际硬」的区别——
+后者已被逐条改成实话。
