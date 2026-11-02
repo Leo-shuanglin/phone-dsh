@@ -32,9 +32,12 @@ python3 spec/ui/v1/tools/ui_check.py --root .
 python3 -m unittest spec.ui.v1.tools.test_ui_check -v
 ```
 
-仓库级 `python3 -m unittest discover -s spec/ui/v1/tools -p 'test_*.py'` 还会运行 page-contract 测试；PR22 的
-ChatPage 契约重抽取属于 package A，当前基线在该测试上报 stale page contracts（同样在提交 `aa2e1aa` 复现），
-本 lane 不隐藏也不修改 `pages/`。
+**验收顺序（a-tokens 与 a-pages 的依赖边界）**：本 lane 的接受门是 `ui_check.py --root .` 与上面的
+`test_ui_check`；仓库级 `python3 -m unittest discover -s spec/ui/v1/tools -p 'test_*.py'` 还会运行 page-contract
+测试，PR22 的 ChatPage 契约重抽取属于 package A。当前基线在该测试上报 stale page contracts（同样在提交
+`aa2e1aa` 复现），`extract_ios_pages.py --check` 与 `page_structure_check.py --baseline` 也报同样 25 个 stale
+页面；本 lane 不隐藏、不修改 `pages/`、不删除测试，也不把这些失败标成通过。三条全量命令留给 a-pages 刷新契约后
+由 h-verify 在最终集成候选上执行。
 
 checker 强制：tokens 过 schema；6 个签名面的 token 引用全部存在且含页面层几何；每个叶子 token 都有 `file:line`
 来源，且该行必须仍存在并包含 token 名/值（页面层长度可用 `expect` 片段；来源过期即失败）；颜色、字号、间距必须
