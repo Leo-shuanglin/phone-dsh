@@ -781,9 +781,9 @@ test('an idle consumer is not failed by a window that expired while the process 
 
 test('an idle consumer cannot renew a frozen clock forever', async () => {
   const chunk = new TextEncoder().encode('event: a\n\n')
-  const fake = (async () => new Response(neverClosingBody([chunk]), {
-    status: 200, headers: { 'content-type': 'text/event-stream' },
-  })) as typeof fetch
+  // `neverClosingBody` already answers with a 200 event-stream Response; wrapping
+  // it in another one is a type error and would double-wrap the stream.
+  const fake = (async () => neverClosingBody([chunk])) as typeof fetch
 
   const clock = installFakeActiveClock()
   try {
