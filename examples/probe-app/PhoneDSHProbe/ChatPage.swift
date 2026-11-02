@@ -2107,25 +2107,31 @@ struct ChatPage: View {
         .accessibilityLabel(stopping ? "正在停止" : "停止执行")
     }
 
-    /// Control row inside the card: + , 语音, 权限 (and the plan chip) on the
+    /// The 语音 button is hidden for now; dictation stays wired up so turning
+    /// this back on restores it.
+    static let showsVoiceInput = false
+
+    /// Control row inside the card: + , 语音 (when shown), 权限 and the plan chip on the
     /// left in 40×44 hit boxes, the model chip and the 36pt send/stop button
     /// on the right, 8pt from the card edge.
     private var composerControls: some View {
         HStack(spacing: 0) {
             composerPlusMenu(tint: HomeSpec.primaryButton)
-            Button {
-                if voice.recording { voice.finish() }
-                else { voice.start { text in draft += (draft.isEmpty ? "" : "\n") + text } }
-            } label: {
-                Image(systemName: voice.recording ? "stop.circle.fill" : "mic")
-                    .font(.system(size: 19, weight: .regular))
-                    .frame(width: 40, height: 44)
-                    .contentShape(Rectangle())
+            if Self.showsVoiceInput {
+                Button {
+                    if voice.recording { voice.finish() }
+                    else { voice.start { text in draft += (draft.isEmpty ? "" : "\n") + text } }
+                } label: {
+                    Image(systemName: voice.recording ? "stop.circle.fill" : "mic")
+                        .font(.system(size: 19, weight: .regular))
+                        .frame(width: 40, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(voice.recording ? ChatPage.danger : HomeSpec.textSecondary)
+                .accessibilityLabel(voice.recording ? "结束语音输入" : "语音输入")
+                .disabled(voice.recognizing && !voice.recording)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(voice.recording ? ChatPage.danger : HomeSpec.textSecondary)
-            .accessibilityLabel(voice.recording ? "结束语音输入" : "语音输入")
-            .disabled(voice.recognizing && !voice.recording)
             accessModeMenu
                 .frame(minWidth: 40)
             if let plan = model.planModeState, plan.isPlanTarget {
