@@ -7,13 +7,13 @@
   "sectionNote": null,
   "title": {
     "text": "定时任务",
-    "provenance": "NativeAutomationPage.swift:76",
+    "provenance": "NativeAutomationPage.swift:66",
     "anchor": ".navigationTitle(\"定时任务\")"
   },
   "source": {
     "file": "NativeAutomationPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/NativeAutomationPage.swift",
-    "lines": 420,
+    "lines": 413,
     "structLine": 8,
     "renderedFrom": [
       "body"
@@ -37,7 +37,7 @@
       "collection": null,
       "rows": [
         {
-          "id": "text-70",
+          "id": "text-62",
           "label": null,
           "labelExpr": "error",
           "kind": "text",
@@ -47,19 +47,19 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeAutomationPage.swift:70",
-          "anchor": "Section(\"需要处理\") { Text(error).font(.footnote).foregroundStyle(.red).textSelectio",
+          "provenance": "NativeAutomationPage.swift:62",
+          "anchor": "Section(\"需要处理\") { Text(error).font(.system(size: 13)).foregroundStyle(.red).text",
           "extraction": "manual"
         }
       ],
-      "provenance": "NativeAutomationPage.swift:70",
-      "anchor": "Section(\"需要处理\") { Text(error).font(.footnote).foregroundStyle(.red).textSelectio",
+      "provenance": "NativeAutomationPage.swift:62",
+      "anchor": "Section(\"需要处理\") { Text(error).font(.system(size: 13)).foregroundStyle(.red).text",
       "extraction": "syntax"
     }
   ],
   "actions": [
     {
-      "id": "gesture-90",
+      "id": "gesture-80",
       "label": null,
       "labelExpr": null,
       "kind": "gesture",
@@ -68,7 +68,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:90",
+      "provenance": "NativeAutomationPage.swift:80",
       "anchor": ".refreshable { await management.refreshAutomations() }",
       "extraction": "syntax"
     },
@@ -82,10 +82,10 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:30",
-      "anchor": "Text(\"新建任务\")",
+      "provenance": "NativeAutomationPage.swift:27",
+      "anchor": "Button(\"新建任务\") { creating = true }",
       "extraction": "syntax",
-      "presents": "sheet-92"
+      "presents": "sheet-82"
     },
     {
       "id": "编辑",
@@ -97,10 +97,10 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:63",
+      "provenance": "NativeAutomationPage.swift:55",
       "anchor": "Button(\"编辑\") { editing = schedule }.tint(.blue)",
       "extraction": "syntax",
-      "presents": "sheet-99"
+      "presents": "sheet-89"
     },
     {
       "id": "删除",
@@ -112,13 +112,13 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:64",
+      "provenance": "NativeAutomationPage.swift:56",
       "anchor": "Button(\"删除\", role: .destructive) { deleting = schedule }",
       "extraction": "syntax",
-      "presents": "confirmationDialog-102"
+      "presents": "confirmationDialog-92"
     },
     {
-      "id": "button-79",
+      "id": "button-69",
       "label": null,
       "labelExpr": null,
       "kind": "button",
@@ -127,7 +127,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:79",
+      "provenance": "NativeAutomationPage.swift:69",
       "anchor": "Button { Task { await management.refreshAutomations() } } label: { Image(systemN",
       "extraction": "manual"
     },
@@ -141,7 +141,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:83",
+      "provenance": "NativeAutomationPage.swift:73",
       "anchor": "Button(\"新建\") { creating = true }",
       "extraction": "syntax"
     },
@@ -155,7 +155,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:104",
+      "provenance": "NativeAutomationPage.swift:94",
       "anchor": "Button(\"删除任务\", role: .destructive) {",
       "extraction": "syntax"
     },
@@ -169,7 +169,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:108",
+      "provenance": "NativeAutomationPage.swift:98",
       "anchor": "Button(\"取消\", role: .cancel) { deleting = nil }",
       "extraction": "syntax"
     },
@@ -179,14 +179,14 @@
       "labelExpr": null,
       "kind": "toggle",
       "trigger": "tap",
-      "semantic": null,
+      "semantic": "binding:$changeTiming",
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:260",
+      "provenance": "NativeAutomationPage.swift:252",
       "anchor": "Toggle(\"修改计划时间\", isOn: $changeTiming)",
       "extraction": "syntax",
-      "presentedBy": "sheet-92"
+      "presentedBy": "sheet-82"
     },
     {
       "id": "规则",
@@ -194,11 +194,11 @@
       "labelExpr": null,
       "kind": "picker",
       "trigger": "tap",
-      "semantic": null,
+      "semantic": "binding:$rule",
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:263",
+      "provenance": "NativeAutomationPage.swift:255",
       "anchor": "Picker(\"规则\", selection: $rule) {",
       "extraction": "syntax",
       "items": [
@@ -211,7 +211,7 @@
         "自定义时间表"
       ],
       "style": "default",
-      "presentedBy": "sheet-92"
+      "presentedBy": "sheet-82"
     },
     {
       "id": "取消",
@@ -223,10 +223,10 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:281",
+      "provenance": "NativeAutomationPage.swift:274",
       "anchor": "ToolbarItem(placement: .cancellationAction) { Button(\"取消\") { dismiss() }.leading",
       "extraction": "syntax",
-      "presentedBy": "sheet-92"
+      "presentedBy": "sheet-82"
     },
     {
       "id": "保存",
@@ -238,10 +238,10 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAutomationPage.swift:283",
+      "provenance": "NativeAutomationPage.swift:276",
       "anchor": "Button(saving ? \"保存中…\" : \"保存\") { save() }",
       "extraction": "syntax",
-      "presentedBy": "sheet-92"
+      "presentedBy": "sheet-82"
     },
     {
       "id": "查看投递记录",
@@ -288,7 +288,7 @@
   ],
   "presentations": [
     {
-      "id": "sheet-92",
+      "id": "sheet-82",
       "kind": "sheet",
       "title": null,
       "destination": "ScheduleEditorPage",
@@ -296,15 +296,15 @@
         "creating"
       ],
       "span": [
-        92,
-        98
+        82,
+        88
       ],
-      "provenance": "NativeAutomationPage.swift:92",
+      "provenance": "NativeAutomationPage.swift:82",
       "anchor": ".sheet(isPresented: $creating) {",
       "triggered": true
     },
     {
-      "id": "sheet-99",
+      "id": "sheet-89",
       "kind": "sheet",
       "title": null,
       "destination": "ScheduleEditorPage",
@@ -312,15 +312,15 @@
         "editing"
       ],
       "span": [
-        99,
-        101
+        89,
+        91
       ],
-      "provenance": "NativeAutomationPage.swift:99",
+      "provenance": "NativeAutomationPage.swift:89",
       "anchor": ".sheet(item: $editing) { schedule in",
       "triggered": true
     },
     {
-      "id": "confirmationDialog-102",
+      "id": "confirmationDialog-92",
       "kind": "confirmationDialog",
       "title": "删除此自动化任务？",
       "destination": null,
@@ -328,10 +328,10 @@
         "deleting"
       ],
       "span": [
-        102,
-        109
+        92,
+        99
       ],
-      "provenance": "NativeAutomationPage.swift:102",
+      "provenance": "NativeAutomationPage.swift:92",
       "anchor": ".confirmationDialog(\"删除此自动化任务？\", isPresented: Binding(",
       "triggered": true
     }
@@ -377,55 +377,58 @@
   "subpages": [
     {
       "name": "ScheduleDetailPage",
-      "line": 117,
+      "line": 107,
       "private": true,
+      "embedded": true,
       "sections": [
         {
           "title": "提醒",
-          "provenance": "NativeAutomationPage.swift:129"
+          "provenance": "NativeAutomationPage.swift:119"
         },
         {
           "title": "投递记录",
-          "provenance": "NativeAutomationPage.swift:136"
+          "provenance": "NativeAutomationPage.swift:126"
         },
         {
           "title": "错误",
-          "provenance": "NativeAutomationPage.swift:150"
+          "provenance": "NativeAutomationPage.swift:140"
         }
       ],
-      "provenance": "NativeAutomationPage.swift:117"
+      "provenance": "NativeAutomationPage.swift:107"
     },
     {
       "name": "ScheduleHistoryPage",
-      "line": 178,
+      "line": 169,
       "private": true,
+      "embedded": true,
       "sections": [
         {
           "title": "错误",
-          "provenance": "NativeAutomationPage.swift:203"
+          "provenance": "NativeAutomationPage.swift:194"
         }
       ],
-      "provenance": "NativeAutomationPage.swift:178"
+      "provenance": "NativeAutomationPage.swift:169"
     },
     {
       "name": "ScheduleEditorPage",
-      "line": 212,
+      "line": 204,
       "private": true,
+      "embedded": true,
       "sections": [
         {
           "title": "任务内容",
-          "provenance": "NativeAutomationPage.swift:252"
+          "provenance": "NativeAutomationPage.swift:244"
         },
         {
           "title": "计划时间",
-          "provenance": "NativeAutomationPage.swift:258"
+          "provenance": "NativeAutomationPage.swift:250"
         },
         {
           "title": "错误",
-          "provenance": "NativeAutomationPage.swift:276"
+          "provenance": "NativeAutomationPage.swift:268"
         }
       ],
-      "provenance": "NativeAutomationPage.swift:212"
+      "provenance": "NativeAutomationPage.swift:204"
     }
   ],
   "unreachable": [],

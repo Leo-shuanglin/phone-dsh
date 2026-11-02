@@ -933,7 +933,8 @@ README_PHRASES = (
     ("只记录，不改基线", "the baseline observations are recorded, not fixed"),
     ("生成 Swift/Compose", "the P5 token generator must be registered as a work item"),
 )
-BASELINE_ANCHORS = ("SessionActivityPage", "DailyBriefPage", "NativeTab", "HomeSpec.swift:5")
+BASELINE_ANCHORS = ("SessionActivityPage", "DailyBriefPage", "NativeTab", "HomeSpec.swift:5",
+                    "HomeSpec.swift:26", "HomeDrawer")
 
 
 def check_readme_notes(readme: str) -> None:

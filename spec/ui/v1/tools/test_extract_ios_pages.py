@@ -16,6 +16,7 @@ These tests pin both directions of the rule:
   * a nested screen (own `navigationTitle`/`.toolbar`) is not.
 """
 
+import json
 import sys
 import tempfile
 import unittest
@@ -388,6 +389,176 @@ class UntitledCriterionTest(unittest.TestCase):
         self.assertEqual("first-row", criterion["kind"])
         self.assertEqual("添加来源后，打开页面就会更新", criterion["label"])
         self.assertEqual("DemoPage.swift:11", criterion["provenance"])
+
+
+DYNAMIC_SECTION_HEADER = """\
+import SwiftUI
+
+struct DemoPage: View {
+    var body: some View {
+        List {
+            Section {
+                ForEach(group.fields) { field in
+                    Text(field.title)
+                }
+            } header: {
+                Text(nativeSettingsGroupTitle(group))
+            }
+        }
+    }
+}
+"""
+
+SETTINGS_ROW_LABEL = """\
+import SwiftUI
+
+struct DemoPage: View {
+    var body: some View {
+        List {
+            Section("连接") {
+                Button {
+                    edit()
+                } label: {
+                    SettingsRowLabel(title: NativeText("模型服务", "Model providers"), icon: "cpu")
+                }
+            }
+        }
+    }
+}
+"""
+
+DEEP_LINK_INIT = """\
+import SwiftUI
+
+struct DemoPage: View {
+    @State private var deepLink: String?
+
+    init(initial: String = "") {
+        _deepLink = State(initialValue: initial.isEmpty ? nil : initial)
+    }
+
+    var body: some View {
+        List {
+            Section("索引") {
+                Text("行")
+            }
+        }
+        .navigationDestination(item: $deepLink) { tab in
+            DetailPage(tab: tab)
+        }
+    }
+}
+
+private struct DetailPage: View {
+    let tab: String
+    var body: some View { Text(tab) }
+}
+"""
+
+EMBEDDED_SUBPAGES = """\
+import SwiftUI
+
+struct DemoPage: View {
+    var body: some View {
+        List {
+            Section("索引") {
+                Text("行")
+            }
+        }
+    }
+}
+
+private struct FontSizeSettingsPage: View {
+    var body: some View { Text("字号") }
+}
+
+private struct ConversationSettingsPage: View {
+    var body: some View {
+        List { Section("工作步骤") { Text("行") } }
+    }
+}
+
+private struct ArchivedSessionsPage: View {
+    var body: some View { Text("已归档") }
+}
+"""
+
+
+class Pr22ConstructTest(unittest.TestCase):
+    """The PR22 constructs the scanner used to mishandle."""
+
+    def test_a_data_driven_section_header_is_an_expression_not_suppressed(self) -> None:
+        page = extract(DYNAMIC_SECTION_HEADER)
+        section = page["sections"][0]
+        self.assertEqual("expression", section["titleSource"])
+        self.assertEqual("nativeSettingsGroupTitle(group)", section["titleExpression"])
+        self.assertIsNone(section["title"])
+        self.assertFalse(section.get("suppressed"))
+        self.assertIn("criterion", section,
+                      "a data-driven title must be identified by a row criterion")
+
+    def test_a_settings_row_label_wrapper_supplies_the_action_wording(self) -> None:
+        page = extract(SETTINGS_ROW_LABEL)
+        self.assertIn("模型服务", labels(page))
+
+    def test_a_state_seeded_in_init_is_a_live_presentation(self) -> None:
+        page = extract(DEEP_LINK_INIT)
+        destination = next(p for p in page["presentations"]
+                           if p["kind"] == "navigationDestination")
+        self.assertTrue(destination["triggered"])
+        self.assertFalse(destination.get("deadUi", False))
+
+    def test_pr22_settings_subpages_are_registered_as_embedded(self) -> None:
+        page = extract(EMBEDDED_SUBPAGES)
+        embedded = {sub["name"]: sub["embedded"] for sub in page["subpages"]}
+        self.assertTrue(embedded["FontSizeSettingsPage"])
+        self.assertTrue(embedded["ConversationSettingsPage"])
+        self.assertTrue(embedded["ArchivedSessionsPage"])
+
+
+class ChromeContractTest(unittest.TestCase):
+    """HomeDrawer/HomeSpec are chrome, not `*Page`, but must not leave the gate."""
+
+    def _root(self, contract: bool = True) -> tuple:
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        probe = root / E.PROBE_REL
+        probe.mkdir(parents=True)
+        (probe / "HomeDrawer.swift").write_text(
+            "import SwiftUI\nstruct HomeDrawer: View { var body: some View { Text(\"x\") } }\n",
+            encoding="utf-8")
+        (probe / "HomeSpec.swift").write_text("enum HomeSpec {}\n", encoding="utf-8")
+        if contract:
+            pages = root / E.PAGES_REL
+            pages.mkdir(parents=True)
+            (pages / "home-drawer.json").write_text(json.dumps({
+                "page": "HomeDrawer", "pageId": "home-drawer", "handRegistered": {"reason": "x"},
+            }), encoding="utf-8")
+        return tmp, root
+
+    def test_the_hand_registered_chrome_contract_must_exist(self) -> None:
+        tmp, root = self._root(contract=False)
+        try:
+            with self.assertRaises(E.ExtractError):
+                E.check_chrome_contracts(root)
+        finally:
+            tmp.cleanup()
+
+    def test_the_chrome_contract_and_home_spec_are_pinned(self) -> None:
+        tmp, root = self._root()
+        try:
+            E.check_chrome_contracts(root)  # no raise
+        finally:
+            tmp.cleanup()
+
+    def test_a_missing_home_spec_is_reported(self) -> None:
+        tmp, root = self._root()
+        try:
+            (root / E.PROBE_REL / "HomeSpec.swift").unlink()
+            with self.assertRaises(E.ExtractError):
+                E.check_chrome_contracts(root)
+        finally:
+            tmp.cleanup()
 
 
 if __name__ == "__main__":

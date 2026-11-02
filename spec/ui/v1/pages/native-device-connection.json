@@ -7,13 +7,13 @@
   "sectionNote": null,
   "title": {
     "text": "Device",
-    "provenance": "NativeDeviceConnectionPage.swift:123",
+    "provenance": "NativeDeviceConnectionPage.swift:121",
     "anchor": ".navigationTitle(\"Device\")"
   },
   "source": {
     "file": "NativeDeviceConnectionPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/NativeDeviceConnectionPage.swift",
-    "lines": 172,
+    "lines": 170,
     "structLine": 75,
     "renderedFrom": [
       "body",
@@ -190,14 +190,14 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "NativeDeviceConnectionPage.swift:130",
+      "provenance": "NativeDeviceConnectionPage.swift:128",
       "anchor": "Button(\"完成\") { dismiss() }.leadingBarText()",
       "extraction": "syntax"
     }
   ],
   "presentations": [
     {
-      "id": "navigationDestination-125",
+      "id": "navigationDestination-123",
       "kind": "navigationDestination",
       "title": null,
       "destination": "NativeDeviceSessionPage",
@@ -205,10 +205,10 @@
         "selection"
       ],
       "span": [
-        125,
-        127
+        123,
+        125
       ],
-      "provenance": "NativeDeviceConnectionPage.swift:125",
+      "provenance": "NativeDeviceConnectionPage.swift:123",
       "anchor": ".navigationDestination(item: $selection) { mapping in",
       "triggered": true
     }

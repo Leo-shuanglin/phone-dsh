@@ -158,6 +158,16 @@ class Fixture:
         self.tmp.cleanup()
 
 
+def approve_baseline(path: Path, lane: str = "H") -> None:
+    """Simulate the human review step that a written baseline requires."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for row in data["divergences"]:
+        if row.get("lane") in (None, "", "UNREVIEWED"):
+            row["lane"] = lane
+        row["reason"] = "fixture divergence, reviewed for the test"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def run_check(root: Path, **kwargs) -> tuple:
     """`check.run` with the CLI's error handling: a CheckError is exit code 1."""
     out = io.StringIO()
@@ -834,6 +844,7 @@ class PageStructureCheckTests(unittest.TestCase):
         baseline = self.fx.root / "spec/ui/v1/pages/_baseline.json"
         rc, out = run_check(self.fx.root, write_baseline=baseline)
         self.assertEqual(rc, 0, out)
+        approve_baseline(baseline)
         rc, out = run_check(self.fx.root, baseline_path=baseline)
         self.assertEqual(rc, 0, out)
         self.assertIn("known divergence(s), 0 new", out)
@@ -849,11 +860,98 @@ class PageStructureCheckTests(unittest.TestCase):
         baseline = self.fx.root / "spec/ui/v1/pages/_baseline.json"
         rc, out = run_check(self.fx.root, write_baseline=baseline)
         self.assertEqual(rc, 0, out)
+        approve_baseline(baseline)
         text = self.fx.android().replace("    SessionSectionLabel(text = \"Gamma\")\n", "")
         self.fx.write_android(text)
         rc, out = run_check(self.fx.root, baseline_path=baseline)
         self.assertEqual(rc, 1, out)
         self.assertIn("stale baseline", out)
+
+    def test_write_baseline_marks_unreviewed_rows(self) -> None:
+        """A bulk write cannot masquerade as a reviewed ratchet move."""
+        self._add_gamma()
+        baseline = self.fx.root / "spec/ui/v1/pages/_baseline.json"
+        rc, out = run_check(self.fx.root, write_baseline=baseline)
+        self.assertEqual(rc, 0, out)
+        data = json.loads(baseline.read_text(encoding="utf-8"))
+        self.assertTrue(data["divergences"])
+        self.assertEqual({"UNREVIEWED"}, {row["lane"] for row in data["divergences"]})
+        rc, out = run_check(self.fx.root, baseline_path=baseline)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("UNREVIEWED", out)
+
+    def test_baseline_entry_needs_an_owning_lane_and_reason(self) -> None:
+        self._add_gamma()
+        baseline = self.fx.root / "spec/ui/v1/pages/_baseline.json"
+        rc, out = run_check(self.fx.root, write_baseline=baseline)
+        self.assertEqual(rc, 0, out)
+        data = json.loads(baseline.read_text(encoding="utf-8"))
+        data["divergences"][0]["lane"] = "X"
+        baseline.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        rc, out = run_check(self.fx.root, baseline_path=baseline)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("not one of C/D/E/F/G/H", out)
+
+    def test_a_reviewed_baseline_loads(self) -> None:
+        self._add_gamma()
+        baseline = self.fx.root / "spec/ui/v1/pages/_baseline.json"
+        rc, out = run_check(self.fx.root, write_baseline=baseline)
+        self.assertEqual(rc, 0, out)
+        approve_baseline(baseline, lane="H")
+        rc, out = run_check(self.fx.root, baseline_path=baseline)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("known divergence(s), 0 new", out)
+
+    def test_a_data_model_section_view_is_not_a_header(self) -> None:
+        """PR22 AboutPage projects cards through `data class AboutSectionView`."""
+        self.fx.write_android(self.fx.android() + """
+public data class AboutSectionView(val id: String, val title: String)
+private fun projection() = listOf(AboutSectionView("about.version", "版本"))
+""")
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("extra-section", out)
+        self.assertNotIn("版本", out)
+
+    def test_settings_form_row_satisfies_an_untitled_criterion(self) -> None:
+        """A settings wrapper still renders the visible row the criterion names."""
+        data = contract()
+        data["sections"] = [{
+            "id": "version", "title": None, "titleTemplate": None, "titleSource": "absent",
+            "condition": None, "collection": None, "rows": [],
+            "criterion": {"kind": "first-row", "label": "版本", "provenance": "FakePage.swift:3"},
+            "provenance": "FakePage.swift:3", "anchor": 'Section {',
+            "extraction": "syntax",
+        }]
+        data["actions"] = []
+        self.fx.write_contract(data)
+        self.fx.write_swift("""import SwiftUI
+struct FakePage: View { var body: some View {
+        Section {
+            Text("版本")
+        }
+} }
+""")
+        self.fx.write_android("""package com.phonedsh.ui.page
+
+public fun FakePage() {
+    SettingsFormRow(title = "版本", value = "1.0")
+}
+""")
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 0, out)
+
+    def test_write_baseline_preserves_an_existing_review(self) -> None:
+        self._add_gamma()
+        baseline = self.fx.root / "spec/ui/v1/pages/_baseline.json"
+        rc, out = run_check(self.fx.root, write_baseline=baseline)
+        self.assertEqual(rc, 0, out)
+        approve_baseline(baseline, lane="E")
+        rc, out = run_check(self.fx.root, write_baseline=baseline)
+        self.assertEqual(rc, 0, out)
+        data = json.loads(baseline.read_text(encoding="utf-8"))
+        self.assertTrue(data["divergences"])
+        self.assertEqual({"E"}, {row["lane"] for row in data["divergences"]})
 
     # -- contract scope ----------------------------------------------------
 

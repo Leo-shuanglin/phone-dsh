@@ -46,7 +46,7 @@
    "page": "native-configuration",
    "kind": "unresolved-section",
    "name": "section.title",
-   "reason": "Android composes this section title from its state (`section.title`); the contract section is criterion-based, so there is no literal title to compare.",
+   "reason": "Android composes this section's header from host state (`section.title`), so the static comparator sees an expression; the contract's literal is the iOS half of the platform-forced 手机 Worker 限制 / iPhone Worker 限制 noun difference.",
    "owner": "android-parity",
    "reviewBy": "2027-06-30"
   },
@@ -75,14 +75,6 @@
    "reviewBy": "2027-06-30"
   },
   {
-   "page": "settings",
-   "kind": "unresolved-section",
-   "name": "<manual region>",
-   "reason": "At iOS HEAD SettingsPage is a five-tab sheet (SettingsPage.swift:64-72 a segmented Picker over NativeSettingsTab, :82-90 the content switch). The extractor models Section trees, not a tab shell, so the page's top-level grouping has no comparable section; each tab body is a page of its own (native-general inline, model-provider-settings, native-plugin-inventory, phone-permissions, native-agent-presets).",
-   "owner": "ui-contract",
-   "reviewBy": "2027-06-30"
-  },
-  {
    "page": "native-agent-presets",
    "kind": "unresolved-section",
    "name": "<untitled: error>",
@@ -95,14 +87,6 @@
    "kind": "missing-action",
    "name": "删除",
    "reason": "DailyBriefPage.swift:112 is a `.swipeActions` Label(\"删除\"); Android renders the same action as a SwipeToDismissBox background label, and DailyBriefPageTest states that turning it into a visible button must fail on purpose. The action exists on both sides; only the affordance differs.",
-   "owner": "ui-contract",
-   "reviewBy": "2027-06-30"
-  },
-  {
-   "page": "native-plugin-inventory",
-   "kind": "unresolved-section",
-   "name": "<untitled: nativeConfigurationError(error)>",
-   "reason": "NativePluginInventoryPage.swift:53 renders an untitled error row whose only text is runtime error data, so no literal criterion exists.",
    "owner": "ui-contract",
    "reviewBy": "2027-06-30"
   },
@@ -127,6 +111,22 @@
    "kind": "unresolved-section",
    "name": "group.title",
    "reason": "PhonePermissionsPage.swift:70 iterates `PhoneCapabilityGroup.allCases` and uses `group.title` as the Section header; the titles are model data, so no literal exists. The same shape is already registered for native-configuration and session-activity.",
+   "owner": "ui-contract",
+   "reviewBy": "2027-06-30"
+  },
+  {
+   "page": "pdsh-shell",
+   "kind": "unresolved-section",
+   "name": "<untitled: empty>",
+   "reason": "PDSHShellPage.swift:74 is an untitled Section whose only row (PDSHShellPage.swift:75) is a ternary button (运行/运行中…); the literal the extractor reads exists in only one branch, so no stable row criterion exists. The section is the run/stop action block, judged through its actions.",
+   "owner": "ui-contract",
+   "reviewBy": "2027-06-30"
+  },
+  {
+   "page": "runtime-details",
+   "kind": "unresolved-section",
+   "name": "<untitled: empty>",
+   "reason": "The first RuntimeDetailsPage Section (ChatPage.swift:4324) opens with `runtimeRow(\"状态\", model.isStarted ? statusValue : \"已停止\")`; the label's value is a ternary, so no stable first-row criterion exists. The row and the stop/restart action are judged by the actions, not by this group title.",
    "owner": "ui-contract",
    "reviewBy": "2027-06-30"
   }

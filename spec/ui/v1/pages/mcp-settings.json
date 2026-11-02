@@ -7,13 +7,13 @@
   "sectionNote": null,
   "title": {
     "text": "MCP 网络与密钥",
-    "provenance": "MCPSettingsPage.swift:101",
+    "provenance": "MCPSettingsPage.swift:99",
     "anchor": ".navigationTitle(\"MCP 网络与密钥\")"
   },
   "source": {
     "file": "MCPSettingsPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/MCPSettingsPage.swift",
-    "lines": 281,
+    "lines": 280,
     "structLine": 17,
     "renderedFrom": [
       "body",
@@ -331,19 +331,20 @@
   "subpages": [
     {
       "name": "MCPEditorPage",
-      "line": 165,
+      "line": 163,
       "private": true,
+      "embedded": false,
       "sections": [
         {
           "title": "服务器",
-          "provenance": "MCPSettingsPage.swift:188"
+          "provenance": "MCPSettingsPage.swift:186"
         },
         {
           "title": "认证头与设备密钥",
-          "provenance": "MCPSettingsPage.swift:203"
+          "provenance": "MCPSettingsPage.swift:201"
         }
       ],
-      "provenance": "MCPSettingsPage.swift:165"
+      "provenance": "MCPSettingsPage.swift:163"
     }
   ],
   "unreachable": [],

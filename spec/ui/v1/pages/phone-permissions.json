@@ -13,7 +13,7 @@
   "source": {
     "file": "PhonePermissionsPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/PhonePermissionsPage.swift",
-    "lines": 274,
+    "lines": 272,
     "structLine": 8,
     "renderedFrom": [
       "body",
@@ -32,7 +32,7 @@
   },
   "sections": [
     {
-      "id": "section-72",
+      "id": "section-70",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
@@ -42,7 +42,7 @@
       "collection": "PhoneCapabilityGroup.allCases, id: \\.self",
       "rows": [
         {
-          "id": "dynamic-74",
+          "id": "dynamic-72",
           "label": null,
           "labelExpr": "row(capability)",
           "kind": "dynamic",
@@ -52,7 +52,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "PhonePermissionsPage.swift:74",
+          "provenance": "PhonePermissionsPage.swift:72",
           "anchor": "row(capability)",
           "extraction": "manual",
           "templateLabels": [
@@ -62,13 +62,13 @@
           "collection": "group.capabilities"
         }
       ],
-      "provenance": "PhonePermissionsPage.swift:72",
+      "provenance": "PhonePermissionsPage.swift:70",
       "anchor": "Section(group.title) {",
       "extraction": "syntax",
       "criterion": {
         "kind": "first-row-expression",
         "labelExpr": "row(capability)",
-        "provenance": "PhonePermissionsPage.swift:74"
+        "provenance": "PhonePermissionsPage.swift:72"
       }
     },
     {
@@ -92,12 +92,12 @@
           "destination": null,
           "writes": false,
           "condition": "audit.isEmpty",
-          "provenance": "PhonePermissionsPage.swift:87",
+          "provenance": "PhonePermissionsPage.swift:85",
           "anchor": "Text(\"暂无使用记录\")",
           "extraction": "syntax"
         },
         {
-          "id": "custom-92",
+          "id": "custom-90",
           "label": null,
           "labelExpr": "PhoneCapabilityAuditRow",
           "kind": "custom",
@@ -107,14 +107,14 @@
           "destination": null,
           "writes": false,
           "condition": "!(audit.isEmpty)",
-          "provenance": "PhonePermissionsPage.swift:92",
+          "provenance": "PhonePermissionsPage.swift:90",
           "anchor": "PhoneCapabilityAuditRow(record: record)",
           "extraction": "manual",
           "template": "PhoneCapabilityAuditRow",
           "collection": "Array(audit.prefix(20).enumerated()), id: \\.offset"
         }
       ],
-      "provenance": "PhonePermissionsPage.swift:85",
+      "provenance": "PhonePermissionsPage.swift:83",
       "anchor": "Section(\"最近使用审计\") {",
       "extraction": "syntax"
     }
@@ -193,7 +193,7 @@
       "extraction": "syntax"
     },
     {
-      "id": "button-103",
+      "id": "button-101",
       "label": null,
       "labelExpr": "capability.title",
       "kind": "button",
@@ -202,7 +202,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "PhonePermissionsPage.swift:103",
+      "provenance": "PhonePermissionsPage.swift:101",
       "anchor": "Button {",
       "extraction": "manual"
     },
@@ -216,7 +216,7 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "PhonePermissionsPage.swift:147",
+      "provenance": "PhonePermissionsPage.swift:145",
       "anchor": "Button(\"去系统设置\") { openSettings() }",
       "extraction": "syntax"
     },
@@ -230,7 +230,7 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "PhonePermissionsPage.swift:161",
+      "provenance": "PhonePermissionsPage.swift:159",
       "anchor": "Button(\"管理可访问照片\") { requester.presentLimitedPhotosPicker() }",
       "extraction": "syntax"
     }
@@ -277,13 +277,13 @@
         {
           "renders": "暂无使用记录",
           "when": "audit.isEmpty",
-          "provenance": "PhonePermissionsPage.swift:87",
+          "provenance": "PhonePermissionsPage.swift:85",
           "anchor": "Text(\"暂无使用记录\")"
         }
       ],
       "data": [
         {
-          "renders": "untitled section at 72 | 最近使用审计",
+          "renders": "untitled section at 70 | 最近使用审计",
           "when": null,
           "provenance": "PhonePermissionsPage.swift:8",
           "anchor": "struct PhonePermissionsPage: View {",

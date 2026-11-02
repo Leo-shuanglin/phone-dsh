@@ -5,15 +5,11 @@
   "structure": "swiftui-view",
   "sectionModel": "single-region",
   "sectionNote": "NavigationStack/VStack: a segmented mode switch over two embedded pages; no group header",
-  "title": {
-    "text": "工作区",
-    "provenance": "NativeWorkbenchPage.swift:29",
-    "anchor": ".navigationTitle(\"工作区\")"
-  },
+  "title": null,
   "source": {
     "file": "NativeWorkbenchPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/NativeWorkbenchPage.swift",
-    "lines": 40,
+    "lines": 43,
     "structLine": 6,
     "renderedFrom": [
       "body"
@@ -35,55 +31,7 @@
       "titleSource": "absent",
       "condition": null,
       "collection": null,
-      "rows": [
-        {
-          "id": "工作面板",
-          "label": "工作面板",
-          "labelExpr": null,
-          "kind": "control",
-          "value": "工作面板 | 文件 | 命令",
-          "valueExpr": null,
-          "clickable": true,
-          "destination": null,
-          "writes": true,
-          "condition": null,
-          "provenance": "NativeWorkbenchPage.swift:16",
-          "anchor": "Picker(\"工作面板\", selection: $section) {",
-          "extraction": "syntax"
-        },
-        {
-          "id": "custom-24",
-          "label": null,
-          "labelExpr": "FilesPage",
-          "kind": "custom",
-          "value": null,
-          "valueExpr": null,
-          "clickable": false,
-          "destination": null,
-          "writes": false,
-          "condition": "section == 0",
-          "provenance": "NativeWorkbenchPage.swift:24",
-          "anchor": "FilesPage(initialPath: initialPath)",
-          "extraction": "manual",
-          "template": "FilesPage"
-        },
-        {
-          "id": "custom-26",
-          "label": null,
-          "labelExpr": "PDSHShellPage",
-          "kind": "custom",
-          "value": null,
-          "valueExpr": null,
-          "clickable": false,
-          "destination": null,
-          "writes": false,
-          "condition": "!(section == 0)",
-          "provenance": "NativeWorkbenchPage.swift:26",
-          "anchor": "PDSHShellPage()",
-          "extraction": "manual",
-          "template": "PDSHShellPage"
-        }
-      ],
+      "rows": [],
       "provenance": "NativeWorkbenchPage.swift:6",
       "anchor": "struct NativeWorkbenchPage: View {",
       "criterion": {
@@ -104,29 +52,9 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "NativeWorkbenchPage.swift:33",
-      "anchor": "Button(\"完成\") { onClose?(); dismiss() }.leadingBarText()",
+      "provenance": "NativeWorkbenchPage.swift:35",
+      "anchor": "Button(\"完成\") { onClose?(); dismiss() }",
       "extraction": "syntax"
-    },
-    {
-      "id": "工作面板",
-      "label": "工作面板",
-      "labelExpr": null,
-      "kind": "picker",
-      "trigger": "tap",
-      "semantic": null,
-      "writes": true,
-      "destination": null,
-      "condition": null,
-      "provenance": "NativeWorkbenchPage.swift:16",
-      "anchor": "Picker(\"工作面板\", selection: $section) {",
-      "extraction": "syntax",
-      "items": [
-        "工作面板",
-        "文件",
-        "命令"
-      ],
-      "style": "default"
     },
     {
       "id": "重试",
