@@ -24,57 +24,97 @@ frame, change `UiMetrics.kt`.
 > baseline, not as PR22 parity evidence. This bootstrap package does not change
 > a pixel profile or claim a cross-platform visual comparison.
 
-## Prerequisites: task-local JDK 17 + Android SDK
+## Prerequisites: writable-HOME JDK 17 + Android SDK 35 + Gradle 8.13
 
-The Gradle tree needs JDK 17 and Android SDK platform 35 / build-tools 35.0.0 /
-platform-tools / cmdline-tools. `bootstrap-android-toolchain.sh` provisions them
-under a task-local directory, never in a shared machine service:
+The Gradle tree needs JDK 17 (both `java` and `javac`), Android SDK platform 35 /
+build-tools 35.0.0 / platform-tools / cmdline-tools, and Gradle 8.13 through the
+committed wrapper. `bootstrap-android-toolchain.sh` provisions them below the
+*current writable HOME or XDG cache*, never in a shared machine service and
+never in a directory derived from the checkout's parent:
 
 ```bash
-# Install/repair. Idempotent: an existing JDK 17 and command-line tools are
-# reused, SDK licences are accepted non-interactively, and installer stdout and
-# stderr stay visible.
+# Install/repair. Idempotent: an existing consistent JDK 17 and command-line
+# tools are reused, SDK licences are accepted non-interactively, and every
+# installer's stdout/stderr stays visible.
 bash android/tools/bootstrap-android-toolchain.sh
 
-# Verify only. This never installs into the SDK and never writes
-# local.properties: java/javac must be 17 and sdkmanager must be able to list
-# platform-tools, platform 35 and build-tools 35.0.0. It prints the resolved
-# paths.
+# Verify only. This downloads nothing, installs nothing and writes no file:
+# java/javac must both be 17, sdkmanager must list platform-tools, platform 35
+# and build-tools 35.0.0, and the committed wrapper must pin Gradle 8.13 + its
+# SHA-256. It prints every resolved path.
 bash android/tools/bootstrap-android-toolchain.sh --check
 ```
 
-The default target is `<checkout-parent>/task-writable`: the JDK lands in
-`jdk-17/`, the SDK in `android-sdk/`, and downloads in `downloads/`. (`--check`
-prints the exact resolved paths on the current host.) Overrides:
+The default install root is `$XDG_CACHE_HOME/pdsh/android` when
+`XDG_CACHE_HOME` is set, otherwise `$HOME/toolchains/pdsh-android`. The JDK
+lands in `jdk-17/`, the SDK in `android-sdk/`, and verified archives in
+`downloads/`. `--check` prints the exact paths on the current host. Overrides:
 
 | variable | effect |
 |---|---|
-| `PDSH_TOOLCHAIN_DIR` | task-local root (default: checkout-parent `task-writable`) |
+| `PDSH_TOOLCHAIN_DIR` | explicit install root (must be writable; tests use a temp dir) |
 | `ANDROID_HOME` | use/install packages in an existing SDK root instead of `android-sdk/` |
-| `PDSH_JAVA_HOME` | use an explicit JDK 17 (the script fails if it is not 17) |
-| `JAVA_HOME` | reused only when it is already JDK 17 |
-| `PDSH_LOCAL_PROPERTIES` | output path for install mode (default: `android/local.properties`) |
-| `PDSH_JDK_URL`, `PDSH_CMDLINE_TOOLS_URL`, `PDSH_CURL` | pinned archives / downloader override |
+| `PDSH_JAVA_HOME` | use an explicit JDK 17; a java-11/javac-17 mix fails |
+| `JAVA_HOME` | reused only when java and javac are both 17; never modified |
+| `PDSH_LOCAL_PROPERTIES` | install-mode output (default: `android/local.properties`) |
+| `PDSH_JDK_URL`, `PDSH_JDK_SHA256` | pinned JDK archive override (both together) |
+| `PDSH_CMDLINE_TOOLS_URL`, `PDSH_CMDLINE_TOOLS_SHA1` | pinned cmdline-tools override |
+| `PDSH_GRADLE_URL`, `PDSH_GRADLE_SHA256` | pinned Gradle archive override (tests only) |
+| `PDSH_GRADLE_FALLBACK_URLS` | transport mirrors tried only after the pinned SHA-256 matches; empty disables |
+| `PDSH_GRADLE_USER_HOME` | Gradle cache root; precedence over `GRADLE_USER_HOME`, `XDG_CACHE_HOME`, `HOME` |
+| `PDSH_GRADLE_PRIMARY_TIMEOUT` | single-attempt window for the official Gradle endpoint before a verified mirror (default 30 s) |
+| `PDSH_CONNECT_TIMEOUT`, `PDSH_DOWNLOAD_TIMEOUT` | finite curl limits, default 20 s / 1800 s |
+| `PDSH_CURL` | downloader executable override (tests supply a fake curl) |
 
-Install mode writes `android/local.properties` (gitignored) with one
-`sdk.dir=<resolved SDK>` line and preserves unrelated keys in that file. A
-download, extraction, licence or package failure prints the exact command and
-its exit code and exits with that code; the script does not write
-`local.properties` until every package verifies. `--check` is separate from
-install and performs no download.
+Pins: Azul Zulu `17.0.21+3` (direct official CDN; SHA-256 per host from Azul's
+metadata API), Google command-line tools `11076708` (SHA-1 from Google's
+repository metadata), and Gradle `8.13`
+from `https://downloads.gradle.org/distributions/gradle-8.13-bin.zip`
+(SHA-256 `20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78`).
+The wrapper uses that official endpoint rather than `services.gradle.org`
+(which redirects to GitHub and has stalled in this environment), keeps the
+same version, and verifies `distributionSha256Sum` before unpacking. In this
+environment `downloads.gradle.org` also 307-redirects to GitHub release assets;
+install therefore tries it first with a single bounded attempt (`--retry 0`,
+default 30 s) and then the same archive name from public Gradle mirrors
+(`mirrors.huaweicloud.com`, `mirrors.cloud.tencent.com`) **only after the
+official SHA-256 verifies**, so a mirror cannot change the bytes. Fallback
+attempts keep curl retries. Install then pre-seeds the committed wrapper cache
+with the verified archive, avoiding a second GitHub fetch.
 
-After the bootstrap, export the paths the check prints:
+Install mode writes `android/local.properties` (gitignored) with
+`sdk.dir=<resolved SDK>`, preserving unrelated keys, and only after every
+package verifies. A download, checksum, extraction, licence or package failure
+prints the exact command and its exit code, removes a `.part` download and exits
+with that code. `--check` is a separate mode and performs no download.
+
+### Running Gradle through the wrapper
+
+Each isolated Gradle task must resolve its own environment; do not assume a
+previous worker's ignored `local.properties`, `~/.gradle` or `HOME` is visible.
+Use:
 
 ```bash
-export JAVA_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/jdk-17"
-export ANDROID_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/android-sdk"
-export GRADLE_USER_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/gradle-home"
-export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+bash android/tools/with-android-toolchain.sh ./gradlew --version --no-daemon
+bash android/tools/with-android-toolchain.sh ./gradlew :lib:testDebugUnitTest --no-daemon
 ```
 
-`GRADLE_USER_HOME` is part of the task-local rule: the prepared Linux host's
-`$HOME` may be read-only, and the Gradle wrapper must not try to write a shared
-`~/.gradle`.
+The wrapper and bootstrap resolve the same Gradle cache:
+`PDSH_GRADLE_USER_HOME` → `GRADLE_USER_HOME` → `XDG_CACHE_HOME/pdsh/gradle` →
+`$HOME/pdsh/gradle`. The wrapper resolves `JAVA_HOME`, `ANDROID_HOME` and that
+writable cache from the current environment (caller-supplied paths first, then
+`android/local.properties`, then the bootstrap default), sets
+`JAVA_TOOL_OPTIONS=-Duser.home=$HOME` for Robolectric, and execs the command
+from `android/`. It never sources `local.properties`; keys are read with `sed`.
+It works on macOS with caller-supplied `JAVA_HOME`/`ANDROID_HOME`.
+
+```bash
+# Equivalent explicit environment if you prefer not to use the wrapper:
+export JAVA_HOME="$HOME/toolchains/pdsh-android/jdk-17"
+export ANDROID_HOME="$HOME/toolchains/pdsh-android/android-sdk"
+export GRADLE_USER_HOME="${XDG_CACHE_HOME:-$HOME}/pdsh/gradle"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+```
 
 Required commands for this package (installation and verification stay
 separate):
@@ -82,18 +122,34 @@ separate):
 ```bash
 bash android/tools/bootstrap-android-toolchain.sh
 bash android/tools/bootstrap-android-toolchain.sh --check
-cd android && ./gradlew --version --no-daemon
-cd .. && python3 android/tools/structure_check.py --root .
-cd .. && python3 -m unittest discover -s android/tools -p 'test_*.py'
+bash android/tools/with-android-toolchain.sh ./gradlew --version --no-daemon
+python3 android/tools/structure_check.py --root .
+python3 -m unittest discover -s android/tools -p 'test_*.py'
 ```
 
 `test_bootstrap_android_toolchain.py` executes the real script in temporary
 directories. Only the external downloader (a fake `curl` serving local fixture
 archives) and the extracted fake `sdkmanager` are stubs; no test contacts the
-network or installs into the real toolchain. The tests cover default/override
-path resolution, check-mode output, `local.properties` generation and key
-preservation, idempotency, and propagation of download/licence/package exit
-codes.
+network or installs into the real toolchain. Coverage: HOME/XDG default and
+override resolution, `--check` output and its no-install guarantee,
+`local.properties` generation and key preservation, idempotency, visible
+installer stdout, checksum rejection, partial-download cleanup, and
+download/licence/package exit-code propagation, including rejection of a
+java-11/javac-17 mix.
+
+The absolute-path structural check is not blanket-exempt for tool tests: fixtures
+build machine paths from parts or temporary directories, and only embedded
+shebang lines are skipped. `android/local.properties` is the sole machine-local
+file exemption (it is gitignored).
+
+### Maven consumer expectation
+
+`:lib` is consumed by `:lib-consumer-test` as the published coordinate
+`com.phonedsh:lib:0.1.0` from `android/build/repo`
+(`./gradlew publishLocalRepository`), not as a file dependency on
+`lib-release.aar`. A file dependency carries no POM/`api` closure and used to
+fail R8 with missing sibling classes. A real consumer adds the same coordinate
+and does not copy the AAR by hand.
 
 ## Which suites each profile runs
 

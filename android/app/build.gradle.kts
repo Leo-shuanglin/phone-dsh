@@ -4,11 +4,11 @@
 import java.util.Properties
 import javax.inject.Inject
 import org.gradle.api.DefaultTask
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
-import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
-import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
@@ -20,37 +20,77 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// The prebuilt worker bundle is a 65 MB, gitignored build input. It is referenced
-// in place (never copied into the repository) and the build fails loudly when it is
-// absent: an APK without a worker bundle would otherwise install and then fail at
-// runtime with a much less useful message.
-val repoRoot: File = rootProject.projectDir.parentFile
-val workerBundleDir: File = repoRoot.resolve("examples/probe-app/Bundle/worker")
-val workerBundleRelative: String = workerBundleDir.relativeTo(repoRoot).path
-
-check(workerBundleDir.isDirectory) {
-    "the prebuilt worker bundle is missing: $workerBundleRelative\n" +
-        "The demo APK needs it; it is not committed because it is ~65 MB.\n" +
-        "Generate it with the documented copy step (needs the pinned DSH checkout):\n" +
-        "  bash examples/probe-app/scripts/copy-bundle-assets.sh\n" +
-        "For a full DSH Web page, build the Web dist first:\n" +
-        "  bash scripts/ci/build-web-dist.sh\n" +
-        "then re-run the copy step. Nothing is copied into android/."
-}
-
+// The prebuilt worker bundle is a 65 MB, gitignored build input owned by
+// :engine. It is referenced there in place (never copied into the repository)
+// and :engine's packageWorkerBundle task fails loudly when it is absent, so an
+// APK without a worker bundle cannot be produced. This module deliberately does
+// NOT check the bundle at configuration time: a host JVM test
+// (:app:testDebugUnitTest) must configure and run without the 65 MB asset, and
+// only APK/asset packaging is allowed to require it. :app consumes :engine, so
+// assembleDebug/assembleRelease and the instrumented APK still depend on that
+// real packaging task and still fail when the bundle is missing.
+//
 // The one Wire codec is Rust (:core's JNI facade); :core is a pure JVM module and
 // cannot carry jniLibs, so the demo APK has to package the .so itself. The path is
 // cargo-ndk's arm64 output; other ABIs are not packaged (the demo target is the
-// arm64-v8a emulator). Missing here means HELLO stays undecodable at runtime, which
-// the screen would show as "libpdsh_jni not packaged"; fail the build instead.
+// arm64-v8a emulator). Missing here means HELLO stays undecodable at runtime,
+// which the screen would show as "libpdsh_jni not packaged"; the packaging task
+// below fails instead of shipping that APK.
+val repoRoot: File = rootProject.projectDir.parentFile
 val pdshJniSo: File = repoRoot.resolve("shell/target/aarch64-linux-android/debug/libpdsh_jni.so")
-val pdshJniRelative: String = pdshJniSo.relativeTo(repoRoot).path
-check(pdshJniSo.isFile) {
-    "the Rust JNI library is missing: $pdshJniRelative\n" +
-        "Without it HELLO cannot be decoded and the demo screen cannot show the\n" +
-        "handshake summary. Build it with the pinned NDK + cargo-ndk:\n" +
-        "  cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni\n" +
-        "The .so is a build product and is not committed."
+fun displayPath(path: File): String =
+    runCatching { path.relativeTo(repoRoot).path }.getOrElse { path.absolutePath }
+val pdshJniRelative: String = displayPath(pdshJniSo)
+
+/**
+ * One validator for production packaging and the test-only fixture task: the
+ * installed APK must never contain an empty, truncated or non-ELF library.
+ *
+ * A plain `object` (not a script-level function) keeps PackagePdshJni a static
+ * nested class; a task class that captures the build-script instance cannot be
+ * instantiated by Gradle.
+ */
+object PdshJniValidation {
+    fun require(input: File, relativePath: String) {
+        check(input.isFile) {
+            "the Rust JNI library is missing: $relativePath\n" +
+                "Without it HELLO cannot be decoded and the demo screen cannot show the\n" +
+                "handshake summary. Build it with the pinned NDK + cargo-ndk:\n" +
+                "  cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni\n" +
+                "The .so is a build product and is not committed."
+        }
+        check(input.length() > 0L) {
+            "the Rust JNI library is empty: $relativePath\n" +
+                "Rebuild it with: cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni"
+        }
+        val magic = ByteArray(4)
+        val magicRead = input.inputStream().use { it.read(magic) }
+        check(
+            magicRead == 4 &&
+                magic[0] == 0x7f.toByte() &&
+                magic[1] == 'E'.code.toByte() &&
+                magic[2] == 'L'.code.toByte() &&
+                magic[3] == 'F'.code.toByte(),
+        ) {
+            "the Rust JNI library is not an ELF shared object: $relativePath\n" +
+                "Rebuild it with: cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni"
+        }
+    }
+}
+
+// Test-only validator entry point. It is deliberately NOT a dependency of any
+// package/assemble task: production packaging always reads the canonical path
+// above, so no Gradle property can replace the shipped .so. The fixture task
+// shares [PdshJniValidation.require] with the real packaging action.
+tasks.register("verifyPdshJniFixture") {
+    description = "Test-only: validate a fixture .so through the packaging validator"
+    group = "verification"
+    doLast {
+        val raw = providers.gradleProperty("pdsh.test.pdshJniSo").orNull
+            ?: error("pass -Ppdsh.test.pdshJniSo=<path> for the test-only JNI validator")
+        val fixture = File(raw)
+        PdshJniValidation.require(fixture, displayPath(fixture))
+    }
 }
 
 // ---- release .so packaging: copy for every variant, strip for release -------
@@ -130,9 +170,22 @@ val stripReleaseNativeLibs: Boolean =
 abstract class PackagePdshJni @Inject constructor(
     private val execOps: ExecOperations,
 ) : DefaultTask() {
-    /** cargo's unstripped debug artifact. */
-    @get:InputFile
-    abstract val source: RegularFileProperty
+    /**
+     * cargo's unstripped debug artifact.
+     *
+     * A file collection (not `@InputFile`) so Gradle does not fail on the
+     * missing artifact before the task action runs: the action prints the
+     * cargo-ndk command that produces it, and every APK packaging task still
+     * fails. When the artifact exists its content is part of the up-to-date
+     * fingerprint.
+     */
+    @get:InputFiles
+    @get:Optional
+    abstract val source: ConfigurableFileCollection
+
+    /** Repository-relative path used in the fail-loud message. */
+    @get:Input
+    abstract val sourceRelativePath: Property<String>
 
     /** jniLibs source root; the task writes `arm64-v8a/<name>` below it. */
     @get:OutputDirectory
@@ -159,11 +212,14 @@ abstract class PackagePdshJni @Inject constructor(
 
     @TaskAction
     fun packageLibrary() {
+        val input = source.files.singleOrNull()
+            ?: error("the Rust JNI library is missing: ${sourceRelativePath.get()}")
+        PdshJniValidation.require(input, sourceRelativePath.get())
         val target = destination.get().asFile
             .resolve("arm64-v8a")
-            .resolve(source.get().asFile.name)
+            .resolve(input.name)
         target.parentFile.mkdirs()
-        source.get().asFile.copyTo(target, overwrite = true)
+        input.copyTo(target, overwrite = true)
 
         val tool = stripExecutable.orNull
         val mode = stripMode.get()
@@ -400,9 +456,9 @@ android {
     // single `assets/worker-bundle.zip` (byte-identical entries) and reads that at
     // runtime. Adding the directory again would ship the bundle twice and, worse,
     // AGP's asset merger un-gzips `*.tar.gz` on the way in (image.tar.gz ->
-    // image.tar), which corrupts the names the bundle resolves. The `check` above
-    // still fails the build when the bundle is absent, so a silent empty APK is
-    // impossible.
+    // image.tar), which corrupts the names the bundle resolves. :engine's
+    // verifyWorkerBundle dependency validates the real bundle before packaging,
+    // so a silent empty APK is impossible.
     //
     // The generated jniLibs root is wired per variant in `androidComponents`
     // below: AGP registers the task output as that variant's jniLibs source, so
@@ -418,7 +474,8 @@ androidComponents {
         val packageTask = tasks.register<PackagePdshJni>("package${suffix}PdshJni") {
             group = "build"
             description = "Copies libpdsh_jni.so into the ${variant.name} APK"
-            source.set(pdshJniSo)
+            source.from(pdshJniSo)
+            sourceRelativePath.set(pdshJniRelative)
             // AGP owns the output directory location when the task is wired via
             // addGeneratedSourceDirectory; the task writes arm64-v8a/<name> under it.
             stripMode.set(

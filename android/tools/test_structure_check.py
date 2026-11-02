@@ -450,16 +450,45 @@ class StructureCheckMutationTests(unittest.TestCase):
         write(self.root / "android" / "abspath-note.md", "bad = \"{}\"\n".format(bad_path))
         self.assert_fails("absolute-paths")
 
-    def test_fixture_path_in_a_tools_test_is_exempt(self):
-        # The absolute-path check must not flag the fake scripts a bootstrap test
-        # needs (they start with #!/usr/bin/env bash). Test_*.py under tools is
-        # the only exempt location; a production script in the same directory is
-        # still checked by test_absolute_path_fails below.
+    def test_non_first_line_shebang_is_not_a_shebang_exemption(self):
+        # Tool tests are not blanket-exempt. A fixture may embed a shell script
+        # whose shebang is not line 1, but a real home path on a later line is
+        # still a finding: skipping shebangs must not launder the rest of the
+        # file.
         write(
             self.root / "android" / "tools" / "test_fixture.py",
-            "#!/usr/bin/env python3\n",
+            "#!/usr/bin/env python3\n"
+            "# embedded fixture below\n"
+            "#!/usr/bin/env bash\n"
+            'bad = "/' + "home" + '/someone/sdk"\n',
+        )
+        self.assert_fails("absolute-paths")
+
+    def test_absolute_path_in_a_tools_test_fails(self):
+        # The old check exempted every tools/test_*.py file. Fixtures now build
+        # the path from parts, so a literal machine path in the same file is a
+        # real portability failure.
+        write(
+            self.root / "android" / "tools" / "test_fixture.py",
+            "#!/usr/bin/env python3\n"
+            'bad = "/' + "Users" + '/someone/sdk"\n',
+        )
+        self.assert_fails("absolute-paths")
+
+    def test_only_the_checkout_local_properties_is_machine_local(self):
+        # android/local.properties is gitignored and carries a machine SDK path.
+        # A file merely named local.properties under tools/ is committed and is
+        # not exempt.
+        write(
+            self.root / "android" / "local.properties",
+            "sdk.dir=/" + "home" + "/someone/sdk\n",
         )
         self.assert_passes("absolute-paths")
+        write(
+            self.root / "android" / "tools" / "local.properties",
+            "sdk.dir=/" + "home" + "/someone/sdk\n",
+        )
+        self.assert_fails("absolute-paths")
 
     def test_unverified_pin_annotation_required(self):
         self.mutate("android/gradle/libs.versions.toml", "# unverified pin", "# verified")

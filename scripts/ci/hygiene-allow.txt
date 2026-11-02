@@ -3,6 +3,18 @@ json-schema\.org
 # public documentation host used by the G2 network scenarios (scripts/ci/scenarios/catalog.json)
 raw\.githubusercontent\.com
 schemas\.openxmlformats\.org
+# Official pinned toolchain distribution hosts used by
+# android/tools/bootstrap-android-toolchain.sh: Android command-line tools and
+# the Gradle 8.13 distribution. Both are public vendor download endpoints, not
+# private infrastructure.
+dl\.google\.com
+downloads\.gradle\.org
+cdn\.azul\.com
+api\.azul\.com
+# Transport-only mirrors for the pinned Gradle archive; SHA-256 from the
+# official endpoint still verifies every byte before use.
+mirrors\.huaweicloud\.com
+mirrors\.cloud\.tencent\.com
 # the gateway allow-list wildcard entry (`https://*`) is a rule, not a hostname
 ^\*$
 
