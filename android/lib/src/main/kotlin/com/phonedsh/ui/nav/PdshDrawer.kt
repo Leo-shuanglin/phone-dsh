@@ -62,12 +62,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -76,17 +74,17 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.phonedsh.ui.SessionsMetrics
+import com.phonedsh.ui.icon.PdshIcon
+import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * One row's glyph.
  *
- * The baseline uses SF Symbols (`clock.arrow.circlepath`, `gearshape`); this app
- * has no icon pack dependency, so each glyph is drawn from the same 22 x 22 box
- * the baseline reserves for it. The shape names the destination, never states.
+ * The baseline uses SF Symbols (`clock`, `gearshape`); the shared registry maps
+ * them to vector paths in the same 22 x 22 box. The shape names the destination,
+ * never states.
  */
 public enum class PdshDrawerIcon {
     /** 对话: a chat bubble. */
@@ -272,131 +270,27 @@ private fun PdshDrawerRow(entry: PdshDrawerEntry, onClick: () -> Unit) {
     }
 }
 
-/** The 22 pt glyph slot the baseline reserves (`NativeShell.swift:422`). */
+/** The 22 pt glyph slot delegates to the shared, source-backed registry. */
 @Composable
 private fun DrawerGlyph(icon: PdshDrawerIcon, color: Color, modifier: Modifier = Modifier) {
-    Canvas(
-        modifier = modifier.size(SessionsMetrics.drawerRowIconSlot),
-    ) {
-        // Every glyph is authored in a 22 x 22 unit box and scaled to the slot,
-        // so the drawn mark keeps the baseline's slot even at another density.
-        val unit = size.minDimension / ICON_UNITS
-        val stroke = Stroke(
-            width = ICON_STROKE_UNITS * unit,
-            cap = StrokeCap.Round,
-            join = StrokeJoin.Round,
-        )
-        when (icon) {
-            PdshDrawerIcon.CHAT -> {
-                val bubble = Path().apply {
-                    addRoundRect(
-                        androidx.compose.ui.geometry.RoundRect(
-                            left = 3.5f * unit,
-                            top = 4f * unit,
-                            right = 18.5f * unit,
-                            bottom = 15.5f * unit,
-                            radiusX = 3f * unit,
-                            radiusY = 3f * unit,
-                        ),
-                    )
-                }
-                drawPath(bubble, color, style = stroke)
-                val tail = Path().apply {
-                    moveTo(7.5f * unit, 15.5f * unit)
-                    lineTo(7.5f * unit, 19f * unit)
-                    lineTo(12f * unit, 15.5f * unit)
-                }
-                drawPath(tail, color, style = stroke)
-            }
-
-            PdshDrawerIcon.SESSIONS -> {
-                drawLine(color, p(5f, 7f, unit), p(17f, 7f, unit), stroke.width, StrokeCap.Round)
-                drawLine(color, p(5f, 11f, unit), p(17f, 11f, unit), stroke.width, StrokeCap.Round)
-                drawLine(color, p(5f, 15f, unit), p(13f, 15f, unit), stroke.width, StrokeCap.Round)
-            }
-
-            PdshDrawerIcon.FOLDER -> {
-                val folder = Path().apply {
-                    moveTo(3.5f * unit, 7f * unit)
-                    lineTo(8.5f * unit, 7f * unit)
-                    lineTo(10.5f * unit, 9.5f * unit)
-                    lineTo(18.5f * unit, 9.5f * unit)
-                    lineTo(18.5f * unit, 17.5f * unit)
-                    lineTo(3.5f * unit, 17.5f * unit)
-                    close()
-                }
-                drawPath(folder, color, style = stroke)
-            }
-
-            PdshDrawerIcon.TERMINAL -> {
-                drawRoundRect(
-                    color = color,
-                    topLeft = p(3.5f, 4.5f, unit),
-                    size = androidx.compose.ui.geometry.Size(15f * unit, 13f * unit),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.5f * unit),
-                    style = stroke,
-                )
-                val chevron = Path().apply {
-                    moveTo(7f * unit, 8.5f * unit)
-                    lineTo(10f * unit, 11f * unit)
-                    lineTo(7f * unit, 13.5f * unit)
-                }
-                drawPath(chevron, color, style = stroke)
-                drawLine(color, p(11.5f, 13.5f, unit), p(15f, 13.5f, unit), stroke.width, StrokeCap.Round)
-            }
-
-            PdshDrawerIcon.DEVICE -> {
-                drawRoundRect(
-                    color = color,
-                    topLeft = p(7f, 3.5f, unit),
-                    size = androidx.compose.ui.geometry.Size(8f * unit, 15f * unit),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.5f * unit),
-                    style = stroke,
-                )
-                drawLine(color, p(10f, 6f, unit), p(12f, 6f, unit), stroke.width, StrokeCap.Round)
-                drawCircle(color, radius = 0.9f * unit, center = p(11f, 15.5f, unit))
-            }
-
-            PdshDrawerIcon.WEB -> {
-                drawCircle(color, radius = 7.5f * unit, center = p(11f, 11f, unit), style = stroke)
-                drawLine(color, p(3.5f, 11f, unit), p(18.5f, 11f, unit), stroke.width)
-                drawOval(
-                    color = color,
-                    topLeft = p(6.5f, 3.5f, unit),
-                    size = androidx.compose.ui.geometry.Size(9f * unit, 15f * unit),
-                    style = stroke,
-                )
-            }
-
-            PdshDrawerIcon.CLOCK -> {
-                drawCircle(color, radius = 7.5f * unit, center = p(11f, 11f, unit), style = stroke)
-                drawLine(color, p(11f, 11f, unit), p(11f, 6.5f, unit), stroke.width, StrokeCap.Round)
-                drawLine(color, p(11f, 11f, unit), p(14.5f, 13f, unit), stroke.width, StrokeCap.Round)
-            }
-
-            PdshDrawerIcon.SETTINGS -> {
-                drawCircle(color, radius = 7.5f * unit, center = p(11f, 11f, unit), style = stroke)
-                drawCircle(color, radius = 2.5f * unit, center = p(11f, 11f, unit), style = stroke)
-                repeat(GEAR_TEETH) { index ->
-                    val angle = (index.toFloat() / GEAR_TEETH) * TWO_PI
-                    val inner = 5.5f * unit
-                    val outer = 7.5f * unit
-                    val center = p(11f, 11f, unit)
-                    drawLine(
-                        color = color,
-                        start = Offset(center.x + cos(angle) * inner, center.y + sin(angle) * inner),
-                        end = Offset(center.x + cos(angle) * outer, center.y + sin(angle) * outer),
-                        strokeWidth = stroke.width,
-                        cap = StrokeCap.Round,
-                    )
-                }
-            }
-        }
+    val registered = when (icon) {
+        PdshDrawerIcon.CHAT -> PdshIcon.CHAT_BUBBLE
+        PdshDrawerIcon.SESSIONS -> PdshIcon.SESSIONS
+        PdshDrawerIcon.FOLDER -> PdshIcon.FOLDER
+        PdshDrawerIcon.TERMINAL -> PdshIcon.TERMINAL
+        PdshDrawerIcon.DEVICE -> PdshIcon.DEVICE
+        PdshDrawerIcon.WEB -> PdshIcon.GLOBE
+        PdshDrawerIcon.CLOCK -> PdshIcon.CLOCK
+        PdshDrawerIcon.SETTINGS -> PdshIcon.GEAR
     }
+    PdshIconView(
+        icon = registered,
+        size = SessionsMetrics.drawerRowIconSlot,
+        tint = color,
+        contentDescription = null,
+        modifier = modifier,
+    )
 }
-
-/** A 22 x 22 unit point scaled to the glyph slot. */
-private fun p(x: Float, y: Float, unit: Float): Offset = Offset(x * unit, y * unit)
 
 /** The 12 pt chevron at the row's trailing edge (`NativeShell.swift:428`). */
 @Composable
@@ -442,18 +336,6 @@ private val PANEL_BOTTOM_INSET: Dp = 16.dp
 
 /** unverified token: no scrim-opacity token exists; the sheet frame uses the same value. */
 private const val SCRIM_ALPHA: Float = 0.32f
-
-/** The glyph authoring box; the drawn mark is 22 x 22 units. */
-private const val ICON_UNITS: Float = 22f
-
-/** 1.5 pt stroke at the 22 unit authoring size. */
-private const val ICON_STROKE_UNITS: Float = 1.5f
-
-/** The gear's spoke count. */
-private const val GEAR_TEETH: Int = 8
-
-/** One turn in radians. */
-private const val TWO_PI: Float = (Math.PI * 2).toFloat()
 
 /** The scrim strip's spoken name. */
 private const val DISMISS_LABEL: String = "关闭抽屉"
