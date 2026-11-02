@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Extract a machine-readable page structure from the iOS baseline.
 
 Purpose: `spec/ui/v1/README.md` §1 gives each page one line of prose, so the two

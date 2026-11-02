@@ -49,11 +49,13 @@ checker 强制：tokens 过 schema；6 个签名面的 token 引用全部存在�
 | SessionActivityPage | 单会话的步骤/用量/上下文 | **触发点缺失（sheet 已接线但无人置位，基线不可达）** | sheet | later |
 | SessionHistoryPage | 历史回合列表与单回合详情 | 页头 `⋯` →「历史」，或 ChatPage 的目标行 | push；回合详情复用 ChatPage 的折叠规则 | later |
 | GoalDetailPage | 单个目标的 objective / 状态 / 动作 | ChatPage 的目标条 | sheet；打开失败保留上一个目标（fail-quiet） | later |
+| SessionArtifactsPage | 本 session 产物清单：按归属过滤、未归属单列、QuickLook 预览与分享 | 页头 `⋯` →「产物」 | sheet；预览子页 SessionArtifactPreviewPage（QuickLook，系统分享） | must |
+| NativeDeviceConnectionPage | 真实连接设备、传输能力、设备会话入口（真实传输未实现，只展示已注入连接器发布的状态） | 页头设备图标（有在线设备时高亮） | sheet；push 子页 NativeDeviceSessionPage（设备会话只读监视，历史分页） | must |
 | FilesPage | 工作区文件树、预览、导入 | 抽屉「工作文件夹」里点某个文件夹 | 页面栈；预览子页 FilePreviewPage | must |
 | NativeWorkbenchPage | 会话内工作面板（文件 / 命令两段） | 对话里点工具写出的文件路径（含待预览路径补开） | sheet，`完成` 关闭 | must |
 | PDSHShellPage | 只读加速器命令（argv 来自 caps） | 工作面板第二段、设置行「命令」 | 段内页面 | must |
 | WorkspaceFoldersPage | 工作区文件夹增删与切换 | 抽屉「工作文件夹」 | push；每行打开 FilesPage | must |
-| SettingsPage | 设置总入口与分组 | 抽屉底行「设置」 | sheet（NavigationStack） | must |
+| SettingsPage | 设置总入口与分组；compact 顶部分段选择器、regular `NavigationSplitView` 侧边栏 | 抽屉底行「设置」 | sheet（NavigationStack）；分区子页 NativeGeneralSettingsPage（通用：权限默认、引擎状态与重启、语言/外观/字号、过程展示、繁忙行为、版本许可）、NativePluginInventoryPage（内置插件：只读清单 + 搜索，进配置页改）、PhonePermissionsPage（手机权限：能力授权/停用/最近使用审计，`embedded` 时无独立返回）、NativeAgentPresetsPage（Agent 预设：查看配置、设为默认）；通用分区 push NativeShortcutsPage；「模型」分区由 ModelProviderSettingsPage 实现 | must |
 | ModelProviderSettingsPage | 模型服务、密钥、编解码 | 设置首行、起手卡「去配置模型服务」、启动失败横幅 | sheet | must |
 | WebSearchSettingsPage | 网页搜索开关与后端 | 设置行、配置页 | push / sheet | must |
 | MCPSettingsPage | MCP 服务器列表与编辑 | 设置行 | push / sheet；编辑子页 MCPEditorPage | must |
@@ -76,15 +78,14 @@ checker 强制：tokens 过 schema；6 个签名面的 token 引用全部存在�
 契约标题 MUST 是**渲染形态**：`dynamicTitle:true` 只表示「固定模板 + 一个可变量」（`title:"Rows (N)"` + `titleTemplate:"Rows ({model.probeRows.count})"`，比较用 template、数字与模板槽归一到 `#`）；标题**就是数据**（`Section(fileGroupTitle)`）记 `title:null` + `titleSource:"expression"` + `titleExpression` + `criterion`，不许冒充 `dynamicTitle`；`title` 里出现源码表达式即契约错误，Android 把表达式当字面量渲染 → `extra-section`。
 无标题/数据即标题的分区 MUST 带 `criterion`（首个可点行 / 首行标签）：checker 找该行、看它之前**有没有** Android 标题——没有=一致，有=`extra-section`，找不到行=`missing-section`；确无字面判据的项登记在 `pages/_unrecognized.json`（owner + reviewBy + 理由，stale 即失败）；基线自身的死 UI 在契约里标 `deadUi` + 证据，由 checker 归类为「已确认、勿实现」，整页一坨的页记 `sectionModel:"single-region"` + 说明。
 Android 侧的分区 / 动作 MUST 走 `SessionSectionLabel`、`SectionHeader(title=...)`、`*SectionView(_, title)` 与 `SessionTextAction(label=...)`、`InfoRow(..., onClick=...)`；标题是表达式时记 `unresolved`，不当作一致。车道统一用 `SessionTextAction` 会让 gate 变精确——`Row(.clickable){BasicText}` 与 `ImeAction.Search` 搜索框只是兜底启发式。
-判据（决定冲突往哪边修）：gate 看不见正确实现时修 gate；实现把信息藏起来（数据驱动标题、拼出来的字符串）时修实现——区别是信息是否在源码里显式可见。
-标准控件也算动作：`Button`/`OutlinedButton`/`TextButton`/`FilledTonalButton`、`SegmentedButton`/`FilterChip`、`Switch`/`Checkbox`、`DropdownMenuItem`、页内 `label:` 包装器取内容里第一个 `Text(text=…)`；`Switch` 只认同一 `Row`/`Column` 直接子节点里最近的 `Text`。
+判据（决定冲突往哪边修）：gate 看不见正确实现时修 gate；实现把信息藏起来（数据驱动标题、拼出来的字符串）时修实现——区别是信息是否在源码里显式可见。 标准控件也算动作：`Button`/`OutlinedButton`/`TextButton`/`FilledTonalButton`、`SegmentedButton`/`FilterChip`、`Switch`/`Checkbox`、`DropdownMenuItem`、页内 `label:` 包装器取内容里第一个 `Text(text=…)`；`Switch` 只认同一 `Row`/`Column` 直接子节点里最近的 `Text`。
 
 ### 1.1 已知基线观察（只记录，不改基线）
 
 | 观察 | 证据 | P5 处置 |
 |---|---|---|
 | SessionActivityPage 的 sheet 已接线但无人置位 | `ChatPage.swift:51` 声明、`ChatPage.swift:292` 接线，全仓无 `showActivity = true` | 不实现；iOS 恢复入口再开 |
-| DailyBriefPage 没有任何入口 | `DailyBriefPage.swift:8` 有页面，全仓无调用点 | 不实现；iOS 恢复入口再开 |
+| DailyBriefPage、ChatPreferencesPage、NativeSettingsDocumentPage 没有任何入口 | `DailyBriefPage.swift:8`、`ChatPreferencesPage.swift:7`、`NativeSettingsDocumentPage.swift:5` 有页面，全仓无调用点（后两页的偏好项与脱敏配置读取已内联在 NativeGeneralSettingsPage / 配置模型里） | 不实现；iOS 恢复入口再开 |
 | NativeTab 四 Tab 枚举是死代码 | `NativeShell.swift:12` 定义、全仓无引用；实际外壳 = Chat + 抽屉 | 按 §1 的抽屉外壳实现，不实现 Tab 栏 |
 | ChatPage 自带一份调色板，与主题层不一致 | `ChatPage.swift:716` accent #2F5BFF、`ChatPage.swift:717` surface #F2F3F5、`ChatPage.swift:723` hairline #DDDCE2 vs `NativeChatTheme.swift:20/14/18` | accent 记为 `colors.ctaOverride`（§4 债表）；hairline/surface 只记录 |
 
@@ -277,4 +278,3 @@ implementation.
 summary sweep; the token inventory for `toolRow` never had `motion.shimmer` / `typography.shimmer`.
 The sweep is the thinking pill's signature effect, and a second animated row competes with it for the
 same attention. `toolRow` therefore shows static state text; the sweep stays on `thinking.pill`.
-
