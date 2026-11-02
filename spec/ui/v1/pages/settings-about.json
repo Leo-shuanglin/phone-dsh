@@ -3,18 +3,18 @@
   "page": "SettingsAboutPage",
   "pageId": "settings-about",
   "structure": "swiftui-view",
-  "sectionModel": "single-region",
+  "sectionModel": "section",
   "sectionNote": "flat List: one version row + one sentence; no group header",
   "title": {
     "text": "关于",
-    "provenance": "NativeShell.swift:905",
+    "provenance": "NativeShell.swift:867",
     "anchor": ".navigationTitle(\"关于\")"
   },
   "source": {
     "file": "NativeShell.swift",
     "path": "examples/probe-app/PhoneDSHProbe/NativeShell.swift",
-    "lines": 1037,
-    "structLine": 897,
+    "lines": 999,
+    "structLine": 839,
     "renderedFrom": [
       "body"
     ],
@@ -27,11 +27,61 @@
   },
   "sections": [
     {
-      "id": "single-region-897",
-      "kind": "single-region",
+      "id": "section-842",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "phone-dsh",
+          "label": "Phone DSH",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeShell.swift:849",
+          "anchor": "Text(\"Phone DSH\")",
+          "extraction": "syntax"
+        },
+        {
+          "id": "运行在手机上的-deepseek-harness",
+          "label": "运行在手机上的 DeepSeek Harness",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeShell.swift:851",
+          "anchor": "Text(\"运行在手机上的 DeepSeek Harness\")",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "NativeShell.swift:842",
+      "anchor": "Section {",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-row",
+        "label": "Phone DSH",
+        "provenance": "NativeShell.swift:849"
+      }
+    },
+    {
+      "id": "section-859",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
       "titleSource": "absent",
       "condition": null,
       "collection": null,
@@ -42,38 +92,45 @@
           "labelExpr": null,
           "kind": "info",
           "value": null,
-          "valueExpr": null,
+          "valueExpr": "Bundle.main.infoDictionary?[\"CFBundleShortVersionString\"] as? String ?? \"—\"",
           "clickable": false,
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeShell.swift:900",
+          "provenance": "NativeShell.swift:860",
           "anchor": "LabeledContent(\"版本\", value: Bundle.main.infoDictionary?[\"CFBundleShortVersionStr",
           "extraction": "syntax"
         },
         {
-          "id": "会话记录和文件都保存在这台手机上",
-          "label": "会话记录和文件都保存在这台手机上。",
+          "id": "构建",
+          "label": "构建",
           "labelExpr": null,
-          "kind": "text",
+          "kind": "info",
           "value": null,
-          "valueExpr": null,
+          "valueExpr": "Bundle.main.infoDictionary?[\"CFBundleVersion\"] as? String ?? \"—\"",
           "clickable": false,
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeShell.swift:901",
-          "anchor": "Text(\"会话记录和文件都保存在这台手机上。\")",
+          "provenance": "NativeShell.swift:861",
+          "anchor": "LabeledContent(\"构建\", value: Bundle.main.infoDictionary?[\"CFBundleVersion\"] as? S",
           "extraction": "syntax"
         }
       ],
-      "provenance": "NativeShell.swift:897",
-      "anchor": "struct SettingsAboutPage: View {",
+      "provenance": "NativeShell.swift:859",
+      "anchor": "Section {",
+      "extraction": "syntax",
       "criterion": {
-        "kind": "single-region"
+        "kind": "first-row",
+        "label": "版本",
+        "provenance": "NativeShell.swift:860"
       },
-      "extraction": "manual",
-      "note": "flat List: one version row + one sentence; no group header"
+      "footer": {
+        "text": "会话记录和文件都保存在这台手机上。",
+        "labelExpr": null,
+        "provenance": "NativeShell.swift:863",
+        "anchor": "Text(\"会话记录和文件都保存在这台手机上。\")"
+      }
     }
   ],
   "actions": [],
@@ -85,9 +142,9 @@
       "empty": [],
       "data": [
         {
-          "renders": "untitled section at 897",
+          "renders": "untitled section at 842 | untitled section at 859",
           "when": null,
-          "provenance": "NativeShell.swift:897",
+          "provenance": "NativeShell.swift:839",
           "anchor": "struct SettingsAboutPage: View {",
           "note": "structural default: the sections above, when no condition overrides them"
         }
@@ -97,8 +154,14 @@
         {
           "renders": "—",
           "when": null,
-          "provenance": "NativeShell.swift:900",
+          "provenance": "NativeShell.swift:860",
           "anchor": "LabeledContent(\"版本\", value: Bundle.main.infoDictionary?[\"CFBundleShortVersionStr"
+        },
+        {
+          "renders": "—",
+          "when": null,
+          "provenance": "NativeShell.swift:861",
+          "anchor": "LabeledContent(\"构建\", value: Bundle.main.infoDictionary?[\"CFBundleVersion\"] as? S"
         }
       ],
       "loading": []
@@ -112,38 +175,40 @@
       "empty": 0,
       "data": 1,
       "failure": 0,
-      "unknown": 1,
+      "unknown": 2,
       "loading": 0
     }
   },
   "subpages": [
     {
       "name": "WorkspaceFoldersPage",
-      "line": 319,
+      "line": 266,
       "private": false,
+      "embedded": false,
       "sections": [],
-      "provenance": "NativeShell.swift:319"
+      "provenance": "NativeShell.swift:266"
     },
     {
       "name": "EgressAllowListPage",
-      "line": 444,
+      "line": 390,
       "private": false,
+      "embedded": false,
       "sections": [
         {
           "title": "地址",
-          "provenance": "NativeShell.swift:474"
+          "provenance": "NativeShell.swift:419"
         }
       ],
-      "provenance": "NativeShell.swift:444"
+      "provenance": "NativeShell.swift:390"
     }
   ],
   "unreachable": [],
   "extraction": {
     "tool": "extract_ios_pages.py",
     "mode": "syntax",
-    "sectionKeywordsInPage": 0,
+    "sectionKeywordsInPage": 2,
     "regionsExtracted": 0,
-    "sectionsExtracted": 1,
+    "sectionsExtracted": 2,
     "warnings": []
   }
 }

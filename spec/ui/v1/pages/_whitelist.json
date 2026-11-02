@@ -23,17 +23,6 @@
    "owner": "ui-contract",
    "reviewBy": "2027-06-30",
    "reason": "The iOS export names iPhone Worker 限制; Android carries the same section under the platform-appropriate noun (see the android half of this pair)."
-  },
-  {
-   "page": "native-plugin-inventory",
-   "kind": "missing-section",
-   "name": "This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH.",
-   "id": "plugin-inventory-management-copy",
-   "side": "ios-only",
-   "platformRef": "platform.phone-worker-copy",
-   "owner": "ui-contract",
-   "reviewBy": "2027-06-30",
-   "reason": "The same management limit, stated with the platform's own noun: 'This iPhone Worker…' on iOS, 手机 Worker 限制 on Android. Note the contract records the English argument while zh-Hans iOS renders 此 iPhone Worker…, so the literal is due a fix in the extractor."
   }
  ]
 }

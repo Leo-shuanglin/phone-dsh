@@ -61,12 +61,30 @@ SCHEMA = "pdsh.ui.page-structure/1"
 ANDROID_ALIASES = {"SettingsAboutPage": "AboutPage"}
 
 #: Page structs that stay embedded in their parent (README §1): no contract of their
-#: own unless an Android screen file exists for them.
+#: own unless an Android screen file exists for them. PR22 moved the settings index
+#: from five tabs to one grouped list, which added FontSizeSettingsPage /
+#: ConversationSettingsPage / ArchivedSessionsPage to the PR13 embedded set; the
+#: DevelopmentToolsPage that hosted memory/probes/background/task-screen no longer
+#: exists (it left with PR #13), so it is not listed here as a current page.
 EMBEDDED_HINTS = ("SessionQueuePage", "PermissionDefaultsPage", "LicensesPage",
-                  "DevelopmentToolsPage", "DeveloperPage", "FilePreviewPage",
+                  "FontSizeSettingsPage", "ConversationSettingsPage", "ArchivedSessionsPage",
                   "ScheduleDetailPage", "ScheduleHistoryPage", "ScheduleEditorPage",
                   "ModelProviderEditorPage", "CommandExecutionResultPage")
 TOOL = "extract_ios_pages.py"
+
+#: Home chrome that is not a `*Page` struct but is still a real surface. HomeDrawer
+#: is the PR22 drawer overlay (NativeShell renders it in SessionsDrawerPanel); its
+#: contract is hand-registered in `pages/home-drawer.json`, like `preview-surface`.
+#: `--check` verifies the contract exists so the screen cannot silently leave the gate.
+CHROME_CONTRACTS = {
+    "HomeDrawer": ("HomeDrawer.swift", "home-drawer.json"),
+}
+
+#: HomeSpec.swift holds the 430x932 home design values (colors, type, spacing,
+#: radii). It declares no `View` struct, so it is not a page contract; the surface
+#: contracts cite it (`HomeSpec.swift:NN`) and README §1.1 records it as the value
+#: source. `--check` pins the file so a missing/changed authority is visible.
+CHROME_VALUE_FILES = ("HomeSpec.swift",)
 
 STRUCT_RE = re.compile(
     r"^[ \t]*(?:public |internal |fileprivate |private |final )*struct[ \t]+(\w+)[ \t]*:"
@@ -103,6 +121,13 @@ STATE_KINDS = ("empty", "data", "failure", "unknown", "loading")
 
 #: Helpers that are containers, not rows: the row is their first argument.
 CONTAINER_HINTS = ("settingsRow",)
+
+#: Row-label wrappers: their visible wording is the `title`/`text` argument, not a
+#: source expression. PR22's grouped settings index and About page label every row
+#: with `SettingsRowLabel(title: NativeText("模型服务", …))`; without this the
+#: extractor saw a null action label and reported a button-driven section as an
+#: empty (unresolved) group.
+LABEL_WRAPPER_HINTS = ("SettingsRowLabel", "SettingsRow", "SettingsBodyRow", "InfoRow")
 
 #: Non-`Section` group wrappers in the baseline: a titled card is a region.
 REGION_CALLS = ("PageSection", "GroupBox")
@@ -301,7 +326,7 @@ class Source:
 
 
 def normalise_label(value: str) -> tuple:
-    """(label, dynamic): `\(count) 个会话` becomes `{count} 个会话`, dynamic=True."""
+    r"""(label, dynamic): `\(count) 个会话` becomes `{count} 个会话`, dynamic=True."""
     if "\\(" in value:
         return template_of(value), True
     return value, False
@@ -609,7 +634,11 @@ def call_parts(source: Source, start: int, end: int) -> dict:
         return {}
     positional, named = [], {}
     for a, b in split_args(masked, open_paren + 1, close_paren):
-        nm = re.match(r"([A-Za-z_]\w*)[ \t]*:", masked[a:b])
+        # `split_args` keeps the whitespace after the comma. Without `\s*` here the
+        # second and later labelled arguments (` icon: "number"`) were positional,
+        # so a row wrapper resolved its SF Symbol name as the row label
+        # (`SettingsRowLabel(title: NativeText("版本", …), icon: "number")` → 版本).
+        nm = re.match(r"\s*([A-Za-z_]\w*)[ \t]*:", masked[a:b])
         if nm:
             named[nm.group(1)] = (a + nm.end(), b)
         else:
@@ -823,6 +852,7 @@ class PageExtractor:
             "states": self._states(),
             "subpages": [
                 {"name": st["name"], "line": st["line"], "private": st["private"],
+                 "embedded": st["name"] in EMBEDDED_HINTS,
                  "sections": self._section_titles_in(st["body_start"], st["body_end"]),
                  "provenance": f"{self.source.path.name}:{st['line']}"}
                 for st in structs if st["name"] != self.name
@@ -922,11 +952,23 @@ class PageExtractor:
         section["provenance"], section["anchor"] = prov, anchor
         if (header and title is None and title_template is None and title_pos is None
                 and self._header_has_dynamic_text(header)):
-            section["suppressed"] = True
-            section["suppressReason"] = (
-                "the header renders a runtime value (no literal title); a dynamic menu/list "
-                "header is not a group the implementation can be judged on, and forcing it "
-                "into a disabled menu item would be the gate dictating the UI")
+            expr, expr_pos = self._header_text_expression(header)
+            if expr:
+                # `Section { … } header: { Text(nativeSettingsGroupTitle(group)) }`:
+                # the title *is* data, so README §1 models it as `title: null` +
+                # `titleSource: expression` + a criterion, never as a suppressed
+                # group. Suppression hid real PR22 groups (NativeConfigurationPage's
+                # settings groups) from the gate.
+                section["titleExpression"] = expr
+                section["titleSource"] = "expression"
+                prov, anchor = source.provenance(expr_pos)
+                section["provenance"], section["anchor"] = prov, anchor
+            else:
+                section["suppressed"] = True
+                section["suppressReason"] = (
+                    "the header renders a runtime value (no literal title); a dynamic menu/list "
+                    "header is not a group the implementation can be judged on, and forcing it "
+                    "into a disabled menu item would be the gate dictating the UI")
         if header and title_pos is not None and self._header_is_ternary(header, title_pos):
             section["suppressed"] = True
             section["suppressReason"] = (
@@ -968,6 +1010,28 @@ class PageExtractor:
             if literal is None:
                 return True
         return False
+
+    def _header_text_expression(self, header: tuple) -> tuple:
+        """The expression a data-driven `Text(<expr>)` header renders, with its anchor.
+
+        `Section { … } header: { Text(nativeSettingsGroupTitle(group)) }` names the
+        group with host data. The contract keeps that expression in `titleExpression`
+        and identifies the group by a row criterion (README §1); it must never read
+        the expression as a literal title.
+        """
+        masked = self.source.masked
+        for match in re.finditer(r"\bText[ \t]*\(", masked[header[0]: header[1]]):
+            open_paren = header[0] + match.end() - 1
+            close = match_delim(masked, open_paren, "(", ")")
+            if close < 0:
+                continue
+            literal, _pos = first_label(self.source, open_paren + 1, close)
+            if literal is not None:
+                continue
+            expr = self.source.statement_lines(open_paren + 1, close)
+            if expr:
+                return expr, open_paren + 1
+        return None, None
 
     def _header_is_ternary(self, header: tuple, title_pos: int) -> bool:
         """Is the *title literal's own* Text a ternary? (A ternary elsewhere is fine.)
@@ -1248,6 +1312,15 @@ class PageExtractor:
                 label, pos = first_label(source, *call["positional"][0])
                 if label is not None:
                     return label, pos, None, []
+            if callee in LABEL_WRAPPER_HINTS:
+                span = (call["named"].get("title") or call["named"].get("text")
+                        or (call["positional"][0] if call["positional"] else None))
+                if span:
+                    label, pos = first_label(source, *span)
+                    if label is not None:
+                        return label, pos, None, []
+                    expr = source.statement_lines(*span)
+                    return None, None, expr, []
             if callee in ("HStack", "VStack", "ZStack", "Group"):
                 inner = call["trailing"] or (call["named"].get("label") if "label" in call["named"] else None)
                 if inner is None and call["named"]:
@@ -1344,7 +1417,7 @@ class PageExtractor:
         # Buttons/NavigationLinks/Menus take their label from a *view* closure, which
         # is resolved branch by branch (a literal deep inside is not the row's name).
         if label is None and callee not in ("Button", "NavigationLink", "Menu"):
-            for name in ("title", "text", "label", "prompt"):
+            for name in ("title", "text", "label", "prompt", "key"):
                 if name in call["named"]:
                     label, label_pos = first_label(source, *call["named"][name])
                     if label:
@@ -1898,8 +1971,18 @@ class PageExtractor:
     # -- action -> presentation link ---------------------------------------
 
     def _assigned_live(self, binding: str) -> bool:
-        """True when `binding = ...` happens outside its `@State`/`var` declaration."""
+        """True when `binding = ...` happens outside its `@State`/`var` declaration.
+
+        A wizard/deep-link state can be seeded in `init` instead of by a button
+        (`SettingsPage.swift:55` `_deepLink = State(initialValue: ...)`, reached by
+        `-uiPreview settings.permissions.tab`). That is a real route, not dead UI:
+        reading only bare `name =` assignments marked the whole navigationDestination
+        dead and hid the PR22 settings deep link from the contract.
+        """
         masked = self.source.masked
+        if re.search(rf"\b_{re.escape(binding)}\s*=\s*State\s*\(\s*initialValue",
+                     masked[self.struct_start:self.body_end]):
+            return True
         for m in re.finditer(rf"\b{re.escape(binding)}\s*=(?!=)", masked[self.body_start:self.body_end]):
             pos = self.body_start + m.start()
             if not self._live(pos):
@@ -2113,7 +2196,7 @@ def dumps(page: dict) -> str:
 
 
 def discover_pages(root: Path) -> list:
-    """(Source, page_name) for every page the contract tree covers.
+    """(path, page_name) for every extracted page contract.
 
     Every `*Page` struct in the probe app is a candidate now, not just the ones in a
     `*Page.swift` file: `WorkspaceFoldersPage`/`EgressAllowListPage`/`SettingsAboutPage`
@@ -2121,15 +2204,23 @@ def discover_pages(root: Path) -> list:
     page stays embedded (README §1) unless the Android tree has a screen for it
     (MCPEditorPage does). `SessionHistoryPage`/`GoalDetailPage` exist only on Android
     and are listed in `_android-only.json`.
+
+    Non-`*Page` chrome (HomeDrawer) is not generated here: it has no `*Page` name to
+    key the contract on and its layout is a VStack drawer rather than a Section tree,
+    so it is hand-registered in `pages/home-drawer.json` (see CHROME_CONTRACTS). The
+    `check_chrome_contracts` gate keeps that file and HomeSpec.swift from vanishing.
     """
     probe = root / PROBE_REL
     pages = []
     for path in sorted(probe.glob("*.swift")):
         source = Source(path, root)
         for struct in page_structs(source):
-            if struct["private"]:
-                # An embedded subpage gets a contract only when it is its own Android
-                # screen file (MCPEditorPage.kt), not a composable inside a parent file.
+            # Embedded subpages (README §1) are contracts only when the Android tree
+            # has a screen of that name. `ModelProviderEditorPage` is a public struct
+            # inside ModelProviderSettingsPage.swift but it is presented as the
+            # parent's sheet, not a separate route; without this test a stale
+            # `model-provider-editor.json` was emitted with android.match=missing.
+            if struct["private"] or struct["name"] in EMBEDDED_HINTS:
                 mapping = android_mapping(root, struct["name"])
                 if mapping["match"] not in ("composable", "alias"):
                     continue
@@ -2137,6 +2228,41 @@ def discover_pages(root: Path) -> list:
                     continue
             pages.append((path, struct["name"]))
     return pages
+
+
+def check_chrome_contracts(root: Path) -> None:
+    """The hand-registered chrome contracts and the HomeSpec authority still exist.
+
+    A hand-written contract is invisible to the regeneration diff, so a deleted file
+    or a renamed Swift struct would otherwise drop the drawer out of the gate without
+    a red check. Fail loudly instead.
+    """
+    probe = root / PROBE_REL
+    problems = []
+    for name, (swift, contract_name) in CHROME_CONTRACTS.items():
+        source = probe / swift
+        if not source.is_file():
+            problems.append(f"{swift} is missing")
+        elif f"struct {name}" not in source.read_text(encoding="utf-8", errors="replace"):
+            problems.append(f"{swift} no longer declares struct {name}")
+        contract_path = root / PAGES_REL / contract_name
+        if not contract_path.is_file():
+            problems.append(f"{PAGES_REL / contract_name} is missing")
+            continue
+        try:
+            contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            problems.append(f"{contract_name} is not valid JSON: {exc}")
+            continue
+        if contract.get("page") != name:
+            problems.append(f"{contract_name} declares page {contract.get('page')!r}, expected {name!r}")
+        if not contract.get("handRegistered"):
+            problems.append(f"{contract_name} must carry a handRegistered block")
+    for swift in CHROME_VALUE_FILES:
+        if not (probe / swift).is_file():
+            problems.append(f"{swift} (home design values) is missing")
+    if problems:
+        raise ExtractError("; ".join(problems))
 
 
 SPEC_REQUIRED_REL = PAGES_REL / "_spec-required.json"
@@ -2240,6 +2366,7 @@ def main(argv: list) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        check_chrome_contracts(root)
         pages = discover_pages(root)
     except ExtractError as exc:
         print(f"extract_ios_pages: {exc}", file=sys.stderr)

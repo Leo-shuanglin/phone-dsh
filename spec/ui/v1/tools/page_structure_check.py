@@ -172,6 +172,12 @@ KINDS = (
     "conditional-section",
 )
 TITLE_KINDS = ("title-mismatch", "missing-title", "unresolved-title")
+#: The re-baseline is owned by a lane: C chat, D composer, E drawer/sessions,
+#: F settings/provider, G secondary files/device/workbench, H integration. A
+#: `--write-baseline` output marks new rows UNREVIEWED so a silent relaxation
+#: cannot be loaded; a reviewer assigns the lane (and a real reason) by hand.
+BASELINE_LANES = frozenset({"C", "D", "E", "F", "G", "H"})
+UNREVIEWED_LANE = "UNREVIEWED"
 ANDROID_ONLY_REL = PAGES_REL / "_android-only.json"
 UNRECOGNIZED_REL = PAGES_REL / "_unrecognized.json"
 UNRECOGNIZED_SCHEMA = "pdsh.ui.page-structure-unrecognized/1"
@@ -220,6 +226,12 @@ LOCAL_CONST_RE = re.compile(
     r"\"((?:[^\"\\]|\\.)*)\"[ \t]*$", re.M)
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 SECTION_CALL_RE = re.compile(r"\b([A-Z]\w*)[ \t]*\(")
+#: Composables that render a visible row label; `Text` is the bare case, the rest
+#: are the settings/row wrappers the pages use so the label is still explicit.
+ROW_CALLS = frozenset({
+    "Text", "BasicText", "InfoRow", "SettingsFormRow", "SettingsGroupedRow",
+    "SettingsBodyRow", "SettingsFootnoteRow",
+})
 DECLARATION_TAIL_RE = re.compile(r"(?:\b(?:data|enum|sealed|abstract|open|private|internal|public|inline|suspend)\s+)*"
                                  r"(?:class|fun|object|interface|typealias)\s+$")
 DYN_EXPR_MAX = 60
@@ -914,6 +926,13 @@ def is_declaration(masked: str, pos: int) -> bool:
     return bool(DECLARATION_TAIL_RE.search(masked[max(0, pos - 100): pos]))
 
 
+#: `*SectionView` type names that are data-model constructors, never a rendered
+#: header. PR22's AboutPage projects its cards through `data class AboutSectionView`;
+#: reading those calls as Compose sections invented two extra titles (版本 / 更多)
+#: that the page draws through `SettingsFormRow` instead.
+NON_UI_SECTION_CONSTRUCTORS = frozenset({"AboutSectionView"})
+
+
 def android_sections(text: str, masked: str, strings: dict, consts: dict,
                      positions: list | None = None) -> tuple:
     """(titled titles, unresolved expressions) declared by the page."""
@@ -922,7 +941,7 @@ def android_sections(text: str, masked: str, strings: dict, consts: dict,
         callee = m.group(1)
         if not (callee.endswith(("SectionLabel", "SectionHeader", "SectionView", "SectionGroup"))):
             continue
-        if is_declaration(masked, m.start()):
+        if is_declaration(masked, m.start()) or callee in NON_UI_SECTION_CONSTRUCTORS:
             continue
         open_paren = m.end() - 1
         close = match_paren(masked, open_paren)
@@ -1682,21 +1701,25 @@ def compare_title(contract: dict, report: "Report", android_file: str, text: str
 
 
 def android_row_positions(text: str, masked: str, strings: dict, consts: dict) -> list:
-    """(label, pos) for every visible Text/BasicText, in source order.
+    """(label, pos) for every visible row label, in source order.
 
     An untitled group is identified by a *row*, which may be a plain text line
-    (`Text("还没有可显示的内容")`), not only a clickable action.
+    (`Text("还没有可显示的内容")`), not only a clickable action. The settings rows
+    are the same fact through a wrapper (`SettingsFormRow(title = …)`), so PR22's
+    AboutPage 版本 row must count even though it is not a bare `Text`.
     """
     out = []
     for m in SECTION_CALL_RE.finditer(masked):
-        if m.group(1) not in ("Text", "BasicText"):
+        callee = m.group(1)
+        if callee not in ROW_CALLS:
             continue
         open_paren = m.end() - 1
         close = match_paren(masked, open_paren)
         if close < 0:
             continue
         named, positional = named_args(masked, open_paren, close)
-        span = named.get("text") or (positional[0] if positional else None)
+        span = (named.get("title") or named.get("text") or named.get("label")
+                or (positional[0] if positional else None))
         if span is None:
             continue
         value, dynamic = resolve_kotlin_expr(text[span[0]:span[1]], strings, consts)
@@ -1849,34 +1872,69 @@ def load_baseline(path: Path) -> dict:
     for entry in entries:
         if not isinstance(entry, dict):
             raise CheckError(f"{path.name}: a baseline entry is not an object")
-        for key in ("page", "kind", "name"):
+        for key in ("page", "kind", "name", "reason", "lane"):
             if key not in entry:
                 raise CheckError(f"{path.name}: a baseline entry misses `{key}`")
         if entry["kind"] not in KINDS:
             raise CheckError(f"{path.name}: unknown kind {entry['kind']!r}")
+        if not str(entry["reason"]).strip():
+            raise CheckError(f"{path.name}: {entry['page']}/{entry['name']!r} needs a real reason")
+        if entry["lane"] == UNREVIEWED_LANE:
+            raise CheckError(f"{path.name}: {entry['page']}/{entry['name']!r} is UNREVIEWED; "
+                             f"assign lane C/D/E/F/G/H and a real reason before loading it")
+        if entry["lane"] not in BASELINE_LANES:
+            raise CheckError(f"{path.name}: {entry['page']}/{entry['name']!r} lane "
+                             f"{entry['lane']!r} is not one of C/D/E/F/G/H")
         name = (normalize(entry["name"])
                 if entry["kind"].startswith(("missing-", "extra-", "unresolved-")) else entry["name"])
         out.add((entry["page"], entry["kind"], name))
     return out
 
 
-def baseline_payload(report: Report, contracts: dict) -> dict:
+def _existing_baseline_rows(path: Path) -> dict:
+    """Read the current baseline leniently, so `--write-baseline` can keep reviews."""
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    rows = {}
+    for entry in data.get("divergences", []):
+        if not isinstance(entry, dict):
+            continue
+        kind, name = entry.get("kind"), entry.get("name")
+        if not isinstance(kind, str) or not isinstance(name, str):
+            continue
+        key = (entry.get("page"), kind,
+               normalize(name) if kind.startswith(("missing-", "extra-", "unresolved-")) else name)
+        rows[key] = entry
+    return rows
+
+
+def baseline_payload(report: Report, contracts: dict, existing: dict | None = None) -> dict:
     rows, seen = [], set()
+    existing = existing or {}
     for page_id, kind, name, _detail in sorted(set(report.findings)):
         key = (page_id, kind, normalize(name)
                if kind.startswith(("missing-", "extra-", "unresolved-")) else name)
         if key in seen:
             continue
         seen.add(key)
+        reviewed = existing.get(key) or {}
         rows.append({
             "page": page_id,
             "kind": kind,
             "name": name,
-            "reason": f"known divergence on {page_id} ({kind}); shrink only",
+            "lane": reviewed.get("lane") or UNREVIEWED_LANE,
+            "reason": reviewed.get("reason") or (
+                f"new divergence on {page_id} ({kind}); review it, name the owning lane and "
+                f"write why it is real before loading this baseline"),
         })
     note = ("Known page-structure divergences between the iOS contract and the Android "
             "screens. This ratchet only shrinks: fix one, delete its row. Regenerate with "
-            "--write-baseline only when the change is reviewed as a ratchet move.")
+            "--write-baseline only when the change is reviewed as a ratchet move; new rows "
+            "are written UNREVIEWED and refuse to load until a lane and reason are assigned.")
     return {"schema": BASELINE_SCHEMA, "note": note, "contracts": len(contracts),
             "divergences": rows}
 
@@ -2469,7 +2527,8 @@ def run(root: Path, strict: bool, baseline_path: Path | None, write_baseline: Pa
         if stale_baseline:
             raise CheckError("refusing to write a baseline while it has stale entries: " +
                              ", ".join(f"{p}/{k}/{n}" for p, k, n in stale_baseline))
-        payload = baseline_payload(report, contracts)
+        payload = baseline_payload(report, contracts,
+                                   existing=_existing_baseline_rows(root / PAGES_REL / "_baseline.json"))
         write_baseline.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"\nwrote {len(payload['divergences'])} known divergence(s) to {write_baseline}")
         return 0

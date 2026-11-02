@@ -7,13 +7,13 @@
   "sectionNote": null,
   "title": {
     "text": "快捷键",
-    "provenance": "NativeShortcutsPage.swift:29",
+    "provenance": "NativeShortcutsPage.swift:30",
     "anchor": ".navigationTitle(NativeText(\"快捷键\", \"Shortcuts\"))"
   },
   "source": {
     "file": "NativeShortcutsPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/NativeShortcutsPage.swift",
-    "lines": 93,
+    "lines": 95,
     "structLine": 5,
     "renderedFrom": [
       "body"
@@ -73,7 +73,7 @@
           "labelExpr": null,
           "kind": "info",
           "value": null,
-          "valueExpr": null,
+          "valueExpr": "\"⇧↩\"",
           "clickable": false,
           "destination": null,
           "writes": false,
@@ -88,7 +88,7 @@
           "labelExpr": null,
           "kind": "info",
           "value": null,
-          "valueExpr": null,
+          "valueExpr": "\"↩\"",
           "clickable": false,
           "destination": null,
           "writes": false,
@@ -103,7 +103,7 @@
           "labelExpr": null,
           "kind": "info",
           "value": null,
-          "valueExpr": null,
+          "valueExpr": "\"⌘↩\"",
           "clickable": false,
           "destination": null,
           "writes": false,

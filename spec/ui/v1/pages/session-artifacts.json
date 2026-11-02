@@ -6,14 +6,14 @@
   "sectionModel": "section",
   "sectionNote": null,
   "title": {
-    "text": "本 session 产物",
-    "provenance": "SessionArtifactsPage.swift:92",
-    "anchor": ".navigationTitle(\"本 session 产物\")"
+    "text": "本会话产物",
+    "provenance": "SessionArtifactsPage.swift:90",
+    "anchor": ".navigationTitle(\"本会话产物\")"
   },
   "source": {
     "file": "SessionArtifactsPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/SessionArtifactsPage.swift",
-    "lines": 349,
+    "lines": 347,
     "structLine": 7,
     "renderedFrom": [
       "body",
@@ -88,8 +88,8 @@
       "collection": null,
       "rows": [
         {
-          "id": "本-session-还没有已确认归属的产物",
-          "label": "本 session 还没有已确认归属的产物",
+          "id": "本会话-还没有已确认归属的产物",
+          "label": "本会话 还没有已确认归属的产物",
           "labelExpr": null,
           "kind": "text",
           "value": null,
@@ -99,12 +99,12 @@
           "writes": false,
           "condition": null,
           "provenance": "SessionArtifactsPage.swift:57",
-          "anchor": "Text(\"本 session 还没有已确认归属的产物\")",
+          "anchor": "Text(\"本会话 还没有已确认归属的产物\")",
           "extraction": "syntax"
         },
         {
-          "id": "此会话生成或导入的文件会显示在这里-没有真实会话来源的记录不会被归入本-session",
-          "label": "此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本 session。",
+          "id": "此会话生成或导入的文件会显示在这里-没有真实会话来源的记录不会被归入本会话",
+          "label": "此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本会话。",
           "labelExpr": null,
           "kind": "text",
           "value": null,
@@ -114,7 +114,7 @@
           "writes": false,
           "condition": null,
           "provenance": "SessionArtifactsPage.swift:60",
-          "anchor": "Text(\"此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本 session。\")",
+          "anchor": "Text(\"此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本会话。\")",
           "extraction": "syntax"
         }
       ],
@@ -123,13 +123,13 @@
       "extraction": "syntax",
       "criterion": {
         "kind": "first-row",
-        "label": "本 session 还没有已确认归属的产物",
+        "label": "本会话 还没有已确认归属的产物",
         "provenance": "SessionArtifactsPage.swift:57"
       }
     },
     {
-      "id": "本-session",
-      "title": "本 session",
+      "id": "本会话",
+      "title": "本会话",
       "titleTemplate": null,
       "dynamicTitle": false,
       "titleExpression": null,
@@ -155,7 +155,7 @@
         }
       ],
       "provenance": "SessionArtifactsPage.swift:70",
-      "anchor": "Section(\"本 session\") {",
+      "anchor": "Section(\"本会话\") {",
       "extraction": "syntax"
     },
     {
@@ -190,10 +190,10 @@
       "extraction": "syntax",
       "hasHeader": true,
       "footer": {
-        "text": "这些记录没有当前会话的真实来源信息，不计为本 session 产物。",
+        "text": "这些记录没有当前会话的真实来源信息，不计为本会话产物。",
         "labelExpr": null,
         "provenance": "SessionArtifactsPage.swift:85",
-        "anchor": "Text(\"这些记录没有当前会话的真实来源信息，不计为本 session 产物。\")"
+        "anchor": "Text(\"这些记录没有当前会话的真实来源信息，不计为本会话产物。\")"
       }
     }
   ],
@@ -242,7 +242,7 @@
       "extraction": "manual"
     },
     {
-      "id": "gesture-100",
+      "id": "gesture-98",
       "label": null,
       "labelExpr": null,
       "kind": "gesture",
@@ -251,7 +251,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "SessionArtifactsPage.swift:100",
+      "provenance": "SessionArtifactsPage.swift:98",
       "anchor": ".refreshable { await loadArtifacts() }",
       "extraction": "syntax"
     },
@@ -265,7 +265,7 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "SessionArtifactsPage.swift:96",
+      "provenance": "SessionArtifactsPage.swift:94",
       "anchor": "Button(\"完成\") { dismiss() }.leadingBarText()",
       "extraction": "syntax"
     },
@@ -279,13 +279,13 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "SessionArtifactsPage.swift:108",
+      "provenance": "SessionArtifactsPage.swift:106",
       "anchor": "Button(\"好\", role: .cancel) { openError = nil }",
       "extraction": "syntax",
-      "presents": "alert-104"
+      "presents": "alert-102"
     },
     {
-      "id": "button-115",
+      "id": "button-113",
       "label": null,
       "labelExpr": null,
       "kind": "button",
@@ -294,7 +294,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "SessionArtifactsPage.swift:115",
+      "provenance": "SessionArtifactsPage.swift:113",
       "anchor": "Button {",
       "extraction": "manual"
     },
@@ -308,15 +308,15 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "SessionArtifactsPage.swift:313",
+      "provenance": "SessionArtifactsPage.swift:311",
       "anchor": "Label(\"分享\", systemImage: \"square.and.arrow.up\")",
       "extraction": "syntax",
-      "presentedBy": "navigationDestination-101"
+      "presentedBy": "navigationDestination-99"
     }
   ],
   "presentations": [
     {
-      "id": "navigationDestination-101",
+      "id": "navigationDestination-99",
       "kind": "navigationDestination",
       "title": null,
       "destination": "SessionArtifactPreviewPage",
@@ -324,15 +324,15 @@
         "preview"
       ],
       "span": [
-        101,
-        103
+        99,
+        101
       ],
-      "provenance": "SessionArtifactsPage.swift:101",
+      "provenance": "SessionArtifactsPage.swift:99",
       "anchor": ".navigationDestination(item: $preview) { item in",
       "triggered": true
     },
     {
-      "id": "alert-104",
+      "id": "alert-102",
       "kind": "alert",
       "title": "无法打开产物",
       "destination": null,
@@ -340,10 +340,10 @@
         "openError"
       ],
       "span": [
-        104,
-        109
+        102,
+        107
       ],
-      "provenance": "SessionArtifactsPage.swift:104",
+      "provenance": "SessionArtifactsPage.swift:102",
       "anchor": ".alert(\"无法打开产物\", isPresented: Binding(",
       "triggered": true
     }
@@ -354,27 +354,27 @@
     "sites": {
       "empty": [
         {
-          "renders": "本 session 还没有已确认归属的产物",
+          "renders": "本会话 还没有已确认归属的产物",
           "when": "sessionArtifacts.isEmpty && !isLoading",
           "provenance": "SessionArtifactsPage.swift:57",
-          "anchor": "Text(\"本 session 还没有已确认归属的产物\")"
+          "anchor": "Text(\"本会话 还没有已确认归属的产物\")"
         },
         {
-          "renders": "此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本 session。",
+          "renders": "此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本会话。",
           "when": "sessionArtifacts.isEmpty && !isLoading",
           "provenance": "SessionArtifactsPage.swift:60",
-          "anchor": "Text(\"此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本 session。\")"
+          "anchor": "Text(\"此会话生成或导入的文件会显示在这里。没有真实会话来源的记录不会被归入本会话。\")"
         },
         {
-          "renders": "这些记录没有当前会话的真实来源信息，不计为本 session 产物。",
+          "renders": "这些记录没有当前会话的真实来源信息，不计为本会话产物。",
           "when": "!unassignedArtifacts.isEmpty",
           "provenance": "SessionArtifactsPage.swift:85",
-          "anchor": "Text(\"这些记录没有当前会话的真实来源信息，不计为本 session 产物。\")"
+          "anchor": "Text(\"这些记录没有当前会话的真实来源信息，不计为本会话产物。\")"
         }
       ],
       "data": [
         {
-          "renders": "untitled section at 44 | untitled section at 55 | 本 session | 未归属",
+          "renders": "untitled section at 44 | untitled section at 55 | 本会话 | 未归属",
           "when": null,
           "provenance": "SessionArtifactsPage.swift:7",
           "anchor": "struct SessionArtifactsPage: View {",
@@ -391,13 +391,13 @@
         {
           "renders": "无法打开产物",
           "when": null,
-          "provenance": "SessionArtifactsPage.swift:104",
+          "provenance": "SessionArtifactsPage.swift:102",
           "anchor": ".alert(\"无法打开产物\", isPresented: Binding("
         },
         {
           "renders": "无法读取产物：\\(error.localizedDescription)",
           "when": null,
-          "provenance": "SessionArtifactsPage.swift:168",
+          "provenance": "SessionArtifactsPage.swift:166",
           "anchor": "loadError = \"无法读取产物：\\(error.localizedDescription)\""
         }
       ],
@@ -418,7 +418,7 @@
         {
           "renders": "ProgressView",
           "when": "openingID == artifact.artifactID",
-          "provenance": "SessionArtifactsPage.swift:137",
+          "provenance": "SessionArtifactsPage.swift:135",
           "anchor": "ProgressView().controlSize(.small)"
         }
       ]
@@ -437,10 +437,11 @@
   "subpages": [
     {
       "name": "SessionArtifactPreviewPage",
-      "line": 296,
+      "line": 294,
       "private": true,
+      "embedded": false,
       "sections": [],
-      "provenance": "SessionArtifactsPage.swift:296"
+      "provenance": "SessionArtifactsPage.swift:294"
     }
   ],
   "unreachable": [],

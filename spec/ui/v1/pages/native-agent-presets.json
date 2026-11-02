@@ -7,13 +7,13 @@
   "sectionNote": null,
   "title": {
     "text": "Agent 预设",
-    "provenance": "NativeAgentPresetsPage.swift:162",
+    "provenance": "NativeAgentPresetsPage.swift:160",
     "anchor": ".navigationTitle(NativeText(\"Agent 预设\", \"Agent Presets\"))"
   },
   "source": {
     "file": "NativeAgentPresetsPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/NativeAgentPresetsPage.swift",
-    "lines": 182,
+    "lines": 180,
     "structLine": 99,
     "renderedFrom": [
       "body"
@@ -113,7 +113,7 @@
           "writes": false,
           "condition": null,
           "provenance": "NativeAgentPresetsPage.swift:125",
-          "anchor": "Text(preset.title).font(.headline)",
+          "anchor": "Text(preset.title).font(.system(size: HomeSpec.bodySize, weight: .semibold))",
           "extraction": "manual",
           "collection": "model.presets"
         },
@@ -121,7 +121,7 @@
           "id": "默认",
           "label": "默认",
           "labelExpr": null,
-          "kind": "text",
+          "kind": "custom",
           "value": null,
           "valueExpr": null,
           "clickable": false,
@@ -129,28 +129,30 @@
           "writes": false,
           "condition": "preset.isDefault",
           "provenance": "NativeAgentPresetsPage.swift:127",
-          "anchor": "Text(NativeText(\"默认\", \"Default\"))",
+          "anchor": "HomeTag(text: NativeText(\"默认\", \"Default\"))",
           "extraction": "syntax",
+          "template": "HomeTag",
           "collection": "model.presets"
         },
         {
           "id": "自定义",
           "label": "自定义",
           "labelExpr": null,
-          "kind": "text",
+          "kind": "custom",
           "value": null,
           "valueExpr": null,
           "clickable": false,
           "destination": null,
           "writes": false,
           "condition": "preset.custom",
-          "provenance": "NativeAgentPresetsPage.swift:133",
-          "anchor": "Text(NativeText(\"自定义\", \"Custom\")).font(.caption2).foregroundStyle(.secondary)",
+          "provenance": "NativeAgentPresetsPage.swift:130",
+          "anchor": "HomeTag(text: NativeText(\"自定义\", \"Custom\"))",
           "extraction": "syntax",
+          "template": "HomeTag",
           "collection": "model.presets"
         },
         {
-          "id": "text-136",
+          "id": "text-133",
           "label": null,
           "labelExpr": "preset.id",
           "kind": "text",
@@ -160,13 +162,13 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeAgentPresetsPage.swift:136",
-          "anchor": "Text(preset.id).font(.caption.monospaced()).foregroundStyle(.secondary)",
+          "provenance": "NativeAgentPresetsPage.swift:133",
+          "anchor": "Text(preset.id).font(.system(size: 13).monospaced()).foregroundStyle(.secondary)",
           "extraction": "manual",
           "collection": "model.presets"
         },
         {
-          "id": "text-138",
+          "id": "text-135",
           "label": null,
           "labelExpr": "preset.detail",
           "kind": "text",
@@ -176,13 +178,13 @@
           "destination": null,
           "writes": false,
           "condition": "!preset.detail.isEmpty",
-          "provenance": "NativeAgentPresetsPage.swift:138",
-          "anchor": "Text(preset.detail).font(.footnote).foregroundStyle(.secondary)",
+          "provenance": "NativeAgentPresetsPage.swift:135",
+          "anchor": "Text(preset.detail).font(.system(size: 13)).foregroundStyle(.secondary)",
           "extraction": "manual",
           "collection": "model.presets"
         },
         {
-          "id": "text-141",
+          "id": "text-138",
           "label": null,
           "labelExpr": "broken",
           "kind": "text",
@@ -192,8 +194,8 @@
           "destination": null,
           "writes": false,
           "condition": "let broken = preset.broken",
-          "provenance": "NativeAgentPresetsPage.swift:141",
-          "anchor": "Text(broken).font(.caption).foregroundStyle(.orange)",
+          "provenance": "NativeAgentPresetsPage.swift:138",
+          "anchor": "Text(broken).font(.system(size: 13)).foregroundStyle(.orange)",
           "extraction": "manual",
           "collection": "model.presets"
         },
@@ -208,7 +210,7 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "NativeAgentPresetsPage.swift:144",
+          "provenance": "NativeAgentPresetsPage.swift:141",
           "anchor": "Button(NativeText(\"查看配置\", \"View configuration\")) {",
           "extraction": "syntax",
           "collection": "model.presets"
@@ -224,7 +226,7 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "NativeAgentPresetsPage.swift:149",
+          "provenance": "NativeAgentPresetsPage.swift:146",
           "anchor": "Button(NativeText(\"设为默认\", \"Make default\")) {",
           "extraction": "syntax",
           "collection": "model.presets"
@@ -236,11 +238,11 @@
       "criterion": {
         "kind": "first-clickable-row",
         "label": "查看配置",
-        "provenance": "NativeAgentPresetsPage.swift:144"
+        "provenance": "NativeAgentPresetsPage.swift:141"
       }
     },
     {
-      "id": "section-159",
+      "id": "section-156",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
@@ -250,7 +252,7 @@
       "collection": null,
       "rows": [
         {
-          "id": "text-159",
+          "id": "text-156",
           "label": null,
           "labelExpr": "error",
           "kind": "text",
@@ -260,18 +262,18 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeAgentPresetsPage.swift:159",
+          "provenance": "NativeAgentPresetsPage.swift:156",
           "anchor": "Section { Text(error).foregroundStyle(.red) }",
           "extraction": "manual"
         }
       ],
-      "provenance": "NativeAgentPresetsPage.swift:159",
+      "provenance": "NativeAgentPresetsPage.swift:156",
       "anchor": "Section { Text(error).foregroundStyle(.red) }",
       "extraction": "syntax",
       "criterion": {
         "kind": "first-row-expression",
         "labelExpr": "error",
-        "provenance": "NativeAgentPresetsPage.swift:159"
+        "provenance": "NativeAgentPresetsPage.swift:156"
       }
     }
   ],
@@ -301,11 +303,11 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAgentPresetsPage.swift:144",
+      "provenance": "NativeAgentPresetsPage.swift:141",
       "anchor": "Button(NativeText(\"查看配置\", \"View configuration\")) {",
       "extraction": "syntax",
       "labelAlternatives": [],
-      "presents": "sheet-166"
+      "presents": "sheet-164"
     },
     {
       "id": "设为默认",
@@ -317,13 +319,13 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAgentPresetsPage.swift:149",
+      "provenance": "NativeAgentPresetsPage.swift:146",
       "anchor": "Button(NativeText(\"设为默认\", \"Make default\")) {",
       "extraction": "syntax",
       "labelAlternatives": []
     },
     {
-      "id": "gesture-164",
+      "id": "gesture-162",
       "label": null,
       "labelExpr": null,
       "kind": "gesture",
@@ -332,7 +334,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAgentPresetsPage.swift:164",
+      "provenance": "NativeAgentPresetsPage.swift:162",
       "anchor": ".refreshable { await model.refresh() }",
       "extraction": "syntax"
     },
@@ -346,14 +348,14 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "NativeAgentPresetsPage.swift:176",
+      "provenance": "NativeAgentPresetsPage.swift:174",
       "anchor": "Button(NativeText(\"完成\", \"Done\")) { showYAML = false }",
       "extraction": "syntax"
     }
   ],
   "presentations": [
     {
-      "id": "sheet-166",
+      "id": "sheet-164",
       "kind": "sheet",
       "title": null,
       "destination": "NavigationStack",
@@ -361,10 +363,10 @@
         "showYAML"
       ],
       "span": [
-        166,
-        180
+        164,
+        178
       ],
-      "provenance": "NativeAgentPresetsPage.swift:166",
+      "provenance": "NativeAgentPresetsPage.swift:164",
       "anchor": ".sheet(isPresented: $showYAML) {",
       "triggered": true
     }
@@ -376,7 +378,7 @@
       "empty": [],
       "data": [
         {
-          "renders": "untitled section at 106 | untitled section at 118 | untitled section at 159",
+          "renders": "untitled section at 106 | untitled section at 118 | untitled section at 156",
           "when": null,
           "provenance": "NativeAgentPresetsPage.swift:99",
           "anchor": "struct NativeAgentPresetsPage: View {",

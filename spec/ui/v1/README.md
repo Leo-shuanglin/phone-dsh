@@ -42,37 +42,37 @@ checker 强制：tokens 过 schema；6 个签名面的 token 引用全部存在�
 
 页面按真实文件反推。入口 = 从哪儿打开；导航关系 = 打开后怎么回去。P5 列：`must` = 必须 parity，`later` = 可延后。
 
-入口分三类，别混。**可达** = 产品里点得到；**预览专用** = 只有 DEBUG 的 `-uiPreview` 路由（`NativeShell.swift:737` 的 `PreviewScreen`），产品没有入口；**不可达** = 连预览路由都没有，只剩结构体。PR #13 把设置改成五分页后，about / network / MCP 三条设置行消失：前两条降级为预览专用，MCP 变成不可达。
+入口分三类，别混。**可达** = 产品里点得到；**预览专用** = 只有 DEBUG 的 `-uiPreview` 路由（`NativeShell.swift` 的 `PreviewScreen`），产品没有入口；**不可达** = 连预览路由都没有，只剩结构体。PR22 把首页改成 ChatPage、抽屉改成 HomeDrawer、设置改成一组分组索引：SessionsPage 只剩预览路由，about / network / 文件夹回到设置行，MCP 仍不可达。
 
 | 页面 | 职责 | 入口 | 导航关系 | P5 |
 |---|---|---|---|---|
-| ChatPage | 对话、输入坞、审批/问题卡、目标条 | RootView 的默认原生面（NativeShell） | 根页；自绘页头：抽屉 / 改名 / 运行状态 / `⋯` | must |
-| SessionsPage | 会话列表、重命名、删除、开关 | 页头左按钮拉出抽屉（抽屉主体就是它） | 抽屉内常驻；选中会话即关闭抽屉 | must |
+| ChatPage | PR22 首页：对话、输入坞、审批/问题卡、目标条；空对话也是首页 | RootView 的默认原生面（NativeShell） | 根页；自绘页头：抽屉 / 改名 / 设备+更多（含产物、工作区、运行状态、插件与工具、导出） | must |
+| SessionsPage | 抽屉会话列表（PR22 已不是产品首页） | **预览专用（`-uiPreview sessions`、`DrawerPreview`）；产品抽屉换 HomeDrawer** | 预览壳；选中会话即关闭 | later |
 | SessionActivityPage | 单会话的步骤/用量/上下文 | **触发点缺失（sheet 已接线但无人置位，基线不可达）** | sheet | later |
-| SessionHistoryPage | 历史回合列表与单回合详情 | 页头 `⋯` →「历史」，或 ChatPage 的目标行 | push；回合详情复用 ChatPage 的折叠规则 | later |
-| GoalDetailPage | 单个目标的 objective / 状态 / 动作 | ChatPage 的目标条 | sheet；打开失败保留上一个目标（fail-quiet） | later |
-| FilesPage | 工作区文件树、导入 | 对话内工具输出 → 工作区面板「文件」段（内联） | 页面栈；文件行 push `PreviewSurface`（独立预览面，契约 `pages/preview-surface.json`） | must |
-| NativeWorkbenchPage | 会话内工作面板（文件 / 命令两段） | 对话里点工具写出的文件路径（含待预览路径补开） | sheet，`完成` 关闭 | must |
-| PDSHShellPage | 只读加速器命令（argv 来自 caps） | 工作面板第二段 | 段内页面 | must |
-| WorkspaceFoldersPage | 工作区文件夹增删与切换 | **预览专用（`-uiPreview workspace`）；iOS 抽屉在 PR #13 后只剩「定时任务 / 设置」两行，Android 仍有独立路由** | push；每行打开 FilesPage | must |
-| SettingsPage | 五分页设置：通用 / 模型 / 插件 / 手机权限 / 预设 | 抽屉底行「设置」 | sheet（NavigationStack，iPad 走 NavigationSplitView）；分区是分段 `Picker`，tab 体内嵌 | must |
-| NativeGeneralSettingsPage | 通用 tab：权限、语言、外观、字号、过程折叠、快捷键、发送行为、版本 | 「通用」tab（内嵌，不单独成页） | 内嵌；三个行动作开 PermissionDefaultsPage / NativeShortcutsPage / LicensesPage | must |
-| NativeShortcutsPage | 快捷键对照与恢复全部默认 | 「通用」tab 的「快捷键」行 | push，返回回「通用」 | must |
-| PhonePermissionsPage | 手机权限清单、能力授权与最近审计 | 「手机权限」tab（`embedded: true`） | tab 体内嵌；授权走系统弹窗 | must |
-| NativeAgentPresetsPage | Agent 预设列表、设为默认、配置入口 | 「预设」tab | tab 体内嵌；「查看配置」开 NativeSettingsDocumentPage | must |
-| NativePluginInventoryPage | 内置插件清单、搜索与插件配置入口 | 「插件」tab | tab 体内嵌；「插件配置」开 NativeConfigurationPage | must |
-| ModelProviderSettingsPage | 模型服务、密钥、编解码 | 「模型」tab、起手卡「去配置模型服务」、启动失败横幅 | tab 体内嵌；编辑子页 ModelProviderEditorPage | must |
+| SessionHistoryPage | 历史回合列表与单回合详情（Android 承接页，iOS 无 struct） | 页头 `⋯` →「历史」，或 ChatPage 的目标行 | push；回合详情复用 ChatPage 的折叠规则 | later |
+| GoalDetailPage | 单个目标的 objective / 状态 / 动作（Android 承接页，iOS 无 struct） | ChatPage 的目标条 | sheet；打开失败保留上一个目标（fail-quiet） | later |
+| FilesPage | 工作区文件树、导入 | Chat 工具写出路径；文件段内联 | 页面栈；文件行 push `PreviewSurface`（独立预览面，契约 `pages/preview-surface.json`） | must |
+| NativeWorkbenchPage | 会话内工作面板（文件 / 命令两段） | 对话里点工具写出的文件路径 | sheet，`完成` 关闭 | must |
+| PDSHShellPage | 只读加速器命令（argv 来自 caps） | 文件段旁的「命令」段 | 段内页面 | must |
+| WorkspaceFoldersPage | 工作区文件夹增删与切换 | 设置 › 文件夹 | push；每行打开 FilesPage | must |
+| SettingsPage | PR22 分组设置索引：模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于 | 抽屉底栏「设置」、Chat `⋯` → 设置 | sheet（NavigationStack）；行 push 子页；`initialTab` 深链仅 `-uiPreview settings.permissions.tab` | must |
+| FontSizeSettingsPage / ConversationSettingsPage / ArchivedSessionsPage | 字号 / 工作过程 / 已归档会话（设置内嵌子页） | 设置 › 字号 / 工作过程 / 已归档会话 | 随 SettingsPage 实现、不单独成页；已归档行可恢复 | must |
+| NativeShortcutsPage | 快捷键对照与恢复全部默认 | 设置 › 对话 › 快捷键 | push，返回设置索引 | must |
+| PhonePermissionsPage | 手机权限清单、能力授权与最近审计 | 设置 › 手机权限（`embedded: true`） | push；授权走系统弹窗 | must |
+| NativeAgentPresetsPage | Agent 预设列表、设为默认、配置入口 | 设置 › Agent 预设 | push；预设卡进入会话 | must |
+| NativePluginInventoryPage | 内置插件清单、搜索 | 插件与工具 → 已加载插件 | push；搜索/刷新 | must |
+| ModelProviderSettingsPage | 模型服务、密钥、编解码 | 设置 › 模型服务；Chat 起手卡/启动失败横幅 | push；编辑子页 ModelProviderEditorPage | must |
 | SessionArtifactsPage | 本会话产物、未归属产物与预览 | 页头 `⋯` →「产物」 | sheet；预览子页 SessionArtifactPreviewPage | must |
 | SessionArtifactPreviewPage | 单个产物的内容预览 | SessionArtifactsPage 的行点击 | 内嵌 sheet，不单独成页 | must |
-| NativeDeviceConnectionPage | 已配对的真机连接与传输能力 | 页头 `⋯` →「设备连接」 | sheet；行打开 NativeDeviceSessionPage | must |
+| NativeDeviceConnectionPage | 已配对的真机连接与传输能力 | 页头设备按钮 →「设备连接」 | sheet；行打开 NativeDeviceSessionPage | must |
 | NativeDeviceSessionPage | 只读的设备会话转录（历史、实时） | NativeDeviceConnectionPage 的行 | push，只读，无写动作 | later |
-| NativeConfigurationPage | 会话级与插件配置 | 页头 `⋯` → 本会话设置；「插件」tab 的「插件配置」行 | sheet | must |
-| WebSearchSettingsPage | 网页搜索开关与后端 | 「插件」tab →「插件配置」页 → 网页搜索 | push / sheet | must |
-| MCPSettingsPage | MCP 服务器列表与编辑 | **不可达（PR #13 后全仓无调用点，无预览路由；契约仍在）** | push / sheet；编辑子页 MCPEditorPage | later |
-| NativeAutomationPage | 定时任务、计划详情与历史 | 抽屉「定时任务」、会话页入口 | push；子页 ScheduleDetailPage、ScheduleHistoryPage、ScheduleEditorPage | must |
-| EgressAllowListPage | 出网白名单 | **预览专用（`-uiPreview settings.network`；产品无入口）** | push | later |
-| RuntimeDetailsPage | 运行时状态、停止与重启 | 页头运行状态点 | sheet | must |
-| SettingsAboutPage | 版本、许可、开发者入口 | **预览专用（`-uiPreview settings.about`；产品无「关于」页）** | push；子页 LicensesPage | later |
+| NativeConfigurationPage | 会话级与插件配置 | 页头 `⋯` → 本会话设置；设置 › 插件与工具 | sheet | must |
+| WebSearchSettingsPage | 网页搜索开关与后端 | 插件配置 → 网页搜索与抓取 | push / sheet | must |
+| MCPSettingsPage | MCP 服务器列表与编辑 | **不可达（全仓无调用点，无预览路由；契约仍在）** | push / sheet；编辑子页 MCPEditorPage | later |
+| NativeAutomationPage | 定时任务、计划详情与历史 | 抽屉「定时任务」；`-uiPreview sessions.schedules` | push；子页 ScheduleDetailPage、ScheduleHistoryPage、ScheduleEditorPage | must |
+| EgressAllowListPage | 出网白名单 | 设置 › 网络访问 | push | must |
+| RuntimeDetailsPage | 运行时状态、停止与重启 | 设置 › 引擎 › 运行状态；Chat 页头运行状态 | sheet | must |
+| SettingsAboutPage | 版本、许可、开发者入口 | 设置 › 关于 Phone DSH | push；子页 LicensesPage | must |
 | WebSurfacePage | 完整 DSH 页面（WebView 宿主） | **iOS 已删除（495da9b5）；Android 侧是独立全屏宿主，见 `pages/_android-only.json`** | 全屏容器，不做返回栈 | later |
 | MemoryPage | 记忆条目与来源 | **不可达（开发者工具页已随 PR #13 删除）** | push | later |
 | ProbesPage | 设备探针与报告 | **不可达（同上）** | push | later |
@@ -80,28 +80,28 @@ checker 强制：tokens 过 schema；6 个签名面的 token 引用全部存在�
 | TaskScreenPage | 任务屏预览 | **不可达（同上）** | push | later |
 | ExportPage | 导出诊断包 | **不可达（全仓无调用点）** | push / sheet | later |
 | DailyBriefPage | 每日简报 | **基线无入口（孤页）** | 不可达 | later |
-| ChatPreferencesPage | 聊天外观、字号、过程折叠、转录密度 | **不可达（全仓无调用点；设置已改五分页）** | push | later |
+| ChatPreferencesPage | 聊天外观、字号、过程折叠、转录密度 | **不可达（全仓无调用点；设置已改分组索引）** | push | later |
 | NativeSettingsDocumentPage | 配置文件的只读查看与分享 | **不可达（全仓无调用点）** | sheet | later |
 
-内嵌子页随父页实现、不单独排期：CommandExecutionResultPage、ModelProviderEditorPage、SessionQueuePage、PermissionDefaultsPage、LicensesPage、ScheduleDetailPage、ScheduleHistoryPage、ScheduleEditorPage。
+内嵌子页随父页实现、不单独排期：CommandExecutionResultPage、ModelProviderEditorPage、SessionQueuePage、PermissionDefaultsPage、LicensesPage、FontSizeSettingsPage、ConversationSettingsPage、ArchivedSessionsPage、ScheduleDetailPage、ScheduleHistoryPage、ScheduleEditorPage。`DevelopmentToolsPage` 已随 PR #13 删除，PR22 无此 struct；memory / probes / background / task-screen 因此仍不可达。
 
-`FilePreviewPage` 在 PR15 里被删除，预览改成一个独立面 `PreviewSurface`（它不是 `*Page` struct，提取器不生成契约，见 `pages/preview-surface.json` 的 `handRegistered`）。
+产品抽屉是 `HomeDrawer`（`HomeDrawer.swift:12`，不是 `*Page`）：新会话 / 定时任务、文件夹分组（默认「日常」）、长按重命名/归档、底部设置栏；它用手写契约 `pages/home-drawer.json` 进 gate，`extract_ios_pages.py` 的 `CHROME_CONTRACTS` 钉住文件与 struct。`HomeSpec.swift` 是 430×932 的页面/文字/间距/圆角值来源（#F7F7F7 page、#1A1A1A ink、16/24 body、16 chrome/20 content），不生成页面契约，由 `CHROME_VALUE_FILES` 钉住。`FilePreviewPage` 已删除（PR15），预览是独立面 `PreviewSurface`（`pages/preview-surface.json`）。
 
-页面结构另有机器可读契约：`pages/<page-id>.json`（分区 / 行 / 动作 / 呈现，每项带 `file:line` 来源，由 `tools/extract_ios_pages.py` 从基线抽取），`tools/page_structure_check.py` 用它比对 Android 页面；平台被迫差异只走 `pages/_whitelist.json`（每条 MUST 引用 `spec/platform/whitelist.json` 的 id），已知差异记 `pages/_baseline.json` 且只减不增，`--strict` 输出待对齐清单。非 `Section` 的分组（`PageSection` / `GroupBox` / 粗体标题 `Text`）记 `kind: region`，识别不出的记 `implicit`（不整页跳过）；`states` 只作人读（`"advisory": true`，比较器不读）；Android 无 iOS 对应的页登记在 `pages/_android-only.json`，有 `public fun *Page()` 却既无契约也不在该文件里即失败。
-契约标题 MUST 是**渲染形态**：`dynamicTitle:true` 只表示「固定模板 + 一个可变量」（`title:"Rows (N)"` + `titleTemplate:"Rows ({model.probeRows.count})"`，比较用 template、数字与模板槽归一到 `#`）；标题**就是数据**（`Section(fileGroupTitle)`）记 `title:null` + `titleSource:"expression"` + `titleExpression` + `criterion`，不许冒充 `dynamicTitle`；`title` 里出现源码表达式即契约错误，Android 把表达式当字面量渲染 → `extra-section`。
-无标题/数据即标题的分区 MUST 带 `criterion`（首个可点行 / 首行标签）：checker 找该行、看它之前**有没有** Android 标题——没有=一致，有=`extra-section`，找不到行=`missing-section`；确无字面判据的项登记在 `pages/_unrecognized.json`（owner + reviewBy + 理由，stale 即失败）；基线自身的死 UI 在契约里标 `deadUi` + 证据，由 checker 归类为「已确认、勿实现」，整页一坨的页记 `sectionModel:"single-region"` + 说明。
-Android 侧的分区 / 动作 MUST 走 `SessionSectionLabel`、`SectionHeader(title=...)`、`*SectionView(_, title)` 与 `SessionTextAction(label=...)`、`InfoRow(..., onClick=...)`；标题是表达式时记 `unresolved`，不当作一致。车道统一用 `SessionTextAction` 会让 gate 变精确——`Row(.clickable){BasicText}` 与 `ImeAction.Search` 搜索框只是兜底启发式。
-判据（决定冲突往哪边修）：gate 看不见正确实现时修 gate；实现把信息藏起来（数据驱动标题、拼出来的字符串）时修实现——区别是信息是否在源码里显式可见。
-标准控件也算动作：`Button`/`OutlinedButton`/`TextButton`/`FilledTonalButton`、`SegmentedButton`/`FilterChip`、`Switch`/`Checkbox`、`DropdownMenuItem`、页内 `label:` 包装器取内容里第一个 `Text(text=…)`；`Switch` 只认同一 `Row`/`Column` 直接子节点里最近的 `Text`。
+页面结构另有机器可读契约：`pages/<page-id>.json`（分区/行/动作/呈现，每项带 `file:line`）由 `tools/extract_ios_pages.py` 抽取，`tools/page_structure_check.py` 比对 Android；平台被迫差异只走 `_whitelist.json`（引用 `spec/platform/whitelist.json` 的 id），已知差异记 `_baseline.json` 只减不增；`states` 只作人读，Android 无对应页登记 `_android-only.json`，有 `public fun *Page()` 无契约即失败。
+标题 MUST 是渲染形态：`dynamicTitle` 只给「固定模板+一个可变量」；数据即标题记 `title:null`+`titleSource:"expression"`+`titleExpression`+`criterion`；无字面判据的项登记 `_unrecognized.json`（owner+reviewBy+理由，stale 即失败）；死 UI 标 `deadUi`+证据；整页一坨记 `single-region`。
+Android 侧 MUST 走 `SessionSectionLabel`/`SectionHeader(title=…)`/`*SectionView(_, title)` 与 `SessionTextAction`/`InfoRow(..., onClick=…)`；标题是表达式记 `unresolved`；标准控件（`Button`、`FilterChip`、`Switch`、`DropdownMenuItem`、`label:` 包装器）也算动作；判据是 gate 看不见正确实现时修 gate、实现藏信息时修实现。
 
 ### 1.1 已知基线观察（只记录，不改基线）
 
 | 观察 | 证据 | P5 处置 |
 |---|---|---|
-| SessionActivityPage 的 sheet 已接线但无人置位 | `ChatPage.swift:79` 声明、`ChatPage.swift:502` 接线，全仓无 `showActivity = true` | 不实现；iOS 恢复入口再开 |
+| SessionActivityPage 的 sheet 已接线但无人置位 | `ChatPage.swift:85` 声明、`:547` 接线，全仓无 `showActivity = true` | 不实现；iOS 恢复入口再开 |
 | DailyBriefPage 没有任何入口 | `DailyBriefPage.swift:8` 有页面，全仓无调用点 | 不实现；iOS 恢复入口再开 |
-| NativeTab 四 Tab 枚举是死代码 | `NativeShell.swift:13` 定义、全仓无引用；实际外壳 = Chat + 抽屉 | 按 §1 的抽屉外壳实现，不实现 Tab 栏 |
-| ChatPage 自带一份调色板，与主题层不一致 | `ChatPage.swift:1048` accent #2F5BFF、`:1049` surface #F2F3F5、`:1055` hairline #DDDCE2；主题层 `NativeChatTheme.swift:22` 只声明 accent = `NativeParityTokens.accent`，没有 surface/hairline | accent 记为 `colors.ctaOverride`（§4 债表）；hairline/surface 只记录 |
+| NativeTab 四 Tab 枚举是死代码 | `NativeShell.swift:14` 定义、全仓无引用；实际外壳 = ChatPage + HomeDrawer | 按 §1 的抽屉外壳实现，不实现 Tab 栏 |
+| SessionsPage 不再是产品抽屉 | 产品抽屉是 `HomeDrawer`（`NativeShell.swift:238`）；SessionsPage 只在 `-uiPreview sessions`（`:724`）和 DrawerPreview（`:826`） | 不把 SessionsPage 当 Android 首页；首页/抽屉分别按 ChatPage/HomeDrawer 实现 |
+| 设置五分页外壳已移除 | `SettingsPage.swift:45` 起是分组 List；`NativeSettingsTab`（`:7`）只剩 `initialTab` 深链，仅 `-uiPreview settings.permissions.tab`（`NativeShell.swift:734`） | 按六个分组索引实现，不保留五 Tab 外壳 |
+| HomeSpec 是 PR22 的首页值来源 | `HomeSpec.swift:26` 起 page/ink/surface，#F7F7F7/#1A1A1A、16/24 body、16 chrome/20 content；`ChatPage.swift:1106-1113` 的 accent/surface/hairline 全部委托 HomeSpec/主题，旧的本地 #2F5BFF 调色板已不存在 | 用 HomeSpec 值做 430×932 基准；不再按旧 402pt 主题取色 |
+| DevelopmentToolsPage 已删除 | PR #13 删除该页；PR22 全仓无 `struct DevelopmentToolsPage` | memory/probes/background/task-screen 保持不可达，不恢复开发者页 |
 
 ## 2. 组件语义清单
 
