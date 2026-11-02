@@ -345,6 +345,29 @@ final class EpochSealTests: XCTestCase {
                        "a failed seal must not advertise a fence above the durable tail")
         try? await host.stop()
     }
+
+    func testTerminationRecoverySealFailureEscalatesBackoffToFailed() async throws {
+        enum InjectedSealError: Error { case failed }
+        let fixture = try FacadeFixture()
+        defer { fixture.cleanup() }
+        let engine = MockEngine(worker: MockWorker())
+        let host = try makeHost(fixture, engine)
+        try await host.start()
+        await host.setFailureSealProbeForTesting { throw InjectedSealError.failed }
+
+        engine.setBootError(WebEngineError.navigationFailed("无法连接服务器"))
+        engine.emit(.terminated(1))
+        try await waitUntil(timeout: 10) {
+            let diagnostics = await host.diagnostics()
+            return diagnostics.state == .failed
+        }
+        let diagnostics = await host.diagnostics()
+        XCTAssertEqual(diagnostics.hostState, .failed)
+        XCTAssertEqual(diagnostics.admission, .closed)
+        XCTAssertEqual(engine.bootCount, 4)
+        XCTAssertTrue(diagnostics.lastError?.contains("WAL stop seal failed") == true)
+        try? await host.stop()
+    }
 }
 
 /// Thread-safe stop flag for the drain-generation churn regression.

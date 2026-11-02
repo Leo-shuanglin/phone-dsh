@@ -92,6 +92,7 @@ public final class PhoneDSHProcessLifecycle: @unchecked Sendable {
     public typealias Handler = @MainActor @Sendable (Phase) -> Void
 
     private let center: NotificationCenter
+    private let currentPhaseProvider: @Sendable () -> Phase?
     private let lock = NSLock()
     private var handlers: [Token: Handler] = [:]
     private var observerTokens: [NSObjectProtocol] = []
@@ -112,6 +113,13 @@ public final class PhoneDSHProcessLifecycle: @unchecked Sendable {
     ///   private one and post to it.
     public init(notificationCenter: NotificationCenter = .default) {
         self.center = notificationCenter
+        self.currentPhaseProvider = Self.platformPhase
+    }
+
+    init(notificationCenter: NotificationCenter,
+         currentPhaseProvider: @escaping @Sendable () -> Phase?) {
+        self.center = notificationCenter
+        self.currentPhaseProvider = currentPhaseProvider
     }
 
     /// The phase this observer last recorded.
@@ -264,7 +272,7 @@ public final class PhoneDSHProcessLifecycle: @unchecked Sendable {
     /// Seeds ``phase`` from the platform and optionally delivers it.
     private func seedCurrentPhase(emit: Bool) {
         let seed: @MainActor @Sendable () -> Void = { [weak self] in
-            guard let self, let current = Self.platformPhase() else { return }
+            guard let self, let current = self.currentPhaseProvider() else { return }
             guard self.lock.withLock({ self.started }) else { return }
             if emit {
                 self.deliver(current)

@@ -779,6 +779,35 @@ test('an idle consumer is not failed by a window that expired while the process 
   }
 })
 
+test('an idle consumer cannot renew a frozen clock forever', async () => {
+  const chunk = new TextEncoder().encode('event: a\n\n')
+  const fake = (async () => new Response(neverClosingBody([chunk]), {
+    status: 200, headers: { 'content-type': 'text/event-stream' },
+  })) as typeof fetch
+
+  const clock = installFakeActiveClock()
+  try {
+    const observed = await withWorkerHostRoute(fake, 80, async (module) => {
+      const response = await fetch('https://model.example/v1/messages', { method: 'POST', body: '{}' })
+      // Initial window + three renewals. The next expiry must settle the body.
+      await new Promise(resolve => setTimeout(resolve, 400))
+      try {
+        await settleWithin(response.arrayBuffer(), 500, 'idle consumer with a frozen clock')
+        return { error: undefined, module }
+      } catch (error) {
+        return { error, module }
+      }
+    })
+    assert.ok(observed.error !== undefined)
+    assertDeliveryTimeout(observed.error, observed.module, 'body', 80)
+    assert.equal(observed.metrics.suspends, 3)
+    assert.equal(observed.metrics.stalls, 1)
+    assert.equal(observed.metrics.resumes, 0)
+  } finally {
+    clock.restore()
+  }
+})
+
 test('without a usable active clock the watchdog keeps the wall-clock verdict', async () => {
   const chunk = new TextEncoder().encode('event: a\n\n')
   let calls = 0

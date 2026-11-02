@@ -857,25 +857,23 @@ final class PhoneDSHHostTests: XCTestCase {
         try await host.stop()
     }
 
-    func testWebContentTerminationFailedRetryStillFailsLoud() async throws {
+    func testWebContentTerminationExhaustedRetriesEnterBackoff() async throws {
         let fixture = try FacadeFixture()
         defer { fixture.cleanup() }
         let engine = MockEngine(worker: MockWorker())
         let host = try makeHost(fixture, engine: engine)
         try await host.start()
 
-        // A failure that survives the retry is not a race: the host must still
-        // fail loud exactly as before, so a persistent fault is never hidden.
         engine.setBootError(WebEngineError.navigationFailed("无法连接服务器"))
         engine.emit(.terminated(1))
         try await waitUntil(timeout: 10) {
             let diagnostics = await host.diagnostics()
-            return diagnostics.state == .failed
+            return diagnostics.hostState == .backoff
         }
         let diagnostics = await host.diagnostics()
-        XCTAssertEqual(diagnostics.hostState, .failed)
+        XCTAssertEqual(diagnostics.state, .starting)
         XCTAssertEqual(diagnostics.admission, .closed)
-        XCTAssertEqual(engine.bootCount, 3, "one boot plus the retried recovery attempt")
+        XCTAssertEqual(engine.bootCount, 4, "one initial boot plus three recovery attempts")
         try? await host.stop()
     }
 

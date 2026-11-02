@@ -225,6 +225,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     /// regression injects the sink mutation that reached the log in exactly
     /// that window, which is what opened the never-closed epoch.
     private var drainWindowProbe: (@Sendable (WorkspaceLog) async throws -> Void)?
+    private var failureSealProbeForTesting: (@Sendable () async throws -> Void)?
     /// Test seam: runs after the handoff operation gate is acquired and before
     /// the local runtime is suspended. Production leaves it `nil`; the facade
     /// regression uses it to inject a lifecycle call or a WebContent
@@ -456,6 +457,11 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     internal func setDrainWindowProbeForTesting(
         _ probe: (@Sendable (WorkspaceLog) async throws -> Void)?) {
         drainWindowProbe = probe
+    }
+
+    internal func setFailureSealProbeForTesting(
+        _ probe: (@Sendable () async throws -> Void)?) {
+        failureSealProbeForTesting = probe
     }
 
     /// Installs the pre-suspension handoff probe used by the facade
@@ -3610,11 +3616,18 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             // classify as stale. A seal failure keeps the host Failed and is
             // reported, never swallowed.
             do {
+                if let failureSealProbeForTesting {
+                    try await failureSealProbeForTesting()
+                }
                 _ = try await runtime.log.sealForStop()
             } catch {
                 let sealMessage = "the WAL stop seal failed: \(error)"
-                lastError = (lastError.map { "\($0); " } ?? "") + sealMessage
+                let combined = (lastError.map { "\($0); " } ?? "") + sealMessage
+                lastError = combined
                 eventBus.send(.error(sealMessage))
+                if await runtime.machine.currentState() != .failed {
+                    await runtime.machine.escalateFailureToTerminal(reason: combined)
+                }
             }
             if var services = self.runtime {
                 services.engine = nil
@@ -3765,16 +3778,21 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     ///
     /// Idempotent, and installed by ``start()`` rather than left to the App:
     /// the safety rule "do not boot WebContent from the background" must not
-    /// depend on every App remembering to forward `scenePhase`. The observer
-    /// does not emit the current phase at install time, so a host that starts
-    /// while the process is momentary `inactive` keeps `isForeground == true`
-    /// until the platform actually reports a change.
+    /// depend on every App remembering to forward `scenePhase`. On iOS the
+    /// current phase is emitted at install time so a host created in the
+    /// background cannot inherit the foreground default.
     private func installProcessLifecycleObservation() {
         guard processLifecycle == nil else { return }
         let observer = PhoneDSHProcessLifecycle()
+        #if canImport(UIKit) && os(iOS)
+        observer.start { [weak self] phase in
+            Task { await self?.setForeground(phase == .active) }
+        }
+        #else
         observer.start(emitCurrentPhase: false) { [weak self] phase in
             Task { await self?.setForeground(phase == .active) }
         }
+        #endif
         processLifecycle = observer
     }
 

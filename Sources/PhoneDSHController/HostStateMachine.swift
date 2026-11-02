@@ -880,6 +880,11 @@ public actor HostStateMachine {
         return newState
     }
 
+    public func escalateFailureToTerminal(reason: String) {
+        lastError = reason
+        try? forceFailed(reason: reason)
+    }
+
     private func forceFailed(reason: String) throws {
         let from = state
         // An epoch-close failure is workspace-scoped: the next process gets a

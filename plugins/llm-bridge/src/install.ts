@@ -72,16 +72,16 @@ export const RESUME_TIMEOUT_MS = 30_000
 export const SUSPENSION_ACTIVE_RATIO = 0.5
 
 /**
- * Bounds how many expired head windows a suspension may renew.
+ * Bounds how many expired head or consumer-idle windows a suspension may renew.
  *
  * Renewing a suspended window spends no active budget, so without a bound a
  * clock that never advances (a stubbed or broken `performance.now()`) would
- * keep the head wait alive forever. Three renewals cover repeated
+ * keep the wait alive forever. Three renewals cover repeated
  * background/foreground cycles inside one request and still end it in bounded
- * time. The body path is bounded separately by `MAX_DELIVERY_RESUMES`, because
+ * time. Body reads are bounded separately by `MAX_DELIVERY_RESUMES`, because
  * recovering a body also costs a host resume.
  */
-export const MAX_HEAD_SUSPENSION_RENEWALS = 3
+export const MAX_SUSPENSION_RENEWALS = 3
 
 /** Per-process delivery instrumentation (the Worker side of the three legs). */
 export interface DeliveryMetricsSnapshot {
@@ -500,7 +500,7 @@ async function withHeadDeadline(
       timer = setTimeout(() => {
         timer = undefined
         const frozenMs = frozenWindowActiveMs(armedAt, remainingMs)
-        if (frozenMs !== undefined && renewals < MAX_HEAD_SUSPENSION_RENEWALS) {
+        if (frozenMs !== undefined && renewals < MAX_SUSPENSION_RENEWALS) {
           // The wall clock drained the window, the active clock did not: this
           // process was frozen, so the upstream never got its interval. Spend
           // only the active time we actually observed and wait for the rest.
@@ -592,6 +592,8 @@ function resumableDelivery(initial: DeliveryAttempt, options: DeliveryOptions,
   let terminal = false
   let controller: ReadableStreamDefaultController<Uint8Array> | undefined
   let handoffTimer: ReturnType<typeof setTimeout> | undefined
+  let handoffRemainingMs = options.timeoutMs
+  let handoffRenewals = 0
 
   const clearHandoff = (): void => {
     if (handoffTimer !== undefined) {
@@ -615,25 +617,30 @@ function resumableDelivery(initial: DeliveryAttempt, options: DeliveryOptions,
   const onAbort = (): void => {
     settle(options.signal.reason ?? new DOMException('The request was aborted', 'AbortError'))
   }
-  const armHandoff = (): void => {
+  const armHandoff = (renewBudget = true): void => {
     clearHandoff()
     if (terminal) return
+    if (renewBudget) {
+      handoffRemainingMs = options.timeoutMs
+      handoffRenewals = 0
+    }
     const armedAt = activeClockNow()
     handoffTimer = setTimeout(() => {
       handoffTimer = undefined
       if (terminal) return
-      const frozenMs = frozenWindowActiveMs(armedAt, options.timeoutMs)
-      if (frozenMs !== undefined) {
-        // The consumer was not pulling because this process was frozen, not
-        // because it stopped consuming. Nothing is stalled upstream, so renew
-        // the window instead of failing a body that may still be complete.
+      const frozenMs = frozenWindowActiveMs(armedAt, handoffRemainingMs)
+      if (frozenMs !== undefined && handoffRenewals < MAX_SUSPENSION_RENEWALS) {
         deliveryMetrics.suspends += 1
-        armHandoff()
-        return
+        handoffRenewals += 1
+        handoffRemainingMs -= frozenMs
+        if (handoffRemainingMs > 0) {
+          armHandoff(false)
+          return
+        }
       }
       deliveryMetrics.stalls += 1
       settle(new DeliveryTimeoutError('body', options.timeoutMs))
-    }, options.timeoutMs)
+    }, handoffRemainingMs)
   }
   const readOnce = async (): Promise<DeliveryRead> => {
     let timer: ReturnType<typeof setTimeout> | undefined
