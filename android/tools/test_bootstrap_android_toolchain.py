@@ -2,14 +2,21 @@
 # SPDX-License-Identifier: MIT
 """Tests for android/tools/bootstrap-android-toolchain.sh.
 
-The tests execute the real shell script. External network access is replaced by
-a fake `curl` that serves local fixture archives, and the extracted command-line
-tools fixture carries a fake `sdkmanager`; every path lives in a temporary
-directory, so no JDK, Android SDK or network resource is installed outside it.
+The tests execute the real shell script. Network access is replaced by a fake
+`curl` serving local fixture archives, and the extracted command-line-tools
+fixture carries a fake `sdkmanager`. Every path is a temporary directory, so no
+test writes a real JDK, SDK or Gradle distribution outside its own scratch tree.
+
+Covered: HOME/XDG default resolution, explicit overrides, --check output and its
+no-install guarantee, local.properties generation and key preservation,
+idempotency, installer stdout visibility, checksum rejection, partial-download
+cleanup and exit-code propagation for download/licence/package failures. A
+java-11/javac-17 mix is rejected rather than accepted as "JDK 17".
 """
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import shutil
@@ -21,6 +28,7 @@ import zipfile
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().with_name("bootstrap-android-toolchain.sh")
+GRADLE_SHA256 = "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78"
 
 FAKE_CURL = r"""#!/usr/bin/env bash
 set -u
@@ -30,11 +38,20 @@ url=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --output) out="$2"; shift 2 ;;
-    --retry) shift 2 ;;
-    --*) shift ;;
+    --retry|--retry-delay|--connect-timeout|--max-time) shift 2 ;;
+    --fail|--location|--retry-all-errors) shift ;;
     *) url="$1"; shift ;;
   esac
 done
+if [ -n "${FAKE_CURL_MARKER:-}" ]; then
+  echo "$FAKE_CURL_MARKER"
+fi
+if [ -n "${FAKE_CURL_PARTIAL_EXIT:-}" ]; then
+  [ -n "$out" ] || exit 2
+  printf 'partial' > "$out"
+  echo "fake curl: forced partial failure" >&2
+  exit "$FAKE_CURL_PARTIAL_EXIT"
+fi
 if [ -n "${FAKE_CURL_EXIT:-}" ]; then
   echo "fake curl: forced download failure" >&2
   exit "$FAKE_CURL_EXIT"
@@ -43,6 +60,7 @@ fi
 case "$url" in
   *jdk*|*eclipse*) cp "${FAKE_JDK_ARCHIVE:?}" "$out" ;;
   *cmdline*|*commandline*) cp "${FAKE_SDK_ARCHIVE:?}" "$out" ;;
+  *gradle*) cp "${FAKE_GRADLE_ARCHIVE:?}" "$out" ;;
   *) echo "fake curl: unexpected URL $url" >&2; exit 3 ;;
 esac
 """
@@ -57,6 +75,7 @@ for arg in "$@"; do
   esac
 done
 [ -n "$sdk_root" ] || { echo "fake sdkmanager: no --sdk_root" >&2; exit 2; }
+echo "${FAKE_SDKMANAGER_MARKER:-fake sdkmanager output}"
 args=" $* "
 case "$args" in
   *" --licenses "*)
@@ -101,12 +120,17 @@ exit 0
 """
 
 FAKE_JAVA = """#!/usr/bin/env bash
-echo 'openjdk version "17.0.99" 2026-01-01' >&2
-echo 'OpenJDK Runtime Environment Temurin-17.0.99 (build 17.0.99+9)' >&2
+echo 'openjdk version "17.0.13" 2024-10-15' >&2
+echo 'OpenJDK Runtime Environment Temurin-17.0.13+11 (build 17.0.13+11)' >&2
 """
 
 FAKE_JAVAC = """#!/usr/bin/env bash
-echo 'javac 17.0.99'
+echo 'javac 17.0.13'
+"""
+
+FAKE_JAVA_11 = """#!/usr/bin/env bash
+echo 'openjdk version "11.0.24" 2024-07-16' >&2
+echo 'OpenJDK Runtime Environment (build 11.0.24+8)' >&2
 """
 
 
@@ -120,9 +144,9 @@ def _tar_member(archive: tarfile.TarFile, name: str, data: bytes, executable: bo
 
 def write_jdk_archive(path: Path):
     with tarfile.open(path, "w:gz") as archive:
-        _tar_member(archive, "jdk-17.0.99/bin/java", FAKE_JAVA.encode(), executable=True)
-        _tar_member(archive, "jdk-17.0.99/bin/javac", FAKE_JAVAC.encode(), executable=True)
-        _tar_member(archive, "jdk-17.0.99/release", b"JAVA_VERSION=\"17.0.99\"\n")
+        _tar_member(archive, "jdk-17.0.13+11/bin/java", FAKE_JAVA.encode(), executable=True)
+        _tar_member(archive, "jdk-17.0.13+11/bin/javac", FAKE_JAVAC.encode(), executable=True)
+        _tar_member(archive, "jdk-17.0.13+11/release", b'JAVA_VERSION="17.0.13"\n')
 
 
 def write_sdk_archive(path: Path):
@@ -133,12 +157,25 @@ def write_sdk_archive(path: Path):
         archive.writestr(info, FAKE_SDKMANAGER.encode())
 
 
-def write_jdk_home(home: Path):
+def write_gradle_archive(path: Path):
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("gradle-8.13/bin/gradle", "fake gradle launcher\n")
+
+
+def write_jdk_home(home: Path, java_text: str = FAKE_JAVA, javac_text: str = FAKE_JAVAC):
     (home / "bin").mkdir(parents=True)
-    for name, text in (("java", FAKE_JAVA), ("javac", FAKE_JAVAC)):
+    for name, text in (("java", java_text), ("javac", javac_text)):
         target = home / "bin" / name
         target.write_text(text, encoding="utf-8")
         target.chmod(0o755)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sha1(path: Path) -> str:
+    return hashlib.sha1(path.read_bytes()).hexdigest()
 
 
 class BootstrapToolchainTests(unittest.TestCase):
@@ -154,14 +191,36 @@ class BootstrapToolchainTests(unittest.TestCase):
         self.sdkmanager_log = self.root / "sdkmanager.log"
         self.jdk_archive = self.root / "jdk17.tar.gz"
         self.sdk_archive = self.root / "cmdline-tools.zip"
+        self.gradle_archive = self.root / "gradle-8.13-bin.zip"
         write_jdk_archive(self.jdk_archive)
         write_sdk_archive(self.sdk_archive)
+        write_gradle_archive(self.gradle_archive)
         self.curl = self.fake_bin / "fake-curl"
         self.curl.write_text(FAKE_CURL, encoding="utf-8")
         self.curl.chmod(0o755)
+        self._write_wrapper(self.repo)
 
     def tearDown(self):
         self._temp.cleanup()
+
+    def _write_wrapper(self, checkout: Path, pinned: bool = True):
+        wrapper = checkout / "android" / "gradle" / "wrapper" / "gradle-wrapper.properties"
+        wrapper.parent.mkdir(parents=True, exist_ok=True)
+        url = (
+            "https\\://downloads.gradle.org/distributions/gradle-8.13-bin.zip"
+            if pinned
+            else "https\\://services.gradle.org/distributions/gradle-8.13-bin.zip"
+        )
+        sha = GRADLE_SHA256 if pinned else ""
+        wrapper.write_text(
+            "distributionBase=GRADLE_USER_HOME\n"
+            "distributionPath=wrapper/dists\n"
+            "distributionUrl={}\n".format(url)
+            + ("distributionSha256Sum={}\n".format(sha) if sha else "")
+            + "zipStoreBase=GRADLE_USER_HOME\n"
+            "zipStorePath=wrapper/dists\n",
+            encoding="utf-8",
+        )
 
     def environment(self, **overrides):
         env = os.environ.copy()
@@ -173,26 +232,44 @@ class BootstrapToolchainTests(unittest.TestCase):
             "PDSH_LOCAL_PROPERTIES",
             "PDSH_CURL",
             "PDSH_JDK_URL",
+            "PDSH_JDK_SHA256",
             "PDSH_CMDLINE_TOOLS_URL",
+            "PDSH_CMDLINE_TOOLS_SHA1",
+            "PDSH_GRADLE_URL",
+            "PDSH_GRADLE_SHA256",
+            "PDSH_GRADLE_FALLBACK_URLS",
+            "PDSH_CONNECT_TIMEOUT",
+            "PDSH_DOWNLOAD_TIMEOUT",
             "FAKE_CURL_EXIT",
+            "FAKE_CURL_PARTIAL_EXIT",
+            "FAKE_CURL_MARKER",
             "FAKE_CURL_LOG",
             "FAKE_JDK_ARCHIVE",
             "FAKE_SDK_ARCHIVE",
+            "FAKE_GRADLE_ARCHIVE",
             "FAKE_SDKMANAGER_LOG",
+            "FAKE_SDKMANAGER_MARKER",
             "FAKE_SDKMANAGER_LICENSE_EXIT",
             "FAKE_SDKMANAGER_INSTALL_EXIT",
         ):
             env.pop(key, None)
         env.update(
             {
+                "HOME": str(self.root / "home"),
+                "XDG_CACHE_HOME": str(self.root / "cache"),
                 "PDSH_TOOLCHAIN_DIR": str(self.toolchain),
                 "PDSH_LOCAL_PROPERTIES": str(self.local_properties),
                 "PDSH_CURL": str(self.curl),
                 "PDSH_JDK_URL": "https://fake.invalid/jdk17.tar.gz",
+                "PDSH_JDK_SHA256": sha256(self.jdk_archive),
                 "PDSH_CMDLINE_TOOLS_URL": "https://fake.invalid/cmdline-tools.zip",
+                "PDSH_CMDLINE_TOOLS_SHA1": sha1(self.sdk_archive),
+                "PDSH_GRADLE_URL": "https://fake.invalid/gradle-8.13-bin.zip",
+                "PDSH_GRADLE_SHA256": sha256(self.gradle_archive),
                 "FAKE_CURL_LOG": str(self.curl_log),
                 "FAKE_JDK_ARCHIVE": str(self.jdk_archive),
                 "FAKE_SDK_ARCHIVE": str(self.sdk_archive),
+                "FAKE_GRADLE_ARCHIVE": str(self.gradle_archive),
                 "FAKE_SDKMANAGER_LOG": str(self.sdkmanager_log),
             }
         )
@@ -213,15 +290,22 @@ class BootstrapToolchainTests(unittest.TestCase):
     def combined(self, proc):
         return proc.stdout + proc.stderr
 
-    def test_default_paths_are_checkout_sibling_and_android_sdk(self):
-        checkout = self.root / "checkout"
+    def copy_script_to(self, checkout: Path, pinned_wrapper: bool = True):
         tools = checkout / "android" / "tools"
-        tools.mkdir(parents=True)
+        tools.mkdir(parents=True, exist_ok=True)
         copied = tools / SCRIPT.name
         shutil.copy2(SCRIPT, copied)
+        self._write_wrapper(checkout, pinned=pinned_wrapper)
+        return copied
+
+    def test_default_root_uses_xdg_cache_when_set(self):
+        checkout = self.root / "checkout"
+        copied = self.copy_script_to(checkout)
         env = self.environment()
         env.pop("PDSH_TOOLCHAIN_DIR")
         env.pop("PDSH_LOCAL_PROPERTIES")
+        env["XDG_CACHE_HOME"] = str(self.root / "xdg-cache")
+        env["HOME"] = str(self.root / "home")
         proc = subprocess.run(
             ["bash", str(copied), "--check"],
             cwd=str(self.root),
@@ -233,21 +317,56 @@ class BootstrapToolchainTests(unittest.TestCase):
         )
         output = self.combined(proc)
         self.assertNotEqual(proc.returncode, 0, output)
-        self.assertIn("PDSH_TOOLCHAIN_DIR={}".format(self.root / "task-writable"), output)
-        self.assertIn("ANDROID_HOME={}".format(self.root / "task-writable" / "android-sdk"), output)
+        root = self.root / "xdg-cache" / "pdsh" / "android"
+        self.assertIn("PDSH_TOOLCHAIN_DIR={}".format(root), output)
+        self.assertIn("ANDROID_HOME={}".format(root / "android-sdk"), output)
         self.assertIn("LOCAL_PROPERTIES={}".format(checkout / "android" / "local.properties"), output)
+        self.assertFalse(root.exists(), "check mode must not create the install root")
+
+    def test_default_root_uses_home_when_xdg_is_unset(self):
+        checkout = self.root / "checkout2"
+        copied = self.copy_script_to(checkout)
+        env = self.environment()
+        env.pop("PDSH_TOOLCHAIN_DIR")
+        env.pop("PDSH_LOCAL_PROPERTIES")
+        env.pop("XDG_CACHE_HOME", None)
+        home = self.root / "home2"
+        env["HOME"] = str(home)
+        proc = subprocess.run(
+            ["bash", str(copied), "--check"],
+            cwd=str(self.root),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            check=False,
+        )
+        output = self.combined(proc)
+        self.assertNotEqual(proc.returncode, 0, output)
+        root = home / "toolchains" / "pdsh-android"
+        self.assertIn("PDSH_TOOLCHAIN_DIR={}".format(root), output)
+        self.assertIn("ANDROID_HOME={}".format(root / "android-sdk"), output)
 
     def test_check_reports_missing_toolchain_without_installing(self):
         proc = self.run_script("--check")
         output = self.combined(proc)
         self.assertEqual(proc.returncode, 1, output)
         self.assertIn("JAVA_HOME={}".format(self.toolchain / "jdk-17"), output)
-        self.assertIn("JAVA=MISSING", output)
+        self.assertIn("JAVA=MISSING_OR_MISMATCHED", output)
         self.assertIn("SDKMANAGER=MISSING", output)
         self.assertIn("MODE=check", output)
         self.assertFalse(self.toolchain.exists(), "check mode must not create the toolchain")
         self.assertFalse(self.local_properties.exists(), "check mode must not write local.properties")
         self.assertFalse(self.curl_log.exists(), "check mode must not download")
+
+    def test_check_rejects_unpinned_wrapper(self):
+        checkout = self.root / "unpinned"
+        copied = self.copy_script_to(checkout, pinned_wrapper=False)
+        proc = self.run_script("--check", script=copied)
+        output = self.combined(proc)
+        self.assertNotEqual(proc.returncode, 0, output)
+        self.assertIn("Gradle wrapper is not pinned to Gradle 8.13", output)
+        self.assertIn("Gradle wrapper SHA-256 is not the pinned value", output)
 
     def test_install_is_idempotent_and_writes_local_properties(self):
         first = self.run_script()
@@ -257,25 +376,39 @@ class BootstrapToolchainTests(unittest.TestCase):
         self.assertTrue((self.toolchain / "android-sdk" / "platforms" / "android-35").is_dir())
         self.assertTrue((self.toolchain / "android-sdk" / "build-tools" / "35.0.0").is_dir())
         self.assertTrue((self.toolchain / "android-sdk" / "platform-tools" / "adb").is_file())
+        self.assertTrue((self.toolchain / "downloads" / "gradle-8.13-bin.zip").is_file())
         self.assertIn(
             "sdk.dir={}".format(self.toolchain / "android-sdk"),
             self.local_properties.read_text(encoding="utf-8"),
         )
         downloads = self.curl_log.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(downloads), 2, downloads)
+        self.assertEqual(len(downloads), 3, downloads)
         self.assertTrue(any("jdk17.tar.gz" in line for line in downloads), downloads)
         self.assertTrue(any("cmdline-tools.zip" in line for line in downloads), downloads)
+        self.assertTrue(any("gradle-8.13-bin.zip" in line for line in downloads), downloads)
+        for line in downloads:
+            self.assertIn("--connect-timeout", line)
+            self.assertIn("--max-time", line)
 
         second = self.run_script()
         output = self.combined(second)
         self.assertEqual(second.returncode, 0, output)
         self.assertIn("JDK 17 already present", output)
         self.assertIn("command-line tools already present", output)
+        self.assertIn("reusing verified download", output)
         self.assertEqual(
             len(self.curl_log.read_text(encoding="utf-8").splitlines()),
-            2,
+            3,
             "an idempotent second run must not download again",
         )
+
+    def test_installer_stdout_is_visible(self):
+        proc = self.run_script(FAKE_CURL_MARKER="fake-curl talking", FAKE_SDKMANAGER_MARKER="fake-sdkmanager talking")
+        output = self.combined(proc)
+        self.assertEqual(proc.returncode, 0, output)
+        self.assertIn("fake-curl talking", output)
+        self.assertIn("fake-sdkmanager talking", output)
+        self.assertIn("All SDK package licenses accepted.", output)
 
     def test_check_after_install_prints_versions_and_packages(self):
         install = self.run_script()
@@ -283,12 +416,16 @@ class BootstrapToolchainTests(unittest.TestCase):
         proc = self.run_script("--check")
         output = self.combined(proc)
         self.assertEqual(proc.returncode, 0, output)
-        self.assertIn("JAVA=openjdk version \"17.0.99\"", output)
-        self.assertIn("JAVAC=javac 17.0.99", output)
+        self.assertIn('JAVA=openjdk version "17.0.13"', output)
+        self.assertIn("JAVAC=javac 17.0.13", output)
         self.assertIn("PACKAGE platforms;android-35=installed", output)
         self.assertIn("PACKAGE build-tools;35.0.0=installed", output)
         self.assertIn("PACKAGE platform-tools=installed", output)
+        self.assertIn("GRADLE_WRAPPER=gradle-8.13", output)
+        self.assertIn("GRADLE_DIST_STATE=verified", output)
+        self.assertIn("LOCAL_PROPERTIES_SDK={}".format(self.toolchain / "android-sdk"), output)
         self.assertIn("toolchain check passed", output)
+        self.assertNotIn("fake-curl", output)
 
     def test_android_home_override_is_honoured(self):
         sdk = self.root / "existing-sdk"
@@ -299,8 +436,27 @@ class BootstrapToolchainTests(unittest.TestCase):
         self.assertIn("ANDROID_HOME={}".format(sdk), output)
         self.assertIn("sdk.dir={}".format(sdk), self.local_properties.read_text(encoding="utf-8"))
 
+    def test_valid_java_home_is_reused_without_jdk_download(self):
+        java_home = self.root / "jdk17"
+        write_jdk_home(java_home)
+        proc = self.run_script(PDSH_JAVA_HOME=str(java_home))
+        output = self.combined(proc)
+        self.assertEqual(proc.returncode, 0, output)
+        downloads = self.curl_log.read_text(encoding="utf-8").splitlines()
+        self.assertFalse(any("jdk17.tar.gz" in line for line in downloads), downloads)
+        self.assertIn("JAVA_HOME={}".format(java_home), output)
+
+    def test_java11_javac17_mismatch_is_rejected(self):
+        java_home = self.root / "mixed-jdk"
+        write_jdk_home(java_home, java_text=FAKE_JAVA_11, javac_text=FAKE_JAVAC)
+        proc = self.run_script("--check", PDSH_JAVA_HOME=str(java_home))
+        output = self.combined(proc)
+        self.assertEqual(proc.returncode, 1, output)
+        self.assertIn("PDSH_JAVA_HOME is not a consistent JDK 17", output)
+        self.assertIn("java=11 javac=17", output)
+
     def test_local_properties_preserves_unrelated_keys_and_replaces_sdk_dir(self):
-        self.local_properties.parent.mkdir(parents=True)
+        self.local_properties.parent.mkdir(parents=True, exist_ok=True)
         self.local_properties.write_text("sdk.dir=/old/sdk\ncustom.key=keep\n", encoding="utf-8")
         proc = self.run_script()
         self.assertEqual(proc.returncode, 0, self.combined(proc))
@@ -313,9 +469,25 @@ class BootstrapToolchainTests(unittest.TestCase):
         proc = self.run_script(FAKE_CURL_EXIT="23")
         output = self.combined(proc)
         self.assertEqual(proc.returncode, 23, output)
-        self.assertIn("command failed (exit 23)", output)
+        self.assertIn("download failed (exit 23)", output)
         self.assertIn("fake-curl", output)
         self.assertIn("https://fake.invalid/jdk17.tar.gz", output)
+        self.assertFalse(self.local_properties.exists())
+        self.assertFalse(any(self.toolchain.glob("downloads/*.part")) if self.toolchain.exists() else [])
+
+    def test_partial_download_is_removed(self):
+        proc = self.run_script(FAKE_CURL_PARTIAL_EXIT="28")
+        output = self.combined(proc)
+        self.assertEqual(proc.returncode, 28, output)
+        self.assertFalse(list(self.toolchain.glob("downloads/*.part")) if self.toolchain.exists() else [])
+        self.assertFalse(self.local_properties.exists())
+
+    def test_checksum_mismatch_fails_and_removes_partial_file(self):
+        proc = self.run_script(PDSH_JDK_SHA256="0" * 64)
+        output = self.combined(proc)
+        self.assertNotEqual(proc.returncode, 0, output)
+        self.assertIn("checksum mismatch", output)
+        self.assertFalse(list(self.toolchain.glob("downloads/*.part")) if self.toolchain.exists() else [])
         self.assertFalse(self.local_properties.exists())
 
     def test_licence_failure_propagates_exit_code_and_command(self):
@@ -332,7 +504,7 @@ class BootstrapToolchainTests(unittest.TestCase):
         proc = self.run_script(FAKE_SDKMANAGER_INSTALL_EXIT="7")
         output = self.combined(proc)
         self.assertEqual(proc.returncode, 7, output)
-        self.assertIn("command failed (exit 7)", output)
+        self.assertIn("package installation failed (exit 7)", output)
         self.assertIn("platform-tools", output)
         self.assertFalse(self.local_properties.exists())
 
@@ -356,6 +528,7 @@ class BootstrapToolchainTests(unittest.TestCase):
         output = self.combined(proc)
         self.assertEqual(proc.returncode, 0, output)
         self.assertNotIn("fake-curl", output)
+        self.assertIn("GRADLE_DIST_STATE=not-downloaded", output)
 
 
 if __name__ == "__main__":

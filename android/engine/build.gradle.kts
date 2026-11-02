@@ -26,9 +26,32 @@ val repoRoot: File = rootProject.projectDir.parentFile
 val workerBundleDir: File = repoRoot.resolve("examples/probe-app/Bundle/worker")
 val workerBundleAssetDir: File = layout.buildDirectory.dir("generated/worker-bundle").get().asFile
 
+// A Zip task whose `from(dir)` is missing is NO-SOURCE, and Gradle does not run
+// its actions (including doFirst) for a NO-SOURCE task. Keep the fail-loud check
+// in an always-running validator that packageWorkerBundle depends on, so an APK
+// can never ship an empty asset. The validator is deliberately not part of JVM
+// test graphs: only asset merge consumers depend on packageWorkerBundle.
+val verifyWorkerBundle = tasks.register("verifyWorkerBundle") {
+    description = "Fails if the prebuilt worker bundle is absent (asset packaging only)"
+    group = "verification"
+    doLast {
+        check(workerBundleDir.isDirectory) {
+            "the prebuilt worker bundle is missing: " +
+                workerBundleDir.relativeTo(repoRoot).path + "\n" +
+                "The APK needs it; it is not committed because it is ~65 MB.\n" +
+                "Generate it with the documented copy step (needs the pinned DSH checkout):\n" +
+                "  bash examples/probe-app/scripts/copy-bundle-assets.sh\n" +
+                "For a full DSH Web page, build the Web dist first:\n" +
+                "  bash scripts/ci/build-web-dist.sh\n" +
+                "then re-run the copy step. Nothing is copied into android/."
+        }
+    }
+}
+
 val packageWorkerBundle = tasks.register<Zip>("packageWorkerBundle") {
     description = "Packs the prebuilt worker bundle into assets/worker-bundle.zip"
     group = "build"
+    dependsOn(verifyWorkerBundle)
     from(workerBundleDir)
     archiveFileName.set("worker-bundle.zip")
     destinationDirectory.set(workerBundleAssetDir)

@@ -4,8 +4,8 @@
 > **状态：可构建、可测试、可在模拟器上跑通 boot→HELLO。**
 > 13 个 Gradle 模块：11 个 Swift 模块由 **7 个模块镜像**（合并规则见下），另 6 个不镜像 Swift
 > （`:platform` 承载 SPI、`:platform-android` 承载 SPI 的 Android 实现、`:domain` 承载设备能力契约
-> 与手机权限读数、`:lib` 是可发布 AAR、`:app` 是 probe-app、`:lib-consumer-test` 以文件依赖消费
-> 发布出来的 AAR）。`:domain` 的 **DomainStore 已删除**（2026-11-01：
+> 与手机权限读数、`:lib` 是可发布 AAR、`:app` 是 probe-app、`:lib-consumer-test` 以发布坐标
+> `com.phonedsh:lib:0.1.0` 消费 AAR）。`:domain` 的 **DomainStore 已删除**（2026-11-01：
 > 1,019 行零生产消费者，它要服务的 session/memory/task 持久化在 Android 上尚未实现；`:dsh` 已有
 > `HostStateStore` 与 `JournalStore` 两条写路径，留着它只会让下一个人以为 P6 已交付。
 > **104,603 行 Kotlin 主代码 + 49,261 行单测 + 9,660 行 instrumented**（`wc -l`，**快照 2026-11-01
@@ -17,29 +17,42 @@
 本文的每个数字都来自本文「门禁与数字」一节列出的那条命令；**没有跑过的数字写「未测量」**，
 不从别的报告里转抄。
 
-## 工具链引导（task-local，不写共享机器目录）
+## 工具链引导（当前可写 HOME/XDG，不写共享机器目录）
 
-本树不把 JDK/SDK 预装进 `PATH`、共享 SDK 目录或其它机器级位置。`android/tools/bootstrap-android-toolchain.sh`
-把 **JDK 17**、Android SDK **platform 35 / build-tools 35.0.0 / platform-tools / cmdline-tools**
-装到本 checkout 的 `task-writable/` 兄弟目录（默认 `<checkout 的父目录>/task-writable`）；
-`PDSH_TOOLCHAIN_DIR`、`ANDROID_HOME`、`JAVA_HOME` 已设置时按脚本打印的解析结果复用。
+本树不把 JDK/SDK 预装进 `PATH`、共享 SDK 目录或其它机器级位置，也**不再**使用
+checkout 父目录下的 `task-writable/`。`android/tools/bootstrap-android-toolchain.sh`
+把 **JDK 17（java 与 javac 同为 17）**、Android SDK **platform 35 / build-tools 35.0.0 /
+platform-tools / cmdline-tools** 和 **Gradle 8.13** 的官方归档装到当前可写的
+`$XDG_CACHE_HOME/pdsh/android`（未设置时 `$HOME/toolchains/pdsh-android`）；
+`PDSH_TOOLCHAIN_DIR`、`ANDROID_HOME`、`JAVA_HOME` 已设置时按脚本打印的解析结果复用，
+已有只读工具不会被修改。下载走固定版本 + 校验和 + 有限连接/下载超时，失败时打印完整命令与退出码。
+
 安装与校验是两条独立命令：
 
 ```bash
-# 1) 安装/修复（幂等；非交互接受 SDK licence；所有下载器输出都打印）
+# 1) 安装/修复（幂等；非交互接受 SDK licence；所有安装器 stdout/stderr 都打印）
 bash android/tools/bootstrap-android-toolchain.sh
 
-# 2) 只校验：不下载、不安装包、不写 local.properties；java/javac 必须是 17，
-#    sdkmanager 必须能列出三个包
+# 2) 只校验：不下载、不安装包、不写 local.properties；java/javac 必须同为 17，
+#    sdkmanager 必须能列出三个包，committed wrapper 必须固定 Gradle 8.13 + SHA-256
 bash android/tools/bootstrap-android-toolchain.sh --check
 
-# 3) 后续 Gradle/测试命令使用第 2 步打印的 JAVA_HOME / ANDROID_HOME；
-#    Gradle 缓存也放在 task-writable 下，避免写只读 HOME。
-export JAVA_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/jdk-17"
-export ANDROID_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/android-sdk"
-export GRADLE_USER_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/gradle-home"
+# 3) 每条隔离的 Gradle 命令都通过 wrapper 重新解析自己的环境（不假设别的 worker
+#    的 local.properties / HOME / Gradle 缓存可见）；它设置可写的
+#    GRADLE_USER_HOME 与 Robolectric 需要的 JAVA_TOOL_OPTIONS=-Duser.home=$HOME。
+bash android/tools/with-android-toolchain.sh ./gradlew --version --no-daemon
+```
+
+wrapper 在 macOS 上使用调用者提供的 `JAVA_HOME`/`ANDROID_HOME` 同样工作；它只读
+`local.properties` 的 `sdk.dir`（用 sed，不 source 不可信文件）。若必须手工导出：
+
+```bash
+PDSH_TOOLCHAIN_DIR="${PDSH_TOOLCHAIN_DIR:-${XDG_CACHE_HOME:+$XDG_CACHE_HOME/pdsh/android}}"
+PDSH_TOOLCHAIN_DIR="${PDSH_TOOLCHAIN_DIR:-$HOME/toolchains/pdsh-android}"
+export JAVA_HOME="$PDSH_TOOLCHAIN_DIR/jdk-17"
+export ANDROID_HOME="$PDSH_TOOLCHAIN_DIR/android-sdk"
+export GRADLE_USER_HOME="${XDG_CACHE_HOME:-$HOME}/pdsh/gradle"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
-cd android && ./gradlew --version --no-daemon
 ```
 
 结构门禁与工具单测（不联网、不需要 Gradle）：
@@ -49,9 +62,25 @@ python3 android/tools/structure_check.py --root .
 python3 -m unittest discover -s android/tools -p 'test_*.py'
 ```
 
-`bootstrap-android-toolchain.sh` 的可覆盖变量、失败时的退出码/完整命令，以及
-`test_bootstrap_android_toolchain.py` 使用的假下载器，见
-[`android/tools/README.md`](tools/README.md)。
+`bootstrap-android-toolchain.sh` 的可覆盖变量、固定版本/校验和、失败时的退出码/完整命令，
+以及 `test_bootstrap_android_toolchain.py` 使用的假下载器，见
+[`android/tools/README.md`](tools/README.md)。工具测试不再整文件豁免绝对路径检查：
+fixture 用临时目录或拼接构造路径，只有嵌入的 shebang 行被跳过。
+
+### Gradle 构建图：JVM 测试与打包输入
+
+`:app` 过去在 configuration 阶段 `check` Worker bundle 与 Android `.so`，导致不相关的
+`:app:testDebugUnitTest` / `:lib:testDebugUnitTest` 在缺少 NDK/Worker 镜像时连配置都失败。
+现在校验移到真正的打包消费者：
+
+- `:engine:packageWorkerBundle` 在 `doFirst` 检查 65 MB Worker bundle；任何消费该 asset 的
+  APK/asset merge 仍会失败。
+- `:app:package<Variant>PdshJni` 在 task action 中检查 `libpdsh_jni.so`；debug/release/
+  instrumented APK 打包仍会失败，纯 JVM 测试不会触发它。
+- `:testkit` 只让 `merge*AndroidTest*` 依赖 Worker/scenario/JNI staging，不再挂到 `preBuild`；
+  connected/instrumented 测试 APK 仍保留缺失输入时的失败。
+- 不生成 dummy `.so`、不伪造 Worker asset、不跳过测试任务，也没有可发布空产物的开关。
+  完整生产 APK（真实 Worker/JNI）仍由 Mac owner 在最终验收时构建。
 
 ## 两种壳：产品壳 vs 诊断壳
 
@@ -104,7 +133,7 @@ android/
 ├── net/                       # loopback + gateway
 ├── controller/ engine/ dsh/
 ├── shell/                     # JNI 薄包装 pdsh-ffi 的统一 C ABI：rg / jaq（见 shell/README.md）
-├── lib-consumer-test/           # 以文件依赖消费 lib-release.aar 的消费者探针
+├── lib-consumer-test/           # 以 com.phonedsh:lib:0.1.0 坐标消费发布 AAR 的消费者探针
 └── tools/                     # bootstrap + structure_check.py + test-count.sh + unittest
 ```
 
@@ -189,7 +218,7 @@ android/
 
 | # | 命令 | 结果 |
 | --- | --- | --- |
-| 1 | `python3 android/tools/structure_check.py --root .` | 14/14 项通过：13 个 include=磁盘、13/13 build 文件、13 个模块清单、34 个 `*Page.kt`（含 `ChatPage.kt`）、11 个 Swift 模块各映射一次、370 个生产 `.kt` 无占位、0 处绝对路径、`local.properties` 已忽略、8 个 `# unverified pin` |
+| 1 | `python3 android/tools/structure_check.py --root .` | 14/14 项通过：13 个 include=磁盘、13/13 build 文件、13 个模块清单、34 个 `*Page.kt`（含 `ChatPage.kt`）、11 个 Swift 模块各映射一次、371 个生产 `.kt` 无占位、0 处绝对路径、`local.properties` 已忽略、8 个 `# unverified pin` |
 | 2 | `python3 spec/v1/tools/spec_golden.py --full` | **73 个文件**，0 error |
 | 3 | `python3 spec/v1/tools/gateway_check.py --root .` | **30 条向量**，0 error（credential-injection=3 header-strip=3 redirect-scope=8 egress-classification=5 response-redaction=7 failure-surface=4） |
 | 4 | `python3 spec/platform/tools/platform_check.py --root .` | 8 个文件、**24 条白名单**、0 failure（classes: hardware-absent=1 os-forced=22 policy-forbidden=1） |

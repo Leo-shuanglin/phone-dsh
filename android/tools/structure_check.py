@@ -86,11 +86,6 @@ ANDROID_SO_CANDIDATES = (
 
 
 SKIP_DIR_NAMES = {".git", ".gradle", "build", "__pycache__"}
-# `local.properties` is the standard machine-local Android file: it must carry an
-# absolute `sdk.dir`, it is gitignored, and nothing in it is ever committed. It is
-# therefore exempt from the "no hard-coded absolute path" rule, which exists to keep
-# committed files portable.
-MACHINE_LOCAL_FILES = {"local.properties"}
 # `TODO()` or `error("... not implemented")` in src/main: an unfinished stub.
 STUB_RE = re.compile(r"\bTODO\(|\berror\(\s*\"[^\"]*not implemented", re.IGNORECASE)
 TEXT_SUFFIXES = {
@@ -455,26 +450,43 @@ def iter_text_files(root):
             yield path
 
 
+def is_machine_local_file(root, path):
+    """Only the checkout's own android/local.properties is machine-local.
+
+    A file merely *named* local.properties elsewhere (for example a vendored or
+    fixture copy) is still a committed file and must stay portable.
+    """
+    try:
+        return path.relative_to(root).as_posix() == "android/local.properties"
+    except ValueError:
+        return False
+
+
 def check_absolute_paths(root):
     """Fail on a hard-coded machine path in a committed, shipped file.
 
-    Test sources are exempt: a fixture that proves "an absolute path is rejected"
-    has to contain an absolute path. A real home directory in a test is still
-    caught by the repository-wide hygiene rule, which scans `android/` too.
+    The only file-level exemption is the gitignored android/local.properties,
+    whose sdk.dir is machine-local by design. Tool tests are NOT blanket-exempt:
+    a fixture that needs an absolute path builds it from parts (or a temporary
+    directory), and raw home/SDK paths in a test fail like any other file.
+    Shebang lines are skipped wherever they appear (fixtures embed small shell
+    scripts), while a non-first-line absolute path in the same file is still a
+    finding.
     """
     problems = []
     for path in iter_text_files(root):
-        if path.name in MACHINE_LOCAL_FILES:
+        if is_machine_local_file(root, path):
             continue
         if "src" in path.parts and "test" in path.parts:
             continue
-        # The tool tests build fixture trees, and a fixture whose job is to prove
-        # that an absolute path is rejected has to contain one. Only test_*.py
-        # beside the checkers is exempt; production scripts and docs are not.
-        if path.parent.name == "tools" and path.name.startswith("test_"):
-            continue
         for number, line in enumerate(read_text(path).splitlines(), start=1):
-            if number == 1 and line.startswith("#!"):
+            # A shebang-shaped line is an embedded fixture, not a machine path:
+            # skip it wherever it appears, including immediately after a
+            # triple-quote opener (`FAKE = r"""#!/usr/bin/env bash`). A real
+            # absolute path on any other line is still a finding.
+            if line.lstrip().startswith("#!") or any(
+                marker in line for marker in ('"""#!', "'''#!", '"#!', "'#!")
+            ):
                 continue
             match = ABS_POSIX_RE.search(line) or ABS_WINDOWS_RE.search(line)
             if match:

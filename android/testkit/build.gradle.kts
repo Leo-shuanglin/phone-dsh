@@ -119,15 +119,15 @@ val androidJniLibrary: File =
 val androidTestJniDirectory: File =
     layout.buildDirectory.dir("generated/test-jniLibs").get().asFile
 
-val packageWorkerBundleForTests = tasks.register<Zip>("packageWorkerBundleForTests") {
-    description = "Packs the prebuilt worker bundle into the test APK's assets/worker-bundle.zip"
+// A Copy/Zip task whose source is missing is NO-SOURCE, and Gradle skips its
+// actions (including doFirst) for NO-SOURCE. The fail-loud checks therefore live
+// in always-running validators that the staging tasks depend on. Only the
+// Android-test packaging graph reaches these validators; a pure JVM test does
+// not, which is the preBuild split this module needs.
+val verifyWorkerBundleForTests = tasks.register("verifyWorkerBundleForTests") {
+    description = "Fails if the device test Worker bundle is absent"
     group = "verification"
-    from(workerBundleDirectory)
-    archiveFileName.set("worker-bundle.zip")
-    destinationDirectory.set(workerBundleAssetDirectory)
-    isPreserveFileTimestamps = false
-    isReproducibleFileOrder = true
-    doFirst {
+    doLast {
         check(workerBundleDirectory.isDirectory) {
             "the prebuilt worker bundle is missing: " +
                 workerBundleDirectory.relativeTo(repoRoot).path +
@@ -137,17 +137,44 @@ val packageWorkerBundleForTests = tasks.register<Zip>("packageWorkerBundleForTes
     }
 }
 
-val stageAndroidTestJni = tasks.register<Copy>("stageAndroidTestJni") {
-    description = "Stages libpdsh_jni.so into the androidTest jniLibs (arm64-v8a)"
+val verifyAndroidTestJni = tasks.register("verifyAndroidTestJni") {
+    description = "Fails if the Android arm64 JNI library is absent"
     group = "verification"
-    from(androidJniLibrary)
-    into(androidTestJniDirectory.resolve("arm64-v8a"))
-    doFirst {
+    doLast {
         check(androidJniLibrary.isFile) {
             "missing " + androidJniLibrary.relativeTo(repoRoot).path +
                 "; build it first with: cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni"
         }
     }
+}
+
+val verifyScenarioCatalog = tasks.register("verifyScenarioCatalog") {
+    description = "Fails if the checked-in scenario catalog is absent"
+    group = "verification"
+    doLast {
+        check(scenarioCatalogSource.isFile) {
+            "the scenario catalog is missing: " + scenarioCatalogSource.relativeTo(repoRoot).path
+        }
+    }
+}
+
+val packageWorkerBundleForTests = tasks.register<Zip>("packageWorkerBundleForTests") {
+    description = "Packs the prebuilt worker bundle into the test APK's assets/worker-bundle.zip"
+    group = "verification"
+    dependsOn(verifyWorkerBundleForTests)
+    from(workerBundleDirectory)
+    archiveFileName.set("worker-bundle.zip")
+    destinationDirectory.set(workerBundleAssetDirectory)
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+
+val stageAndroidTestJni = tasks.register<Copy>("stageAndroidTestJni") {
+    description = "Stages libpdsh_jni.so into the androidTest jniLibs (arm64-v8a)"
+    group = "verification"
+    dependsOn(verifyAndroidTestJni)
+    from(androidJniLibrary)
+    into(androidTestJniDirectory.resolve("arm64-v8a"))
 }
 
 // ---- the catalog as a device asset -----------------------------------------
@@ -165,13 +192,9 @@ val scenarioCatalogAssetDirectory: File =
 val packageScenarioCatalogForTests = tasks.register<Copy>("packageScenarioCatalogForTests") {
     description = "Copies the scenario catalog into the test APK's assets/scenario-catalog/"
     group = "verification"
+    dependsOn(verifyScenarioCatalog)
     from(scenarioCatalogSource)
     into(scenarioCatalogAssetDirectory.resolve("scenario-catalog"))
-    doFirst {
-        check(scenarioCatalogSource.isFile) {
-            "the scenario catalog is missing: " + scenarioCatalogSource.relativeTo(repoRoot).path
-        }
-    }
 }
 
 android {
@@ -182,15 +205,18 @@ android {
     sourceSets["androidTest"].jniLibs.srcDir(androidTestJniDirectory)
 }
 
+// Only the Android test *packaging* consumers depend on the real device-only
+// inputs. preBuild deliberately does not: it is a parent of every variant,
+// including testDebugUnitTest, and attaching the 65 MB Worker image + Android
+// .so there made a pure host JVM test fail (or do expensive staging) for inputs
+// it cannot use. The merge tasks below are the actual packaging edges, so a
+// connected/instrumented test APK still fails loudly when an input is missing.
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("AndroidTestAssets") }
     .configureEach { dependsOn(packageWorkerBundleForTests, packageScenarioCatalogForTests) }
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("AndroidTestJniLibFolders") }
     .configureEach { dependsOn(stageAndroidTestJni) }
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("AndroidTestNativeLibs") }
     .configureEach { dependsOn(stageAndroidTestJni) }
-tasks.named("preBuild").configure {
-    dependsOn(packageWorkerBundleForTests, packageScenarioCatalogForTests, stageAndroidTestJni)
-}
 
 dependencies {
     // The turn lane constructs the real engine (WebViewEngine via its factory) and
