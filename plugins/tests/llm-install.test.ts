@@ -142,6 +142,63 @@ async function settleWithin<T>(promise: Promise<T>, milliseconds: number,
   }
 }
 
+/** A monotonic clock the test advances by hand. */
+interface FakeActiveClock {
+  /** Moves the active clock forward. */
+  advance(milliseconds: number): void
+  /** Restores the real clock. */
+  restore(): void
+}
+
+/**
+ * Replaces `performance.now()` with a hand-driven monotonic clock.
+ *
+ * The delivery watchdogs decide "frozen process vs upstream stall" by comparing
+ * the wall clock a fired window proves to have spent against the active clock.
+ * With this fake the test controls the active clock alone: leaving it still
+ * while a real timer fires is a freeze, advancing it past half the window first
+ * is a genuine stall.
+ */
+function installFakeActiveClock(start = 1_000): FakeActiveClock {
+  const clock = globalThis.performance
+  assert.ok(clock !== undefined, 'the suspension tests need a performance object')
+  const original = Object.getOwnPropertyDescriptor(clock, 'now')
+  let current = start
+  Object.defineProperty(clock, 'now', { value: () => current, configurable: true, writable: true })
+  return {
+    advance(milliseconds: number): void {
+      current += milliseconds
+    },
+    restore(): void {
+      if (original === undefined) delete (clock as { now?: unknown }).now
+      else Object.defineProperty(clock, 'now', original)
+    },
+  }
+}
+
+/** A host-route response that hands over its chunks and never closes. */
+function neverClosingBody(chunks: readonly Uint8Array[], headers: Record<string, string> = {}): Response {
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk)
+      // Never closes: the delivery leg holds the remaining bytes.
+    },
+  }), { status: 200, headers: { 'content-type': 'text/event-stream', ...headers } })
+}
+
+/** Asserts that `error` is the module's typed delivery timeout for `stage`. */
+function assertDeliveryTimeout(error: unknown,
+                               module: typeof import('../llm-bridge/src/install.ts'),
+                               stage: 'head' | 'body', timeoutMs: number): void {
+  assert.ok(error instanceof module.DeliveryTimeoutError,
+    `expected DeliveryTimeoutError, got ${String(error)}`)
+  const timeout = error as InstanceType<typeof module.DeliveryTimeoutError>
+  assert.equal(timeout.code, 'PDSH_DELIVERY_TIMEOUT')
+  assert.equal(timeout.stage, stage)
+  assert.equal(timeout.timeoutMs, timeoutMs)
+  assert.match(timeout.message, /delivery stalled for \d+ ms \(PDSH_DELIVERY_TIMEOUT\)/)
+}
+
 test('a stalled host-route body fails with a typed delivery timeout', async () => {
   const fake = (async () => new Response(new ReadableStream<Uint8Array>({
     start(controller) {
@@ -463,4 +520,296 @@ test('a bodyless status is never re-wrapped around a stray body', async () => {
   assert.equal(observed.text, '')
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(cancelled, true, 'the stray body stream must be cancelled')
+})
+
+// --- Suspension-aware delivery watchdogs (P5 / I7) ------------------------
+//
+// iOS freezes the WebContent process — and the Worker inside it — while the App
+// is in the background. A `setTimeout` armed before the freeze fires the moment
+// the process is thawed, so a 60 s wall-clock window can expire although the
+// process ran for milliseconds of it; the thaw used to kill a whole turn with
+// `PDSH_DELIVERY_TIMEOUT`. The watchdogs now also read `performance.now()`: a
+// window the active clock did not spend is a suspension, not an upstream stall,
+// and is recovered through the delivery window (body) or renewed (head).
+//
+// These tests drive the active clock by hand. The real timer supplies the wall
+// clock, the fake supplies the active clock: leaving it still while the window
+// fires is a freeze, advancing it past half the window is a genuine stall.
+
+test('a body window that expired while the process was frozen resumes from the host log', async () => {
+  const first = new TextEncoder().encode('a'.repeat(120))
+  const rest = new TextEncoder().encode('b'.repeat(180))
+  const resumeHeaders: Array<string | null> = []
+  const fake = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers)
+    resumeHeaders.push(headers.get('x-pdsh-resume-from'))
+    if (resumeHeaders.length === 1) return neverClosingBody([first])
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(rest)
+        controller.close()
+      },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream', 'x-pdsh-resumed': '1' },
+    })
+  }) as typeof fetch
+
+  const clock = installFakeActiveClock()
+  try {
+    const observed = await withWorkerHostRoute(fake, 200, async (module) => {
+      const response = await fetch('https://model.example/v1/messages', { method: 'POST', body: '{}' })
+      assert.equal(response.status, 200)
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      return { bytes, metrics: module.deliveryMetricsSnapshot() }
+    })
+    assert.deepEqual(resumeHeaders, [null, String(first.byteLength)],
+      'the thawed delivery must ask for the suffix at the delivered offset')
+    assert.deepEqual(Buffer.from(observed.bytes), Buffer.concat([Buffer.from(first), Buffer.from(rest)]),
+      'the model client must see one continuous body across the freeze')
+    assert.equal(observed.metrics.suspends, 1, 'the frozen window is not an upstream stall')
+    assert.equal(observed.metrics.stalls, 0)
+    assert.equal(observed.metrics.resumes, 1)
+    assert.equal(observed.metrics.attempts, 2)
+    assert.equal(observed.metrics.resumedBytes, rest.byteLength)
+  } finally {
+    clock.restore()
+  }
+})
+
+test('a body stall that consumed the active window still fails as a delivery timeout', async () => {
+  const first = new TextEncoder().encode('a'.repeat(64))
+  let calls = 0
+  const fake = (async () => {
+    calls += 1
+    if (calls === 1) return neverClosingBody([first])
+    return new Response('the response is not committed', {
+      status: 502,
+      headers: { 'content-type': 'application/json', 'x-pdsh-proxy-error': 'upstream' },
+    })
+  }) as typeof fetch
+
+  const clock = installFakeActiveClock()
+  // 200 ms window: 150 ms of active time is a real stall (>= half the window).
+  const advance = setTimeout(() => clock.advance(150), 100)
+  try {
+    const observed = await withWorkerHostRoute(fake, 200, async (module) => {
+      const response = await fetch('https://model.example/v1/messages', { method: 'POST', body: '{}' })
+      const reader = response.body?.getReader()
+      assert.ok(reader !== undefined)
+      await reader.read()
+      try {
+        await settleWithin(reader.read(), 2_000, 'stalled body read')
+        return { error: undefined, module, metrics: module.deliveryMetricsSnapshot() }
+      } catch (error) {
+        return { error, module, metrics: module.deliveryMetricsSnapshot() }
+      }
+    })
+    assert.equal(calls, 2)
+    assert.ok(observed.error !== undefined)
+    assertDeliveryTimeout(observed.error, observed.module, 'body', 200)
+    assert.equal(observed.metrics.suspends, 0, 'active time was spent, so this is no suspension')
+    assert.equal(observed.metrics.stalls, 1)
+  } finally {
+    clearTimeout(advance)
+    clock.restore()
+  }
+})
+
+test('a frozen body window the host cannot resume still fails with the typed timeout', async () => {
+  const first = new TextEncoder().encode('a'.repeat(48))
+  let calls = 0
+  const fake = (async () => {
+    calls += 1
+    if (calls === 1) return neverClosingBody([first])
+    return new Response('the response is not committed', { status: 502 })
+  }) as typeof fetch
+
+  const clock = installFakeActiveClock()
+  try {
+    const observed = await withWorkerHostRoute(fake, 120, async (module) => {
+      const response = await fetch('https://model.example/v1/messages', { method: 'POST', body: '{}' })
+      const reader = response.body?.getReader()
+      assert.ok(reader !== undefined)
+      await reader.read()
+      try {
+        await settleWithin(reader.read(), 2_000, 'unresumable frozen body read')
+        return { error: undefined, module, metrics: module.deliveryMetricsSnapshot() }
+      } catch (error) {
+        return { error, module, metrics: module.deliveryMetricsSnapshot() }
+      }
+    })
+    assert.equal(calls, 2)
+    assert.ok(observed.error !== undefined)
+    assertDeliveryTimeout(observed.error, observed.module, 'body', 120)
+    assert.equal(observed.metrics.suspends, 1)
+    assert.equal(observed.metrics.stalls, 0)
+    assert.equal(observed.metrics.resumes, 0, 'a refused resume does not spend the resume meter')
+  } finally {
+    clock.restore()
+  }
+})
+
+test('the resume budget still bounds how many frozen windows a body may recover', async () => {
+  const first = new TextEncoder().encode('a'.repeat(64))
+  const rest = new TextEncoder().encode('b'.repeat(96))
+  let calls = 0
+  const fake = (async () => {
+    calls += 1
+    if (calls === 1) return neverClosingBody([first])
+    if (calls === 2) return neverClosingBody([rest], { 'x-pdsh-resumed': '1' })
+    return new Response('unexpected third attempt', { status: 502 })
+  }) as typeof fetch
+
+  const clock = installFakeActiveClock()
+  try {
+    const observed = await withWorkerHostRoute(fake, 120, async (module) => {
+      const response = await fetch('https://model.example/v1/messages', { method: 'POST', body: '{}' })
+      const reader = response.body?.getReader()
+      assert.ok(reader !== undefined)
+      const chunks: Uint8Array[] = []
+      try {
+        for (;;) {
+          const result = await settleWithin(reader.read(), 2_000, 'frozen body read')
+          if (result.done === true) break
+          chunks.push(result.value)
+        }
+        return { chunks, error: undefined, module, metrics: module.deliveryMetricsSnapshot() }
+      } catch (error) {
+        return { chunks, error, module, metrics: module.deliveryMetricsSnapshot() }
+      }
+    })
+    assert.equal(calls, 2, 'MAX_DELIVERY_RESUMES is 1, so the second freeze cannot resume again')
+    assert.equal(observed.chunks.length, 2, 'the bytes before the second freeze were delivered')
+    assert.ok(observed.error !== undefined)
+    assertDeliveryTimeout(observed.error, observed.module, 'body', 120)
+    assert.ok(observed.metrics.suspends >= 2)
+    assert.equal(observed.metrics.stalls, 0, 'neither window was an upstream stall')
+    assert.equal(observed.metrics.resumes, 1)
+  } finally {
+    clock.restore()
+  }
+})
+
+test('a head window that expired while the process was frozen keeps waiting for the head', async () => {
+  const chunk = new TextEncoder().encode('event: a\n\n')
+  let calls = 0
+  const fake = (async () => {
+    calls += 1
+    // The upstream is still working: the head arrives after the 120 ms window.
+    await new Promise(resolve => setTimeout(resolve, 350))
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(chunk)
+        controller.close()
+      },
+    }), { status: 200, headers: { 'content-type': 'text/event-stream' } })
+  }) as typeof fetch
+
+  const clock = installFakeActiveClock()
+  try {
+    const observed = await withWorkerHostRoute(fake, 120, async (module) => {
+      const response = await fetch('https://model.example/v1/messages', { method: 'POST', body: '{}' })
+      return {
+        status: response.status,
+        body: await response.text(),
+        metrics: module.deliveryMetricsSnapshot(),
+      }
+    })
+    assert.equal(observed.status, 200)
+    assert.equal(observed.body, 'event: a\n\n')
+    assert.equal(calls, 1, 'a suspended head wait keeps the in-flight request instead of re-issuing it')
+    assert.ok(observed.metrics.suspends >= 2, `expected renewed windows, got ${observed.metrics.suspends}`)
+    assert.equal(observed.metrics.stalls, 0)
+  } finally {
+    clock.restore()
+  }
+})
+
+test('a head stall that consumed the active window still fails as a delivery timeout', async () => {
+  const fake = (() => new Promise<Response>(() => {})) as typeof fetch
+  const clock = installFakeActiveClock()
+  // 120 ms window: 90 ms of active time is a real stall (>= half the window).
+  const advance = setTimeout(() => clock.advance(90), 40)
+  try {
+    const observed = await withWorkerHostRoute(fake, 120, async (module) => {
+      try {
+        await settleWithin(fetch('https://model.example/v1/messages', { method: 'POST', body: '{}' }),
+          2_000, 'stalled head fetch')
+        return { error: undefined, module }
+      } catch (error) {
+        return { error, module }
+      }
+    })
+    assert.ok(observed.error !== undefined)
+    assertDeliveryTimeout(observed.error, observed.module, 'head', 120)
+  } finally {
+    clearTimeout(advance)
+    clock.restore()
+  }
+})
+
+test('an idle consumer is not failed by a window that expired while the process was frozen', async () => {
+  const chunk = new TextEncoder().encode('event: a\n\n')
+  const fake = (async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(chunk)
+      // The body completes only after the first watchdog window has expired.
+      setTimeout(() => {
+        try { controller.close() } catch { /* already closed */ }
+      }, 260)
+    },
+  }), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch
+
+  const clock = installFakeActiveClock()
+  try {
+    const observed = await withWorkerHostRoute(fake, 120, async (module) => {
+      const response = await fetch('https://model.example/v1/messages', { method: 'POST', body: '{}' })
+      // The consumer is frozen too: it does not pull for longer than a window.
+      await new Promise(resolve => setTimeout(resolve, 200))
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      return { bytes, metrics: module.deliveryMetricsSnapshot() }
+    })
+    assert.deepEqual(Buffer.from(observed.bytes), Buffer.from(chunk))
+    assert.ok(observed.metrics.suspends >= 1, 'the idle window must be classified as a suspension')
+    assert.equal(observed.metrics.stalls, 0)
+    assert.equal(observed.metrics.resumes, 0, 'nothing was stalled, so no host resume is spent')
+  } finally {
+    clock.restore()
+  }
+})
+
+test('without a usable active clock the watchdog keeps the wall-clock verdict', async () => {
+  const chunk = new TextEncoder().encode('event: a\n\n')
+  let calls = 0
+  const fake = (async () => {
+    calls += 1
+    return neverClosingBody([chunk])
+  }) as typeof fetch
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'performance')
+  // A Worker without `performance`: the fallback must be exactly the previous
+  // wall-clock behaviour, i.e. a body without progress still fails the turn.
+  Object.defineProperty(globalThis, 'performance', { value: undefined, configurable: true, writable: true })
+  try {
+    const observed = await withWorkerHostRoute(fake, 120, async (module) => {
+      const response = await fetch('https://model.example/v1/messages', { method: 'POST', body: '{}' })
+      const reader = response.body?.getReader()
+      assert.ok(reader !== undefined)
+      await reader.read()
+      try {
+        await settleWithin(reader.read(), 2_000, 'stalled body read')
+        return { error: undefined, module, metrics: module.deliveryMetricsSnapshot() }
+      } catch (error) {
+        return { error, module, metrics: module.deliveryMetricsSnapshot() }
+      }
+    })
+    assert.equal(calls, 2, 'the wall-clock behaviour still spends its one resume')
+    assert.ok(observed.error !== undefined)
+    assertDeliveryTimeout(observed.error, observed.module, 'body', 120)
+    assert.equal(observed.metrics.suspends, 0)
+    assert.equal(observed.metrics.stalls, 1)
+  } finally {
+    if (descriptor !== undefined) Object.defineProperty(globalThis, 'performance', descriptor)
+    else delete (globalThis as { performance?: unknown }).performance
+  }
 })

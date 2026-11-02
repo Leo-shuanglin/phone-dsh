@@ -56,6 +56,33 @@ export const MAX_DELIVERY_RESUMES = 1
  */
 export const RESUME_TIMEOUT_MS = 30_000
 
+/**
+ * Share of a watchdog window that must drain on the *active* clock for the
+ * expiry to count as an upstream stall.
+ *
+ * A window is armed with `timeoutMs` of wall clock, so a fired timer proves the
+ * wall clock advanced at least that far. A running process reports an active
+ * delta close to `timeoutMs` (timers fire late, never early); a process that
+ * iOS froze reports close to zero for the same window. Half the window keeps
+ * the verdicts far from timer jitter, a busy main thread and the coarse
+ * `performance.now()` resolutions some WebKit releases use, while still
+ * honouring a genuine stall: the upstream must have swallowed half of the
+ * window's active time before the request is failed.
+ */
+export const SUSPENSION_ACTIVE_RATIO = 0.5
+
+/**
+ * Bounds how many expired head windows a suspension may renew.
+ *
+ * Renewing a suspended window spends no active budget, so without a bound a
+ * clock that never advances (a stubbed or broken `performance.now()`) would
+ * keep the head wait alive forever. Three renewals cover repeated
+ * background/foreground cycles inside one request and still end it in bounded
+ * time. The body path is bounded separately by `MAX_DELIVERY_RESUMES`, because
+ * recovering a body also costs a host resume.
+ */
+export const MAX_HEAD_SUSPENSION_RENEWALS = 3
+
 /** Per-process delivery instrumentation (the Worker side of the three legs). */
 export interface DeliveryMetricsSnapshot {
   /** Host-route responses whose head arrived. */
@@ -64,13 +91,21 @@ export interface DeliveryMetricsSnapshot {
   readonly bodyBytes: number
   /** Inactivity intervals that expired on an open body. */
   readonly stalls: number
+  /**
+   * Watchdog windows that expired while the process itself was frozen.
+   *
+   * Counted separately from `stalls`: the wall clock drained without this
+   * process running, so the upstream never got its inactivity interval and the
+   * window was recovered instead of failing the request.
+   */
+  readonly suspends: number
   /** Resumes issued after a stalled body. */
   readonly resumes: number
   /** Body bytes that arrived through a resumed response. */
   readonly resumedBytes: number
 }
 
-const deliveryMetrics = { attempts: 0, bodyBytes: 0, stalls: 0, resumes: 0, resumedBytes: 0 }
+const deliveryMetrics = { attempts: 0, bodyBytes: 0, stalls: 0, suspends: 0, resumes: 0, resumedBytes: 0 }
 
 /** Snapshot of the Worker delivery counters. */
 export function deliveryMetricsSnapshot(): DeliveryMetricsSnapshot {
@@ -389,19 +424,98 @@ function anySignal(signals: AbortSignal[]): AbortSignal {
   return controller.signal
 }
 
-/** Waits for the response head under the delivery inactivity interval. */
+/**
+ * The only Worker-safe monotonic clock, or `undefined` when this runtime has
+ * none.
+ *
+ * Read dynamically, never captured at module load: a host (or a test) that
+ * replaces `performance.now` must be observed by every window. A clock that
+ * throws or reports a non-finite value is treated as absent so the watchdogs
+ * fall back to their original wall-clock behaviour instead of a timer callback
+ * throwing.
+ */
+function activeClockNow(): number | undefined {
+  const clock = (globalThis as { performance?: { now?: () => number } }).performance
+  if (clock === undefined || typeof clock.now !== 'function') return undefined
+  try {
+    const now = clock.now.call(clock)
+    return Number.isFinite(now) ? now : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Active milliseconds since `armedAt`, or `undefined` without a usable clock. */
+function activeElapsedSince(armedAt: number | undefined): number | undefined {
+  if (armedAt === undefined) return undefined
+  const now = activeClockNow()
+  if (now === undefined) return undefined
+  const elapsed = now - armedAt
+  // A backwards jump is not a suspension: keep the wall-clock verdict.
+  return elapsed >= 0 ? elapsed : undefined
+}
+
+/**
+ * Active milliseconds a watchdog window consumed if it expired while the
+ * process itself was frozen; `undefined` when it expired for any other reason.
+ *
+ * The caller only asks once the wall-clock timer fired, so a value means: "the
+ * wall clock drained the window while this process was not running". Without a
+ * usable monotonic clock the answer is always `undefined`, which restores the
+ * pre-existing wall-clock behaviour exactly.
+ */
+function frozenWindowActiveMs(armedAt: number | undefined, budgetMs: number): number | undefined {
+  const active = activeElapsedSince(armedAt)
+  if (active === undefined) return undefined
+  return active < budgetMs * SUSPENSION_ACTIVE_RATIO ? active : undefined
+}
+
+/**
+ * Waits for the response head under the delivery inactivity interval.
+ *
+ * The interval is measured on the active clock. When a window expires while the
+ * process was frozen the window is renewed with the active budget it did not
+ * spend, so a thawed Worker keeps waiting for the head its upstream is still
+ * producing instead of failing the request for time it never ran. A genuine
+ * stall — the active clock drained the window too — aborts the attempt with the
+ * typed error exactly as before, and so does a suspension that exhausted the
+ * bounded renewals.
+ */
 async function withHeadDeadline(
   request: Promise<Response>,
   timeoutMs: number,
   controller: AbortController,
 ): Promise<Response> {
   let timer: ReturnType<typeof setTimeout> | undefined
+  let remainingMs = timeoutMs
+  let renewals = 0
   const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
+    const fail = (): void => {
       const error = new DeliveryTimeoutError('head', timeoutMs)
       controller.abort(error)
       reject(error)
-    }, timeoutMs)
+    }
+    const arm = (): void => {
+      const armedAt = activeClockNow()
+      timer = setTimeout(() => {
+        timer = undefined
+        const frozenMs = frozenWindowActiveMs(armedAt, remainingMs)
+        if (frozenMs !== undefined && renewals < MAX_HEAD_SUSPENSION_RENEWALS) {
+          // The wall clock drained the window, the active clock did not: this
+          // process was frozen, so the upstream never got its interval. Spend
+          // only the active time we actually observed and wait for the rest.
+          deliveryMetrics.suspends += 1
+          renewals += 1
+          remainingMs -= frozenMs
+          if (remainingMs > 0) {
+            arm()
+            return
+          }
+        }
+        fail()
+      }, remainingMs)
+    }
+    arm()
   })
   try {
     return await Promise.race([request, deadline])
@@ -427,6 +541,11 @@ type DeliveryRead =
   | { readonly kind: 'chunk'; readonly value: Uint8Array }
   | { readonly kind: 'done' }
   | { readonly kind: 'failure'; readonly error: unknown; readonly timedOut: boolean }
+  /**
+   * The read window expired while the process was frozen: no byte ever arrived
+   * because nothing here could run, not because the upstream stopped.
+   */
+  | { readonly kind: 'suspended' }
 
 /**
  * Wraps a platform response so a suspended downstream consumer can resume.
@@ -438,6 +557,11 @@ type DeliveryRead =
  * response from that byte offset (``RESUME_FROM_HEADER``). The host serves the
  * suffix from its committed response log, so the model client sees one
  * continuous body and the delivery window is replenished instead of abandoned.
+ *
+ * The inactivity interval is measured on the active clock: a window that
+ * expired because iOS froze the Worker is recovered the same way (a resume at
+ * the delivered offset, which also re-arms the window) instead of failing the
+ * turn for time the process never ran. The resume budget bounds both cases.
  *
  * The typed ``DeliveryTimeoutError`` is still the failure of last resort: with
  * no resumable host body, or after ``maxResumes``, the body errors with
@@ -494,21 +618,41 @@ function resumableDelivery(initial: DeliveryAttempt, options: DeliveryOptions,
   const armHandoff = (): void => {
     clearHandoff()
     if (terminal) return
+    const armedAt = activeClockNow()
     handoffTimer = setTimeout(() => {
       handoffTimer = undefined
       if (terminal) return
+      const frozenMs = frozenWindowActiveMs(armedAt, options.timeoutMs)
+      if (frozenMs !== undefined) {
+        // The consumer was not pulling because this process was frozen, not
+        // because it stopped consuming. Nothing is stalled upstream, so renew
+        // the window instead of failing a body that may still be complete.
+        deliveryMetrics.suspends += 1
+        armHandoff()
+        return
+      }
       deliveryMetrics.stalls += 1
       settle(new DeliveryTimeoutError('body', options.timeoutMs))
     }, options.timeoutMs)
   }
   const readOnce = async (): Promise<DeliveryRead> => {
     let timer: ReturnType<typeof setTimeout> | undefined
+    // A window cannot fire before a whole wall clock interval has passed, so the
+    // active delta below answers "was this process running for the window the
+    // upstream never got?".
+    const armedAt = activeClockNow()
     const timeout = new Promise<DeliveryRead>(resolve => {
-      timer = setTimeout(() => resolve({
-        kind: 'failure',
-        error: new DeliveryTimeoutError('body', options.timeoutMs),
-        timedOut: true,
-      }), options.timeoutMs)
+      timer = setTimeout(() => {
+        if (frozenWindowActiveMs(armedAt, options.timeoutMs) !== undefined) {
+          resolve({ kind: 'suspended' })
+          return
+        }
+        resolve({
+          kind: 'failure',
+          error: new DeliveryTimeoutError('body', options.timeoutMs),
+          timedOut: true,
+        })
+      }, options.timeoutMs)
     })
     const read = reader.read()
       .then(result => result.done === true
@@ -550,18 +694,31 @@ function resumableDelivery(initial: DeliveryAttempt, options: DeliveryOptions,
           settle(options.signal.reason)
           return
         }
-        const failure = result.timedOut
-          ? new DeliveryTimeoutError('body', options.timeoutMs)
-          : result.error
-        if (result.timedOut) deliveryMetrics.stalls += 1
+        // A read window ended without a chunk. `suspended` means the process
+        // itself was frozen for that window: the wall clock drained while
+        // nothing here could run, so the upstream never got its inactivity
+        // interval and this is not a delivery stall. Recover through the host
+        // delivery window exactly like a stall; a genuine stall (the active
+        // clock drained the window too) keeps its typed failure below.
+        const suspended = result.kind === 'suspended'
+        if (suspended) deliveryMetrics.suspends += 1
+        else if (result.kind === 'failure' && result.timedOut) deliveryMetrics.stalls += 1
+        const failure = result.kind === 'failure' && !result.timedOut
+          ? result.error
+          : new DeliveryTimeoutError('body', options.timeoutMs)
         if (resumes >= options.maxResumes) {
           settle(failure)
           return
         }
         resumes += 1
         // Release the abandoned attempt before asking the host for the suffix.
-        attempt.controller.abort(failure)
-        try { await reader.cancel(failure) } catch { /* already closed */ }
+        // A suspension has no stalled upstream to report, so it aborts the old
+        // attempt with its own reason instead of the typed delivery error.
+        const abandoned = suspended
+          ? new Error('llm-bridge: delivery window suspended; resuming from the host log')
+          : failure
+        attempt.controller.abort(abandoned)
+        try { await reader.cancel(abandoned) } catch { /* already closed */ }
         let next: DeliveryAttempt | undefined
         try { next = await options.resume(offset) } catch { next = undefined }
         if (next === undefined || next.response.body === null) {
