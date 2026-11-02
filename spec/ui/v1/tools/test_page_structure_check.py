@@ -123,6 +123,26 @@ def platform_whitelist() -> list:
     return [{"id": "platform.post-notifications-degraded", "capability": "notifier.permission-degraded"}]
 
 
+class LocalizedLabelResolutionTests(unittest.TestCase):
+    def test_known_translation_keeps_chinese_contract_label(self):
+        value, dynamic = check.resolve_kotlin_expr(
+            'UiStrings.settingsNativeText(state.language, UiStrings.ROW, "English, label")',
+            {"ROW": "工作步骤"},
+        )
+        self.assertEqual(("工作步骤", False), (value, dynamic))
+
+    def test_local_forwarder_requires_verified_declaration(self):
+        self.assertEqual((None, True), check.resolve_kotlin_expr('native("工作步骤", "Steps")', {}))
+        self.assertEqual(("工作步骤", False), check.resolve_kotlin_expr(
+            'native("工作步骤", "Steps")', {}, {"__native_text_forwarder__": True},
+        ))
+
+    def test_dynamic_chinese_label_does_not_become_a_contract_match(self):
+        self.assertEqual((None, True), check.resolve_kotlin_expr(
+            'UiStrings.settingsNativeText(locale, state.title, "Title")', {},
+        ))
+
+
 class Fixture:
     def __init__(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

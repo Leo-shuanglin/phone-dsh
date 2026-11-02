@@ -516,6 +516,19 @@ def resolve_kotlin_expr(expr: str, strings: dict, consts: dict | None = None) ->
     m = re.fullmatch(r"([A-Z][A-Z0-9_]*)", text)
     if m and m.group(1) in consts:
         return consts[m.group(1)], False
+    # NativeText-style localization preserves the Chinese contract identity.
+    # Only this known API and its verified local forwarder resolve; arbitrary
+    # wrappers/conditionals remain dynamic and cannot hide missing controls.
+    localized = re.fullmatch(r"(UiStrings\.settingsNativeText|native)\s*\((.*)\)", text, re.S)
+    if localized:
+        name = localized.group(1)
+        body = localized.group(2)
+        parts = split_args(mask_kotlin(body), 0, len(body))
+        expected = 3 if name == "UiStrings.settingsNativeText" else 2
+        verified = name != "native" or consts.get("__native_text_forwarder__") is True
+        if len(parts) == expected and verified:
+            start, end = parts[1 if expected == 3 else 0]
+            return resolve_kotlin_expr(body[start:end], strings, consts)
     # A conditional that falls back to `null` still names a label when it is shown.
     m = re.fullmatch(r"if\s*\((.+)\)\s*(.+?)\s*else\s+null", text, re.S)
     if m:
@@ -2022,8 +2035,10 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
         return summary
 
     consts = {**shared_consts, **local_constants(text)}
-    section_positions, action_positions = [], []
-    consts = {**shared_consts, **local_constants(text)}
+    consts["__native_text_forwarder__"] = bool(re.search(
+        r"fun\s+native\s*\(\s*chinese\s*:\s*String\s*,\s*english\s*:\s*String\s*\)\s*:\s*String\s*=\s*"
+        r"UiStrings\.settingsNativeText\(\s*languageId\s*,\s*chinese\s*,\s*english\s*\)", text,
+    ))
     section_positions, action_positions = [], []
     # A fold header whose wording is the action's alternative is still that action's
     # header, so the fold test reads every wording, not only the primary one.

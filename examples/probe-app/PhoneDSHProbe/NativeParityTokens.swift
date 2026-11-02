@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-// NativeParityTokens: the official DSH session-line design values, resolved for
-// a 402pt phone viewport. This is the single source of truth for the new
-// parity views; `NativeChatTheme` delegates here so existing call sites keep
-// compiling while the old ad-hoc values are retired.
+// NativeParityTokens: shared session-line values retained for existing call
+// sites. The current visual baseline is PR 22's HomeSpec 430pt design; newer
+// home/settings views use HomeSpec directly, while NativeChatTheme bridges the
+// shared values used by older components.
 //
-// Official baseline: deepseek-harness 7be5505b0b (0.2.1-rc.2), CSS px == iOS pt
-// at a 402pt viewport. Values come from the shipped web-app CSS; see
+// The remaining 402pt layout constants are legacy values, not the current
+// HomeSpec baseline. Historical official-Web references live in
 // docs/receipts/ios-session-audit/00-MASTER.md §6 and the axis reports.
 
 import SwiftUI
@@ -88,7 +88,7 @@ enum NativeParityTokens {
         max(0, codeLineHeight - UIFont.monospacedSystemFont(ofSize: codeSize, weight: .regular).lineHeight)
     }
 
-    // MARK: - Layout (402pt)
+    // MARK: - Legacy layout (402pt; not the HomeSpec baseline)
 
     /// Transcript column: 402 - 2 * (composer clearance 16 + 16) = 338.
     static let contentWidth: CGFloat = 338

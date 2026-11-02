@@ -9,23 +9,23 @@
 
 ## iOS 基线用哪个脚本
 
-iOS 的 402pt 基线分两层，不要手截图：
+当前原生视觉基线是 PR 22 的 HomeSpec 430×932pt 设计。官方 DSH 的 402pt 资料保留为历史参照，两层截图都不要手截：
 
 ```bash
-# 1) 官方 DSH 真机 Web UI 参照（9 个状态）
+# 1) 历史参照：官方 DSH 真机 Web UI（402×874@3，9 个状态）
 scripts/ios-parity/golden/capture-official.sh
 
-# 2) iOS 原生自检截图
+# 2) 当前原生自检：在 430pt 宽的模拟器上运行
 scripts/ios-parity/capture.sh <simulator-udid> sample
 ```
 
 官方 golden 会启动真实 `dsh web`、用 Chrome DevTools Protocol 在 402×874@3 下截图，
 并把 hero / auth / chat / tool / question / plan / subagent 的 manifest 一起写出来。
-详见 [golden/README.md](golden/README.md)。
+详见 [golden/README.md](golden/README.md)。这些官方文件不因 HomeSpec rebaseline 而改写。
 
 ## Android 对齐建议
 
-Android 不要手工截图对 iOS；用同一个 402×874@3 口径跑脚本，再把两边同名状态并排审：
+Android 不要手工截图对 iOS；用同一套状态名和当前 HomeSpec layout metrics 跑脚本，再把同名状态并排审：
 
 ```bash
 # Android 截图（Android 仓自己的工具）
@@ -38,9 +38,8 @@ python3 android/tools/test_screenshot_compare.py compare \
 ```
 
 跨平台不要直接做逐像素 diff：CoreText 与 Android 字体栅格不同，必然有抗锯齿差异。
-Android 对齐 iOS 基线时使用同一套状态名、同一 402×874@3 视口、同一组 layout metrics
-（header 50、composer 370×98、内容列 338、tool row 24、flow 6/12）；
-像素阈值只在 Android 自己的 golden 内使用。
+当前基线为 430pt 设计画布，浮动控件左右 16、阅读内容左右 20、正文 16/24、过程行 15/24、
+输入卡最小高 104、发送键 36、tool row 24；像素阈值只在 Android 自己的 golden 内使用。
 
 ## 用法
 

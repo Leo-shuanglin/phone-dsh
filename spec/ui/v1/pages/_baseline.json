@@ -1,6 +1,6 @@
 {
  "schema": "pdsh.ui.page-structure-baseline/1",
- "note": "Re-frozen against iOS PR22 edd687463cd24b9c969914a13fa1da268df016fe (HomeSpec 430x932 home, grouped SettingsPage, HomeDrawer) and Android PR14 8c2eeab + the reusable candidate. Before this re-baseline the file held 1 row (mcp-editor missing-action 保存修改并重连, now fixed by the PR22 wording); after review it holds 90 rows on 12 pages. Every row is a current observed divergence with kind/name/reason and its owning lane C chat, D composer, E drawer/sessions, F settings/provider, G secondary files/device/workbench. This ratchet only shrinks: fix one, delete its row. `--write-baseline` writes new rows as UNREVIEWED, which this file refuses to load.",
+ "note": "Re-frozen against iOS PR22 edd687463cd24b9c969914a13fa1da268df016fe (HomeSpec 430x932 home, grouped SettingsPage, HomeDrawer) and Android PR14 8c2eeab + the reusable candidate. Before this re-baseline the file held 1 row (mcp-editor missing-action 保存修改并重连, now fixed by the PR22 wording); after review it holds 90 rows on 12 pages. Every row is a current observed divergence with kind/name/reason and its owning lane C chat, D composer, E drawer/sessions, F settings/provider, G secondary files/device/workbench. This ratchet only shrinks: fix one, delete its row. `--write-baseline` writes new rows as UNREVIEWED, which this file refuses to load. Final integration removes three source-resolved chat entries (read-aloud, collapse glyph and dynamic label); no new divergence is added.",
  "contracts": 34,
  "divergences": [
   {
@@ -37,27 +37,6 @@
    "name": "插件与工具",
    "lane": "C",
    "reason": "PR22 makes ChatPage the home and draws the HomeSpec header/menu: drawer button, session title + folder subtitle, 设备+更多 (工作区/插件与工具/产物/运行状态/导出), and the composer's voice/collapse controls. Android ChatPage.kt still renders the pre-PR22 header/menu, so this control is not the PR22 one. Lane C owns the home/header/menu; lane D owns the composer/voice controls. The PR22 home exposes `插件与工具`; Android does not render it."
-  },
-  {
-   "page": "chat",
-   "kind": "missing-action",
-   "name": "朗读最近回复",
-   "lane": "D",
-   "reason": "PR22 makes ChatPage the home and draws the HomeSpec header/menu: drawer button, session title + folder subtitle, 设备+更多 (工作区/插件与工具/产物/运行状态/导出), and the composer's voice/collapse controls. Android ChatPage.kt still renders the pre-PR22 header/menu, so this control is not the PR22 one. Lane C owns the home/header/menu; lane D owns the composer/voice controls. The PR22 home exposes `朗读最近回复`; Android does not render it."
-  },
-  {
-   "page": "chat",
-   "kind": "unresolved-action",
-   "name": "if (minimized) \"⌃\" else \"⌄\"",
-   "lane": "D",
-   "reason": "PR22 makes ChatPage the home and draws the HomeSpec header/menu: drawer button, session title + folder subtitle, 设备+更多 (工作区/插件与工具/产物/运行状态/导出), and the composer's voice/collapse controls. Android ChatPage.kt still renders the pre-PR22 header/menu, so this control is not the PR22 one. Lane C owns the home/header/menu; lane D owns the composer/voice controls. Android's `if (minimized) \"⌃\" else \"⌄\"` label is an expression, so the gate cannot pair it with the PR22 wording."
-  },
-  {
-   "page": "chat",
-   "kind": "unresolved-action",
-   "name": "text",
-   "lane": "D",
-   "reason": "PR22 makes ChatPage the home and draws the HomeSpec header/menu: drawer button, session title + folder subtitle, 设备+更多 (工作区/插件与工具/产物/运行状态/导出), and the composer's voice/collapse controls. Android ChatPage.kt still renders the pre-PR22 header/menu, so this control is not the PR22 one. Lane C owns the home/header/menu; lane D owns the composer/voice controls. Android's `text` label is an expression, so the gate cannot pair it with the PR22 wording."
   },
   {
    "page": "home-drawer",
