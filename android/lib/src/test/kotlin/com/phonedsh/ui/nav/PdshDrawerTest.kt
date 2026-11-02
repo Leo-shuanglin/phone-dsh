@@ -1,14 +1,15 @@
 // The drawer's rows and geometry, asserted on the JVM.
 // SPDX-License-Identifier: MIT
 //
-// The drawer is the only map of the app: a row that compiles but has no route,
+// The pre-PR22 public app-map drawer remains compatible. The product root uses
+// HomeDrawer, whose source-based tests are separate. This compatibility drawer: a row that compiles but has no route,
 // or a route no row names, is exactly the "routing-reachable, touch-unreachable"
 // bug L1/L2/L5 reported. These tests tap every row of the real [PdshDrawer] and
 // assert the route it hands back; the geometry assertions pin the iOS numbers
 // this lane aligns to (320 panel / 288 content / 48 row / 22 icon slot).
 //
 // `NativeShell.swift:97` (320), `SessionsPage.swift:594` (288), `:422` (22),
-// `:432` (48). The values are read from [SessionsMetrics], never re-typed here.
+// `:432` (48). The values are read from [LegacyDrawerMetrics], never re-typed here.
 package com.phonedsh.ui.nav
 
 import androidx.compose.ui.test.assertHeightIsEqualTo
@@ -22,7 +23,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.phonedsh.ui.SessionsMetrics
 import com.phonedsh.ui.theme.PdshTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -98,11 +98,11 @@ class PdshDrawerTest {
     fun `the panel is the iOS 320 pt wide`() {
         show()
         compose.onNodeWithTag(PdshDrawerTags.PANEL)
-            .assertWidthIsEqualTo(SessionsMetrics.drawerWidth)
+            .assertWidthIsEqualTo(LegacyDrawerMetrics.drawerWidth)
         // 320 - 16 - 16 = 288, the baseline's measured content width.
         assertEquals(
-            SessionsMetrics.DRAWER_CONTENT_WIDTH_PT,
-            SessionsMetrics.DRAWER_WIDTH_PT - 2 * SessionsMetrics.ROW_INSET_PT,
+            LegacyDrawerMetrics.DRAWER_CONTENT_WIDTH_PT,
+            LegacyDrawerMetrics.DRAWER_WIDTH_PT - 2 * LegacyDrawerMetrics.ROW_INSET_PT,
         )
     }
 
@@ -110,7 +110,7 @@ class PdshDrawerTest {
     fun `a row is 48 pt tall and starts at the 16 pt inset`() {
         show()
         val row = compose.onNodeWithTag(PdshDrawerTags.ROW_PREFIX + "对话")
-        row.assertHeightIsEqualTo(SessionsMetrics.drawerRowHeight)
+        row.assertHeightIsEqualTo(LegacyDrawerMetrics.drawerRowHeight)
         // The row merges its descendants (it is one button), so the glyph slot
         // and the title are only addressable in the unmerged tree.
         val icon = compose.onNodeWithTag(PdshDrawerTags.ICON_PREFIX + "对话", useUnmergedTree = true)

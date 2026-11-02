@@ -21,7 +21,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.runtime.mutableStateOf
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.page.UiPageTags
-import com.phonedsh.ui.page.UiTags
+import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.page.AutomationFacts
 import com.phonedsh.ui.page.AutomationSnapshot
 import com.phonedsh.ui.theme.PdshTheme

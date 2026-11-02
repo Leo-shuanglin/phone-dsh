@@ -26,7 +26,8 @@
 //     (`:422`);
 //   * icon/title gap 10 pt (`:419`), chevron reference 12 pt (`:428`–`:429`).
 //
-// All five numbers are read from [SessionsMetrics]; this file carries no second
+// Legacy geometry is frozen in [LegacyDrawerMetrics]; the PR22 product drawer uses HomeDrawer.
+// This compatibility file carries no second
 // copy of them. The only unmeasured value is the 22 pt corner on the panel's
 // trailing edge (`NativeShell.swift:254`): the token table publishes no
 // drawer-radius token, so the literal is marked here.
@@ -73,7 +74,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.phonedsh.ui.SessionsMetrics
 import com.phonedsh.ui.icon.PdshIcon
 import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.theme.LocalUiTokens
@@ -175,7 +175,7 @@ public fun PdshDrawer(
         // iOS is 320 on every phone it ships on; a narrower window (a split
         // screen, a small device) keeps a strip of the page visible instead of
         // letting the drawer cover the whole frame.
-        val panelWidth: Dp = minOf(SessionsMetrics.drawerWidth, maxWidth - MIN_PAGE_STRIP)
+        val panelWidth: Dp = minOf(LegacyDrawerMetrics.drawerWidth, maxWidth - MIN_PAGE_STRIP)
         Row(Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
@@ -244,14 +244,14 @@ private fun PdshDrawerRow(entry: PdshDrawerEntry, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(SessionsMetrics.drawerRowHeight)
+            .height(LegacyDrawerMetrics.drawerRowHeight)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = entry.label }
             .testTag(PdshDrawerTags.ROW_PREFIX + entry.label)
             // 320 - 16 - 16 = 288: the measured drawer content width.
-            .padding(horizontal = SessionsMetrics.rowInset),
+            .padding(horizontal = LegacyDrawerMetrics.rowInset),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(SessionsMetrics.drawerRowSpacing),
+        horizontalArrangement = Arrangement.spacedBy(LegacyDrawerMetrics.drawerRowSpacing),
     ) {
         DrawerGlyph(
             icon = entry.icon,
@@ -285,7 +285,7 @@ private fun DrawerGlyph(icon: PdshDrawerIcon, color: Color, modifier: Modifier =
     }
     PdshIconView(
         icon = registered,
-        size = SessionsMetrics.drawerRowIconSlot,
+        size = LegacyDrawerMetrics.drawerRowIconSlot,
         tint = color,
         contentDescription = null,
         modifier = modifier,
@@ -295,7 +295,7 @@ private fun DrawerGlyph(icon: PdshDrawerIcon, color: Color, modifier: Modifier =
 /** The 12 pt chevron at the row's trailing edge (`NativeShell.swift:428`). */
 @Composable
 private fun DrawerChevron(color: Color) {
-    Canvas(Modifier.size(SessionsMetrics.drawerRowChevron)) {
+    Canvas(Modifier.size(LegacyDrawerMetrics.drawerRowChevron)) {
         val unit = size.minDimension / 12f
         val path = Path().apply {
             moveTo(4.5f * unit, 2.5f * unit)
@@ -317,7 +317,7 @@ private fun DrawerDivider() {
     Box(
         Modifier
             .fillMaxWidth()
-            .height(SessionsMetrics.separatorHeight)
+            .height(LegacyDrawerMetrics.separatorHeight)
             .background(tokens.colors.borderLight),
     )
 }
@@ -339,3 +339,21 @@ private const val SCRIM_ALPHA: Float = 0.32f
 
 /** The scrim strip's spoken name. */
 private const val DISMISS_LABEL: String = "关闭抽屉"
+
+/**
+ * Frozen geometry of the public pre-PR22 app-map drawer (PR14 8c2eeab7).
+ * The product root now uses HomeDrawer. Sharing SessionsMetrics would silently
+ * resize this compatibility API whenever the live session page changes.
+ */
+internal object LegacyDrawerMetrics {
+    const val DRAWER_WIDTH_PT: Int = 320
+    const val DRAWER_CONTENT_WIDTH_PT: Int = 288
+    const val ROW_INSET_PT: Int = 16
+    val drawerWidth: Dp get() = DRAWER_WIDTH_PT.dp
+    val rowInset: Dp get() = ROW_INSET_PT.dp
+    val drawerRowHeight: Dp get() = 48.dp
+    val drawerRowSpacing: Dp get() = 10.dp
+    val drawerRowIconSlot: Dp get() = 22.dp
+    val drawerRowChevron: Dp get() = 12.dp
+    val separatorHeight: Dp get() = 0.5.dp
+}

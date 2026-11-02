@@ -36,7 +36,7 @@ class HomeDrawerStateTest {
         compose.setContent {
             PdshTheme(darkTheme = false) {
                 Box(Modifier.fillMaxSize()) {
-                    HomeDrawer(HomeDrawerFacts(), onClose = { closed = true }, onCreateSession = {})
+                    HomeDrawer(HomeDrawerFacts(), onClose = { closed = true }, onCreateSession = { true })
                 }
             }
         }
