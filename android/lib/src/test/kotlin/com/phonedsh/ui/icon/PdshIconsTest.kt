@@ -56,7 +56,12 @@ class PdshIconsTest {
     fun `every registered symbol has distinct nonempty vector geometry`() {
         val icons = PdshIcon.values()
         assertTrue("registry should cover the HomeSpec and settings symbol set", icons.size >= 35)
-        assertEquals("each entry maps to one distinct SF Symbol owner", icons.size, icons.map { it.sfSymbol }.toSet().size)
+        val unsourcedFallbacks = icons.filter { it.sourceOwner == null }.map { it.sfSymbol }
+        assertEquals("SF-only entries have distinct system symbol owners", unsourcedFallbacks.size, unsourcedFallbacks.toSet().size)
+        val sourceIds = icons.mapNotNull { it.sourceOwner }
+        assertEquals("asset source IDs are distinct", sourceIds.size, sourceIds.toSet().size)
+        val owners = icons.map { it.sourceOwner ?: "sf:${it.sfSymbol}" }
+        assertEquals("each entry has a unique source owner or SF fallback", owners.size, owners.toSet().size)
         val signatures = icons.map { icon ->
             val vector = PdshIcons.vector(icon, Color.Black)
             val paths = vector.root.toList().filterIsInstance<VectorPath>()
@@ -74,8 +79,60 @@ class PdshIconsTest {
 
     @Test
     fun `settings permission engine and runtime use their actual PR22 symbols`() {
+        assertEquals("doc.on.doc", PdshIcon.COPY.sfSymbol)
+        assertEquals("text.alignleft", PdshIcon.TEXT_ALIGN_LEFT.sfSymbol)
+        assertEquals("arrow.left.and.right", PdshIcon.ARROW_LEFT_RIGHT.sfSymbol)
         assertEquals("hand.raised", PdshIcon.HAND.sfSymbol)
         assertEquals("bolt.horizontal", PdshIcon.BOLT.sfSymbol)
         assertEquals("waveform.path.ecg", PdshIcon.WAVEFORM.sfSymbol)
+    }
+
+    @Test
+    fun `message atom assets have explicit owner IDs and their own tinted vector paths`() {
+        val expectedOwners = mapOf(
+            PdshIcon.THINK to "Assets.xcassets/DSHThink.imageset/DSHThink.svg",
+            PdshIcon.READ to "Assets.xcassets/DSHRead.imageset/DSHRead.svg",
+            PdshIcon.EDIT to "Assets.xcassets/DSHEdit.imageset/DSHEdit.svg",
+            PdshIcon.CODE to "Assets.xcassets/DSHCode.imageset/DSHCode.svg",
+            PdshIcon.SEARCH to "Assets.xcassets/DSHSearch.imageset/DSHSearch.svg",
+            PdshIcon.TERMINAL to "Assets.xcassets/DSHTerminal.imageset/DSHTerminal.svg",
+            PdshIcon.SPARKLE to "Assets.xcassets/DSHSparkle.imageset/DSHSparkle.svg",
+            PdshIcon.BRANCH to "Assets.xcassets/DSHBranch.imageset/DSHBranch.svg",
+            PdshIcon.DATABASE to "Assets.xcassets/DSHDatabase.imageset/DSHDatabase.svg",
+            PdshIcon.GAUGE to "Assets.xcassets/DSHGauge.imageset/DSHGauge.svg",
+        )
+        expectedOwners.forEach { (icon, owner) ->
+            assertEquals(icon.name, owner, icon.sourceOwner)
+            val vectorPaths = PdshIcons.vector(icon, Color(0xFF287A63)).root
+                .toList().filterIsInstance<VectorPath>()
+            assertTrue("${icon.name} renders its source asset paths", vectorPaths.isNotEmpty())
+            assertTrue(
+                "${icon.name} uses the caller tint",
+                vectorPaths.any { ((it.stroke ?: it.fill) as? SolidColor)?.value == Color(0xFF287A63) },
+            )
+        }
+        assertEquals("brain.head.profile", PdshIcon.THINK.sfSymbol)
+    }
+
+    @Test
+    fun `thinking atom composes at its caller size with the source-backed vector`() {
+        val tint = Color(0xFF287A63)
+        compose.setContent {
+            PdshIconView(
+                icon = PdshIcon.THINK,
+                size = 18.dp,
+                tint = tint,
+                contentDescription = "思考",
+                modifier = Modifier.testTag("pdsh.icon.think"),
+            )
+        }
+        compose.onNodeWithTag("pdsh.icon.think")
+            .assertExists()
+            .assertContentDescriptionEquals("思考")
+            .assertWidthIsEqualTo(18.dp)
+            .assertHeightIsEqualTo(18.dp)
+        val paths = PdshIcons.vector(PdshIcon.THINK, tint).root.toList().filterIsInstance<VectorPath>()
+        assertEquals(3, paths.size)
+        assertTrue(paths.any { it.fill is SolidColor })
     }
 }
