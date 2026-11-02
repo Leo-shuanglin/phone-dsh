@@ -116,10 +116,14 @@ class ModelProviderSettingsPageTest {
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
             .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
         compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
+        val nameField = compose.onNodeWithTag("pdsh.provider.field.${UiStrings.PROVIDER_FIELD_NAME}")
+        // The source keeps Test disabled until the new provider has a name, URL,
+        // model and valid model row; fill the required name before exercising it.
+        nameField.performTextInput("测试服务")
         compose.onNodeWithText(UiStrings.PROVIDER_TEST).performClick()
         assertTrue(requireNotNull(testedDraft).isNew)
         compose.onNodeWithText("测试中…").assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.CANCEL).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CANCEL).performScrollTo().assertIsDisplayed()
 
         // The host publishes only a safe result fact. Recomposition must retain
         // the inline editor and its typed draft; the key field is never replaced
@@ -135,9 +139,10 @@ class ModelProviderSettingsPageTest {
                 ),
             )
         }
-        compose.onNodeWithTag("pdsh.provider.test-result").assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.provider.test-result").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("密钥被服务拒绝（HTTP 401）。").assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PROVIDER_FIELD_NAME).assertIsDisplayed()
+        nameField.performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("测试服务").assertIsDisplayed()
     }
 
     /** A live host: the fold and the row callbacks update the projected state. */
@@ -304,13 +309,13 @@ class ModelProviderSettingsPageTest {
         // The editor replaces the list: the sheet is a full-surface panel here.
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertDoesNotExist()
         // The editor's toolbar: 测试 / 取消 / 保存, the contract's three actions.
-        compose.onNodeWithText(UiStrings.PROVIDER_TEST).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.CANCEL).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.SAVE).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PROVIDER_FIELD_NAME).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PROVIDER_DEFAULT_MODEL).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PROVIDER_REASONING_EFFORT).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PROVIDER_MODEL_CATALOG).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_TEST).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CANCEL).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.SAVE).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_FIELD_NAME).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_DEFAULT_MODEL).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_REASONING_EFFORT).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_MODEL_CATALOG).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_TEXT_INPUT).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_IMAGE_INPUT).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_DELETE_MODEL).performScrollTo().assertIsDisplayed()
@@ -381,10 +386,11 @@ class ModelProviderSettingsPageTest {
                 ),
             )
         }
-        compose.onNodeWithTag("pdsh.provider.save-result").assertIsDisplayed()
-        compose.onNodeWithText("本机存储不可写，本次未保存").assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.CANCEL).assertIsDisplayed()
-        nameField.assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.provider.save-result").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("本机存储不可写，本次未保存").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CANCEL).performScrollTo().assertIsDisplayed()
+        nameField.performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("用户服务").assertIsDisplayed()
     }
 
     @Test

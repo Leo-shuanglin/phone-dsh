@@ -25,7 +25,6 @@
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,7 +39,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -53,7 +52,6 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -425,12 +423,14 @@ public fun WorkspaceFoldersPage(
                             if (state.hasUnmeasuredValues) {
                                 item(key = "unmeasured") { UnmeasuredHint() }
                             }
-                            items(items = state.folders, key = { it.id }) { folder ->
+                            itemsIndexed(items = state.folders, key = { _, folder -> folder.id }) { index, folder ->
                                 FolderRow(
                                     folder = folder,
                                     onOpenFiles = onOpenFiles,
                                 )
-                                SessionHairline()
+                                if (index < state.folders.lastIndex) {
+                                    SessionHairline(modifier = Modifier.padding(horizontal = tokens.geometry.pageOuterMarginH))
+                                }
                             }
                         }
 
@@ -612,49 +612,38 @@ private fun WorkspaceCreateDialog(
 private fun FolderRow(folder: WorkspaceFolderView, onOpenFiles: (WorkspaceFolderView) -> Unit) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    val rowShape = RoundedCornerShape(HomeMetrics.LIST_CARD_RADIUS_PT.dp)
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = tokens.geometry.pageOuterMarginH)
-                .clip(rowShape)
-                .background(tokens.colors.surface, rowShape)
-                .border(1.dp, tokens.colors.borderList, rowShape)
-                .testTag(UiPageTags.WORKSPACE_ROW)
-                // Opening a folder's file list is a READ; `writable` gates creating,
-                // switching and deleting (and the host correctly reports NO for those
-                // on this App). Binding the two together made the row dead on every
-                // host that is honest about being read-only, which is every host —
-                // the drawer row was the only way left into the Files page.
-                .clickable(role = Role.Button, onClick = { onOpenFiles(folder) })
-                // HomeSpec's grouped row floor is 48 pt. The host can still make the
-                // row taller when its name or metadata wraps.
-                .defaultMinSize(minHeight = tokens.geometry.pageListRowMinHeight)
-                .padding(horizontal = tokens.geometry.pageOuterMarginH)
-                .semantics(mergeDescendants = true) {},
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(WORKSPACE_ROW_GAP_PT.dp),
-        ) {
-            BasicText(
-                text = folder.name,
-                style = type.rowLabel.copy(color = tokens.colors.primary),
-                maxLines = 1,
-                modifier = Modifier.weight(1f),
-            )
-            // iOS's HStack places the measured count on the same line, before the
-            // NavigationLink chevron (`NativeShell.swift:326-337`).
-            BasicText(
-                text = folder.sessionCount?.let { UiStrings.WORKSPACE_SESSION_COUNT.format(it) }
-                    ?: UiStrings.UNKNOWN,
-                style = type.subheadline.copy(color = tokens.colors.secondary),
-                maxLines = 1,
-            )
-            BasicText(
-                text = WORKSPACE_ROW_CHEVRON,
-                style = type.caption.copy(color = tokens.colors.tertiary),
-            )
-        }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(tokens.colors.surface)
+            .testTag(UiPageTags.WORKSPACE_ROW)
+            // Folder opening is a read; the grouped-list row stays available in
+            // the host's read-only mode.
+            .clickable(role = Role.Button, onClick = { onOpenFiles(folder) })
+            .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
+            .padding(horizontal = HomeMetrics.contentInset)
+            .semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(WORKSPACE_ROW_GAP_PT.dp),
+    ) {
+        BasicText(
+            text = folder.name,
+            style = type.body.copy(color = tokens.colors.primary),
+            maxLines = 1,
+            modifier = Modifier.weight(1f),
+        )
+        // iOS's HStack places the measured count on the same line before the
+        // navigation chevron (`NativeShell.swift:279-290`).
+        BasicText(
+            text = folder.sessionCount?.let { UiStrings.WORKSPACE_SESSION_COUNT.format(it) }
+                ?: UiStrings.UNKNOWN,
+            style = type.subheadline.copy(color = tokens.colors.secondary),
+            maxLines = 1,
+        )
+        BasicText(
+            text = WORKSPACE_ROW_CHEVRON,
+            style = type.caption.copy(color = tokens.colors.tertiary),
+        )
     }
 }
 
@@ -827,7 +816,6 @@ internal object WorkspaceFoldersPageTokens {
         UiTokenNames.COLORS_WARNING,
         UiTokenNames.COLORS_INPUT,
         UiTokenNames.COLORS_SURFACE,
-        UiTokenNames.COLORS_BORDER_LIST,
         UiTokenNames.RADIUS_CARD,
         UiTokenNames.TYPOGRAPHY_BODY,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
@@ -839,7 +827,6 @@ internal object WorkspaceFoldersPageTokens {
         UiTokenNames.SPACING_CARD_INSET,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_PAGE_LIST_ROW_MIN_HEIGHT,
         // L75: the toolbar capsule's two page-layer lengths. The white page fill and
         // the 34 pt title are the frame's (`pageFill` / `largeTitle`).
         UiTokenNames.GEOMETRY_PAGE_BAR_BUTTON_INSET_H,

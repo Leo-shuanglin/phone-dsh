@@ -298,6 +298,7 @@ class WebSearchSettingsPageTest {
         )
         scrollTo(UiStrings.WEB_SEARCH_SECTION_WARNING)
         compose.onNodeWithText(UiStrings.WEB_SEARCH_SECTION_WARNING).assertIsDisplayed()
+        scrollTo("本地引擎没有搜索能力")
         compose.onNodeWithText("本地引擎没有搜索能力").assertIsDisplayed()
         scrollTo(UiStrings.WEB_SEARCH_WARNING_TAIL)
         compose.onNodeWithText(UiStrings.WEB_SEARCH_WARNING_TAIL).assertIsDisplayed()

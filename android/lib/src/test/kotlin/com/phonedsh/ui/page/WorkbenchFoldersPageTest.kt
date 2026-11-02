@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -31,6 +32,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.SpecFixtures
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.PdshTheme
 import com.phonedsh.ui.tokenNames
@@ -424,7 +426,9 @@ class WorkspaceFoldersPageTest {
     fun `workspace rows do not expose Android-only switch and delete actions`() {
         showLive(snapshot)
         compose.onAllNodesWithTag(UiPageTags.WORKSPACE_ROW).assertCountEquals(2)
-        compose.onAllNodesWithTag(UiPageTags.WORKSPACE_ROW)[0].assertIsDisplayed()
+        compose.onAllNodesWithTag(UiPageTags.WORKSPACE_ROW)[0]
+            .assertIsDisplayed()
+            .assertHeightIsAtLeast(HomeMetrics.defaultMinListRowHeight)
         compose.onNodeWithTag(UiPageTags.WORKSPACE_SWITCH).assertDoesNotExist()
         compose.onNodeWithTag(UiPageTags.WORKSPACE_DELETE).assertDoesNotExist()
     }
