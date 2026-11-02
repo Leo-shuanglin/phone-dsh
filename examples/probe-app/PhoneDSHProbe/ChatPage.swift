@@ -548,12 +548,17 @@ struct ChatPage: View {
             #endif
             if model.isStarted { Task { await management.refresh() } }
             // The native surface owns the one host now, so a cold launch
-            // starts it directly instead of waiting for a tap.
+            // starts it directly instead of waiting for a tap. `autoRecover`
+            // lets a persisted `Failed` controller (D14) be acknowledged once
+            // at launch, so reopening the App is enough to get a working
+            // engine back.
             if !model.isStarted, !model.busy {
                 #if DEBUG
-                if previewItems == nil && PreviewScreen.requested == nil { Task { await model.start() } }
+                if previewItems == nil && PreviewScreen.requested == nil {
+                    Task { await model.start(autoRecover: true) }
+                }
                 #else
-                Task { await model.start() }
+                Task { await model.start(autoRecover: true) }
                 #endif
             }
             // Device-test automation (PDSH_CHAT_AUTOSTART / PDSH_CHAT_AUTOPROMPT).

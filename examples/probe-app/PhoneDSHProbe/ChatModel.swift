@@ -540,6 +540,9 @@ final class ChatModel {
     private var failedHost: PhoneDSHHost?
     /// True while ``failedHost`` waits for the user's acknowledgement.
     private(set) var engineNeedsReset = false
+    /// One automatic reset per process launch (see ``start(autoRecover:)``).
+    /// A fault that survives it keeps the manual button and stays fail-loud.
+    private var autoRecoveryAttempted = false
     private var foregroundResumeRequested = false
     private var backgroundParkRequested = false
     var canSend: Bool { harness != nil && sessionID != nil && transcriptReady && !busy && !parked && !hostLifecycleTransition }
@@ -901,8 +904,23 @@ final class ChatModel {
 
     // MARK: Lifecycle
 
-    func start() async {
+    /// Boots the host and adopts the persisted session.
+    ///
+    /// - Parameter autoRecover: the launch path passes `true`. Launching the
+    ///   App is the user's intent to have the engine running, so a boot that
+    ///   hits a persisted `Failed` controller (D14) acknowledges it once
+    ///   instead of parking the person on a button. Only one automatic attempt
+    ///   per process is made: a fault that survives it stays fail-loud.
+    func start(autoRecover: Bool = false) async {
         guard host == nil, !busy else { return }
+        // A persisted `Failed` controller refuses a plain boot. Every caller
+        // that asks for the engine — the launch path, the empty-state button,
+        // the composer — therefore goes through the acknowledgement instead of
+        // failing again on the same gate.
+        if engineNeedsReset, failedHost != nil {
+            await restartEngine()
+            return
+        }
         busy = true
         defer { busy = false }
         guard let bundle = WorkerBundleLocator.bundle() else {
@@ -1048,12 +1066,41 @@ final class ChatModel {
             // controller needs before it may boot again.
             failedHost = newHost
             engineNeedsReset = true
+            // The launch path retries through the reset once, after `busy` is
+            // released (this call still holds it). A second failure in the
+            // same launch keeps the manual button and the fail-loud state.
+            if autoRecover, !autoRecoveryAttempted {
+                autoRecoveryAttempted = true
+                Task { @MainActor [weak self] in
+                    await self?.restartEngineWhenIdle()
+                }
+            }
             return
         }
         await adoptRunningHost(newHost,
                                budgets: configuration.budgets,
                                selectedProfile: selectedProfile,
                                egressHosts: egressHosts)
+    }
+
+    /// Waits for the boot attempt that scheduled it to release `busy`, then
+    /// performs the launch-path reset.
+    private func restartEngineWhenIdle() async {
+        var waited = 0
+        while busy && waited < 40 {
+            try? await Task.sleep(for: .milliseconds(50))
+            waited += 1
+        }
+        await restartEngine()
+    }
+
+    /// Makes sure the engine is running before an operation that needs it —
+    /// a new message from the composer is the important one: the person
+    /// typed, so boot instead of dropping the send. `start()` routes a
+    /// persisted `Failed` controller through the reset path by itself.
+    private func ensureEngineRunning() async {
+        guard host == nil, !busy else { return }
+        await start(autoRecover: true)
     }
 
     /// The explicit user acknowledgement D14 requires before a persisted
@@ -1633,23 +1680,26 @@ final class ChatModel {
 
     // MARK: Unattended test hook
 
-    /// Launch-time automation for device tests driven from the Mac: with
-    /// `PDSH_CHAT_AUTOSTART=1` the page starts the host as soon as its anchor is
-    /// in a window and, when `PDSH_CHAT_AUTOPROMPT` is set, sends that prompt.
-    /// `devicectl device process launch --environment-variables` supplies
-    /// both; the model key still comes from the provider settings.
+    /// Launch-time automation for device tests driven from the Mac.
     ///
-    /// `PDSH_CHAT_AUTORESTART=1` adds the user-reset step: after a start that
-    /// left `engineNeedsReset`, it performs exactly what the
-    /// 「重新启动引擎」button does. A persisted `Failed` controller cannot boot
-    /// any other way, and `devicectl` cannot tap the button, so an unattended
-    /// run needs this to prove the escape hatch works on a device.
+    /// - `PDSH_CHAT_AUTOSTART=1` starts the host as soon as its anchor is in a
+    ///   window and, when `PDSH_CHAT_AUTOPROMPT` is set, sends that prompt.
+    /// - `PDSH_CHAT_AUTOSTOP=1` stops the host first and then sends the
+    ///   prompt: that is the "typing boots the engine" path a person hits after
+    ///   stopping it by hand, and `devicectl` cannot tap the composer.
+    /// - `PDSH_CHAT_AUTORESTART=1` reports the launch-path acknowledgement of a
+    ///   persisted `Failed` controller (`start(autoRecover:)`).
+    ///
+    /// `devicectl device process launch --environment-variables` supplies
+    /// these; the model key still comes from the provider settings.
     private var autostartDone = false
 
     func autostartIfRequested() {
         guard !autostartDone else { return }
         let environment = ProcessInfo.processInfo.environment
-        guard environment["PDSH_CHAT_AUTOSTART"] == "1" else { return }
+        let autostart = environment["PDSH_CHAT_AUTOSTART"] == "1"
+        let autostop = environment["PDSH_CHAT_AUTOSTOP"] == "1"
+        guard autostart || autostop else { return }
         autostartDone = true
         let prompt = environment["PDSH_CHAT_AUTOPROMPT"]
         let autoRestart = environment["PDSH_CHAT_AUTORESTART"] == "1"
@@ -1661,25 +1711,25 @@ final class ChatModel {
             }
             guard let self else { return }
             appendStatus("Autostart requested by the launch environment")
-            await start()
-            if autoRestart {
-                // The page starts the host on appear as well, and that start
-                // owns the gate: wait for it to settle before judging the
-                // outcome instead of reading `engineNeedsReset` too early.
-                for _ in 0..<40 {
-                    if !busy { break }
-                    try? await Task.sleep(for: .milliseconds(250))
-                }
-                if !isStarted, !engineNeedsReset, !busy {
-                    await start()
-                }
-                if engineNeedsReset {
-                    appendStatus("Auto restart requested by the launch environment")
-                    await restartEngine()
-                }
+            // The page starts the host on appear too; wait for that start to
+            // release the gate so this hook judges a settled state.
+            for _ in 0..<40 {
+                if !busy { break }
+                try? await Task.sleep(for: .milliseconds(250))
             }
-            if let prompt, !prompt.isEmpty, isStarted {
-                await send(prompt)
+            if autostart, !isStarted {
+                await start(autoRecover: true)
+            }
+            if autoRestart {
+                appendStatus("Auto restart: engineNeedsReset=\(engineNeedsReset) started=\(isStarted)")
+            }
+            if autostop, isStarted {
+                await stop()
+                appendStatus("Autostop requested by the launch environment; the send below must boot the engine")
+            }
+            if let prompt, !prompt.isEmpty {
+                let sent = await send(prompt)
+                appendStatus("Autostart prompt delivered=\(sent) started=\(isStarted)")
             }
         }
     }
@@ -1693,7 +1743,14 @@ final class ChatModel {
     /// 重发时把 `reusing` 传进来:仍用原来那条气泡,不再长出新的一行。
     func send(_ text: String, attachments: [HarnessAttachment], reusing itemID: String? = nil) async -> Bool {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (!prompt.isEmpty || !attachments.isEmpty), canSend, let harness, let sessionID else { return false }
+        guard !prompt.isEmpty || !attachments.isEmpty else { return false }
+        // Sending is the clearest signal that the engine is wanted. Boot it
+        // here (the transcript stays visible from the cache meanwhile) instead
+        // of silently dropping the message because nothing is running.
+        if !isStarted, !busy {
+            await ensureEngineRunning()
+        }
+        guard canSend, let harness, let sessionID else { return false }
         busy = true
         defer { busy = false }
         let (fingerprint, requestID) = Self.retryableRequest(operation: "prompt", text: prompt,
