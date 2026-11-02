@@ -17,6 +17,84 @@ The 402 pt frame is not a number this script owns: it is read out of
 emulator display and the harness assertion cannot drift apart. To change the
 frame, change `UiMetrics.kt`.
 
+> **PR22 authority note.** The prepared PR22 baseline is **430 × 932 pt**. The
+> capture profiles below still describe Android's historical **402 × 874 @3**
+> frame; the capture harness and the token/spec work are separate packages.
+> Until those land, treat a 402-frame capture as Android's own regression
+> baseline, not as PR22 parity evidence. This bootstrap package does not change
+> a pixel profile or claim a cross-platform visual comparison.
+
+## Prerequisites: task-local JDK 17 + Android SDK
+
+The Gradle tree needs JDK 17 and Android SDK platform 35 / build-tools 35.0.0 /
+platform-tools / cmdline-tools. `bootstrap-android-toolchain.sh` provisions them
+under a task-local directory, never in a shared machine service:
+
+```bash
+# Install/repair. Idempotent: an existing JDK 17 and command-line tools are
+# reused, SDK licences are accepted non-interactively, and installer stdout and
+# stderr stay visible.
+bash android/tools/bootstrap-android-toolchain.sh
+
+# Verify only. This never installs into the SDK and never writes
+# local.properties: java/javac must be 17 and sdkmanager must be able to list
+# platform-tools, platform 35 and build-tools 35.0.0. It prints the resolved
+# paths.
+bash android/tools/bootstrap-android-toolchain.sh --check
+```
+
+The default target is `<checkout-parent>/task-writable`: the JDK lands in
+`jdk-17/`, the SDK in `android-sdk/`, and downloads in `downloads/`. (`--check`
+prints the exact resolved paths on the current host.) Overrides:
+
+| variable | effect |
+|---|---|
+| `PDSH_TOOLCHAIN_DIR` | task-local root (default: checkout-parent `task-writable`) |
+| `ANDROID_HOME` | use/install packages in an existing SDK root instead of `android-sdk/` |
+| `PDSH_JAVA_HOME` | use an explicit JDK 17 (the script fails if it is not 17) |
+| `JAVA_HOME` | reused only when it is already JDK 17 |
+| `PDSH_LOCAL_PROPERTIES` | output path for install mode (default: `android/local.properties`) |
+| `PDSH_JDK_URL`, `PDSH_CMDLINE_TOOLS_URL`, `PDSH_CURL` | pinned archives / downloader override |
+
+Install mode writes `android/local.properties` (gitignored) with one
+`sdk.dir=<resolved SDK>` line and preserves unrelated keys in that file. A
+download, extraction, licence or package failure prints the exact command and
+its exit code and exits with that code; the script does not write
+`local.properties` until every package verifies. `--check` is separate from
+install and performs no download.
+
+After the bootstrap, export the paths the check prints:
+
+```bash
+export JAVA_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/jdk-17"
+export ANDROID_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/android-sdk"
+export GRADLE_USER_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/gradle-home"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+```
+
+`GRADLE_USER_HOME` is part of the task-local rule: the prepared Linux host's
+`$HOME` may be read-only, and the Gradle wrapper must not try to write a shared
+`~/.gradle`.
+
+Required commands for this package (installation and verification stay
+separate):
+
+```bash
+bash android/tools/bootstrap-android-toolchain.sh
+bash android/tools/bootstrap-android-toolchain.sh --check
+cd android && ./gradlew --version --no-daemon
+cd .. && python3 android/tools/structure_check.py --root .
+cd .. && python3 -m unittest discover -s android/tools -p 'test_*.py'
+```
+
+`test_bootstrap_android_toolchain.py` executes the real script in temporary
+directories. Only the external downloader (a fake `curl` serving local fixture
+archives) and the extracted fake `sdkmanager` are stubs; no test contacts the
+network or installs into the real toolchain. The tests cover default/override
+path resolution, check-mode output, `local.properties` generation and key
+preservation, idempotency, and propagation of download/licence/package exit
+codes.
+
 ## Which suites each profile runs
 
 The APK carries every test class, so each profile passes an explicit `-e class`

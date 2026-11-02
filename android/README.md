@@ -2,9 +2,10 @@
 # PDSH Android 适配树
 
 > **状态：可构建、可测试、可在模拟器上跑通 boot→HELLO。**
-> 12 个 Gradle 模块：11 个 Swift 模块由 **7 个模块镜像**（合并规则见下），另 5 个不镜像 Swift
+> 13 个 Gradle 模块：11 个 Swift 模块由 **7 个模块镜像**（合并规则见下），另 6 个不镜像 Swift
 > （`:platform` 承载 SPI、`:platform-android` 承载 SPI 的 Android 实现、`:domain` 承载设备能力契约
-> 与手机权限读数、`:lib` 是可发布 AAR、`:app` 是 probe-app）。`:domain` 的 **DomainStore 已删除**（2026-11-01：
+> 与手机权限读数、`:lib` 是可发布 AAR、`:app` 是 probe-app、`:lib-consumer-test` 以文件依赖消费
+> 发布出来的 AAR）。`:domain` 的 **DomainStore 已删除**（2026-11-01：
 > 1,019 行零生产消费者，它要服务的 session/memory/task 持久化在 Android 上尚未实现；`:dsh` 已有
 > `HostStateStore` 与 `JournalStore` 两条写路径，留着它只会让下一个人以为 P6 已交付。
 > **104,603 行 Kotlin 主代码 + 49,261 行单测 + 9,660 行 instrumented**（`wc -l`，**快照 2026-11-01
@@ -15,6 +16,42 @@
 
 本文的每个数字都来自本文「门禁与数字」一节列出的那条命令；**没有跑过的数字写「未测量」**，
 不从别的报告里转抄。
+
+## 工具链引导（task-local，不写共享机器目录）
+
+本树不把 JDK/SDK 预装进 `PATH`、共享 SDK 目录或其它机器级位置。`android/tools/bootstrap-android-toolchain.sh`
+把 **JDK 17**、Android SDK **platform 35 / build-tools 35.0.0 / platform-tools / cmdline-tools**
+装到本 checkout 的 `task-writable/` 兄弟目录（默认 `<checkout 的父目录>/task-writable`）；
+`PDSH_TOOLCHAIN_DIR`、`ANDROID_HOME`、`JAVA_HOME` 已设置时按脚本打印的解析结果复用。
+安装与校验是两条独立命令：
+
+```bash
+# 1) 安装/修复（幂等；非交互接受 SDK licence；所有下载器输出都打印）
+bash android/tools/bootstrap-android-toolchain.sh
+
+# 2) 只校验：不下载、不安装包、不写 local.properties；java/javac 必须是 17，
+#    sdkmanager 必须能列出三个包
+bash android/tools/bootstrap-android-toolchain.sh --check
+
+# 3) 后续 Gradle/测试命令使用第 2 步打印的 JAVA_HOME / ANDROID_HOME；
+#    Gradle 缓存也放在 task-writable 下，避免写只读 HOME。
+export JAVA_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/jdk-17"
+export ANDROID_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/android-sdk"
+export GRADLE_USER_HOME="${PDSH_TOOLCHAIN_DIR:-$(cd .. && pwd)/task-writable}/gradle-home"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+cd android && ./gradlew --version --no-daemon
+```
+
+结构门禁与工具单测（不联网、不需要 Gradle）：
+
+```bash
+python3 android/tools/structure_check.py --root .
+python3 -m unittest discover -s android/tools -p 'test_*.py'
+```
+
+`bootstrap-android-toolchain.sh` 的可覆盖变量、失败时的退出码/完整命令，以及
+`test_bootstrap_android_toolchain.py` 使用的假下载器，见
+[`android/tools/README.md`](tools/README.md)。
 
 ## 两种壳：产品壳 vs 诊断壳
 
@@ -53,7 +90,7 @@
 
 ```text
 android/
-├── settings.gradle.kts        # 12 个 Gradle 模块 + version catalog
+├── settings.gradle.kts        # 13 个 Gradle 模块 + version catalog
 ├── build.gradle.kts           # 根 plugins（apply false）
 ├── gradle.properties          # AndroidX / R 类 / JVM 最小开关
 ├── gradle/libs.versions.toml  # AGP/Kotlin/Compose 占位 pin（全部 unverified）
@@ -67,7 +104,8 @@ android/
 ├── net/                       # loopback + gateway
 ├── controller/ engine/ dsh/
 ├── shell/                     # JNI 薄包装 pdsh-ffi 的统一 C ABI：rg / jaq（见 shell/README.md）
-└── tools/                     # structure_check.py + test-count.sh + unittest
+├── lib-consumer-test/           # 以文件依赖消费 lib-release.aar 的消费者探针
+└── tools/                     # bootstrap + structure_check.py + test-count.sh + unittest
 ```
 
 ## Swift 模块 → Kotlin 包 → Gradle 模块（11/11）
@@ -124,8 +162,8 @@ android/
 （旧表里 `:engine 92 = 46 × 2`、`:platform-android 22 = 11 × 2` 就是相加造成的虚高）。
 
 > **快照警告**：上表是 2026-10-31 的 `test-count.sh` 输出，2026-11-01 **未复跑**。当时 `:lib` 有
-> **21** 个 `*Page.kt`，当前是 **36** 个；所以 `:lib` 的 287 和合计 1,095 对应旧树，不能和「门禁与数字」
-> #10 的 36 个页面混着引用。要更新测试数，先重跑 `./gradlew test --rerun-tasks --no-daemon --continue`，
+> **21** 个 `*Page.kt`，prepared baseline 是 **34** 个；所以 `:lib` 的 287 和合计 1,095 对应旧树，不能和「门禁与数字」
+> #10 的 34 个页面混着引用。要更新测试数，先重跑 `./gradlew test --rerun-tasks --no-daemon --continue`，
 > 再跑 `bash android/tools/test-count.sh`（陷阱 #7）。
 
 ### instrumented（**本轮未测量**）
@@ -151,7 +189,7 @@ android/
 
 | # | 命令 | 结果 |
 | --- | --- | --- |
-| 1 | `python3 android/tools/structure_check.py --root .` | 9/9 项通过：12 个 include=磁盘、12/12 build 文件、11 个 Swift 模块各映射一次、250 个生产 `.kt` 无占位、0 处绝对路径、8 个 `# unverified pin` |
+| 1 | `python3 android/tools/structure_check.py --root .` | 14/14 项通过：13 个 include=磁盘、13/13 build 文件、13 个模块清单、34 个 `*Page.kt`（含 `ChatPage.kt`）、11 个 Swift 模块各映射一次、370 个生产 `.kt` 无占位、0 处绝对路径、`local.properties` 已忽略、8 个 `# unverified pin` |
 | 2 | `python3 spec/v1/tools/spec_golden.py --full` | **73 个文件**，0 error |
 | 3 | `python3 spec/v1/tools/gateway_check.py --root .` | **30 条向量**，0 error（credential-injection=3 header-strip=3 redirect-scope=8 egress-classification=5 response-redaction=7 failure-surface=4） |
 | 4 | `python3 spec/platform/tools/platform_check.py --root .` | 8 个文件、**24 条白名单**、0 failure（classes: hardware-absent=1 os-forced=22 policy-forbidden=1） |
@@ -159,8 +197,8 @@ android/
 | 6 | `python3 spec/host/v1/tools/host_check.py --root .` | **41 个文件**，0 error |
 | 7 | `bash android/tools/test-count.sh` | 11 个模块、**1,095 条测试**、0 failing（见上表） |
 | 8 | `python3 -m unittest discover -s android/tools -p 'test_*.py'` | **19 条**，OK（0.5 s） |
-| 9 | `grep -c 'include(":' android/settings.gradle.kts` | **12** |
-| 10 | `ls android/lib/src/main/kotlin/com/phonedsh/ui/page/*Page.kt \| wc -l` | **36** 个页面（2026-11-01） |
+| 9 | `grep -c 'include(":' android/settings.gradle.kts` | **13** |
+| 10 | `ls android/lib/src/main/kotlin/com/phonedsh/ui/page/*Page.kt \| wc -l` | **34** 个页面（prepared PR22/PR14 baseline，结构门禁的下限） |
 | 11 | `find shell/crates -name "*.rs" \| xargs wc -l \| tail -1` | **27,742** 行 Rust（`:shell` 依赖的加速器实现，见 `shell/README.md`） |
 | 12 | `find android -path "*/src/main/*" -name "*.kt" \| xargs wc -l \| tail -1` | **104,603** 行 Kotlin 主代码（2026-11-01 20:45 工作树） |
 | 13 | `find android -path "*/src/test/*" -name "*.kt" \| xargs wc -l \| tail -1` | **49,261** 行 JVM 单测（2026-11-01 20:45） |
@@ -170,6 +208,6 @@ android/
 
 - `structure_check.py` 的 `kotlin-stubs` 检查只禁「占位代码」（`TODO()`、not-implemented 抛错），不禁止真实逻辑。
 - 版本 pin 全部标 `# unverified pin`；本轮不联网校验，换成本机解析出的版本后才可去掉标注。
-- 仓库只允许 `google()` 与 `mavenCentral()`；不放 `local.properties`、不硬编码绝对路径。
+- 仓库只允许 `google()` 与 `mavenCentral()`；`local.properties` 只由 bootstrap 生成且必须保持 gitignored，不提交、不硬编码绝对路径。
 - 测试数只认 `test-count.sh` 的输出；引数字前先确认那次 `./gradlew test` 是 `--rerun-tasks` 跑的
   （陷阱 #7）。
