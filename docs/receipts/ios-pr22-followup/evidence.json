@@ -48,5 +48,27 @@
       ],
       "sha256": "f09574c240f7cfd959e5ed3522243040ac13b356bb5b2aa765767ed280acf4f7"
     }
-  ]
+  ],
+  "queueFollowup": {
+    "sourceBeforeSha256": "b3a6ab4ccccc57be22b9fc1b7e9feb5f5c1036de89cb300229bf38309e011807",
+    "sourceAfterSha256": "ab66020e977bfa85e7aea7dd31035a0a13eade0e02f047324f46f443b59dc3f3",
+    "scope": "Disable delete and steer for local queue rows without a durable item id; existing guards and durable actions retained",
+    "simulatorBuild": "PASS",
+    "pythonTests": {
+      "tests": 89,
+      "failures": 0
+    },
+    "queueInteractionUITests": "NOT_RUN",
+    "strictAndroidParity": {
+      "result": "FAIL",
+      "existingDifferences": 173
+    },
+    "baselineCheck": {
+      "known": 173,
+      "new": 0,
+      "stale": 0,
+      "whitelisted": 1
+    },
+    "providerUITestSourceCommit": "df20c5bd411034655a44f14cdb91cd308edd9a9c"
+  }
 }

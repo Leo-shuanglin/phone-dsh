@@ -32,3 +32,22 @@ device validation. See `evidence.json` for source/capture hashes and exact scope
 | Before | After |
 |---|---|
 | ![Before](provider-add-before.png) | ![After](provider-add-after.png) |
+
+## Queue follow-up
+
+Local queued messages can appear before the durable inbox projection returns an
+item ID. Delete and Steer previously looked enabled, but their closures returned
+without doing anything when that ID was missing. They now share Edit's explicit
+unavailable reason until the durable row arrives. Existing durable-row actions
+are unchanged.
+
+- Final iOS simulator Debug build: PASS.
+- Full UI Python suite: 89 PASS; 33 generated page contracts current.
+- Explicit baseline check: 173 known / 0 new / 0 stale; strict parity remains
+  FAIL with the same 173 Android differences. No baseline entry was added.
+- Token/source check and diff whitespace check: PASS.
+- Queue interaction UI tests: NOT_RUN. The three native provider UI tests above
+  cover the earlier provider fix at df20c5b; they are not queue coverage.
+
+The two generated ChatPage/runtime contract files and the manual Submit Answers
+source anchor were refreshed for the two-line source shift.
