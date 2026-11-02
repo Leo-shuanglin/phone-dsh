@@ -152,6 +152,27 @@ class UiCheckTests(unittest.TestCase):
         self.write_tokens(document)
         self.assert_fails(run_checker(self.root), "absolute font sizes are forbidden")
 
+    # -- 4b. PR22 composition facts the generic rules cannot infer ----------
+
+    def test_composer_composition_has_no_border(self) -> None:
+        # PR22 composerCard is HomeSpec.surface + homeComposerShadow only.
+        document = self.tokens()
+        composer = document["signatureSurfaces"]["composer"]["tokens"]
+        self.assertFalse([token for token in composer if token.startswith("stroke.")])
+
+    def test_tool_row_keeps_the_hairline(self) -> None:
+        document = self.tokens()
+        self.assertIn("stroke.hairline", document["signatureSurfaces"]["toolRow"]["tokens"])
+
+    def test_thinking_pill_uses_the_process_font(self) -> None:
+        # ShimmerText is called with the process/list-item font, never the 13pt
+        # default; the sweep is motion.shimmer, the text is typography.process.
+        document = self.tokens()
+        thinking = document["signatureSurfaces"]["thinkingPill"]["tokens"]
+        self.assertIn("typography.process", thinking)
+        self.assertIn("motion.shimmer", thinking)
+        self.assertNotIn("typography.shimmer", document["typography"]["styles"])
+
     # -- 5. provenance is dropped for one token -----------------------------
 
     def test_missing_provenance_fails(self) -> None:

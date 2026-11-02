@@ -38,16 +38,15 @@ ChatPage 契约重抽取属于 package A，当前基线在该测试上报 stale 
 
 checker 强制：tokens 过 schema；6 个签名面的 token 引用全部存在且含页面层几何；每个叶子 token 都有 `file:line`
 来源，且该行必须仍存在并包含 token 名/值（页面层长度可用 `expect` 片段；来源过期即失败）；颜色、字号、间距必须
-来自 `HomeSpec.swift`；仍被 PR22 使用的组件 token（ShimmerText 字体、0.5 hairline、发送/复制动效）保留 owning
+来自 `HomeSpec.swift`；仍被 PR22 使用的组件 token（0.5 hairline、ShimmerText 动效、发送/复制动效）保留 owning
 page/component 出处；只有页面层几何/动效可标 `tier: page`；WCAG 对比度（正文 4.5 / 大字与非文本 3.0，已登记债
 在 `--strict` 下失败）；8 条平台差异与 §5 逐条对齐并带 type-role 映射；页面清单覆盖基线里真实存在的每个 `*Page`；
 README ≤ 345 行（PR22 新增类型/几何表，cap 319→345，规则变更记录在 `tools/ui_check.py`，不删页面）；数据文件里
 不出现外链、邮箱、绝对用户路径。
 
 `tokens.json` 是 token 的唯一来源；`golden/tokens.golden.json` 只是 schema 示例，不是规范来源。来源分级：
-**颜色一律来自 `HomeSpec.swift`；字号/行高/间距默认来自 `HomeSpec.swift`；PR22 仍在用的 ShimmerText 字体来自
-`DSHComponents.swift`，0.5 hairline 与动效来自 owning component/page；圆角与页面层几何允许来自 `HomeSpec.swift`
-或 owning page**，页面层标 `tier: page`；取不到就记 `unmeasured`，不写假值。
+**颜色、字号/行高与间距一律来自 `HomeSpec.swift`；0.5 hairline 与动效来自 owning component/page；圆角与页面层几何
+允许来自 `HomeSpec.swift` 或 owning page**，页面层标 `tier: page`；取不到就记 `unmeasured`，不写假值。
 
 ## 1. 页面清单
 
@@ -195,9 +194,9 @@ Parity is asserted on **two different object graphs**，混用两者就是端口
 |---|---|---|---|---|---|---|---|
 | 气泡 | `colors.userBubble` `colors.textPrimary` | `typography.body` | `radius.bubble` |  | `spacing.paragraphGap` | `geometry.contentInset` `geometry.bubblePaddingH` `geometry.bubblePaddingV` `geometry.bubbleMaxWidthRatio` |  |
 | 工具行 | `colors.surface` `colors.textSecondary` `colors.textTertiary` `colors.borderList` | `typography.process` `typography.listItem` | `radius.listCard` | `stroke.hairline` | `spacing.disclosureGap` | `geometry.processRowHeight` `geometry.processIcon` `geometry.listRowHeight` | `motion.disclosure` |
-| thinking_pill | `colors.textSecondary` `colors.textTertiary` | `typography.process` `typography.shimmer` |  |  |  | `geometry.processRowHeight` `geometry.processIcon` | `motion.disclosure` `motion.shimmer` |
+| thinking_pill | `colors.textSecondary` `colors.textTertiary` | `typography.process` |  |  |  | `geometry.processRowHeight` `geometry.processIcon` | `motion.disclosure` `motion.shimmer` |
 | 审批卡 | `colors.surface` `colors.textPrimary` `colors.textSecondary` `colors.primaryButton` `colors.primaryButtonInk` `colors.borderList` | `typography.navTitle` `typography.body` | `radius.listCard` |  |  | `geometry.cardPadding` `geometry.cardOuterMarginH` `geometry.cardOuterMarginV` `geometry.primaryButtonHeight` `geometry.secondaryButtonHeight` `geometry.cardAreaMaxHeightRatio` |  |
-| composer | `colors.surface` `colors.page` `colors.primaryButton` `colors.primaryButtonInk` `colors.userBubble` `colors.inputPlaceholder` `colors.iconMuted` | `typography.body` | `radius.composerOpen` | `stroke.hairline` |  | `geometry.composerOpenMinHeight` `geometry.sendButton` `geometry.composerIcon` `geometry.chromeInset` `geometry.composerMaxHeight` `geometry.composerControlHeight` |  |
+| composer | `colors.surface` `colors.page` `colors.primaryButton` `colors.primaryButtonInk` `colors.userBubble` `colors.inputPlaceholder` `colors.iconMuted` | `typography.body` | `radius.composerOpen` |  |  | `geometry.composerOpenMinHeight` `geometry.sendButton` `geometry.composerIcon` `geometry.chromeInset` `geometry.composerMaxHeight` `geometry.composerControlHeight` |  |
 | fail-loud 横幅 | `colors.page` `colors.textPrimary` `colors.textSecondary` | `typography.body` `typography.listItem` |  |  |  | `geometry.bannerGap` `geometry.bannerInsetH` `geometry.bannerInsetV` |  |
 
 **颜色（HomeSpec 430×932pt，light / dark）**
@@ -228,7 +227,6 @@ Parity is asserted on **two different object graphs**，混用两者就是端口
 | `typography.body` | 16 / 24 | 400 | body | `HomeSpec.swift:47` |
 | `typography.process` | 15 / 24 | 400 | body | `HomeSpec.swift:49` |
 | `typography.listItem` | 14 / 22 | 400 | body | `HomeSpec.swift:50` |
-| `typography.shimmer` | 13 / null | 400 | label | `DSHComponents.swift:12`（PR22 仍在用的 ShimmerText 默认字体；行高未测） |
 | `typography.tabLabel` | 10.5 / null | 400 | label | `HomeSpec.swift:52`（行高未测，不编造） |
 
 字体映射：两端都不打包字体；iOS 系统 SF Pro/PingFang SC，Android 系统无衬线（Roboto 或厂商替代）；等宽回退见

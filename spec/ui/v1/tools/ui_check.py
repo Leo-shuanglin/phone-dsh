@@ -105,10 +105,10 @@ ABSOLUTE_USER_PATH = "/" + "Users" + "/"
 # are no longer accepted provenance for a colour/type/spacing token: leaving them
 # accepted is how the superseded values survived the first port.
 AUTHORITY_FILE = "HomeSpec.swift"
-# HomeSpec is the authority for the six product roles. A small set of component
-# tokens that PR22 still renders (the ShimmerText default font) keeps its owning
-# component file as provenance; geometry/radius stay on HomeSpec or a page.
-TYPE_SOURCE_FILES = (AUTHORITY_FILE, "DSHComponents.swift")
+# HomeSpec is the authority for the product roles and for spacing. The ShimmerText
+# effect is motion-only in PR22 (the text uses the process font), so there is no
+# component typography exception; geometry/radius stay on HomeSpec or a page.
+TYPE_SOURCE_FILES = (AUTHORITY_FILE,)
 GEOMETRY_SOURCE_FILES = (AUTHORITY_FILE,)
 
 
