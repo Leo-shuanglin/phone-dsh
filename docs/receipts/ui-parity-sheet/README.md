@@ -1,5 +1,21 @@
 # iOS ↔ Android side-by-side sheets
 
+> **Read this first (L86, 2026-11-02): the Android half is not the App.**
+> These PNGs are rendered by the instrumented harness from *hand-authored*
+> `ChatScreenState` / `SessionsScreenState` samples in
+> `android/lib/src/androidTest/**`, not by the running product. The real app was
+> captured on a device in the same 402×874 pt @3× frame and put next to both
+> halves: on the home screen the sample sits **6.27 %** from iOS while the real
+> App sat **79–80 %** from *both* (after the L86 home rebuild it sits 10.34 %
+> from iOS — see the report); on 定时任务 the sample is 14 % from iOS and the
+> real page 92 %; on 设置 the sample is *further* from iOS (47.87 %) than the real
+> page (13.70 %). Five registered states that the samples draw
+> (`page-sessions-empty/default/many/ungrouped`, `page-sessions-schedules`) are
+> unreachable on the real host, because it reports no workspace folders and no
+> schedule snapshot.
+> **A difference on these sheets is a fact about the samples until a real-device
+> capture says otherwise.** See [`real-device/REPORT.md`](real-device/REPORT.md).
+
 One PNG per registered parity state: the **iOS baseline on the left**, the
 **Android parity capture on the right**, both resampled by *one* factor and
 top-aligned. One sheet is `<state>__ios-left.png`, where `<state>` is the

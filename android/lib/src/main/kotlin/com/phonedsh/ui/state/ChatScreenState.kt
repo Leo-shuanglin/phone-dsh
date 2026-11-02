@@ -625,7 +625,13 @@ public data class ChatScreenState(
 
             fun flushRun() {
                 val builder = run ?: return
-                rows.add(builder.build())
+                // A row with nothing to say is not a row. On a restored session the
+                // host's result node can arrive without a name and without output
+                // (the call/result pair lost its `callId`), and the page painted a
+                // bare `工具调用 ·` line for each of them — two per call, on the
+                // real transcript. iOS only draws a line it can name.
+                val built = builder.build()
+                if (built.entries.isNotEmpty()) rows.add(built)
                 run = null
             }
 
@@ -1056,7 +1062,12 @@ public data class ChatScreenState(
             }
         }
 
-        fun build(): ChatRow.ToolRun = ChatRow.ToolRun(id = firstNodeID, entries = entries.values.toList())
+        fun build(): ChatRow.ToolRun = ChatRow.ToolRun(
+            id = firstNodeID,
+            entries = entries.values.filterNot { entry ->
+                entry.title.isEmpty() && entry.summary.isEmpty() && entry.body.isEmpty()
+            },
+        )
     }
 }
 

@@ -54,6 +54,9 @@
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -1074,14 +1077,20 @@ private fun SettingsBarAction(
     modifier: Modifier = Modifier,
 ) {
     val tokens = LocalUiTokens.current
+    // ios-settings.png (measured): 完成 is a **white capsule with black ink**
+    // (x 302.7-389.7, y 60.0-104.7), not a bare blue text button. The blue word
+    // read as a link and lost the control's shape on the real page.
     BasicText(
         text = label,
-        style = settingsLabelStyle().copy(color = tokens.colors.accent),
+        style = settingsLabelStyle().copy(color = tokens.colors.primary),
         maxLines = 1,
         modifier = modifier
+            .clip(CircleShape)
+            .background(tokens.colors.input)
+            .border(tokens.stroke.hairline, tokens.colors.borderLight, CircleShape)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = label }
-            .padding(tokens.spacing.iconText),
+            .padding(tokens.spacing.cardInset),
     )
 }
 
@@ -1439,6 +1448,7 @@ private const val NOTE_FONT_SCOPE: String = "仅影响会话内容、代码和�
 internal object SettingsPageTokens {
     val refs: List<String> = listOf(
         UiTokenNames.COLORS_ACCENT,
+        UiTokenNames.COLORS_BORDER_LIGHT,
         UiTokenNames.COLORS_GROUPED_BACKGROUND,
         UiTokenNames.COLORS_INPUT,
         UiTokenNames.COLORS_PRIMARY,
@@ -1447,7 +1457,9 @@ internal object SettingsPageTokens {
         UiTokenNames.COLORS_TERTIARY,
         UiTokenNames.COLORS_WARNING,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
+        UiTokenNames.SPACING_CARD_INSET,
         UiTokenNames.SPACING_ICON_TEXT,
+        UiTokenNames.STROKE_HAIRLINE,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
     )
 }

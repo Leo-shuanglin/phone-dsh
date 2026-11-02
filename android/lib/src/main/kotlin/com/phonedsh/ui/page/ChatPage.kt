@@ -63,6 +63,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -116,6 +117,7 @@ import com.phonedsh.ui.projection.CanonicalJson
 import com.phonedsh.ui.state.AccessModeOption
 import com.phonedsh.ui.state.ChatEmpty
 import com.phonedsh.ui.state.ChatPhase
+import com.phonedsh.ui.state.ChatRow
 import com.phonedsh.ui.state.ChatScreenState
 import com.phonedsh.ui.state.ComposerCommand
 import com.phonedsh.ui.state.GoalBarState
@@ -264,6 +266,26 @@ public fun ChatPage(
     // device a platform dialog would be fine. The content, the two verbs and the
     // trimming are the iOS alert's (`ChatPage.swift` `.alert("重命名会话")`).
     var renaming by remember { mutableStateOf(false) }
+    // iOS `ChatPage.swift:145-154 sessionTitle`: a real session name wins; a
+    // conversation that already has a user turn reads 当前会话; only a fresh one
+    // reads 新会话. The page used to fall back to the *product name* ("PDSH"), so
+    // every real conversation was headed with the app's own name — a word the
+    // baseline never paints there. A title that is the store's generic default is
+    // not a name (iOS checks the same two strings).
+    val headerTitle = remember(title, state.rows) {
+        val generic = title.isEmpty() ||
+            title == UiStrings.NEW_SESSION ||
+            title == UiStrings.SESSION_TITLE_NEW ||
+            title.equals("new conversation", ignoreCase = true) ||
+            title.equals("conversation", ignoreCase = true)
+        if (!generic) {
+            title
+        } else if (state.rows.any { it is ChatRow.User }) {
+            UiStrings.SESSIONS_CURRENT
+        } else {
+            UiStrings.NEW_SESSION
+        }
+    }
     Box(modifier = modifier.fillMaxSize().then(surface).testTag(UiTags.CHAT_ROOT)) {
     Column(
         modifier = Modifier
@@ -273,7 +295,7 @@ public fun ChatPage(
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
     ) {
         ChatHeader(
-            title = title,
+            title = headerTitle,
             runStatus = state.runStatus,
             onOpenSessions = onOpenSessions,
             onStartRename = { renaming = true },
@@ -389,7 +411,7 @@ public fun ChatPage(
     }
     if (renaming) {
         RenameSessionOverlay(
-            title = title,
+            title = headerTitle,
             onCancel = { renaming = false },
             onSave = { name ->
                 renaming = false
@@ -557,12 +579,12 @@ private fun ChatHeader(
                     // iOS disables the rename for a session that is not open.
                     if (title.isNotEmpty()) onStartRename()
                 }
-                .semantics { contentDescription = title.ifEmpty { PRODUCT_NAME } }
+                .semantics { contentDescription = title }
                 .testTag(UiPageTags.CHAT_HEADER_TITLE),
             contentAlignment = Alignment.Center,
         ) {
             BasicText(
-                text = title.ifEmpty { PRODUCT_NAME },
+                text = title,
                 style = type.headline.copy(color = tokens.colors.primary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1166,14 +1188,28 @@ private fun ChatTranscript(
     // user drag can set it, and being near the tail again clears it (iOS
     // `userScrolledAway` + `nearBottom`).
     var scrolledAway by remember { mutableStateOf(false) }
+    // True while this composable itself is placing the viewport. A programmatic
+    // scroll is not a reader gesture: without this flag the open-at-tail scroll
+    // counts as "the reader scrolled away", the pill appears over a transcript
+    // nobody touched, and the next rows update refuses to follow the tail.
+    var autoScrolling by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress to nearBottom }.collect { (scrolling, near) ->
+            if (autoScrolling) return@collect
             if (scrolling && !near) scrolledAway = true
             if (near) scrolledAway = false
         }
     }
-    LaunchedEffect(state.rows.size) {
+    // The tail is keyed on the rows' *identity*, not only their count: a restored
+    // session can replace its history with re-derived row ids of the same length,
+    // and a LazyColumn that cannot match a previous key starts again at the top.
+    // Keyed on `size` that replacement was invisible, so the transcript stayed on
+    // its first message (measured on the phone, 2026-11-02).
+    val rowsKey = remember(state.rows) {
+        state.rows.joinToString(separator = "\u0000") { it.id }
+    }
+    LaunchedEffect(rowsKey) {
         if (scrolledAway || state.rows.isEmpty()) return@LaunchedEffect
         // A session opened with history composes its rows and its layout in the
         // same frame, so `totalItemsCount` is still 0 when this effect starts and a
@@ -1181,10 +1217,24 @@ private fun ChatTranscript(
         // capture showed the first row while iOS showed the last). iOS opens at the
         // tail: wait for the list's first layout, then land on the last row.
         val total = snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
-        // The offset past the last row's height clamps to the list's own end, so the
-        // viewport lands on the *tail* of the last (possibly viewport-taller) answer
-        // instead of its first line.
-        listState.scrollToItem(total - 1, Int.MAX_VALUE)
+        autoScrolling = true
+        try {
+            // Land on the last row, then scroll the remaining distance so a last
+            // row taller than the viewport shows its *end* (iOS opens at the tail
+            // of the answer, not at its first line). Measuring the remainder is
+            // what `scrollToItem(Int.MAX_VALUE)` was trying to do by overflowing
+            // the offset, which lands nowhere on a real device.
+            listState.scrollToItem(total - 1)
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            if (last != null && last.index >= total - 1) {
+                val past = last.offset + last.size -
+                    (info.viewportEndOffset - info.afterContentPadding)
+                if (past > 0) listState.scrollBy(past.toFloat())
+            }
+        } finally {
+            autoScrolling = false
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -1247,15 +1297,19 @@ private fun ChatTranscript(
                 }
             }
             if (scrolledAway && !nearBottom) {
-                Box(
+                Row(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = tokens.spacing.cardInset)
                         .testTag(UiPageTags.CHAT_BACK_TO_LATEST)
                         // iOS draws this pill as a capsule (94 x 30 pt, radius =
-                        // height / 2), not as a card corner.
+                        // height / 2) with a **near-white glass fill** and a 0.5 pt
+                        // border (`VISUAL.md` back-to-latest row). Filling it with
+                        // `selector` — the page's own #F2F3F5 — made the capsule
+                        // disappear against the transcript and left the label
+                        // floating mid-air on a real device.
                         .clip(CircleShape)
-                        .background(tokens.colors.selector)
+                        .background(tokens.colors.input)
                         .border(
                             width = tokens.stroke.hairline,
                             color = tokens.colors.border,
@@ -1273,7 +1327,16 @@ private fun ChatTranscript(
                             horizontal = tokens.spacing.cardInset,
                             vertical = tokens.spacing.codeToolbar,
                         ),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
                 ) {
+                    // iOS is `Label("回到最新", systemImage: "arrow.down")`: the glyph
+                    // is part of the control, and without it the pill reads as a
+                    // stray link rather than a "jump to the tail" action.
+                    BasicText(
+                        text = BACK_TO_LATEST_GLYPH,
+                        style = LocalUiType.current.subheadline.copy(color = tokens.colors.accent),
+                    )
                     BasicText(
                         text = UiStrings.BACK_TO_LATEST,
                         // iOS label is 17 pt in the accent; the nearest declared
@@ -2502,7 +2565,6 @@ internal object ChatPageTokens {
 
 /** The `kind` of ask that submits an answer instead of allowing an action. */
 private const val QUESTION: String = "question"
-private const val PRODUCT_NAME: String = "PDSH"
 private const val MENU_GLYPH: String = "☰"
 private const val MORE_GLYPH: String = "⋯"
 private const val LOCK_GLYPH: String = "⛨"
@@ -2516,6 +2578,9 @@ private const val SELECTED_GLYPH: String = "◉"
 
 /** The menu's "this one is in force" mark (iOS `Label(title, systemImage: "checkmark")`). */
 private const val CHECK_GLYPH: String = "✓"
+
+/** iOS `arrow.down` on the 回到最新 capsule. */
+private const val BACK_TO_LATEST_GLYPH: String = "↓"
 
 /** The goal phases the bar translates (the host's wire words). */
 private const val PHASE_ACTIVE: String = "active"

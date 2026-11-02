@@ -120,7 +120,7 @@ class SessionsParityScreenshotTest : ScreenshotTestBase() {
      */
     @Test
     fun pageSessionsSchedules() {
-        check(ParityState.PAGE_SESSIONS_SCHEDULES.status == ParityStatus.CAPTURED) {
+        check(ParityState.PAGE_SESSIONS_SCHEDULES.status != ParityStatus.PENDING) {
             "PAGE_SESSIONS_SCHEDULES is not registered as captured"
         }
         setCapturedContent {
@@ -182,7 +182,7 @@ class SessionsParityScreenshotTest : ScreenshotTestBase() {
         drawer: Boolean = true,
         build: () -> SessionsScreenState,
     ) {
-        check(state.status == ParityStatus.CAPTURED) {
+        check(state.status != ParityStatus.PENDING) {
             "${state.androidName} is registered but not captured yet (owner: ${state.owner})"
         }
         val screenState = build()

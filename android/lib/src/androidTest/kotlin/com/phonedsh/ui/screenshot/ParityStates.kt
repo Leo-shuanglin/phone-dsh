@@ -202,8 +202,8 @@ enum class ParityState(
         iosRoute = "sessions",
         screen = "SessionsPage",
         owner = "Sessions lane",
-        status = ParityStatus.CAPTURED,
-        note = "0 sessions, 0 folders, engine off: the big empty block in the FULL 402 pt window, which is the container the iOS `.sessions` route mounts the page in (NativeShell.swift:842). The block centres on 201 and the CTA runs 16 → 385.7. Same state in the 320 pt drawer is page-sessions-nothing; since L73 the two captures differ exactly where the two iOS shots do",
+        status = ParityStatus.UNREACHABLE,
+        note = "unreachable on a device: the page needs workspace facts and HostNavFacts.kt sets workspaces = null, so a real host draws the 未知 folder block instead of the 0-folder empty block. Sample: 0 sessions, 0 folders, engine off in the FULL 402 pt window (NativeShell.swift:842). Same state in the 320 pt drawer is page-sessions-nothing; since L73 the two captures differ exactly where the two iOS shots do",
     ),
     PAGE_SESSIONS_MANY(
         androidName = "page-sessions-many",
@@ -211,8 +211,8 @@ enum class ParityState(
         iosRoute = "sessions.many",
         screen = "SessionsPage",
         owner = "Sessions lane",
-        status = ParityStatus.CAPTURED,
-        note = "40 sessions dealt across 2 folders (20 each) from the baseline's own preview generator",
+        status = ParityStatus.UNREACHABLE,
+        note = "unreachable on a device: 40 sessions dealt across 2 folders needs workspace facts the host does not report (HostNavFacts.kt workspaces = null), so the folder sections cannot be drawn on a phone",
     ),
     PAGE_SESSIONS_EMPTY(
         androidName = "page-sessions-empty",
@@ -220,8 +220,8 @@ enum class ParityState(
         iosRoute = "sessions.empty",
         screen = "SessionsPage",
         owner = "Sessions lane",
-        status = ParityStatus.CAPTURED,
-        note = "0 sessions, 2 folders, engine off: each folder renders its 还没有会话 block",
+        status = ParityStatus.UNREACHABLE,
+        note = "unreachable on a device: 0 sessions across 2 folders — the folder sections need workspace facts the host does not report (HostNavFacts.kt workspaces = null). This is the state L86 measured as 79.22 % of the frame away from the real first-run home",
     ),
     PAGE_SESSIONS_NOTHING(
         androidName = "page-sessions-nothing",
@@ -229,8 +229,8 @@ enum class ParityState(
         iosRoute = "sessions.nothing",
         screen = "SessionsPage",
         owner = "Sessions lane",
-        status = ParityStatus.CAPTURED,
-        note = "0 sessions, 0 folders inside the baseline's DrawerPreview (.frame(width: 320), NativeShell.swift:872-879): the block centres on 160 and the CTA runs 16 → 304, so this capture is NOT page-sessions-default — the two differ by the container width, exactly like the two iOS PNGs",
+        status = ParityStatus.UNREACHABLE,
+        note = "unreachable on a device: 0 folders is a workspace fact the host does not report (HostNavFacts.kt workspaces = null), so a phone draws the 未知 block here; the sample is 0 sessions / 0 folders in the baseline's DrawerPreview (.frame(width: 320), NativeShell.swift:872-879): the block centres on 160 and the CTA runs 16 → 304, so this capture is NOT page-sessions-default — the two differ by the container width, exactly like the two iOS PNGs",
     ),
     PAGE_SESSIONS_UNGROUPED(
         androidName = "page-sessions-ungrouped",
@@ -238,8 +238,8 @@ enum class ParityState(
         iosRoute = "sessions.ungrouped",
         screen = "SessionsPage",
         owner = "Sessions lane",
-        status = ParityStatus.CAPTURED,
-        note = "3 sessions and no folder, so the ungrouped rows sit under the new-session row",
+        status = ParityStatus.UNREACHABLE,
+        note = "unreachable on a device: 3 sessions and *no folder* is a workspace fact; the host reports none, so a phone draws the 未知 folder block instead of the ungrouped rows",
     ),
     PAGE_SESSIONS_ERROR(
         androidName = "page-sessions-error",
@@ -256,8 +256,8 @@ enum class ParityState(
         iosRoute = "sessions.schedules",
         screen = "NativeAutomationPage",
         owner = "Automation lane (L11)",
-        status = ParityStatus.CAPTURED,
-        note = "L11 aligned the page to NativeAutomationPage.swift: 34 pt large title, ✕ + 刷新 leading, 新建 trailing, empty block with the 50 pt CTA, then the 需要处理 section with the host's raw error",
+        status = ParityStatus.UNREACHABLE,
+        note = "unreachable on a device: the host reports no schedule snapshot, so NativeAutomationPage draws 定时任务状态未知 / 未知 and no 新建任务 CTA (measured 91.87 % of the frame away from this sample). Sample keeps L11's alignment: 34 pt large title, ✕ + 刷新 leading, 新建 trailing, empty block with the 50 pt CTA, then 需要处理 with the host's raw error",
     ),
 
     // --------------------------------------------------------------- settings
@@ -484,6 +484,21 @@ enum class ParityStatus(
 
     /** Registered and owned, not captured yet: the page lane supplies the state. */
     PENDING("pending"),
+
+    /**
+     * Captured, but **the running app cannot produce this state**: the host does
+     * not report the facts the page needs, so the capture is a sample the device
+     * will never show.
+     *
+     * The value exists because "captured" was doing two jobs. A state that is
+     * faithful to the page but unreachable from the host used to read exactly
+     * like one the app really draws, and a reviewer reading the sheet had no way
+     * to tell them apart. L86 measured the difference on a device (see
+     * `docs/receipts/ui-parity-sheet/real-device/REPORT.md`): the folder-section
+     * states need workspace facts `HostNavFacts.kt` sets to `null`, and the
+     * automation state needs a schedule snapshot the host never reports.
+     */
+    UNREACHABLE("unreachable"),
 }
 
 /**

@@ -225,9 +225,17 @@ internal fun HostSessionsScreen(
  *     by touch;
  *   * the 模型服务 onboarding card. A fresh install has no key, and the product
  *     answer is to say so and open the settings page that can fix it — not to
- *     leave a probe full of D14 state as the first screen;
- *   * the empty state. An empty list is not a product page: the person sees what
- *     this app is and which control to use next, in the baseline's own words.
+ *     leave a probe full of D14 state as the first screen. This card is the one
+ *     thing on the face the baseline does not have (iOS keeps its key in the
+ *     system store, so it has nothing to ask); it stays because the Android
+ *     host really does need a key before the first turn, and it now sits on the
+ *     baseline's page instead of replacing it.
+ *
+ * An empty read renders the same list page the 会话 route renders — the
+ * baseline's root screen is the list, and its empty state is that list with
+ * nothing in it (search, 新建会话, the workspace section, 添加工作文件夹,
+ * 已归档). The host-owned identity card that used to replace it here was
+ * Android-only, and it cost the home screen the whole of that structure.
  *
  * @param engine the composition root (its session read and its clock).
  * @param state the engine lifecycle state (the 新建会话 blocked reason).
@@ -252,16 +260,17 @@ internal fun HostHomeScreen(
     onOpenChat: () -> Unit = {},
 ) {
     val tokens = PdshThemeValues.tokens
-    val sessionSnapshot by engine.sessions.collectAsState()
     // The home is where the app opens, so the first journal read belongs here:
-    // the snapshot decides between the list and the empty state, and neither can
-    // be drawn before it is taken.
+    // no row can be drawn before it is taken.
     LaunchedEffect(Unit) { engine.refreshSessions() }
-    val handOff: (String) -> Unit = sessionHandOff(onHostNotice)
     Column(
         Modifier
             .fillMaxSize()
-            .background(tokens.colors.selector)
+            // The home's own chrome is the page's paper, not a second grey: the
+            // sessions page below paints `colors.input`, and a `selector` column
+            // behind the header left a full-width seam where the two met on a
+            // phone (measured 2026-11-02). iOS's root screen is one white page.
+            .background(tokens.colors.input)
             // One status-bar reading for the whole face. The strip is consumed
             // here so the sessions page below it does not add the same inset a
             // second time (the rule the shell's note bar already follows), and
@@ -273,28 +282,26 @@ internal fun HostHomeScreen(
             ProviderSetupCard(onOpenModelProvider = onOpenModelProvider)
         }
         Box(Modifier.weight(1f)) {
-            // A read still running, or a read that found rows: the list page.
-            // Read-and-empty is the third state, and it is this face's own.
-            if (sessionSnapshot.waiting || sessionSnapshot.sessions.isNotEmpty()) {
-                HostSessionsScreen(
-                    engine = engine,
-                    state = state,
-                    turn = turn,
-                    onBack = null,
-                    onHostNotice = onHostNotice,
-                    onOpenChat = onOpenChat,
-                    refreshOnEnter = false,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                HomeEmptyState(
-                    providerConfigured = providerConfigured,
-                    onNewSession = {
-                        engine.newChatSession()
-                        onOpenChat()
-                    },
-                )
-            }
+            // The list page is the home, empty or not. It used to be replaced by
+            // `HomeEmptyState` (a centered "Phone DSH / 运行在手机端的 DeepSeek
+            // Harness / 还没有会话" card) whenever the read found nothing, and that
+            // card is a screen the iOS baseline does not have: on a fresh install
+            // the Android home was missing the search field, the 新建会话 row, the
+            // workspace section and the 已归档 row, i.e. 79-80 % of the frame
+            // (measured on a device against both the iOS baseline and this PR's own
+            // parity sample — `docs/receipts/ui-parity-sheet/real-device/REPORT.md`).
+            // The baseline's root screen is the sessions list, and its empty state
+            // is the list with nothing in it, so the same page now draws both.
+            HostSessionsScreen(
+                engine = engine,
+                state = state,
+                turn = turn,
+                onBack = null,
+                onHostNotice = onHostNotice,
+                onOpenChat = onOpenChat,
+                refreshOnEnter = false,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }
@@ -378,71 +385,6 @@ private fun ProviderSetupCard(onOpenModelProvider: () -> Unit) {
             )
             Spacer(Modifier.height(tokens.spacing.cardInset))
             HomeButton(label = UiStrings.PROVIDER_SETUP_ACTION, primary = true, onClick = onOpenModelProvider)
-        }
-    }
-}
-
-/**
- * The read-and-empty state: what this app is, and which control to use next.
- *
- * Both sentences are the baseline's: the identity pair is the chat page's ready
- * state (`READY_TITLE` / `READY_SUBTITLE`) and the list pair is the drawer's own
- * empty copy (`SESSIONS_EMPTY` / `SESSIONS_EMPTY_HINT`). No new copy was written
- * for this face — the two platforms say the same words.
- *
- * The one control is 新建会话, and it is handed off like the list page's own row
- * gestures: this host has no session write, so the shell's note bar says so
- * instead of the button silently doing nothing.
- *
- * @param providerConfigured when `false` the card above already carries 去配置
- *  模型服务, and a second call to action here would compete with it.
- * @param onNewSession hand the 新建会话 gesture to the shell.
- */
-@Composable
-private fun HomeEmptyState(providerConfigured: Boolean, onNewSession: () -> Unit) {
-    val tokens = PdshThemeValues.tokens
-    val type = PdshThemeValues.type
-    val shape = RoundedCornerShape(tokens.radius.card)
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(
-                horizontal = tokens.geometry.cardOuterMarginH,
-                vertical = tokens.geometry.cardOuterMarginV,
-            ),
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(shape)
-                .background(tokens.colors.input)
-                .border(tokens.stroke.hairline, tokens.colors.border, shape)
-                .padding(tokens.geometry.cardPadding),
-        ) {
-            BasicText(
-                text = UiStrings.READY_TITLE,
-                style = type.headline.copy(color = tokens.colors.primary),
-            )
-            Spacer(Modifier.height(tokens.spacing.jsonStack))
-            BasicText(
-                text = UiStrings.READY_SUBTITLE,
-                style = type.caption.copy(color = tokens.colors.secondary),
-            )
-            Spacer(Modifier.height(tokens.spacing.cardInset))
-            BasicText(
-                text = UiStrings.SESSIONS_EMPTY,
-                style = type.secondary.copy(color = tokens.colors.primary),
-            )
-            Spacer(Modifier.height(tokens.spacing.badgeInsetV))
-            BasicText(
-                text = UiStrings.SESSIONS_EMPTY_HINT,
-                style = type.caption.copy(color = tokens.colors.secondary),
-            )
-            if (providerConfigured) {
-                Spacer(Modifier.height(tokens.spacing.cardInset))
-                HomeButton(label = UiStrings.SESSION_NEW, primary = true, onClick = onNewSession)
-            }
         }
     }
 }

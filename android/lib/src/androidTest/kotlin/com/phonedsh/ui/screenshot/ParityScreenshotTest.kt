@@ -101,7 +101,7 @@ class ParityScreenshotTest : ScreenshotTestBase() {
         }
         assertEquals(
             "a captured state keeps its iOS name with the kind prefix swapped in",
-            states.filter { it.status == ParityStatus.CAPTURED }
+            states.filter { it.status != ParityStatus.PENDING }
                 .map { it.androidName to it.iosFile }
                 .filterNot { (android, ios) -> matchesNamingRule(android, ios) },
             emptyList<Pair<String, String>>(),
@@ -248,7 +248,7 @@ class ParityScreenshotTest : ScreenshotTestBase() {
     }
 
     private fun captureParity(state: ParityState): Unit {
-        check(state.status == ParityStatus.CAPTURED) {
+        check(state.status != ParityStatus.PENDING) {
             "${state.androidName} is registered but not captured yet (owner: ${state.owner})"
         }
         setCapturedContent { parityContent(state) }
