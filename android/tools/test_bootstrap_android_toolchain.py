@@ -29,6 +29,17 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().with_name("bootstrap-android-toolchain.sh")
 GRADLE_SHA256 = "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78"
+GRADLE_WRAPPER_URL = "https://downloads.gradle.org/distributions/gradle-8.13-bin.zip"
+
+
+def wrapper_cache_hash(url: str) -> str:
+    value = int.from_bytes(hashlib.md5(url.encode("utf-8")).digest(), "big")
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    out = ""
+    while value:
+        value, remainder = divmod(value, 36)
+        out = digits[remainder] + out
+    return out or "0"
 
 FAKE_CURL = r"""#!/usr/bin/env bash
 set -u
@@ -166,8 +177,13 @@ def write_sdk_archive(path: Path):
 
 
 def write_gradle_archive(path: Path):
+    launcher = zipfile.ZipInfo("gradle-8.13/bin/gradle")
+    launcher.external_attr = 0o755 << 16
+    launcher.create_system = 3
+    jar = zipfile.ZipInfo("gradle-8.13/lib/gradle-launcher-8.13.jar")
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("gradle-8.13/bin/gradle", "fake gradle launcher\n")
+        archive.writestr(launcher, "fake gradle launcher\n")
+        archive.writestr(jar, "fake launcher jar\n")
 
 
 def write_jdk_home(home: Path, java_text: str = FAKE_JAVA, javac_text: str = FAKE_JAVAC):
@@ -461,9 +477,46 @@ class BootstrapToolchainTests(unittest.TestCase):
         self.assertEqual(len(gradle_lines), 2, gradle_lines)
         self.assertIn("gradle-primary", gradle_lines[0])
         self.assertIn("--retry 0", gradle_lines[0])
+        self.assertIn("--max-time 30", gradle_lines[0])
         self.assertIn("gradle-mirror", gradle_lines[1])
         self.assertIn("--retry 3", gradle_lines[1])
         self.assertIn("downloaded and verified", output)
+
+    def test_gradle_user_home_override_seeds_the_same_cache(self):
+        custom = self.root / "custom-gradle-home"
+        proc = self.run_script(PDSH_GRADLE_USER_HOME=str(custom))
+        output = self.combined(proc)
+        self.assertEqual(proc.returncode, 0, output)
+        seeded = custom / "wrapper" / "dists" / "gradle-8.13-bin"
+        self.assertTrue(
+            any(
+                (child / "gradle-8.13" / "bin" / "gradle").is_file()
+                for child in seeded.iterdir()
+            ),
+            output,
+        )
+        check = self.run_script("--check", PDSH_GRADLE_USER_HOME=str(custom))
+        self.assertEqual(check.returncode, 0, self.combined(check))
+        self.assertIn("GRADLE_USER_HOME={}".format(custom), self.combined(check))
+
+    def test_seed_repairs_incomplete_unpacked_gradle(self):
+        cache = self.root / "broken-gradle-home"
+        directory = (
+            cache
+            / "wrapper"
+            / "dists"
+            / "gradle-8.13-bin"
+            / wrapper_cache_hash(GRADLE_WRAPPER_URL)
+        )
+        (directory / "gradle-8.13").mkdir(parents=True)
+        (directory / "gradle-8.13-bin.zip.ok").write_text("", encoding="utf-8")
+        proc = self.run_script(PDSH_GRADLE_USER_HOME=str(cache))
+        output = self.combined(proc)
+        self.assertEqual(proc.returncode, 0, output)
+        self.assertTrue((directory / "gradle-8.13" / "bin" / "gradle").is_file())
+        self.assertTrue(
+            (directory / "gradle-8.13" / "lib" / "gradle-launcher-8.13.jar").is_file()
+        )
 
     def test_valid_java_home_is_reused_without_jdk_download(self):
         java_home = self.root / "jdk17"

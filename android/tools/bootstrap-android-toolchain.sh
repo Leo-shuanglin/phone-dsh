@@ -31,9 +31,12 @@
 #   PDSH_GRADLE_FALLBACK_URLS
 #                       space-separated transport mirrors, accepted only when the
 #                       pinned SHA-256 matches (empty disables)
+#   PDSH_GRADLE_USER_HOME
+#                       Gradle cache root override (first in the same precedence
+#                       chain the wrapper uses)
 #   PDSH_GRADLE_PRIMARY_TIMEOUT
-#                       bounded window for the official Gradle endpoint before a
-#                       checksum-verified mirror is tried (default 180)
+#                       single-attempt window for the official Gradle endpoint
+#                       before a checksum-verified mirror is tried (default 30)
 #   PDSH_CONNECT_TIMEOUT / PDSH_DOWNLOAD_TIMEOUT
 #                       finite curl limits in seconds (defaults 20 / 1800)
 #
@@ -138,6 +141,17 @@ else
   SDK_DIR="$TOOLCHAIN_DIR/android-sdk"
 fi
 LOCAL_PROPERTIES="$(trim_trailing_slash "$(abs_path "${PDSH_LOCAL_PROPERTIES:-$ANDROID_DIR/local.properties}")")"
+if [ -n "${PDSH_GRADLE_USER_HOME:-}" ]; then
+  GRADLE_USER_HOME_RESOLVED="$(trim_trailing_slash "$(abs_path "$PDSH_GRADLE_USER_HOME")")"
+elif [ -n "${GRADLE_USER_HOME:-}" ]; then
+  GRADLE_USER_HOME_RESOLVED="$(trim_trailing_slash "$(abs_path "$GRADLE_USER_HOME")")"
+elif [ -n "${XDG_CACHE_HOME:-}" ]; then
+  GRADLE_USER_HOME_RESOLVED="$(trim_trailing_slash "$(abs_path "$XDG_CACHE_HOME")")/pdsh/gradle"
+elif [ -n "${HOME:-}" ]; then
+  GRADLE_USER_HOME_RESOLVED="$(trim_trailing_slash "$(abs_path "$HOME")")/pdsh/gradle"
+else
+  die "no writable Gradle home: set PDSH_GRADLE_USER_HOME, GRADLE_USER_HOME, XDG_CACHE_HOME or HOME"
+fi
 SDKMANAGER="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
 DOWNLOADS="$TOOLCHAIN_DIR/downloads"
 GRADLE_DIST="$DOWNLOADS/$GRADLE_DIST_NAME"
@@ -220,15 +234,15 @@ java_version() { "$1/bin/java" -version 2>&1 | sed -n '1p'; }
 javac_version() { "$1/bin/javac" -version 2>&1 | sed -n '1p'; }
 
 jdk_problem() {
-  local home="$1"
+  local jdk_root="$1"
   local java_v=""
   local javac_v=""
-  if [ ! -x "$home/bin/java" ] || [ ! -x "$home/bin/javac" ]; then
-    printf 'missing java and/or javac under %s/bin\n' "$home"
+  if [ ! -x "$jdk_root/bin/java" ] || [ ! -x "$jdk_root/bin/javac" ]; then
+    printf 'missing java and/or javac under %s/bin\n' "$jdk_root"
     return 0
   fi
-  java_v="$(java_major "$home" || true)"
-  javac_v="$(javac_major "$home" || true)"
+  java_v="$(java_major "$jdk_root" || true)"
+  javac_v="$(javac_major "$jdk_root" || true)"
   if [ "$java_v" != "17" ] || [ "$javac_v" != "17" ]; then
     printf 'java=%s javac=%s (both must be 17)\n' "${java_v:-unknown}" "${javac_v:-unknown}"
     return 0
@@ -543,7 +557,7 @@ print_paths() {
   say "SDKMANAGER=$SDKMANAGER"
   say "LOCAL_PROPERTIES=$LOCAL_PROPERTIES"
   say "GRADLE_DIST=$GRADLE_DIST"
-  say "GRADLE_USER_HOME=${GRADLE_USER_HOME:-${XDG_CACHE_HOME:-$HOME}/pdsh/gradle}"
+  say "GRADLE_USER_HOME=$GRADLE_USER_HOME_RESOLVED"
 }
 
 check_toolchain() {
@@ -622,7 +636,7 @@ download_gradle() {
   # The official endpoint 307s to GitHub. Give that hop a bounded window before
   # trying a checksum-verified mirror; a stalled GitHub connection must not burn
   # the full download budget.
-  ( download_verified "$GRADLE_URL" "$GRADLE_DIST" sha256 "$GRADLE_DOWNLOAD_SHA256" "${PDSH_GRADLE_PRIMARY_TIMEOUT:-180}" 0 )
+  ( download_verified "$GRADLE_URL" "$GRADLE_DIST" sha256 "$GRADLE_DOWNLOAD_SHA256" "${PDSH_GRADLE_PRIMARY_TIMEOUT:-30}" 0 )
   rc=$?
   set -e
   if [ "$rc" -eq 0 ]; then
@@ -651,8 +665,9 @@ seed_gradle_wrapper_cache() {
   local wrapper="$ANDROID_DIR/gradle/wrapper/gradle-wrapper.properties"
   local wrapper_url=""
   local hash=""
-  local gradle_home=""
   local directory=""
+  local extracted=""
+  local launcher=""
   [ -f "$GRADLE_DIST" ] || return
   [ -f "$wrapper" ] || return
   wrapper_url="$(sed -nE 's/^distributionUrl=(.*)$/\1/p' "$wrapper" | sed 's/\\:/:/g' | sed -n '1p')"
@@ -675,15 +690,25 @@ while value:
 sys.stdout.write(out or "0")
 PYHASH
 )" || return
-  gradle_home="${GRADLE_USER_HOME:-${XDG_CACHE_HOME:-$HOME}/pdsh/gradle}"
-  directory="$gradle_home/wrapper/dists/$GRADLE_DIST_BASENAME/$hash"
+  directory="$GRADLE_USER_HOME_RESOLVED/wrapper/dists/$GRADLE_DIST_BASENAME/$hash"
+  extracted="$directory/gradle-$GRADLE_VERSION"
+  launcher="$extracted/lib/gradle-launcher-$GRADLE_VERSION.jar"
   mkdir -p "$directory"
   if [ ! -f "$directory/$GRADLE_DIST_NAME" ] || ! cmp -s "$GRADLE_DIST" "$directory/$GRADLE_DIST_NAME"; then
     cp -- "$GRADLE_DIST" "$directory/$GRADLE_DIST_NAME"
   fi
-  if [ ! -d "$directory/gradle-$GRADLE_VERSION" ]; then
-    unzip -q "$GRADLE_DIST" -d "$directory"
+  if [ -d "$extracted" ] && { [ ! -x "$extracted/bin/gradle" ] || [ ! -s "$launcher" ]; }; then
+    warn "removing incomplete extracted Gradle at $extracted"
+    rm -rf -- "$extracted"
+    rm -f -- "$directory/$GRADLE_DIST_NAME.ok"
   fi
+  if [ ! -d "$extracted" ]; then
+    rm -rf -- "$extracted"
+    rm -f -- "$directory/$GRADLE_DIST_NAME.ok"
+    unzip -q "$GRADLE_DIST" -d "$directory" || die "failed to unpack Gradle into $directory"
+  fi
+  [ -x "$extracted/bin/gradle" ] || die "Gradle seed has no executable bin/gradle: $extracted"
+  [ -s "$launcher" ] || die "Gradle seed has no gradle-launcher-$GRADLE_VERSION.jar: $extracted"
   : > "$directory/$GRADLE_DIST_NAME.ok"
   ok "seeded Gradle wrapper cache: $directory"
 }

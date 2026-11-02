@@ -111,14 +111,11 @@ tasks.withType<Test>().configureEach {
 //   3. the scenario catalog (`assets/scenario-catalog/catalog.json`), copied
 //      from `scripts/ci/scenarios/catalog.json`, so the device lane reads the
 //      same document the JVM and macOS lanes read instead of a second copy.
-val workerBundleDirectory: File = providers.gradleProperty("pdsh.testkit.workerBundleDir").orNull
-    ?.let { File(it).let { path -> if (path.isAbsolute) path else rootProject.file(it) } }
-    ?: repoRoot.resolve("examples/probe-app/Bundle/worker")
+val workerBundleDirectory: File = repoRoot.resolve("examples/probe-app/Bundle/worker")
 val workerBundleAssetDirectory: File =
     layout.buildDirectory.dir("generated/worker-bundle").get().asFile
-val androidJniLibrary: File = providers.gradleProperty("pdsh.testkit.androidJniLibrary").orNull
-    ?.let { File(it).let { path -> if (path.isAbsolute) path else rootProject.file(it) } }
-    ?: repoRoot.resolve("shell/target/aarch64-linux-android/debug/libpdsh_jni.so")
+val androidJniLibrary: File =
+    repoRoot.resolve("shell/target/aarch64-linux-android/debug/libpdsh_jni.so")
 val androidTestJniDirectory: File =
     layout.buildDirectory.dir("generated/test-jniLibs").get().asFile
 
@@ -183,8 +180,7 @@ fun requireElfLibrary(file: File) {
 // actions (including doFirst) for NO-SOURCE. The fail-loud checks therefore live
 // in always-running validators that the staging tasks depend on. Only the
 // Android-test packaging graph reaches these validators; a pure JVM test does
-// not, which is the preBuild split this module needs. The `-Ppdsh.testkit.*`
-// overrides relocate test fixtures without bypassing any content check.
+// not, which is the preBuild split this module needs.
 val verifyWorkerBundleForTests = tasks.register("verifyWorkerBundleForTests") {
     description = "Fails if the device test Worker bundle is missing, empty or incomplete"
     group = "verification"
@@ -198,6 +194,30 @@ val verifyAndroidTestJni = tasks.register("verifyAndroidTestJni") {
     group = "verification"
     doLast {
         requireElfLibrary(androidJniLibrary)
+    }
+}
+
+// Test-only fixture entry points; NOT dependencies of any Android-test merge or
+// packaging task. Production staging always uses the canonical paths above, so
+// no Gradle property can replace the shipped inputs. Both tasks share the real
+// validators.
+tasks.register("verifyWorkerBundleForTestsFixture") {
+    description = "Test-only: validate a fixture Worker directory through the device-test validator"
+    group = "verification"
+    doLast {
+        val raw = providers.gradleProperty("pdsh.test.testkitWorkerBundleDir").orNull
+            ?: error("pass -Ppdsh.test.testkitWorkerBundleDir=<path> for the test-only Worker validator")
+        requireWorkerBundleForTests(File(raw))
+    }
+}
+
+tasks.register("verifyAndroidTestJniFixture") {
+    description = "Test-only: validate a fixture .so through the device-test JNI validator"
+    group = "verification"
+    doLast {
+        val raw = providers.gradleProperty("pdsh.test.testkitAndroidJni").orNull
+            ?: error("pass -Ppdsh.test.testkitAndroidJni=<path> for the test-only JNI validator")
+        requireElfLibrary(File(raw))
     }
 }
 

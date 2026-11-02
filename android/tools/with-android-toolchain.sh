@@ -30,8 +30,9 @@
 # no Linux-only assumption. It never sources local.properties or any other
 # untrusted file; keys are read with sed.
 #
-# JAVA_TOOL_OPTIONS gains -Duser.home=$HOME so Robolectric's SDK/Java writes go
-# to a writable home instead of a read-only container default. Existing options
+# JAVA_TOOL_OPTIONS gains -Duser.home=<writable home> so Robolectric's SDK/Java
+# writes go to a writable home instead of a read-only container default. HOME is
+# preferred, then XDG_CACHE_HOME, then the resolved Gradle home. Existing options
 # are preserved. The wrapper never installs anything: run
 # android/tools/bootstrap-android-toolchain.sh first (or pass explicit paths).
 
@@ -82,10 +83,10 @@ javac_major() {
 }
 
 jdk_is_17() {
-  local home="$1"
-  [ -x "$home/bin/java" ] && [ -x "$home/bin/javac" ] || return 1
-  [ "$(java_major "$home" || true)" = "17" ] || return 1
-  [ "$(javac_major "$home" || true)" = "17" ] || return 1
+  local jdk_root="$1"
+  [ -x "$jdk_root/bin/java" ] && [ -x "$jdk_root/bin/javac" ] || return 1
+  [ "$(java_major "$jdk_root" || true)" = "17" ] || return 1
+  [ "$(javac_major "$jdk_root" || true)" = "17" ] || return 1
 }
 
 read_local_property() {
@@ -171,7 +172,14 @@ export ANDROID_SDK_ROOT="$SDK_DIR"
 export GRADLE_USER_HOME="$GRADLE_USER_HOME_RESOLVED"
 # -Duser.home keeps Robolectric and any tool that writes under user.home inside
 # the current writable HOME. Preserve options the caller already needed.
-export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Duser.home=$HOME"
+if [ -n "${HOME:-}" ]; then
+  JAVA_USER_HOME="$(abs_path "$HOME")"
+elif [ -n "${XDG_CACHE_HOME:-}" ]; then
+  JAVA_USER_HOME="$(abs_path "$XDG_CACHE_HOME")"
+else
+  JAVA_USER_HOME="$GRADLE_USER_HOME_RESOLVED"
+fi
+export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Duser.home=$JAVA_USER_HOME"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
 
 printf 'toolchain: JAVA_HOME=%s ANDROID_HOME=%s GRADLE_USER_HOME=%s\n' \

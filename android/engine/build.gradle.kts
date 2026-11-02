@@ -23,9 +23,7 @@ plugins {
 }
 
 val repoRoot: File = rootProject.projectDir.parentFile
-val workerBundleDir: File = providers.gradleProperty("pdsh.workerBundleDir").orNull
-    ?.let { File(it).let { path -> if (path.isAbsolute) path else rootProject.file(it) } }
-    ?: repoRoot.resolve("examples/probe-app/Bundle/worker")
+val workerBundleDir: File = repoRoot.resolve("examples/probe-app/Bundle/worker")
 val workerBundleAssetDir: File = layout.buildDirectory.dir("generated/worker-bundle").get().asFile
 
 fun displayPath(path: File): String =
@@ -79,13 +77,26 @@ fun requireWorkerBundle(directory: File) {
 // check in an always-running validator that packageWorkerBundle depends on, so an
 // APK can never ship an empty asset. The validator is deliberately not part of
 // JVM test graphs: only asset merge consumers depend on packageWorkerBundle.
-// `-Ppdsh.workerBundleDir=` relocates the input for an executable empty-fixture
-// test; it does not bypass validation, so it cannot publish a reduced product.
 val verifyWorkerBundle = tasks.register("verifyWorkerBundle") {
     description = "Fails if the prebuilt worker bundle is missing, empty or incomplete (asset packaging only)"
     group = "verification"
     doLast {
         requireWorkerBundle(workerBundleDir)
+    }
+}
+
+// Test-only fixture entry point; NOT a dependency of packageWorkerBundle or any
+// asset merge. Production packaging always reads the canonical path above, so no
+// Gradle property can replace the shipped bundle. The fixture task shares
+// [requireWorkerBundle] with the real packaging validator.
+tasks.register("verifyWorkerBundleFixture") {
+    description = "Test-only: validate a fixture Worker directory through the packaging validator"
+    group = "verification"
+    doLast {
+        val raw = providers.gradleProperty("pdsh.test.workerBundleDir").orNull
+            ?: error("pass -Ppdsh.test.workerBundleDir=<path> for the test-only Worker validator")
+        val fixture = File(raw)
+        requireWorkerBundle(fixture)
     }
 }
 

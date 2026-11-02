@@ -17,10 +17,10 @@ model relationships:
     staging tasks.
 
 The suite also executes the validators against deliberately empty or zero-byte
-fixtures (via narrowly-scoped `-Ppdsh...` input relocations). Those fixtures must
-fail: an existing-but-empty Worker directory is not a bundle, and a zero-byte
-`.so` is not an ELF shared object. There is no switch that skips validation, so
-these properties cannot publish an empty/reduced product.
+fixtures through dedicated test-only validator tasks. Production packaging always
+uses canonical input paths, so no property can replace the shipped Worker/JNI.
+The shared validators must reject an existing-but-empty Worker directory and a
+zero-byte or non-ELF `.so`.
 
 `--dry-run` still configures the projects, so a configuration-time `check(...)`
 would fail here exactly as it did for callers. The real packaging tasks keep
@@ -71,6 +71,7 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
     maxDiff = None
     java_home = ""
     android_home = ""
+    gradle_user_home = ""
 
     @classmethod
     def setUpClass(cls):
@@ -109,10 +110,27 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
                 cls.java_home = value
             elif key == "ANDROID_HOME" and value:
                 cls.android_home = value
-        if not cls.java_home or not cls.android_home:
+            elif key == "GRADLE_USER_HOME" and value:
+                cls.gradle_user_home = value
+        if not cls.java_home or not cls.android_home or not cls.gradle_user_home:
             raise AssertionError(
-                "bootstrap --check did not print JAVA_HOME/ANDROID_HOME:\n"
+                "bootstrap --check did not print JAVA_HOME/ANDROID_HOME/GRADLE_USER_HOME:\n"
                 + check.stdout[-8000:]
+            )
+        # Install must have seeded the same cache the wrapper will use, not just
+        # found a JDK/SDK; otherwise the first Gradle invocation can hit the
+        # stalled GitHub redirect again.
+        dists = Path(cls.gradle_user_home) / "wrapper" / "dists" / "gradle-8.13-bin"
+        seeded = [
+            child
+            for child in dists.iterdir()
+            if (child / "gradle-8.13" / "bin" / "gradle").is_file()
+        ] if dists.is_dir() else []
+        if not seeded:
+            raise AssertionError(
+                "bootstrap did not seed the Gradle wrapper cache under {}:\n{}".format(
+                    dists, install.stdout[-8000:]
+                )
             )
 
     def toolchain_env(self):
@@ -238,6 +256,14 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
         # These are real consumers, not generated dummy outputs.
         self.assertIn(":app:mergeDebugJniLibFolders", graph)
         self.assertIn(":app:mergeReleaseJniLibFolders", graph)
+        # Test-only fixture validators must not leak into the shipping graph.
+        for fixture_task in (
+            ":app:verifyPdshJniFixture",
+            ":engine:verifyWorkerBundleFixture",
+            ":testkit:verifyWorkerBundleForTestsFixture",
+            ":testkit:verifyAndroidTestJniFixture",
+        ):
+            self.assertNotIn(fixture_task, graph)
 
     def test_testkit_instrumented_packaging_keeps_device_staging(self):
         graph = self.task_graph([":testkit:assembleDebugAndroidTest"])
@@ -265,19 +291,19 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
             sorted(graph),
         )
 
-    def test_empty_worker_bundle_fixture_fails_packaging(self):
+    def test_empty_worker_bundle_fixture_fails_shared_validator(self):
         with tempfile.TemporaryDirectory() as temp:
             empty = Path(temp) / "worker"
             empty.mkdir()
             proc = self.run_gradle(
-                [":engine:packageWorkerBundle"],
-                {"pdsh.workerBundleDir": str(empty)},
+                [":engine:verifyWorkerBundleFixture"],
+                {"pdsh.test.workerBundleDir": str(empty)},
             )
             output = proc.stdout
             self.assertNotEqual(proc.returncode, 0, output)
             self.assertIn("worker bundle is incomplete", output, output[-8000:])
 
-    def test_incomplete_worker_bundle_fixture_fails_packaging(self):
+    def test_incomplete_worker_bundle_fixture_fails_shared_validator(self):
         with tempfile.TemporaryDirectory() as temp:
             bundle = Path(temp) / "worker"
             bundle.mkdir()
@@ -287,20 +313,20 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
             # the product lacks the real image.
             (bundle / "image.tar.gz").write_bytes(b"")
             proc = self.run_gradle(
-                [":testkit:verifyWorkerBundleForTests"],
-                {"pdsh.testkit.workerBundleDir": str(bundle)},
+                [":testkit:verifyWorkerBundleForTestsFixture"],
+                {"pdsh.test.testkitWorkerBundleDir": str(bundle)},
             )
             output = proc.stdout
             self.assertNotEqual(proc.returncode, 0, output)
             self.assertIn("worker bundle is incomplete", output, output[-8000:])
 
-    def test_zero_byte_and_non_elf_jni_fixtures_fail_packaging(self):
+    def test_zero_byte_and_non_elf_jni_fixtures_fail_shared_validator(self):
         with tempfile.TemporaryDirectory() as temp:
             empty = Path(temp) / "libpdsh_jni.so"
             empty.write_bytes(b"")
             proc = self.run_gradle(
-                [":app:packageDebugPdshJni"],
-                {"pdsh.pdshJniSo": str(empty)},
+                [":app:verifyPdshJniFixture"],
+                {"pdsh.test.pdshJniSo": str(empty)},
             )
             output = proc.stdout
             self.assertNotEqual(proc.returncode, 0, output)
@@ -309,12 +335,20 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
             text = Path(temp) / "text.so"
             text.write_bytes(b"not an elf")
             proc = self.run_gradle(
-                [":app:packageDebugPdshJni"],
-                {"pdsh.pdshJniSo": str(text)},
+                [":app:verifyPdshJniFixture"],
+                {"pdsh.test.pdshJniSo": str(text)},
             )
             output = proc.stdout
             self.assertNotEqual(proc.returncode, 0, output)
             self.assertIn("not an ELF shared object", output, output[-8000:])
+
+            proc = self.run_gradle(
+                [":testkit:verifyAndroidTestJniFixture"],
+                {"pdsh.test.testkitAndroidJni": str(empty)},
+            )
+            output = proc.stdout
+            self.assertNotEqual(proc.returncode, 0, output)
+            self.assertIn("JNI library is empty", output, output[-8000:])
 
     def test_wrapper_no_xdg_gradle_home_matches_bootstrap_seed(self):
         with tempfile.TemporaryDirectory() as temp:
