@@ -2422,6 +2422,7 @@ struct ChatPage: View {
                 inputFocused = false
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                 to: nil, from: nil, for: nil)
+                ChatModel.appendDiagnostic("composer: released focus after send")
                 let id = model.items.last(where: { if case .user = $0.kind { return true }; return false })?.id
                 if let id {
                     // `send` sets turnRunning for the turn it just started, so
@@ -3230,8 +3231,14 @@ private struct NativeComposerTextView: UIViewRepresentable {
         }
         coordinator.applyTypingAttributes(lineSpacing: lineSpacing)
         if isFocused, !uiView.isFirstResponder, uiView.window != nil {
-            DispatchQueue.main.async { [weak uiView] in
-                guard let uiView, !uiView.isFirstResponder else { return }
+            // The hop exists so the view is in a window before it becomes first
+            // responder. It must re-read the *current* intent when it runs: a
+            // send releases focus in the same turn that queued this block, and
+            // the queued becomeFirstResponder used to run afterwards, see a view
+            // that is no longer first responder, and bring the keyboard back.
+            DispatchQueue.main.async { [weak uiView, weak coordinator] in
+                guard let uiView, !uiView.isFirstResponder,
+                      coordinator?.parent.isFocused == true else { return }
                 uiView.becomeFirstResponder()
             }
         } else if !isFocused, uiView.isFirstResponder {
