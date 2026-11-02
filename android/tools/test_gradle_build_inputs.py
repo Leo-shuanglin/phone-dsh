@@ -363,6 +363,9 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
             for key in ("XDG_CACHE_HOME", "GRADLE_USER_HOME", "PDSH_GRADLE_USER_HOME"):
                 env.pop(key, None)
             env["HOME"] = str(home)
+            # A caller may already export options; the wrapper must append, not
+            # replace them, and the test must not require exact-line equality.
+            env["JAVA_TOOL_OPTIONS"] = "-Dfoo=bar"
             proc = _run(
                 [
                     "bash",
@@ -380,7 +383,10 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
             # The wrapper appends to any pre-existing JAVA_TOOL_OPTIONS, so check
             # that one line contains the expected property rather than equals it.
             self.assertTrue(
-                any("-Duser.home={}".format(home) in line for line in lines),
+                any(
+                    "-Dfoo=bar" in line and "-Duser.home={}".format(home) in line
+                    for line in lines
+                ),
                 lines,
             )
 

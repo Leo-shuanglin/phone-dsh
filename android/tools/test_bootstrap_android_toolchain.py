@@ -24,6 +24,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 from pathlib import Path
 
@@ -463,6 +464,29 @@ class BootstrapToolchainTests(unittest.TestCase):
         self.assertTrue((sdk / "platforms" / "android-35").is_dir())
         self.assertIn("ANDROID_HOME={}".format(sdk), output)
         self.assertIn("sdk.dir={}".format(sdk), self.local_properties.read_text(encoding="utf-8"))
+
+    def test_environment_scrubs_caller_gradle_cache_and_timeout(self):
+        caller_gradle = self.root / "caller-gradle-home"
+        caller_cache = self.root / "caller-pdsh-cache"
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GRADLE_USER_HOME": str(caller_gradle),
+                "PDSH_GRADLE_USER_HOME": str(caller_cache),
+                "PDSH_GRADLE_PRIMARY_TIMEOUT": "180",
+            },
+        ):
+            proc = self.run_script()
+        output = self.combined(proc)
+        self.assertEqual(proc.returncode, 0, output)
+        self.assertFalse(caller_gradle.exists(), "test must not use caller GRADLE_USER_HOME")
+        self.assertFalse(caller_cache.exists(), "test must not use caller PDSH_GRADLE_USER_HOME")
+        lines = self.curl_log.read_text(encoding="utf-8").splitlines()
+        primary = [line for line in lines if "gradle-8.13-bin.zip" in line]
+        self.assertTrue(primary, lines)
+        self.assertIn("--max-time 30", primary[0])
+        seeded = self.root / "cache" / "pdsh" / "gradle" / "wrapper" / "dists" / "gradle-8.13-bin"
+        self.assertTrue(seeded.is_dir(), "seed must use the temporary XDG cache")
 
     def test_gradle_primary_failure_uses_verified_fallback_without_retries(self):
         primary = "https://fake.invalid/gradle-primary.zip"
