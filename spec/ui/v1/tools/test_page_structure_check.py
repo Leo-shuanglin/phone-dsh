@@ -123,6 +123,20 @@ def platform_whitelist() -> list:
     return [{"id": "platform.post-notifications-degraded", "capability": "notifier.permission-degraded"}]
 
 
+class PositionalClickableLabelTests(unittest.TestCase):
+    def test_positional_text_is_an_action_only_on_its_own_clickable_modifier(self):
+        source = 'BasicText(UiStrings.RESTORE, modifier = Modifier.clickable { restore() })'
+        labels, unresolved, _ = check.android_actions(source, check.mask_kotlin(source), {"RESTORE": "恢复"}, {})
+        self.assertEqual(["恢复"], labels)
+        self.assertEqual([], unresolved)
+        plain = 'BasicText(UiStrings.RESTORE)'
+        self.assertEqual([], check.android_actions(plain, check.mask_kotlin(plain), {"RESTORE": "恢复"}, {})[0])
+
+    def test_inferred_type_string_constants_are_not_unresolved_actions(self):
+        source = 'private const val IMPORT_LABEL = "导入文件"'
+        self.assertEqual({"IMPORT_LABEL": "导入文件"}, check.local_constants(source))
+
+
 class LocalizedLabelResolutionTests(unittest.TestCase):
     def test_known_translation_keeps_chinese_contract_label(self):
         value, dynamic = check.resolve_kotlin_expr(

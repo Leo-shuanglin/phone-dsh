@@ -15,7 +15,6 @@ import com.phonedsh.ui.surface.SettingsCardGap
 import com.phonedsh.ui.surface.SettingsFootnoteRow
 import com.phonedsh.ui.surface.SettingsGroupCard
 import com.phonedsh.ui.surface.SettingsGroupedRow
-import com.phonedsh.ui.surface.SettingsSectionLabel
 import com.phonedsh.ui.surface.SettingsSubPageFrame
 
 /** A verified license notice; name, license label and full notice come from the host catalog. */
@@ -57,23 +56,20 @@ public fun LicensesPage(
                     }
                 }
             } else {
-                entries.forEachIndexed { index, entry ->
-                    item(key = "license.$index.${entry.name}") {
-                        Column {
-                            SettingsSectionLabel(entry.name)
-                            SettingsGroupCard {
-                                SettingsGroupedRow(
-                                    title = "许可",
-                                    value = entry.license,
-                                    dividerBelow = true,
+                item(key = "license-catalog") {
+                    SettingsGroupCard {
+                        entries.forEachIndexed { index, entry ->
+                            SettingsGroupedRow(
+                                title = entry.name,
+                                value = entry.license,
+                                dividerBelow = index != entries.lastIndex || !entry.notice.isNullOrBlank(),
+                            )
+                            entry.notice?.takeIf(String::isNotBlank)?.let { notice ->
+                                com.phonedsh.ui.surface.SettingsBodyRow(
+                                    text = notice,
+                                    dividerBelow = index != entries.lastIndex,
+                                    modifier = Modifier.testTag("$LICENSES_NOTICE_PREFIX$index"),
                                 )
-                                entry.notice?.takeIf(String::isNotBlank)?.let { notice ->
-                                    com.phonedsh.ui.surface.SettingsBodyRow(
-                                        text = notice,
-                                        dividerBelow = false,
-                                        modifier = Modifier.testTag("$LICENSES_NOTICE_PREFIX$index"),
-                                    )
-                                }
                             }
                         }
                     }

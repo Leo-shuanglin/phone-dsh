@@ -41,8 +41,8 @@ public fun PermissionDefaultsPage(
         ) {
             item(key = "permission-defaults") {
                 Column {
+                    com.phonedsh.ui.surface.SettingsSectionLabel(title = state.note, modifier = Modifier.testTag(PERMISSION_DEFAULTS_NOTE_TAG))
                     SettingsGroupCard {
-                        SettingsFootnoteRow(text = state.note, modifier = Modifier.testTag(PERMISSION_DEFAULTS_NOTE_TAG))
                         state.options.forEachIndexed { index, option ->
                             SettingsRowFrame(
                                 dividerBelow = index != state.options.lastIndex,

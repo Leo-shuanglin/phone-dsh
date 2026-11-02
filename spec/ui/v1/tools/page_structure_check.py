@@ -222,7 +222,7 @@ DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 UISTRING_RE = re.compile(
     r"^[ \t]*public const val ([A-Z][A-Z0-9_]*): String = \"((?:[^\"\\]|\\.)*)\"[ \t]*$", re.M)
 LOCAL_CONST_RE = re.compile(
-    r"^[ \t]*(?:private |internal |public )?const val ([A-Z][A-Z0-9_]*): String = "
+    r"^[ \t]*(?:private |internal |public )?const val ([A-Z][A-Z0-9_]*)(?:: String)? = "
     r"\"((?:[^\"\\]|\\.)*)\"[ \t]*$", re.M)
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 SECTION_CALL_RE = re.compile(r"\b([A-Z]\w*)[ \t]*\(")
@@ -1363,7 +1363,7 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             continue
         open_paren = m.end() - 1
         close = match_paren(masked, open_paren)
-        if close < 0 or ".clickable(" not in masked[open_paren:close]:
+        if close < 0 or not re.search(r"\.clickable\s*(?:\(|\{)", masked[open_paren:close]):
             continue
         span = None
         for a, b in split_args(masked, open_paren + 1, close):
@@ -1371,6 +1371,11 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             if nm and nm.group(1) == "text":
                 span = (a + nm.end(), b)
                 break
+        if span is None:
+            # Kotlin permits the text argument positionally. It is still an
+            # action only when this Text's own modifier has .clickable(...).
+            _, positional = named_args(masked, open_paren, close)
+            span = positional[0] if positional else None
         if span is None:
             continue
         value, dynamic = resolve_kotlin_expr(text[span[0]:span[1]], strings, consts)
@@ -1392,7 +1397,7 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             continue
         open_paren = m.end() - 1
         close = match_paren(masked, open_paren)
-        if close < 0 or ".clickable(" not in masked[open_paren:close]:
+        if close < 0 or not re.search(r"\.clickable\s*(?:\(|\{)", masked[open_paren:close]):
             continue
         k = close + 1
         while k < len(masked) and masked[k] in " \t\r\n":

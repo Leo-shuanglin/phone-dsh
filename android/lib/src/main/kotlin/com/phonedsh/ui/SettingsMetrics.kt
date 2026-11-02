@@ -33,6 +33,9 @@ import androidx.compose.ui.unit.dp
  * `geometry.pageRowMinHeight` (44), both of which the rendered page exceeds.
  */
 public object SettingsMetrics {
+    /** SettingsPage.swift ArchivedSessionsPage: title/time VStack spacing 2. */
+    public const val ARCHIVE_TEXT_GAP_PT: Int = 2
+
     // --------------------------------------------------------------- nav bar
 
     /** Inline navigation bar height. Source: system `.navigationBarTitleDisplayMode(.inline)` at `SettingsPage.swift:169` + `tokens.json` `geometry.pageHeaderMinHeight: 44`; PNG check: title ink centre at y=253 px with a 62 pt safe top → 44 pt bar. Confidence: measured (render), exact (token). */

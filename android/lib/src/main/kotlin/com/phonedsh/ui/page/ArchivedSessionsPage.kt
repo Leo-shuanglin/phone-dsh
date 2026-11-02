@@ -18,8 +18,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -31,6 +32,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.text.font.FontWeight
+import com.phonedsh.ui.SettingsMetrics
+import com.phonedsh.ui.surface.SettingsCardRadius
 import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.surface.SettingsSubPageFrame
@@ -103,6 +108,7 @@ public fun ArchivedSessionsPage(
         rootTag = UiPageTags.SETTINGS_ARCHIVED_ROOT,
         modifier = modifier,
         showSheetHandle = false,
+        grouped = true,
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             state.mutationReceipt?.let { PageMutationReceiptLine(it) }
@@ -170,10 +176,9 @@ public fun ArchivedSessionsPage(
                         horizontal = tokens.geometry.pageOuterMarginH,
                         vertical = tokens.spacing.iconText,
                     ),
-                    verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
                 ) {
-                    items(state.rows, key = { it.id }) { row ->
-                        ArchivedSessionPageRow(row, onRestore)
+                    itemsIndexed(state.rows, key = { _, row -> row.id }) { index, row ->
+                        ArchivedSessionPageRow(row, onRestore, index == 0, index == state.rows.lastIndex)
                     }
                     item(key = "restore-footer") {
                         BasicText(
@@ -198,23 +203,29 @@ public fun ArchivedSessionsPage(
 private fun ArchivedSessionPageRow(
     row: ArchivedRowView,
     onRestore: ((ArchivedRowView) -> Unit)?,
+    first: Boolean,
+    last: Boolean,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    val shape = RoundedCornerShape(HomeMetrics.LIST_CARD_RADIUS_PT.dp)
+    val flat = CornerSize(0)
+    val rounded = CornerSize(SettingsCardRadius)
+    val shape = RoundedCornerShape(
+        topStart = if (first) rounded else flat, topEnd = if (first) rounded else flat,
+        bottomStart = if (last) rounded else flat, bottomEnd = if (last) rounded else flat,
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = HomeMetrics.DEFAULT_MIN_LIST_ROW_HEIGHT_PT.dp)
             .clip(shape)
             .background(tokens.colors.surface)
-            .border(1.dp, tokens.colors.borderList, shape)
             .padding(horizontal = tokens.geometry.pageOuterMarginH, vertical = tokens.spacing.badgeInsetV)
             .testTag(UiPageTags.SETTINGS_ARCHIVED_ROW),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(SettingsMetrics.ARCHIVE_TEXT_GAP_PT.dp)) {
             BasicText(
                 row.title,
                 style = type.body.copy(color = tokens.colors.textPrimary),
@@ -225,8 +236,7 @@ private fun ArchivedSessionPageRow(
                     time,
                     style = type.secondary.copy(
                         color = tokens.colors.textPlaceholder,
-                        fontSize = HomeMetrics.LIST_ITEM_SIZE_PT.sp,
-                        lineHeight = HomeMetrics.LIST_ITEM_LINE_PT.sp,
+                        lineHeight = TextUnit.Unspecified,
                     ),
                     maxLines = 1,
                     modifier = Modifier.testTag(ARCHIVED_PAGE_METADATA_TAG),
@@ -235,7 +245,9 @@ private fun ArchivedSessionPageRow(
         }
         BasicText(
             UiStrings.SESSIONS_RESTORE,
-            style = type.secondary.copy(
+            style = type.processBody.copy(
+                fontWeight = FontWeight.Medium,
+                lineHeight = TextUnit.Unspecified,
                 color = if (onRestore == null) tokens.colors.textTertiary else tokens.colors.textPrimary,
             ),
             modifier = Modifier
