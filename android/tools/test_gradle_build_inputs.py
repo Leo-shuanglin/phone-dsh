@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Task-graph checks for the PDSH Android build inputs.
+"""Task-graph and fail-loud input checks for the PDSH Android build.
 
 The bug this test locks down is a *graph* bug, not a string typo: `:app` used to
 run `check(...)` for the 65 MB Worker bundle and the Android `.so` at
@@ -12,15 +12,20 @@ model relationships:
 
   * pure JVM test graphs contain no APK/device staging tasks;
   * `:app:assembleDebug` / `:app:assembleRelease` contain the per-variant
-    `package<PdshJni>` tasks and `:engine:packageWorkerBundle`;
+    `package<PdshJni>` tasks and `:engine:verifyWorkerBundle`;
   * `:testkit:assembleDebugAndroidTest` contains the Worker/scenario/JNI
     staging tasks.
 
+The suite also executes the validators against deliberately empty or zero-byte
+fixtures (via narrowly-scoped `-Ppdsh...` input relocations). Those fixtures must
+fail: an existing-but-empty Worker directory is not a bundle, and a zero-byte
+`.so` is not an ELF shared object. There is no switch that skips validation, so
+these properties cannot publish an empty/reduced product.
+
 `--dry-run` still configures the projects, so a configuration-time `check(...)`
 would fail here exactly as it did for callers. The real packaging tasks keep
-their fail-loud `doFirst`/action checks; this test does not execute them (the
-Linux host may not have the NDK output or the 65 MB Worker image), and the Mac
-owner runs the full production APK assembly.
+their fail-loud validators; the Linux host may not have the real NDK output or
+the 65 MB Worker image, and the Mac owner runs the full production APK assembly.
 """
 
 from __future__ import annotations
@@ -34,7 +39,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ANDROID_DIR = REPO_ROOT / "android"
-WRAPPER = REPO_ROOT / "android" / "tools" / "with-android-toolchain.sh"
+WRAPPER = ANDROID_DIR / "tools" / "with-android-toolchain.sh"
+BOOTSTRAP = ANDROID_DIR / "tools" / "bootstrap-android-toolchain.sh"
 GRADLEW = ANDROID_DIR / "gradlew"
 
 # The Graph is populated after configuration; writing it from whenReady also
@@ -48,17 +54,72 @@ gradle.taskGraph.whenReady { graph ->
 """
 
 
+def _run(command, env, timeout=1800):
+    return subprocess.run(
+        command,
+        cwd=str(REPO_ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        universal_newlines=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
 class GradleBuildInputTaskGraphTests(unittest.TestCase):
     maxDiff = None
+    java_home = ""
+    android_home = ""
 
     @classmethod
     def setUpClass(cls):
         if not GRADLEW.is_file():
             raise unittest.SkipTest("android/gradlew is absent")
-        if not WRAPPER.is_file():
-            raise unittest.SkipTest("with-android-toolchain.sh is absent")
+        if not WRAPPER.is_file() or not BOOTSTRAP.is_file():
+            raise unittest.SkipTest("toolchain wrapper/bootstrap is absent")
         if shutil.which("bash") is None:
             raise unittest.SkipTest("bash is absent")
+
+        # Each isolated Gradle execution owns its environment. Verify first; on a
+        # clean worker install the pinned toolchain, then verify again. The test
+        # command list may run this suite before the explicit bootstrap command,
+        # so relying on an earlier step would be a false assumption.
+        env = os.environ.copy()
+        # Install is idempotent and also seeds the wrapper's Gradle cache. A bare
+        # --check can pass on a host with a JDK/SDK but no cached distribution,
+        # which would make the first wrapper invocation fetch Gradle again.
+        install = _run(["bash", str(BOOTSTRAP)], env)
+        if install.returncode != 0:
+            raise AssertionError(
+                "bootstrap install failed (exit {}):\n{}".format(
+                    install.returncode, install.stdout[-12000:]
+                )
+            )
+        check = _run(["bash", str(BOOTSTRAP), "--check"], env)
+        if check.returncode != 0:
+            raise AssertionError(
+                "bootstrap --check failed (exit {}):\n{}".format(
+                    check.returncode, check.stdout[-12000:]
+                )
+            )
+        for line in check.stdout.splitlines():
+            key, _, value = line.partition("=")
+            if key == "JAVA_HOME" and value:
+                cls.java_home = value
+            elif key == "ANDROID_HOME" and value:
+                cls.android_home = value
+        if not cls.java_home or not cls.android_home:
+            raise AssertionError(
+                "bootstrap --check did not print JAVA_HOME/ANDROID_HOME:\n"
+                + check.stdout[-8000:]
+            )
+
+    def toolchain_env(self):
+        env = os.environ.copy()
+        env["PDSH_JAVA_HOME"] = self.java_home
+        env["PDSH_ANDROID_HOME"] = self.android_home
+        return env
 
     def task_graph(self, tasks):
         """Return the configured task-path set for one Gradle invocation."""
@@ -67,7 +128,7 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
             init = temp_dir / "capture-task-graph.gradle"
             out = temp_dir / "tasks.txt"
             init.write_text(INIT_SCRIPT, encoding="utf-8")
-            env = os.environ.copy()
+            env = self.toolchain_env()
             env["PDSH_TASK_GRAPH_OUT"] = str(out)
             command = [
                 "bash",
@@ -81,16 +142,7 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
                 *tasks,
                 "--dry-run",
             ]
-            proc = subprocess.run(
-                command,
-                cwd=str(REPO_ROOT),
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                timeout=1800,
-                check=False,
-            )
+            proc = _run(command, env)
             if proc.returncode != 0:
                 self.fail(
                     "Gradle task-graph invocation failed (exit {}):\n{}\n{}".format(
@@ -107,6 +159,21 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
                 for line in out.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             }
+
+    def run_gradle(self, tasks, properties=None):
+        """Run real tasks so a validator's failure (not just graph shape) is proved."""
+        env = self.toolchain_env()
+        command = [
+            "bash",
+            str(WRAPPER),
+            "./gradlew",
+            "--no-daemon",
+            "--console=plain",
+            *tasks,
+        ]
+        for key, value in (properties or {}).items():
+            command.append("-P{}={}".format(key, value))
+        return _run(command, env)
 
     def test_jvm_tests_do_not_require_apk_or_device_inputs(self):
         graph = self.task_graph(
@@ -197,6 +264,81 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
             any("AndroidTestJni" in task or "AndroidTestNative" in task for task in graph),
             sorted(graph),
         )
+
+    def test_empty_worker_bundle_fixture_fails_packaging(self):
+        with tempfile.TemporaryDirectory() as temp:
+            empty = Path(temp) / "worker"
+            empty.mkdir()
+            proc = self.run_gradle(
+                [":engine:packageWorkerBundle"],
+                {"pdsh.workerBundleDir": str(empty)},
+            )
+            output = proc.stdout
+            self.assertNotEqual(proc.returncode, 0, output)
+            self.assertIn("worker bundle is incomplete", output, output[-8000:])
+
+    def test_incomplete_worker_bundle_fixture_fails_packaging(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp) / "worker"
+            bundle.mkdir()
+            for name in ("index.html", "boot.js", "worker-entry.js"):
+                (bundle / name).write_text("real content\n", encoding="utf-8")
+            # image.tar.gz exists but is empty: a Zip source can still exist while
+            # the product lacks the real image.
+            (bundle / "image.tar.gz").write_bytes(b"")
+            proc = self.run_gradle(
+                [":testkit:verifyWorkerBundleForTests"],
+                {"pdsh.testkit.workerBundleDir": str(bundle)},
+            )
+            output = proc.stdout
+            self.assertNotEqual(proc.returncode, 0, output)
+            self.assertIn("worker bundle is incomplete", output, output[-8000:])
+
+    def test_zero_byte_and_non_elf_jni_fixtures_fail_packaging(self):
+        with tempfile.TemporaryDirectory() as temp:
+            empty = Path(temp) / "libpdsh_jni.so"
+            empty.write_bytes(b"")
+            proc = self.run_gradle(
+                [":app:packageDebugPdshJni"],
+                {"pdsh.pdshJniSo": str(empty)},
+            )
+            output = proc.stdout
+            self.assertNotEqual(proc.returncode, 0, output)
+            self.assertIn("JNI library is empty", output, output[-8000:])
+
+            text = Path(temp) / "text.so"
+            text.write_bytes(b"not an elf")
+            proc = self.run_gradle(
+                [":app:packageDebugPdshJni"],
+                {"pdsh.pdshJniSo": str(text)},
+            )
+            output = proc.stdout
+            self.assertNotEqual(proc.returncode, 0, output)
+            self.assertIn("not an ELF shared object", output, output[-8000:])
+
+    def test_wrapper_no_xdg_gradle_home_matches_bootstrap_seed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "home"
+            home.mkdir()
+            env = self.toolchain_env()
+            for key in ("XDG_CACHE_HOME", "GRADLE_USER_HOME", "PDSH_GRADLE_USER_HOME"):
+                env.pop(key, None)
+            env["HOME"] = str(home)
+            proc = _run(
+                [
+                    "bash",
+                    str(WRAPPER),
+                    "bash",
+                    "-c",
+                    'printf "%s\\n%s\\n" "$GRADLE_USER_HOME" "$JAVA_TOOL_OPTIONS"',
+                ],
+                env,
+                timeout=120,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+            lines = proc.stdout.splitlines()
+            self.assertIn(str(home / "pdsh" / "gradle"), lines, lines)
+            self.assertIn("-Duser.home={}".format(home), lines, lines)
 
 
 if __name__ == "__main__":

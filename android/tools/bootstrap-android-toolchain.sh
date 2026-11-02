@@ -307,6 +307,7 @@ download_verified() {
   local algorithm="$3"
   local expected="$4"
   local timeout="${5:-$DOWNLOAD_TIMEOUT}"
+  local retries="${6:-3}"
   local part="$destination.part"
   local rc=0
 
@@ -321,10 +322,10 @@ download_verified() {
   fi
 
   rm -f -- "$part"
-  say "+ $CURL --fail --location --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout $CONNECT_TIMEOUT --max-time $timeout --output $part $url"
+  say "+ $CURL --fail --location --retry $retries --retry-delay 2 --retry-all-errors --connect-timeout $CONNECT_TIMEOUT --max-time $timeout --output $part $url"
   set +e
   "$CURL" --fail --location \
-    --retry 3 --retry-delay 2 --retry-all-errors \
+    --retry "$retries" --retry-delay 2 --retry-all-errors \
     --connect-timeout "$CONNECT_TIMEOUT" --max-time "$timeout" \
     --output "$part" "$url"
   rc=$?
@@ -621,7 +622,7 @@ download_gradle() {
   # The official endpoint 307s to GitHub. Give that hop a bounded window before
   # trying a checksum-verified mirror; a stalled GitHub connection must not burn
   # the full download budget.
-  ( download_verified "$GRADLE_URL" "$GRADLE_DIST" sha256 "$GRADLE_DOWNLOAD_SHA256" "${PDSH_GRADLE_PRIMARY_TIMEOUT:-180}" )
+  ( download_verified "$GRADLE_URL" "$GRADLE_DIST" sha256 "$GRADLE_DOWNLOAD_SHA256" "${PDSH_GRADLE_PRIMARY_TIMEOUT:-180}" 0 )
   rc=$?
   set -e
   if [ "$rc" -eq 0 ]; then

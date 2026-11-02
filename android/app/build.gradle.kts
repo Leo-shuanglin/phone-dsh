@@ -37,8 +37,12 @@ plugins {
 // which the screen would show as "libpdsh_jni not packaged"; the packaging task
 // below fails instead of shipping that APK.
 val repoRoot: File = rootProject.projectDir.parentFile
-val pdshJniSo: File = repoRoot.resolve("shell/target/aarch64-linux-android/debug/libpdsh_jni.so")
-val pdshJniRelative: String = pdshJniSo.relativeTo(repoRoot).path
+val pdshJniSo: File = providers.gradleProperty("pdsh.pdshJniSo").orNull
+    ?.let { File(it).let { path -> if (path.isAbsolute) path else rootProject.file(it) } }
+    ?: repoRoot.resolve("shell/target/aarch64-linux-android/debug/libpdsh_jni.so")
+fun displayPath(path: File): String =
+    runCatching { path.relativeTo(repoRoot).path }.getOrElse { path.absolutePath }
+val pdshJniRelative: String = displayPath(pdshJniSo)
 
 // ---- release .so packaging: copy for every variant, strip for release -------
 //
@@ -166,6 +170,22 @@ abstract class PackagePdshJni @Inject constructor(
                 "handshake summary. Build it with the pinned NDK + cargo-ndk:\n" +
                 "  cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni\n" +
                 "The .so is a build product and is not committed."
+        }
+        check(input.length() > 0L) {
+            "the Rust JNI library is empty: ${sourceRelativePath.get()}\n" +
+                "Rebuild it with: cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni"
+        }
+        val magic = ByteArray(4)
+        val magicRead = input.inputStream().use { it.read(magic) }
+        check(
+            magicRead == 4 &&
+                magic[0] == 0x7f.toByte() &&
+                magic[1] == 'E'.code.toByte() &&
+                magic[2] == 'L'.code.toByte() &&
+                magic[3] == 'F'.code.toByte(),
+        ) {
+            "the Rust JNI library is not an ELF shared object: ${sourceRelativePath.get()}\n" +
+                "Rebuild it with: cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni"
         }
         val target = destination.get().asFile
             .resolve("arm64-v8a")
@@ -408,9 +428,9 @@ android {
     // single `assets/worker-bundle.zip` (byte-identical entries) and reads that at
     // runtime. Adding the directory again would ship the bundle twice and, worse,
     // AGP's asset merger un-gzips `*.tar.gz` on the way in (image.tar.gz ->
-    // image.tar), which corrupts the names the bundle resolves. The `check` above
-    // still fails the build when the bundle is absent, so a silent empty APK is
-    // impossible.
+    // image.tar), which corrupts the names the bundle resolves. :engine's
+    // verifyWorkerBundle dependency validates the real bundle before packaging,
+    // so a silent empty APK is impossible.
     //
     // The generated jniLibs root is wired per variant in `androidComponents`
     // below: AGP registers the task output as that variant's jniLibs source, so

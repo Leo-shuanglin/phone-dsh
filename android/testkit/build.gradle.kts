@@ -111,40 +111,93 @@ tasks.withType<Test>().configureEach {
 //   3. the scenario catalog (`assets/scenario-catalog/catalog.json`), copied
 //      from `scripts/ci/scenarios/catalog.json`, so the device lane reads the
 //      same document the JVM and macOS lanes read instead of a second copy.
-val workerBundleDirectory: File = repoRoot.resolve("examples/probe-app/Bundle/worker")
+val workerBundleDirectory: File = providers.gradleProperty("pdsh.testkit.workerBundleDir").orNull
+    ?.let { File(it).let { path -> if (path.isAbsolute) path else rootProject.file(it) } }
+    ?: repoRoot.resolve("examples/probe-app/Bundle/worker")
 val workerBundleAssetDirectory: File =
     layout.buildDirectory.dir("generated/worker-bundle").get().asFile
-val androidJniLibrary: File =
-    repoRoot.resolve("shell/target/aarch64-linux-android/debug/libpdsh_jni.so")
+val androidJniLibrary: File = providers.gradleProperty("pdsh.testkit.androidJniLibrary").orNull
+    ?.let { File(it).let { path -> if (path.isAbsolute) path else rootProject.file(it) } }
+    ?: repoRoot.resolve("shell/target/aarch64-linux-android/debug/libpdsh_jni.so")
 val androidTestJniDirectory: File =
     layout.buildDirectory.dir("generated/test-jniLibs").get().asFile
+
+fun displayPath(path: File): String =
+    runCatching { path.relativeTo(repoRoot).path }.getOrElse { path.absolutePath }
+
+fun requireWorkerBundleForTests(directory: File) {
+    check(directory.isDirectory) {
+        "the prebuilt worker bundle is missing: " + displayPath(directory) +
+            " (it is a gitignored build input; copy it with " +
+            "examples/probe-app/scripts/copy-bundle-assets.sh)"
+    }
+    val required = listOf(
+        "index.html",
+        "boot.js",
+        "worker-entry.js",
+        "tool-worker-python.js",
+        "workflow-isolate.js",
+        "image.tar.gz",
+    )
+    val missing = required.filter { name ->
+        val file = File(directory, name)
+        !file.isFile || file.length() == 0L
+    }
+    check(missing.isEmpty()) {
+        "the prebuilt worker bundle is incomplete: " + displayPath(directory) +
+            " (missing or empty: " + missing.joinToString(", ") + ")"
+    }
+    val image = File(directory, "image.tar.gz")
+    val magic = ByteArray(2)
+    val read = image.inputStream().use { it.read(magic) }
+    check(read == 2 && magic[0] == 0x1f.toByte() && magic[1] == 0x8b.toByte()) {
+        "the prebuilt worker bundle has an invalid image.tar.gz (not gzip): " +
+            displayPath(image)
+    }
+}
+
+fun requireElfLibrary(file: File) {
+    check(file.isFile) {
+        "missing " + displayPath(file) +
+            "; build it first with: cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni"
+    }
+    check(file.length() > 0L) {
+        "the JNI library is empty: " + displayPath(file) +
+            "; rebuild it with: cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni"
+    }
+    val magic = ByteArray(4)
+    val read = file.inputStream().use { it.read(magic) }
+    check(
+        read == 4 &&
+            magic[0] == 0x7f.toByte() &&
+            magic[1] == 'E'.code.toByte() &&
+            magic[2] == 'L'.code.toByte() &&
+            magic[3] == 'F'.code.toByte(),
+    ) {
+        "the JNI library is not an ELF shared object: " + displayPath(file) +
+            "; rebuild it with: cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni"
+    }
+}
 
 // A Copy/Zip task whose source is missing is NO-SOURCE, and Gradle skips its
 // actions (including doFirst) for NO-SOURCE. The fail-loud checks therefore live
 // in always-running validators that the staging tasks depend on. Only the
 // Android-test packaging graph reaches these validators; a pure JVM test does
-// not, which is the preBuild split this module needs.
+// not, which is the preBuild split this module needs. The `-Ppdsh.testkit.*`
+// overrides relocate test fixtures without bypassing any content check.
 val verifyWorkerBundleForTests = tasks.register("verifyWorkerBundleForTests") {
-    description = "Fails if the device test Worker bundle is absent"
+    description = "Fails if the device test Worker bundle is missing, empty or incomplete"
     group = "verification"
     doLast {
-        check(workerBundleDirectory.isDirectory) {
-            "the prebuilt worker bundle is missing: " +
-                workerBundleDirectory.relativeTo(repoRoot).path +
-                " (it is a gitignored build input; copy it with " +
-                "examples/probe-app/scripts/copy-bundle-assets.sh)"
-        }
+        requireWorkerBundleForTests(workerBundleDirectory)
     }
 }
 
 val verifyAndroidTestJni = tasks.register("verifyAndroidTestJni") {
-    description = "Fails if the Android arm64 JNI library is absent"
+    description = "Fails if the Android arm64 JNI library is absent, empty or not ELF"
     group = "verification"
     doLast {
-        check(androidJniLibrary.isFile) {
-            "missing " + androidJniLibrary.relativeTo(repoRoot).path +
-                "; build it first with: cd shell && cargo ndk -t arm64-v8a build -p pdsh-jni"
-        }
+        requireElfLibrary(androidJniLibrary)
     }
 }
 

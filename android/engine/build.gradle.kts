@@ -23,28 +23,69 @@ plugins {
 }
 
 val repoRoot: File = rootProject.projectDir.parentFile
-val workerBundleDir: File = repoRoot.resolve("examples/probe-app/Bundle/worker")
+val workerBundleDir: File = providers.gradleProperty("pdsh.workerBundleDir").orNull
+    ?.let { File(it).let { path -> if (path.isAbsolute) path else rootProject.file(it) } }
+    ?: repoRoot.resolve("examples/probe-app/Bundle/worker")
 val workerBundleAssetDir: File = layout.buildDirectory.dir("generated/worker-bundle").get().asFile
 
-// A Zip task whose `from(dir)` is missing is NO-SOURCE, and Gradle does not run
-// its actions (including doFirst) for a NO-SOURCE task. Keep the fail-loud check
-// in an always-running validator that packageWorkerBundle depends on, so an APK
-// can never ship an empty asset. The validator is deliberately not part of JVM
-// test graphs: only asset merge consumers depend on packageWorkerBundle.
+fun displayPath(path: File): String =
+    runCatching { path.relativeTo(repoRoot).path }.getOrElse { path.absolutePath }
+
+/**
+ * Required real Worker entries. The bundle is generated, but an existing empty
+ * directory is not a bundle: a Zip task with no source is NO-SOURCE and would
+ * otherwise produce no `assets/worker-bundle.zip` while still succeeding.
+ * `image.tar.gz` is also checked for the gzip magic so a zero-byte or text file
+ * cannot pass. Keep this in sync with examples/probe-app/Bundle/README.md.
+ */
+fun requireWorkerBundle(directory: File) {
+    check(directory.isDirectory) {
+        "the prebuilt worker bundle is missing: " + displayPath(directory) + "\n" +
+            "The APK needs it; it is not committed because it is ~65 MB.\n" +
+            "Generate it with the documented copy step (needs the pinned DSH checkout):\n" +
+            "  bash examples/probe-app/scripts/copy-bundle-assets.sh\n" +
+            "For a full DSH Web page, build the Web dist first:\n" +
+            "  bash scripts/ci/build-web-dist.sh\n" +
+            "then re-run the copy step. Nothing is copied into android/."
+    }
+    val required = listOf(
+        "index.html",
+        "boot.js",
+        "worker-entry.js",
+        "tool-worker-python.js",
+        "workflow-isolate.js",
+        "image.tar.gz",
+    )
+    val missing = required.filter { name ->
+        val file = File(directory, name)
+        !file.isFile || file.length() == 0L
+    }
+    check(missing.isEmpty()) {
+        "the prebuilt worker bundle is incomplete: " + displayPath(directory) + "\n" +
+            "Missing or empty required entries: " + missing.joinToString(", ") + "\n" +
+            "Re-run: bash examples/probe-app/scripts/copy-bundle-assets.sh"
+    }
+    val image = File(directory, "image.tar.gz")
+    val magic = ByteArray(2)
+    val read = image.inputStream().use { it.read(magic) }
+    check(read == 2 && magic[0] == 0x1f.toByte() && magic[1] == 0x8b.toByte()) {
+        "the prebuilt worker bundle has an invalid image.tar.gz (not gzip): " +
+            displayPath(image)
+    }
+}
+
+// A Zip task whose `from(dir)` is missing/empty is NO-SOURCE, and Gradle does not
+// run its actions (including doFirst) for a NO-SOURCE task. Keep the fail-loud
+// check in an always-running validator that packageWorkerBundle depends on, so an
+// APK can never ship an empty asset. The validator is deliberately not part of
+// JVM test graphs: only asset merge consumers depend on packageWorkerBundle.
+// `-Ppdsh.workerBundleDir=` relocates the input for an executable empty-fixture
+// test; it does not bypass validation, so it cannot publish a reduced product.
 val verifyWorkerBundle = tasks.register("verifyWorkerBundle") {
-    description = "Fails if the prebuilt worker bundle is absent (asset packaging only)"
+    description = "Fails if the prebuilt worker bundle is missing, empty or incomplete (asset packaging only)"
     group = "verification"
     doLast {
-        check(workerBundleDir.isDirectory) {
-            "the prebuilt worker bundle is missing: " +
-                workerBundleDir.relativeTo(repoRoot).path + "\n" +
-                "The APK needs it; it is not committed because it is ~65 MB.\n" +
-                "Generate it with the documented copy step (needs the pinned DSH checkout):\n" +
-                "  bash examples/probe-app/scripts/copy-bundle-assets.sh\n" +
-                "For a full DSH Web page, build the Web dist first:\n" +
-                "  bash scripts/ci/build-web-dist.sh\n" +
-                "then re-run the copy step. Nothing is copied into android/."
-        }
+        requireWorkerBundle(workerBundleDir)
     }
 }
 

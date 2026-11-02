@@ -23,7 +23,7 @@
 #                   $PDSH_TOOLCHAIN_DIR/android-sdk, then the bootstrap default
 #   GRADLE_USER_HOME
 #                   PDSH_GRADLE_USER_HOME, then caller GRADLE_USER_HOME, then
-#                   $XDG_CACHE_HOME/pdsh/gradle, then $HOME/.gradle
+#                   $XDG_CACHE_HOME/pdsh/gradle, then $HOME/pdsh/gradle
 #
 # macOS works with caller-supplied JAVA_HOME/ANDROID_HOME (or local.properties);
 # this script only resolves paths and exports environment variables, so it has
@@ -154,7 +154,7 @@ elif [ -n "${GRADLE_USER_HOME:-}" ]; then
 elif [ -n "${XDG_CACHE_HOME:-}" ]; then
   GRADLE_USER_HOME_RESOLVED="$(abs_path "$XDG_CACHE_HOME")/pdsh/gradle"
 elif [ -n "${HOME:-}" ]; then
-  GRADLE_USER_HOME_RESOLVED="$(abs_path "$HOME")/.gradle"
+  GRADLE_USER_HOME_RESOLVED="$(abs_path "$HOME")/pdsh/gradle"
 else
   die "no writable Gradle home: set GRADLE_USER_HOME, XDG_CACHE_HOME or HOME"
 fi

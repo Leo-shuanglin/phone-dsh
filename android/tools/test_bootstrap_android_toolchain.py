@@ -46,6 +46,14 @@ done
 if [ -n "${FAKE_CURL_MARKER:-}" ]; then
   echo "$FAKE_CURL_MARKER"
 fi
+if [ -n "${FAKE_CURL_FAIL_URL_CONTAINS:-}" ]; then
+  case "$url" in
+    *"$FAKE_CURL_FAIL_URL_CONTAINS"*)
+      echo "fake curl: forced failure for $url" >&2
+      exit 22
+      ;;
+  esac
+fi
 if [ -n "${FAKE_CURL_PARTIAL_EXIT:-}" ]; then
   [ -n "$out" ] || exit 2
   printf 'partial' > "$out"
@@ -243,6 +251,7 @@ class BootstrapToolchainTests(unittest.TestCase):
             "FAKE_CURL_EXIT",
             "FAKE_CURL_PARTIAL_EXIT",
             "FAKE_CURL_MARKER",
+            "FAKE_CURL_FAIL_URL_CONTAINS",
             "FAKE_CURL_LOG",
             "FAKE_JDK_ARCHIVE",
             "FAKE_SDK_ARCHIVE",
@@ -435,6 +444,26 @@ class BootstrapToolchainTests(unittest.TestCase):
         self.assertTrue((sdk / "platforms" / "android-35").is_dir())
         self.assertIn("ANDROID_HOME={}".format(sdk), output)
         self.assertIn("sdk.dir={}".format(sdk), self.local_properties.read_text(encoding="utf-8"))
+
+    def test_gradle_primary_failure_uses_verified_fallback_without_retries(self):
+        primary = "https://fake.invalid/gradle-primary.zip"
+        fallback = "https://fake.invalid/gradle-mirror.zip"
+        proc = self.run_script(
+            PDSH_GRADLE_URL=primary,
+            PDSH_GRADLE_FALLBACK_URLS=fallback,
+            FAKE_CURL_FAIL_URL_CONTAINS="gradle-primary",
+        )
+        output = self.combined(proc)
+        self.assertEqual(proc.returncode, 0, output)
+        self.assertTrue(self.local_properties.is_file())
+        lines = self.curl_log.read_text(encoding="utf-8").splitlines()
+        gradle_lines = [line for line in lines if "gradle-primary" in line or "gradle-mirror" in line]
+        self.assertEqual(len(gradle_lines), 2, gradle_lines)
+        self.assertIn("gradle-primary", gradle_lines[0])
+        self.assertIn("--retry 0", gradle_lines[0])
+        self.assertIn("gradle-mirror", gradle_lines[1])
+        self.assertIn("--retry 3", gradle_lines[1])
+        self.assertIn("downloaded and verified", output)
 
     def test_valid_java_home_is_reused_without_jdk_download(self):
         java_home = self.root / "jdk17"

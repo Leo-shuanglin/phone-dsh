@@ -73,10 +73,11 @@ fixture 用临时目录或拼接构造路径，只有嵌入的 shebang 行被跳
 `:app:testDebugUnitTest` / `:lib:testDebugUnitTest` 在缺少 NDK/Worker 镜像时连配置都失败。
 现在校验移到真正的打包消费者：
 
-- `:engine:packageWorkerBundle` 在 `doFirst` 检查 65 MB Worker bundle；任何消费该 asset 的
-  APK/asset merge 仍会失败。
-- `:app:package<Variant>PdshJni` 在 task action 中检查 `libpdsh_jni.so`；debug/release/
-  instrumented APK 打包仍会失败，纯 JVM 测试不会触发它。
+- `:engine:packageWorkerBundle` 依赖 always-running `:engine:verifyWorkerBundle`，校验 Worker
+  bundle 目录存在且 `index.html`/`boot.js`/`worker-entry.js`/`tool-worker-python.js`/`workflow-isolate.js`/
+  `image.tar.gz` 均非空、`image.tar.gz` 为 gzip；空目录或空文件同样失败，任何消费该 asset 的 APK/asset merge 仍会失败。
+- `:app:package<Variant>PdshJni` 在 task action 中检查 `libpdsh_jni.so` 存在、非空且为 ELF；
+  debug/release/instrumented APK 打包仍会失败，纯 JVM 测试不会触发它。
 - `:testkit` 只让 `merge*AndroidTest*` 依赖 Worker/scenario/JNI staging，不再挂到 `preBuild`；
   connected/instrumented 测试 APK 仍保留缺失输入时的失败。
 - 不生成 dummy `.so`、不伪造 Worker asset、不跳过测试任务，也没有可发布空产物的开关。

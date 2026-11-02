@@ -61,7 +61,7 @@ lands in `jdk-17/`, the SDK in `android-sdk/`, and verified archives in
 | `PDSH_CMDLINE_TOOLS_URL`, `PDSH_CMDLINE_TOOLS_SHA1` | pinned cmdline-tools override |
 | `PDSH_GRADLE_URL`, `PDSH_GRADLE_SHA256` | pinned Gradle archive override (tests only) |
 | `PDSH_GRADLE_FALLBACK_URLS` | transport mirrors tried only after the pinned SHA-256 matches; empty disables |
-| `PDSH_GRADLE_PRIMARY_TIMEOUT` | bounded window for the official Gradle endpoint before a verified mirror (default 180 s) |
+| `PDSH_GRADLE_PRIMARY_TIMEOUT` | single-attempt window for the official Gradle endpoint before a verified mirror (default 180 s) |
 | `PDSH_CONNECT_TIMEOUT`, `PDSH_DOWNLOAD_TIMEOUT` | finite curl limits, default 20 s / 1800 s |
 | `PDSH_CURL` | downloader executable override (tests supply a fake curl) |
 
@@ -74,11 +74,12 @@ The wrapper uses that official endpoint rather than `services.gradle.org`
 (which redirects to GitHub and has stalled in this environment), keeps the
 same version, and verifies `distributionSha256Sum` before unpacking. In this
 environment `downloads.gradle.org` also 307-redirects to GitHub release assets;
-install therefore tries it first and then the same archive name from public
-Gradle mirrors (`mirrors.huaweicloud.com`, `mirrors.cloud.tencent.com`) **only
-after the official SHA-256 verifies**, so a mirror cannot change the bytes. It
-then pre-seeds the committed wrapper cache with the verified archive, avoiding a
-second GitHub fetch.
+install therefore tries it first with a single bounded attempt (`--retry 0`,
+default 180 s) and then the same archive name from public Gradle mirrors
+(`mirrors.huaweicloud.com`, `mirrors.cloud.tencent.com`) **only after the
+official SHA-256 verifies**, so a mirror cannot change the bytes. Fallback
+attempts keep curl retries. Install then pre-seeds the committed wrapper cache
+with the verified archive, avoiding a second GitHub fetch.
 
 Install mode writes `android/local.properties` (gitignored) with
 `sdk.dir=<resolved SDK>`, preserving unrelated keys, and only after every
