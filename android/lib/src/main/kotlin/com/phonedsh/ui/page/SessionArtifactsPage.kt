@@ -18,12 +18,26 @@
 // evidence when it contains exactly one `phone <verb>` invocation (a mixed shell
 // line cannot prove which call produced which id).
 //
-// There is no preview *surface* here. iOS pushes a `QLPreviewController`
-// (`SessionArtifactsPage.swift:301`); Android ships no system previewer, so the
-// preview subpage (`SessionArtifactPreviewPage`, `:296`–`:319`) renders the
-// baseline's own "cannot preview" body (`:304`–`:305`) plus the one platform fact
-// iOS does not need, and its 分享 verb is a real `Intent.ACTION_SEND` chooser
-// (`:313`).
+// ---- the workspace source (L81) -------------------------------------------
+// The Office store above is the iOS subject; on this host the files a turn really
+// produces are the ones it wrote into the materialized workspace
+// (`files/xl/materialized/workspace`, the tree the files page and the preview
+// read). [WorkspaceSessionArtifactSource] lists that tree, and the host's *fact*
+// says which of those paths this session's own turns wrote. The two together are
+// the same split the baseline draws from its store and its transcript:
+//
+//  * 本 session — a path whose bytes changed while one of this session's turns was
+//    running (or that a write tool named and the disk really holds);
+//  * 未归属 — every other workspace file (an import from 添加文件, an earlier
+//    session's leftover), listed and labelled, never claimed.
+//
+// There is no preview *surface* here in the QuickLook sense. iOS pushes a
+// `QLPreviewController` (`SessionArtifactsPage.swift:301`); Android ships no
+// system previewer. The preview subpage (`SessionArtifactPreviewPage`, `:296`–
+// `:319`) therefore renders the text the host read for the file when there is one,
+// and the baseline's own "cannot preview" body (`:304`–`:305`) when there is not,
+// and its 分享 verb is a real `Intent.ACTION_SEND` chooser (`:313`) driven by the
+// host's [PreviewShare] uri or by the host's own share callback.
 //
 // Geometry: every length comes from `spec/ui/v1/tokens.json` (page-level block and
 // the file glyph's card inset); nothing is invented.
@@ -43,10 +57,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
@@ -67,14 +88,25 @@ import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.domain.connector.DeviceToolState
 import com.phonedsh.domain.connector.DeviceTranscriptItem
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.surface.preview.PreviewFileSource
+import com.phonedsh.ui.surface.preview.PreviewPathResolver
+import com.phonedsh.ui.surface.preview.PreviewResolution
+import com.phonedsh.ui.surface.preview.PreviewWorkspace
+import com.phonedsh.ui.surface.preview.WorkspacePreviewSource
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
+import java.io.IOException
+import java.nio.file.Path
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * One artifact the store holds.
  *
- * @property artifactId the store's id (`art_` prefixed); the attribution key.
+ * @property artifactId the store's id — an `art_`-prefixed record id for the iOS
+ *   Office store, or the workspace-relative path for this host's
+ *   [WorkspaceSessionArtifactSource]; the attribution key either way.
  * @property name the file name the store reports, extension included.
  * @property byteCount the file's size, formatted for a person by [formatFileSize].
  */
@@ -262,6 +294,11 @@ public data class SessionArtifactPage(
  * the page takes this interface and the host injects one. `fileExists` is separate
  * from `list` because a store can list a record whose file is already gone, which is
  * exactly the case the baseline reports as 文件已不在本机产物存储中。
+ *
+ * The last two methods are this host's additions and both have honest defaults:
+ * a store that cannot address its files answers `null` to [fileFor] (no share
+ * carried the file itself) and `null` to [content] (the preview then shows the
+ * baseline's "cannot preview" body instead of a body it did not read).
  */
 public interface SessionArtifactSource {
     /** Reads one page. */
@@ -269,6 +306,115 @@ public interface SessionArtifactSource {
 
     /** Whether the store still holds the file behind [artifactId]. */
     public suspend fun fileExists(artifactId: String): Boolean
+
+    /**
+     * The readable file behind [artifactId], or `null` when this store cannot
+     * address one (the Office double keeps records, not paths).
+     *
+     * A `content://` uri handed to another app must name a file the provider
+     * really serves, so the share path resolves through this value rather than
+     * re-joining a root and an id here.
+     */
+    public suspend fun fileFor(artifactId: String): Path? = null
+
+    /**
+     * The first text page of [artifactId], or `null` when the file is not text or
+     * the store has no read.
+     *
+     * The page draws whatever comes back and says so when it is a window rather
+     * than the whole file ([SessionArtifactContent.loadedBytes] vs
+     * [SessionArtifactContent.totalBytes]).
+     */
+    public suspend fun content(artifactId: String): SessionArtifactContent? = null
+}
+
+/**
+ * One readable window of an artifact's text.
+ *
+ * @param text the decoded text of the first page.
+ * @param loadedBytes how many of the file's bytes [text] covers.
+ * @param totalBytes the file's whole size, when the store measured one.
+ */
+public data class SessionArtifactContent(
+    public val text: String,
+    public val loadedBytes: Long,
+    public val totalBytes: Long?,
+)
+
+/**
+ * The workspace as an artifact store: the files a host can really hand over.
+ *
+ * The rows are the materialized workspace tree (`<filesDir>/xl/materialized/
+ * workspace`, [PreviewWorkspace.defaultRoot]) read through [PreviewFileSource] —
+ * the same listing the files page and the preview surface use, so the three can
+ * never disagree about what exists. The id of a row is its workspace-relative
+ * path, which is what the host's write fact names.
+ *
+ * A root that is not there (the app has not written a workspace yet) is reported
+ * as [IOException] with [NO_WORKSPACE_REASON], never as an empty list: "this host
+ * has no workspace to read" and "this workspace holds no files" are different
+ * facts, and the page renders a retry for the first and the empty body for the
+ * second.
+ *
+ * @param root the materialized workspace root, or `null` when the host has none.
+ */
+public class WorkspaceSessionArtifactSource(
+    public val root: Path?,
+) : SessionArtifactSource {
+    private val files: PreviewFileSource = WorkspacePreviewSource(root)
+
+    override suspend fun list(cursor: Int, limit: Int): SessionArtifactPage {
+        require(cursor >= 0) { "a cursor is never negative" }
+        require(limit > 0) { "a page limit is positive" }
+        val listing = files.files() ?: throw IOException(NO_WORKSPACE_REASON)
+        val rows = listing.map { file ->
+            SessionArtifactRef(
+                artifactId = file.relativePath,
+                name = file.relativePath.substringAfterLast('/'),
+                byteCount = file.size ?: 0L,
+            )
+        }
+        if (cursor >= rows.size) return SessionArtifactPage(emptyList(), nextCursor = null)
+        val end = minOf(cursor + minOf(limit, MAX_PAGE_ITEMS), rows.size)
+        return SessionArtifactPage(
+            items = rows.subList(cursor, end),
+            nextCursor = if (end < rows.size) end else null,
+        )
+    }
+
+    override suspend fun fileExists(artifactId: String): Boolean = fileFor(artifactId) != null
+
+    override suspend fun fileFor(artifactId: String): Path? = withContext(Dispatchers.IO) {
+        (PreviewPathResolver.resolve(root, artifactId) as? PreviewResolution.Resolved)?.file
+    }
+
+    override suspend fun content(artifactId: String): SessionArtifactContent? {
+        val resolved = withContext(Dispatchers.IO) {
+            PreviewPathResolver.resolve(root, artifactId) as? PreviewResolution.Resolved
+        } ?: return null
+        if (!files.looksLikeText(resolved.file)) return null
+        val page = try {
+            files.readPage(resolved.file, 0L)
+        } catch (_: IOException) {
+            // A file that cannot be read is "no preview", not a page of error text:
+            // the fallback body already tells the person to open it elsewhere.
+            return null
+        }
+        if (page.text.isEmpty()) return null
+        return SessionArtifactContent(
+            text = page.text,
+            loadedBytes = page.nextOffset.coerceAtMost(resolved.sizeBytes),
+            totalBytes = resolved.sizeBytes,
+        )
+    }
+
+    public companion object {
+        /** The reason a read with no workspace carries; the page words it for a person. */
+        public const val NO_WORKSPACE_REASON: String = "the host has no workspace yet"
+
+        /** The page size this store serves; the listing is small and sorted. */
+        public const val MAX_PAGE_ITEMS: Int = 50
+    }
 }
 
 /**
@@ -309,24 +455,72 @@ public class InMemorySessionArtifactSource(
 }
 
 /**
+ * The host's answer to "which workspace files did this session write?".
+ *
+ * This is the fact the workspace source is attributed with. It is deliberately
+ * **not** a directory scan and **not** a transcript parse:
+ *
+ *  * a scan of `/dsh/workspace` cannot tell this session's output from a file the
+ *    person imported with 添加文件 a minute earlier, or from a previous session's
+ *    leftover — the very distinction this page exists to make;
+ *  * the transcript names a *tool*, and for the one tool that writes almost
+ *    everything (`bash`) the path is buried in shell syntax; parsing redirections
+ *    is a heuristic that would both miss writes and invent them.
+ *
+ * So the host measures it: it snapshots the materialized workspace when a turn
+ * starts and diffs it when that turn ends (and after each of the turn's tool
+ * results), so a path is "this session's" when its bytes changed while one of this
+ * session's own turns was running. A path a named write tool (`write` / `edit` /
+ * `str_replace_editor`) announced is also accepted, and no row is ever drawn for a
+ * path the disk does not hold: the listing is the authority on existence, this
+ * fact only claims authorship.
+ *
+ * @param writtenPaths the workspace-relative paths this session's turns wrote, in
+ *   observation order, or `null` when the host made no measurement at all (a host
+ *   with no turn lane, or a session that never ran one).
+ */
+public data class SessionArtifactsFacts(
+    public val writtenPaths: List<String>? = null,
+)
+
+/**
  * One artifact opened for reading: the `navigationDestination(item: $preview)`
  * payload (`SessionArtifactsPage.swift:101`).
  *
  * iOS carries `(OfficeArtifactRef, URL)`: the file's own URL, which
  * `QLPreviewController` renders and `ShareLink` shares. This host's store can hand
- * over a `content://` uri when it has one ([contentUri]); when it has none the
- * preview still opens — the page shows the baseline's fallback body — and 分享
- * sends the artifact's descriptor instead of a file. The page never pretends a
- * uri exists.
+ * over a `content://` uri when it has one ([contentUri]) and the first text page it
+ * read ([text]); when it has neither the preview still opens — the page shows the
+ * baseline's fallback body — and 分享 sends the artifact's descriptor instead of a
+ * file. The page never pretends a uri or a body exists.
  *
  * @param artifact the row that was opened.
  * @param contentUri the `content://` uri the store grants read access to, or
  *   `null` when the store holds no shareable uri for this file.
+ * @param text the first text page of the file, or `null` when this host cannot
+ *   show it as text (a binary document, or a store with no read).
+ * @param loadedBytes how many bytes [text] covers; `null` when [text] is `null`.
+ * @param totalBytes the file's whole size when the host measured one, `null`
+ *   otherwise.
  */
 public data class SessionArtifactPreview(
     public val artifact: SessionArtifactRef,
     public val contentUri: String? = null,
-)
+    public val text: String? = null,
+    public val loadedBytes: Long? = null,
+    public val totalBytes: Long? = null,
+) {
+    /** True when the preview body is the host's read text rather than the fallback. */
+    public val hasText: Boolean get() = !text.isNullOrEmpty()
+
+    /** True when [text] is a window on a longer file. */
+    public val textTruncated: Boolean
+        get() {
+            val loaded = loadedBytes ?: return false
+            val total = totalBytes ?: return false
+            return loaded < total
+        }
+}
 
 /** The artifacts page's local UI state: the row being opened, and the open preview. */
 public data class SessionArtifactsLocalState(
@@ -373,18 +567,51 @@ public data class SessionArtifactsScreenState(
             local: SessionArtifactsLocalState = SessionArtifactsLocalState(),
             waiting: Boolean = false,
             failure: String? = null,
-        ): SessionArtifactsScreenState {
-            val ids = SessionArtifactAttribution.generatedArtifactIDs(evidence)
-            return SessionArtifactsScreenState(
-                assigned = artifacts.filter { it.artifactId in ids },
-                unassigned = artifacts.filter { it.artifactId !in ids },
-                loading = waiting,
-                failure = failure,
-                openFailure = null,
-                openingId = local.openingId,
-                preview = local.preview,
-            )
-        }
+        ): SessionArtifactsScreenState = fromIDs(
+            artifacts = artifacts,
+            ids = SessionArtifactAttribution.generatedArtifactIDs(evidence),
+            local = local,
+            waiting = waiting,
+            failure = failure,
+        )
+
+        /**
+         * Projects a workspace listing and the host's per-turn write fact.
+         *
+         * The ids are the fact's workspace-relative paths, so the split is the
+         * same rule as [from] with a measured evidence set instead of a transcript
+         * one. `null` (no measurement) claims nothing: every file lands in
+         * 未归属 rather than being attributed by guesswork.
+         */
+        public fun fromWorkspace(
+            artifacts: List<SessionArtifactRef>,
+            facts: SessionArtifactsFacts,
+            local: SessionArtifactsLocalState = SessionArtifactsLocalState(),
+            waiting: Boolean = false,
+            failure: String? = null,
+        ): SessionArtifactsScreenState = fromIDs(
+            artifacts = artifacts,
+            ids = facts.writtenPaths.orEmpty().toSet(),
+            local = local,
+            waiting = waiting,
+            failure = failure,
+        )
+
+        private fun fromIDs(
+            artifacts: List<SessionArtifactRef>,
+            ids: Set<String>,
+            local: SessionArtifactsLocalState,
+            waiting: Boolean,
+            failure: String?,
+        ): SessionArtifactsScreenState = SessionArtifactsScreenState(
+            assigned = artifacts.filter { it.artifactId in ids },
+            unassigned = artifacts.filter { it.artifactId !in ids },
+            loading = waiting,
+            failure = failure,
+            openFailure = null,
+            openingId = local.openingId,
+            preview = local.preview,
+        )
 
         /** Replaces the open failure, keeping every other field (the page's alert). */
         public fun withOpenFailure(
@@ -405,6 +632,12 @@ public data class SessionArtifactsScreenState(
  * @param onDismissOpenFailure dismiss the 无法打开产物 alert (`:108`).
  * @param onClosePreview leave the preview and return to the list; `null` keeps the
  *   preview without a back control (the list's 完成 is then the only exit).
+ * @param onShare the host's share action for the open preview, returning false when
+ *   the platform refused (no app can receive the file, or the provider would not
+ *   serve it). `null` keeps the page's own chooser, which is a real
+ *   `Intent.ACTION_SEND` built from [SessionArtifactPreview.contentUri] or the
+ *   artifact's descriptor. Either way the verb is drawn: the baseline's 分享 exists
+ *   on every preview (`SessionArtifactsPage.swift:310`–`:316`).
  */
 @Composable
 public fun SessionArtifactsPage(
@@ -415,12 +648,16 @@ public fun SessionArtifactsPage(
     onRetry: (() -> Unit)? = null,
     onDismissOpenFailure: (() -> Unit)? = null,
     onClosePreview: (() -> Unit)? = null,
+    onShare: ((SessionArtifactPreview) -> Boolean)? = null,
 ) {
     val openFailure = state.openFailure
     if (openFailure != null && onDismissOpenFailure != null) {
         ArtifactOpenFailureAlert(message = openFailure, onDismiss = onDismissOpenFailure)
     }
     val preview = state.preview
+    // 分享 is the preview's one action and its refusal is a fact, so a host share
+    // that fails must show somewhere: the same footer line the preview surface uses.
+    var shareFailed by remember(preview?.artifact?.artifactId) { mutableStateOf(false) }
     PageFrame(
         // The preview's title is the artifact's own name
         // (`navigationTitle(preview.artifact.name)`, `:308`); the list keeps the
@@ -432,7 +669,11 @@ public fun SessionArtifactsPage(
         actions = {
             if (preview != null) {
                 // `.toolbar { ToolbarItem(.primaryAction) { ShareLink… } }` (`:310`).
-                ArtifactShareAction(preview = preview)
+                ArtifactShareAction(
+                    preview = preview,
+                    onShare = onShare,
+                    onRefused = { shareFailed = true },
+                )
             } else {
                 SessionTextAction(
                     label = UiStrings.DEVICE_DONE,
@@ -443,7 +684,7 @@ public fun SessionArtifactsPage(
         },
     ) {
         if (preview != null) {
-            SessionArtifactPreviewPage(preview = preview)
+            SessionArtifactPreviewPage(preview = preview, shareFailed = shareFailed)
             return@PageFrame
         }
         LazyColumn(modifier = Modifier.fillMaxSize().testTag(UiPageTags.ARTIFACTS_LIST)) {
@@ -531,18 +772,27 @@ public fun SessionArtifactsPage(
  * own frame.
  *
  * The baseline renders `QLPreviewController.canPreview(url) ? quickLook : fallback`
- * (`:301`–`:306`). Android has no system previewer to ask, so this port always
- * takes the fallback branch and says so instead of pretending the file opened:
- * the baseline's two sentences (`:304`–`:305`) plus the one platform fact iOS does
- * not need. The file still reaches another app through 分享.
+ * (`:301`–`:306`). Android has no system previewer to ask, so this port reads the
+ * file through the host and takes one of two branches:
  *
- * @param preview the artifact the row opened, and the uri the store can share.
+ *  * the host read text ([SessionArtifactPreview.hasText]) — the text is the body,
+ *    in the mono face, scrollable and selectable, with the measured read window
+ *    stated when it is shorter than the file;
+ *  * no text (an Office document, a binary, a store with no read) — the baseline's
+ *    two sentences (`:304`–`:305`) plus the one platform fact iOS does not need.
+ *
+ * Either way the file still reaches another app through 分享, and a refused share
+ * says so instead of leaving the tap silent.
+ *
+ * @param preview the artifact the row opened, the uri the store can share and the
+ *   text the host read.
+ * @param shareFailed true when the host's own share action reported a refusal.
  */
 @Composable
-private fun SessionArtifactPreviewPage(preview: SessionArtifactPreview) {
+private fun SessionArtifactPreviewPage(preview: SessionArtifactPreview, shareFailed: Boolean) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .testTag(UiPageTags.ARTIFACTS_PREVIEW_ROOT)
@@ -550,35 +800,97 @@ private fun SessionArtifactPreviewPage(preview: SessionArtifactPreview) {
                 horizontal = tokens.geometry.pageOuterMarginH,
                 vertical = tokens.geometry.cardOuterMarginV,
             ),
-        contentAlignment = Alignment.Center,
+        verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.cardInset),
         ) {
             BasicText(
                 text = preview.artifact.name,
-                style = type.body.copy(color = tokens.colors.primary, textAlign = TextAlign.Center),
-                modifier = Modifier.testTag(UiPageTags.ARTIFACTS_PREVIEW_NAME),
+                style = type.body.copy(color = tokens.colors.primary),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(UiPageTags.ARTIFACTS_PREVIEW_NAME),
             )
             BasicText(
                 text = formatFileSize(preview.artifact.byteCount),
                 style = type.caption.copy(color = tokens.colors.tertiary),
             )
-            BasicText(
-                text = UiStrings.ARTIFACTS_NO_PREVIEW,
-                style = type.body.copy(color = tokens.colors.secondary, textAlign = TextAlign.Center),
+        }
+        val text = preview.text
+        if (text != null) {
+            SelectionContainer {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    BasicText(
+                        text = text,
+                        style = type.code.copy(color = tokens.colors.secondary),
+                    )
+                }
+            }
+            if (preview.textTruncated) {
+                val loaded = preview.loadedBytes ?: 0L
+                val total = preview.totalBytes ?: 0L
+                BasicText(
+                    text = UiStrings.PREVIEW_PROGRESS.format(
+                        formatFileSize(loaded),
+                        formatFileSize(total),
+                    ),
+                    style = type.caption.copy(color = tokens.colors.tertiary),
+                )
+            }
+        } else {
+            Box(
                 modifier = Modifier
-                    .testTag(UiPageTags.ARTIFACTS_PREVIEW_FALLBACK)
-                    .semantics { heading() },
-            )
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+                ) {
+                    BasicText(
+                        text = UiStrings.ARTIFACTS_NO_PREVIEW,
+                        style = type.body.copy(
+                            color = tokens.colors.secondary,
+                            textAlign = TextAlign.Center,
+                        ),
+                        modifier = Modifier
+                            .testTag(UiPageTags.ARTIFACTS_PREVIEW_FALLBACK)
+                            .semantics { heading() },
+                    )
+                    BasicText(
+                        text = UiStrings.ARTIFACTS_NO_PREVIEW_HINT,
+                        style = type.caption.copy(
+                            color = tokens.colors.secondary,
+                            textAlign = TextAlign.Center,
+                        ),
+                    )
+                    BasicText(
+                        text = UiStrings.ARTIFACTS_PREVIEW_PLATFORM_NOTE,
+                        style = type.caption.copy(
+                            color = tokens.colors.tertiary,
+                            textAlign = TextAlign.Center,
+                        ),
+                    )
+                }
+            }
+        }
+        if (shareFailed) {
+            // Fail-loud is audible too: an assertive live region interrupts.
             BasicText(
-                text = UiStrings.ARTIFACTS_NO_PREVIEW_HINT,
-                style = type.caption.copy(color = tokens.colors.secondary, textAlign = TextAlign.Center),
-            )
-            BasicText(
-                text = UiStrings.ARTIFACTS_PREVIEW_PLATFORM_NOTE,
-                style = type.caption.copy(color = tokens.colors.tertiary, textAlign = TextAlign.Center),
+                text = UiStrings.PREVIEW_SHARE_FAILED,
+                style = type.caption.copy(color = tokens.colors.warning),
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
             )
         }
     }
@@ -588,22 +900,36 @@ private fun SessionArtifactPreviewPage(preview: SessionArtifactPreview) {
  * 分享 (`:310`–`:316`): the one write-free action of the preview.
  *
  * `ShareLink(item: preview.url)` is the system's own share sheet, so the Android
- * port also emits the system's own chooser: a real `Intent.ACTION_SEND` started on
- * the composition's context. A context that is not an activity (a test host, a
- * themed wrapper) gets `FLAG_ACTIVITY_NEW_TASK`, which is what starting an
- * activity outside an activity requires.
+ * port also emits the system's own chooser. Two drivers:
+ *
+ *  * the host's [onShare] callback (what the app routes use: a `FileProvider` uri
+ *    plus `Intent.ACTION_SEND`, `PreviewShare`), whose `false` answer is drawn;
+ *  * with no host callback, the page's own [sessionArtifactShareChooser], started
+ *    on the composition's context. A context that is not an activity gets
+ *    `FLAG_ACTIVITY_NEW_TASK`, which is what starting an activity outside one
+ *    requires.
  *
  * @param preview the artifact to share.
+ * @param onShare the host's share action, or `null` for the page's own chooser.
+ * @param onRefused called when [onShare] answered false.
  */
 @Composable
-private fun ArtifactShareAction(preview: SessionArtifactPreview) {
+private fun ArtifactShareAction(
+    preview: SessionArtifactPreview,
+    onShare: ((SessionArtifactPreview) -> Boolean)?,
+    onRefused: () -> Unit,
+) {
     val context = LocalContext.current
     SessionTextAction(
         label = UiStrings.ARTIFACTS_PREVIEW_SHARE,
         onClick = {
-            val chooser = sessionArtifactShareChooser(preview)
-            if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(chooser)
+            if (onShare != null) {
+                if (!onShare(preview)) onRefused()
+            } else {
+                val chooser = sessionArtifactShareChooser(preview)
+                if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(chooser)
+            }
         },
         tone = SessionActionTone.ACCENT,
         modifier = Modifier.testTag(UiPageTags.ARTIFACTS_PREVIEW_SHARE),
@@ -937,6 +1263,7 @@ internal object SessionArtifactsPageTokens {
         UiTokenNames.COLORS_INPUT,
         UiTokenNames.TYPOGRAPHY_BODY,
         UiTokenNames.TYPOGRAPHY_CAPTION,
+        UiTokenNames.TYPOGRAPHY_CODE,
         UiTokenNames.TYPOGRAPHY_HEADLINE,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
         UiTokenNames.RADIUS_CARD,

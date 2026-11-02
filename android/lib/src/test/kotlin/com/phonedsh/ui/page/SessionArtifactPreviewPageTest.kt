@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
@@ -124,6 +125,84 @@ class SessionArtifactPreviewPageTest {
         compose.runOnIdle {
             compose.onNodeWithText(UiStrings.DEVICE_DONE).assertIsDisplayed()
         }
+    }
+
+    // ------------------------------------------------------- the text preview
+
+    @Test
+    fun `the host's text is the body instead of the fallback`() {
+        val text = "# orders\nrows: 3\namount total: 325.21\n"
+        val artifact = SessionArtifactRef("orders-summary.md", "orders-summary.md", 78)
+        showPreview(
+            SessionArtifactPreview(
+                artifact = artifact,
+                text = text,
+                loadedBytes = 78,
+                totalBytes = 78,
+            ),
+        )
+
+        compose.onNodeWithTag(UiPageTags.ARTIFACTS_PREVIEW_ROOT).assertIsDisplayed()
+        // The body is the file: the fallback body must not be drawn for a file the
+        // host really read, and the artifact's own line is still the content.
+        compose.onNodeWithTag(UiPageTags.ARTIFACTS_PREVIEW_FALLBACK).assertDoesNotExist()
+        compose.onNodeWithText(UiStrings.ARTIFACTS_NO_PREVIEW).assertDoesNotExist()
+        compose.onNode(
+            hasText("amount total: 325.21", substring = true),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        // 分享 stays the preview's one action.
+        compose.onNodeWithTag(UiPageTags.ARTIFACTS_PREVIEW_SHARE).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a partial read says how much of the file is on screen`() {
+        val artifact = SessionArtifactRef("long.md", "long.md", 4_096)
+        showPreview(
+            SessionArtifactPreview(
+                artifact = artifact,
+                text = "first page",
+                loadedBytes = 512,
+                totalBytes = 4_096,
+            ),
+        )
+
+        compose.onNodeWithText(
+            UiStrings.PREVIEW_PROGRESS.format(
+                formatFileSize(512),
+                formatFileSize(4_096),
+            ),
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a host share callback answers for itself and its refusal is drawn`() {
+        var shared: SessionArtifactPreview? = null
+        compose.setContent {
+            PdshTheme {
+                SessionArtifactsPage(
+                    state = SessionArtifactsScreenState.from(
+                        artifacts = listOf(docx),
+                        evidence = evidence,
+                        local = SessionArtifactsLocalState(preview = SessionArtifactPreview(docx)),
+                    ),
+                    onOpen = {},
+                    onDone = {},
+                    onClosePreview = {},
+                    onShare = { preview ->
+                        shared = preview
+                        false
+                    },
+                )
+            }
+        }
+
+        compose.onNodeWithTag(UiPageTags.ARTIFACTS_PREVIEW_SHARE).performClick()
+        compose.waitForIdle()
+
+        assertEquals("the host owns the share", docx, shared?.artifact)
+        // A refused share is a fact on screen, not a silent tap.
+        compose.onNodeWithText(UiStrings.PREVIEW_SHARE_FAILED).assertIsDisplayed()
     }
 
     // -------------------------------------------------------------- the share

@@ -37,7 +37,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,8 +59,9 @@ import com.phonedsh.ui.state.ToolEntry
 import com.phonedsh.ui.state.contextSourceName
 import com.phonedsh.ui.surface.BubbleBadge
 import com.phonedsh.ui.surface.BubbleRole
-import com.phonedsh.ui.surface.CodeBlock
+import com.phonedsh.ui.surface.ChangedFilesCard
 import com.phonedsh.ui.surface.ChatBubble
+import com.phonedsh.ui.surface.MarkdownBody
 import com.phonedsh.ui.surface.ThinkingPill
 import com.phonedsh.ui.surface.ToolDetailCard
 import com.phonedsh.ui.surface.ToolRow
@@ -231,26 +231,23 @@ internal fun ChatRowItem(
                 .padding(horizontal = horizontal),
             verticalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
         ) {
-            // The baseline renders an answer as markdown: prose paragraphs and, for
-            // a fenced block, the code card with its own language strip and 复制
-            // (ios-chat-assistant.png, ios-code-block.png). A body without a fence
-            // stays the one text node it always was.
-            val segments = remember(row.text) { splitFences(row.text) }
-            if (segments.size == 1 && segments[0] is MessageSegment.Prose) {
-                ChatBubble(role = BubbleRole.ASSISTANT, text = row.text)
-            } else {
-                segments.forEach { segment ->
-                    when (segment) {
-                        is MessageSegment.Prose -> ChatBubble(
-                            role = BubbleRole.ASSISTANT,
-                            text = segment.text,
-                        )
-                        is MessageSegment.Code -> CodeBlock(
-                            language = segment.language,
-                            body = segment.body,
-                        )
-                    }
-                }
+            // iOS renders an answer as markdown (`NativeMarkdownBody`): prose,
+            // headings, lists, quotes, fenced code, GFM tables, typeset math, raw
+            // HTML kept literal and footnote references. `MarkdownBody` owns that
+            // grammar; this row only places it.
+            MarkdownBody(
+                markdown = if (row.text.isEmpty()) EMPTY_ANSWER else row.text,
+                modifier = Modifier.testTag(UiTags.BUBBLE),
+            )
+            if (row.changes.isNotEmpty()) {
+                // iOS `assistantBody` is a 6 pt VStack and the card adds 4 pt of its
+                // own top padding (`NativeChangedFilesCard.swift:97`): 10 pt in total,
+                // which the column's 5 pt gap plus this 5 pt pad reproduces.
+                ChangedFilesCard(
+                    changes = row.changes,
+                    modifier = Modifier.padding(top = tokens.spacing.copyGap),
+                    onOpenFile = onOpenFile,
+                )
             }
             // iOS attaches visible message actions to *user* rows only; the
             // assistant body carries a context menu instead (`ChatPage.swift`
@@ -305,58 +302,6 @@ internal fun ChatRowItem(
                 .padding(horizontal = horizontal),
         )
     }
-}
-
-/**
- * One segment of an answer body: prose, or a fenced code block.
- *
- * iOS renders the markdown of an answer; the one block kind both baselines show is
- * the triple-backtick fence (`ios-chat-assistant.png`, `ios-code-block.png`), so
- * that is the only structure this splitter recognises. Everything else stays one
- * prose run and is drawn exactly as before.
- */
-internal sealed interface MessageSegment {
-    /** A run of prose; the text is passed through unchanged. */
-    public data class Prose(public val text: String) : MessageSegment
-
-    /** A fenced block: its info string (may be empty) and its body. */
-    public data class Code(public val language: String, public val body: String) : MessageSegment
-}
-
-/** The fence marker; three backticks is markdown's block delimiter. */
-private const val FENCE: String = "```"
-
-/**
- * Splits an answer body on triple-backtick fences.
- *
- * Pure: the same text always yields the same segments, so the row projection stays
- * replayable. An unterminated fence is *not* a code block (the stream simply has
- * not finished arriving); the remainder stays prose, so a half-arrived answer
- * never flashes an empty card.
- *
- * @param text the projected answer body.
- */
-internal fun splitFences(text: String): List<MessageSegment> {
-    if (!text.contains(FENCE)) return listOf(MessageSegment.Prose(text))
-    val segments = mutableListOf<MessageSegment>()
-    var cursor = 0
-    while (true) {
-        val open = text.indexOf(FENCE, cursor)
-        if (open < 0) break
-        val close = text.indexOf(FENCE, open + FENCE.length)
-        if (close < 0) break
-        val head = text.substring(cursor, open).trim('\n')
-        if (head.isNotEmpty()) segments.add(MessageSegment.Prose(head))
-        val inner = text.substring(open + FENCE.length, close)
-        val newline = inner.indexOf('\n')
-        val language = if (newline >= 0) inner.substring(0, newline).trim() else ""
-        val body = if (newline >= 0) inner.substring(newline + 1).trimEnd('\n') else inner
-        segments.add(MessageSegment.Code(language = language, body = body))
-        cursor = close + FENCE.length
-    }
-    val tail = text.substring(cursor).trim('\n')
-    if (tail.isNotEmpty()) segments.add(MessageSegment.Prose(tail))
-    return if (segments.isEmpty()) listOf(MessageSegment.Prose(text)) else segments
 }
 
 /**
@@ -658,6 +603,9 @@ private fun MessageActions(
         )
     }
 }
+
+/** The answer placeholder iOS draws while an answer has no text yet. */
+private const val EMPTY_ANSWER: String = "\u2026"
 
 private const val KIND_USER: String = "user"
 private const val KIND_ASSISTANT: String = "assistant"

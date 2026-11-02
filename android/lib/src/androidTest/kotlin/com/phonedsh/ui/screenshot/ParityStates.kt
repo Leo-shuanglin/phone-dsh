@@ -135,11 +135,12 @@ enum class ParityState(
         screen = "ChatPage",
         owner = "Chat lane",
         status = ParityStatus.CAPTURED,
-        note = "captured as the FIXED state (user bubble + one answer + the 5 轮 17 步 stats " +
-            "line), never as the old blank-transcript bug; the iOS shot was recaptured at " +
-            "86a39aac and is fixed too, but it draws the rich transcript (code block, E=mc², " +
-            "literal HTML, 脚注, 已编辑 6 个文件 card) while the sample is a 2-row thread, " +
-            "so the sheet shows a content gap, not a layout one",
+        note = "L84 transcribed the iOS sample (PreviewChatItems.official, NativeShell.swift:953-1040) " +
+            "into ChatParitySamples.chatOfficial: user message, context, reasoning, bash, six edits " +
+            "and the long answer (table, inline/display TeX, literal HTML, footnote, 已编辑 6 个文件 " +
+            "card), so the sheet compares the renderer, not a content gap. Both sides open at the " +
+            "transcript tail; the remaining offset is the page's transcript-to-composer gap (about " +
+            "17 pt on this side), which is page geometry, not markdown",
     ),
     PAGE_CHAT_FAILED(
         androidName = "page-chat-failed",

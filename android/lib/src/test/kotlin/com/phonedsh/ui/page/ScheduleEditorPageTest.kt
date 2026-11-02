@@ -20,7 +20,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsToggleable
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -156,6 +160,18 @@ class ScheduleEditorPageTest {
         scrollTo(UiPageTags.AUTOMATION_EDITOR_CHANGE_TIMING)
         compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_CHANGE_TIMING).assertIsDisplayed()
         compose.onAllNodesWithText(UiStrings.AUTOMATION_EDITOR_CHANGE_TIMING).onFirst().assertIsDisplayed()
+        // `Toggle("修改计划时间", isOn: $changeTiming)` (`:260`) is a switch, so the
+        // row is toggleable and carries the two words as its state description
+        // instead of as visible copy (L82). `changeTiming = false` here.
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_CHANGE_TIMING).assertIsToggleable()
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_CHANGE_TIMING).assert(
+            SemanticsMatcher.expectValue(
+                SemanticsProperties.StateDescription,
+                UiStrings.AUTOMATION_EDITOR_TOGGLE_OFF,
+            ),
+        )
+        // The word is not drawn as a replacement for the control any more.
+        compose.onNodeWithText(UiStrings.AUTOMATION_EDITOR_TOGGLE_OFF).assertDoesNotExist()
         // 当前规则 prints the host's own next-run string (`:274`), never a computed one.
         scrollTo(UiPageTags.AUTOMATION_EDITOR_CURRENT_RULE)
         compose.onNodeWithTag(UiPageTags.AUTOMATION_EDITOR_CURRENT_RULE).assertIsDisplayed()

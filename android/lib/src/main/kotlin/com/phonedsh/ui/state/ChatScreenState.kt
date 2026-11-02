@@ -24,12 +24,16 @@
 package com.phonedsh.ui.state
 
 import com.phonedsh.agentcore.JsonBool
+import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
+import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.projection.UiStateKind
 import com.phonedsh.ui.projection.UiStateNode
+import com.phonedsh.ui.surface.ChatFileChange
 import com.phonedsh.ui.surface.ComposerMode
 import com.phonedsh.ui.surface.ToolRowState
+import com.phonedsh.ui.surface.lineDelta
 
 /** What the page shows around the list. */
 public enum class ChatPhase {
@@ -132,12 +136,16 @@ public sealed interface ChatRow {
      *   host today, so it stays false and no halo/spinner is drawn.
      * @param closing true for the last assistant row of a closed turn, which is
      *   the only row iOS attaches the turn-wide actions to.
+     * @param changes the files the closed turn edited, in tool-call order; empty
+     *   hides the "已编辑 N 个文件" card. The row renderer draws it under the body,
+     *   the way `NativeChangedFilesCard.swift` sits inside `assistantBody`.
      */
     public data class Assistant(
         override val id: String,
         public val text: String,
         public val streaming: Boolean = false,
         public val closing: Boolean = false,
+        public val changes: List<ChatFileChange> = emptyList(),
     ) : ChatRow
 
     /** A reasoning row (iOS `NativeThinkingRow`). */
@@ -821,14 +829,20 @@ public data class ChatScreenState(
             }
 
             // iOS `isTurnClosingAssistant`: the turn's last assistant row carries the
-            // turn-wide actions; only a *closed* turn has one.
+            // turn-wide actions; only a *closed* turn has one. The same row also
+            // carries the turn's changed files (`NativeTranscriptProjector.changes`),
+            // because iOS renders that card inside `assistantBody` (`ChatPage.swift:3699`).
             val closed = settled.map { row ->
-                if (row is ChatRow.Assistant && assistantTurns[row.id]?.let { it !in openTurns } == true) {
-                    val turn = assistantTurns[row.id]
+                val turn = if (row is ChatRow.Assistant) assistantTurns[row.id] else null
+                if (row is ChatRow.Assistant && turn != null && turn !in openTurns) {
                     val lastAssistant = settled.lastOrNull {
                         it is ChatRow.Assistant && assistantTurns[it.id] == turn
                     }
-                    if (lastAssistant?.id == row.id) row.copy(closing = true) else row
+                    if (lastAssistant?.id == row.id) {
+                        row.copy(closing = true, changes = changedFilesFor(nodes, turn))
+                    } else {
+                        row
+                    }
                 } else {
                     row
                 }
@@ -1093,6 +1107,80 @@ private fun progressTitle(phase: String): String = when {
     phase == COMPACTION || phase.startsWith("$COMPACTION/") -> UiStrings.SYSTEM_EVENT_COMPACTION
     else -> UiStrings.SYSTEM_EVENT_TURN
 }
+
+/**
+ * The files a closed turn changed, from its tool-call arguments.
+ *
+ * Mirror: `NativeTranscriptProjector.changes(forTurn:in:)`
+ * (`NativeTranscriptProjector.swift:155-193`). iOS scans the turn's `toolCall`
+ * items whose state settled to `.ok`, keeps the tools that write (`write`,
+ * `edit`, `str_replace_editor`), reads the path and the old/new text from the
+ * call's arguments, and runs the LCS diff in `lineDelta`. A later call for the
+ * same path replaces the earlier entry *in place*, which is what the `positions`
+ * map does there and what [LinkedHashMap] does here.
+ *
+ * @param nodes the UiState projection, in order.
+ * @param turn the turn's node id (`.../turn/<tid>`); a node belongs to it when its
+ *   own id has that prefix before `/event/`.
+ * @return one entry per file, in first-touch order; empty when the turn edited none.
+ */
+private fun changedFilesFor(nodes: List<UiStateNode>, turn: String): List<ChatFileChange> {
+    // The call node carries the arguments; only a settled, successful result makes
+    // the iOS projector count it (`item.toolState == .ok`).
+    val settled = HashMap<String, Boolean>()
+    nodes.forEach { node ->
+        if (node.kind != UiStateKind.TOOL_ROW) return@forEach
+        if (node.props.string("phase") != PHASE_RESULT) return@forEach
+        val callId = node.props.string("callId") ?: return@forEach
+        settled[callId] = !node.props.boolean("isError")
+    }
+
+    val files = LinkedHashMap<String, ChatFileChange>()
+    nodes.forEach { node ->
+        if (node.kind != UiStateKind.TOOL_ROW) return@forEach
+        if (node.nodeID.substringBefore("/event/") != turn) return@forEach
+        if (node.props.string("phase") != PHASE_CALL) return@forEach
+        val name = node.props.string("name") ?: return@forEach
+        if (name !in CHANGE_TOOLS) return@forEach
+        val callId = node.props.string("callId") ?: node.nodeID
+        if (settled[callId] != true) return@forEach
+        val raw = node.props.string("arguments") ?: return@forEach
+        val args = (runCatching { JsonValue.parse(raw) }.getOrNull() as? JsonObject) ?: return@forEach
+        val path = (args["file_path"] ?: args["path"]).asString() ?: return@forEach
+        if (path.isEmpty()) return@forEach
+        var oldText: String? = null
+        var newText: String? = null
+        when (name) {
+            "write" -> newText = args["content"].asString()
+            "edit" -> {
+                oldText = args["old_string"].asString()
+                newText = args["new_string"].asString()
+            }
+            else -> when (args["command"].asString()) {
+                "create" -> newText = args["file_text"].asString() ?: ""
+                "str_replace" -> {
+                    oldText = args["old_str"].asString()
+                    newText = args["new_str"].asString() ?: ""
+                }
+                "insert" -> newText = args["new_str"].asString()
+            }
+        }
+        val text = newText ?: return@forEach
+        val (added, deleted) = lineDelta(oldText, text)
+        files[path] = ChatFileChange(path = path, display = path, added = added, deleted = deleted)
+    }
+    return files.values.toList()
+}
+
+/** A JSON value as a string, or `null` when it is absent or not a string. */
+private fun com.phonedsh.agentcore.JsonValue?.asString(): String? = (this as? JsonString)?.value
+
+/** The tools whose calls count as a changed file (iOS `changes(forTurn:)`, `:159`). */
+private val CHANGE_TOOLS: Set<String> = setOf("write", "edit", "str_replace_editor")
+
+/** The projector's tool-call phases (`UiStateProjector.toolCall` / `toolResult`). */
+private const val PHASE_CALL: String = "call"
+private const val PHASE_RESULT: String = "result"
 
 /** Reads a string prop, or `null` when absent or not a string. */
 internal fun com.phonedsh.agentcore.JsonObject.string(key: String): String? =

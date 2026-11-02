@@ -19,6 +19,7 @@ import com.phonedsh.ui.state.ChatEmpty
 import com.phonedsh.ui.state.ChatPhase
 import com.phonedsh.ui.state.ChatRow
 import com.phonedsh.ui.state.ChatScreenState
+import com.phonedsh.ui.state.ContextEntry
 import com.phonedsh.ui.state.ComposerState
 import com.phonedsh.ui.state.EffortOption
 import com.phonedsh.ui.state.GoalBarState
@@ -27,6 +28,7 @@ import com.phonedsh.ui.state.PendingAnswer
 import com.phonedsh.ui.state.PendingSlot
 import com.phonedsh.ui.state.RunStatus
 import com.phonedsh.ui.state.ToolEntry
+import com.phonedsh.ui.surface.ChatFileChange
 import com.phonedsh.ui.surface.ComposerMode
 import com.phonedsh.ui.surface.ToolRowState
 
@@ -97,6 +99,66 @@ object ChatParitySamples {
 
     /** `ios-chat-official.png`: the stats line under the composer card. */
     const val STATS: String = "5 轮 17 步  ·  54 tok/s  ·  1.0M tok  ·  缓命中 75%"
+
+    /** `NativeShell.swift:953-1040` (`PreviewChatItems.official`): the user message. */
+    const val OFFICIAL_USER: String = "请把官方 DSH 的消息结构完整适配到 iOS 原生。"
+
+    /** The injected context block's source (`NativeShell.swift:959`). */
+    const val OFFICIAL_CONTEXT_SOURCE: String = "agent-instructions"
+
+    /** The injection probe text the context block carries (`NativeShell.swift:960`). */
+    const val OFFICIAL_CONTEXT: String = "PDSH_CONTEXT_INJECTION_MUST_NOT_APPEAR"
+
+    /** The reasoning row (`NativeShell.swift:963`). */
+    const val OFFICIAL_THINKING: String =
+        "先对照官方事件结构。\n需要保留 thinking、工具和 Markdown 的原始顺序。\n\n再检查输入区和统计。"
+
+    /** The bash call's output (`NativeShell.swift:973`). */
+    const val OFFICIAL_BASH_OUTPUT: String = "12 tests passed"
+
+    /** The six files the turn edits (`NativeShell.swift:976-996`). */
+    val OFFICIAL_EDITED_FILES: List<String> = listOf(
+        "docs/design/phone-dsh-app/DESIGN.md",
+        "docs/design/phone-dsh-app/PRD.md",
+        "docs/design/phone-dsh-app/app-map.md",
+        "docs/design/phone-dsh-app/states.md",
+        "docs/design/phone-dsh-app/NativeChat.swift",
+        "docs/design/phone-dsh-app/NativeMarkdown.swift",
+    )
+
+    /**
+     * The answer body, verbatim from `NativeShell.swift:1000-1039` (trailing
+     * newline dropped, as the Swift multi-line literal does).
+     */
+    val OFFICIAL_ANSWER: String = """
+        ## 官方消息结构
+
+        正文支持 **粗体**、*斜体*、~~删除线~~、`Package.swift` 和 [安全链接](https://github.com/deepseek-ai/deepseek-harness)。
+
+        - [x] thinking 与工具调用
+        - [ ] iOS 原生 Markdown
+
+        > 消息、过程和输入区使用同一套官方结构。
+
+        | 模块 | 状态 |
+        |:--|--:|
+        | Markdown | 原生 |
+        | TeX | ${'$'}x^2 + y^2 = z^2${'$'} |
+
+        ```swift
+        struct NativeChat: View {
+            let official = true
+        }
+        ```
+
+        ${'$'}${'$'}
+        E = mc^2
+        ${'$'}${'$'}
+
+        原始 HTML 保持字面：<b>不会执行</b>。[^note]
+
+        [^note]: 流式与历史恢复使用同一事件投影。
+    """.trimIndent()
 
     // ------------------------------------------------------------------- states
 
@@ -266,17 +328,75 @@ object ChatParitySamples {
         ),
     )
 
-    /** `ios-chat-official.png`: a short thread plus the stats line under the card. */
+    /**
+     * `ios-chat-official.png`: the official session, transcribed from
+     * `NativeShell.swift:953-1040` (`PreviewChatItems.official`).
+     *
+     * Content, in order, and nothing else: one user message, one injected context
+     * block, one reasoning row, a bash call, six edit calls, the long answer
+     * (heading, inline styles, task list, quote, GFM table with inline TeX, swift
+     * fence, display TeX, literal HTML, footnote) and the "已编辑 6 个文件" card the
+     * iOS projector derives from the six edit calls.
+     */
     fun chatOfficial(): ChatScreenState = base().copy(
         phase = ChatPhase.IDLE,
         runStatus = RunStatus.STOPPED,
         rows = listOf(
-            ChatRow.User("row-user-1", USER_HELLO),
-            ChatRow.Assistant("row-assistant-1", ASSISTANT_NEXT, closing = true),
+            ChatRow.User("official-user", OFFICIAL_USER),
+            ChatRow.Context(
+                id = "official-context",
+                entries = listOf(
+                    // `NativeShell.swift:958-961` names the source and carries the
+                    // injection probe text. The Android row translates a known source
+                    // and hides the rest, so the internal name never prints.
+                    ContextEntry(
+                        source = OFFICIAL_CONTEXT_SOURCE,
+                        text = OFFICIAL_CONTEXT,
+                    ),
+                ),
+            ),
+            ChatRow.Thinking("official-thinking", OFFICIAL_THINKING, streaming = false),
+            ChatRow.ToolRun(
+                id = "official-tools",
+                entries = listOf(officialBash()) +
+                    OFFICIAL_EDITED_FILES.mapIndexed { index, path -> officialEdit(index, path) },
+            ),
+            ChatRow.Assistant(
+                id = "official-answer",
+                text = OFFICIAL_ANSWER,
+                closing = true,
+                // The same six files and the same +1 -1 the tool-call arguments in
+                // `NativeShell.swift:983-996` produce through the iOS LCS diff.
+                changes = OFFICIAL_EDITED_FILES.map { path ->
+                    ChatFileChange(path = path, display = path, added = 1, deleted = 1)
+                },
+            ),
         ),
         stats = STATS,
         contextPercent = 10,
         composer = ComposerState(canSubmit = false),
+    )
+
+    /** `NativeShell.swift:965-975`: the bash call the official session runs first. */
+    private fun officialBash(): ToolEntry = ToolEntry(
+        id = "official-bash",
+        title = "bash",
+        summary = OFFICIAL_BASH_OUTPUT,
+        state = ToolRowState.OK,
+        banner = "bash",
+        body = OFFICIAL_BASH_OUTPUT,
+        filePath = null,
+    )
+
+    /** `NativeShell.swift:983-996`: one `edit` call per file, one line replaced. */
+    private fun officialEdit(index: Int, path: String): ToolEntry = ToolEntry(
+        id = "official-edit-$index",
+        title = "edit",
+        summary = "Updated",
+        state = ToolRowState.OK,
+        banner = "edit",
+        body = "Updated",
+        filePath = path,
     )
 
     /** `ios-code-block.png`: the `swift` swatch on its own. */

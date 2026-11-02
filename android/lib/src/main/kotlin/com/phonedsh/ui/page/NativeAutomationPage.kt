@@ -75,6 +75,7 @@ package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -96,7 +97,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
@@ -113,6 +116,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -547,6 +552,13 @@ public data class AutomationScheduleView(
     public val ruleText: String,
     public val nextRunText: String,
     public val latestDeliveryText: String,
+    /**
+     * The host's last delivery, or `null` when it reported none. The detail page's
+     * `最近投递：…` line exists only when this is non-null
+     * (`NativeAutomationPage.swift:142`–`:145`), which is why the page needs the
+     * absence as a fact and not only as the 未知 word.
+     */
+    public val latestDeliveryAt: String?,
     public val sessionText: String,
     public val detailText: String?,
     /** True when a visible value is 未知, so the page can explain the word once. */
@@ -779,6 +791,7 @@ public data class AutomationScreenState(
                 ruleText = rule ?: UiStrings.UNKNOWN,
                 nextRunText = nextRun ?: UiStrings.UNKNOWN,
                 latestDeliveryText = latest ?: UiStrings.UNKNOWN,
+                latestDeliveryAt = latest,
                 sessionText = session ?: UiStrings.AUTOMATION_SESSION_UNKNOWN,
                 detailText = schedule.detail?.takeUnless { it.isBlank() },
                 hasUnmeasuredValues = schedule.status == ScheduleStatus.UNKNOWN ||
@@ -1304,7 +1317,11 @@ private fun AutomationScheduleRow(
         ) {
             BasicText(
                 text = schedule.title,
-                style = type.body.copy(color = tokens.colors.primary),
+                // `NativeAutomationPage.swift:52`: `.font(.body.weight(.medium))`.
+                style = type.body.copy(
+                    color = tokens.colors.primary,
+                    fontWeight = FontWeight.Medium,
+                ),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
@@ -1349,10 +1366,12 @@ private fun AutomationDetailContent(
     ) {
         if (state.detailMissing || detail == null) {
             item(key = "automation.detail.missing") {
+                // `ContentUnavailableView("任务不存在", systemImage: "clock.badge.xmark")`
+                // (`NativeAutomationPage.swift:148`): the baseline draws the title and
+                // a glyph, no second sentence, so the Android-only hint is gone.
                 InfoRow(
                     title = UiStrings.AUTOMATION_NOT_FOUND,
                     value = null,
-                    subtitle = UiStrings.AUTOMATION_NOT_FOUND_HINT,
                     tone = PageTone.DEGRADED,
                 )
             }
@@ -1373,16 +1392,17 @@ private fun AutomationDetailContent(
             }
             return@LazyColumn
         }
-        item(key = "automation.detail.status") {
+        // Section("提醒") (`NativeAutomationPage.swift:129`): 名称 / 规则 / 下次计划 /
+        // 状态 in that order, then the prompt as one selectable paragraph (`:134`).
+        // The 名称 row and the section header were missing on Android, and 会话 /
+        // 最近投递 were two rows the baseline does not draw in this section.
+        item(key = "automation.detail.reminder.label") {
+            SettingsSectionLabel(title = UiStrings.AUTOMATION_SECTION_REMINDER)
+        }
+        item(key = "automation.detail.name") {
             InfoRow(
-                title = UiStrings.AUTOMATION_STATUS,
-                value = detail.statusText,
-                tone = detail.statusTone,
-                subtitle = if (detail.statusTone == PageTone.UNKNOWN) {
-                    UiStrings.AUTOMATION_STATUS_UNKNOWN
-                } else {
-                    null
-                },
+                title = UiStrings.AUTOMATION_NAME,
+                value = detail.title,
             )
         }
         item(key = "automation.detail.rule") {
@@ -1399,34 +1419,25 @@ private fun AutomationDetailContent(
                 tone = if (detail.nextRunText == UiStrings.UNKNOWN) PageTone.UNKNOWN else PageTone.NORMAL,
             )
         }
-        item(key = "automation.detail.latest") {
+        item(key = "automation.detail.status") {
             InfoRow(
-                title = UiStrings.AUTOMATION_LATEST_DELIVERY,
-                value = detail.latestDeliveryText,
-                tone = if (detail.latestDeliveryText == UiStrings.UNKNOWN) {
-                    PageTone.UNKNOWN
+                title = UiStrings.AUTOMATION_STATUS,
+                value = detail.statusText,
+                tone = detail.statusTone,
+                subtitle = if (detail.statusTone == PageTone.UNKNOWN) {
+                    UiStrings.AUTOMATION_STATUS_UNKNOWN
                 } else {
-                    PageTone.NORMAL
-                },
-            )
-        }
-        item(key = "automation.detail.session") {
-            InfoRow(
-                title = UiStrings.AUTOMATION_SESSION,
-                value = detail.sessionText,
-                tone = if (detail.sessionText == UiStrings.AUTOMATION_SESSION_UNKNOWN) {
-                    PageTone.UNKNOWN
-                } else {
-                    PageTone.NORMAL
+                    null
                 },
             )
         }
         item(key = "automation.detail.prompt") {
-            InfoRow(
-                title = UiStrings.AUTOMATION_PROMPT,
-                value = null,
-                subtitle = detail.prompt,
-            )
+            AutomationParagraph(text = detail.prompt)
+        }
+        // Section("投递记录") (`:136`): the route into the saved deliveries, then the
+        // baseline's own `最近投递：…` sentence (`:142`–`:145`).
+        item(key = "automation.detail.history.label") {
+            SettingsSectionLabel(title = UiStrings.AUTOMATION_SECTION_HISTORY)
         }
         item(key = "automation.detail.history") {
             InfoRow(
@@ -1435,6 +1446,23 @@ private fun AutomationDetailContent(
                 onClick = { onOpenHistory(detail.id) },
                 modifier = Modifier.testTag(UiPageTags.AUTOMATION_HISTORY_OPEN),
             )
+        }
+        detail.latestDeliveryAt?.let { latest ->
+            item(key = "automation.detail.latest") {
+                // `Text("最近投递：\(latestDeliveryAt)").font(.caption)
+                // .foregroundStyle(.secondary)` (`NativeAutomationPage.swift:143`).
+                val tokens = LocalUiTokens.current
+                BasicText(
+                    text = UiStrings.AUTOMATION_LATEST_DELIVERY_FORMAT.format(latest),
+                    style = LocalUiType.current.caption.copy(color = tokens.colors.secondary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            horizontal = tokens.geometry.pageOuterMarginH,
+                            vertical = tokens.spacing.badgeInsetV,
+                        ),
+                )
+            }
         }
         if (onEditSchedule != null) {
             item(key = "automation.detail.edit") {
@@ -1505,18 +1533,24 @@ private fun AutomationHistoryContent(
     ) {
         if (state.detailMissing || state.detail == null) {
             item(key = "automation.history.missing") {
+                // `ContentUnavailableView("任务不存在", systemImage: "clock.badge.xmark")`
+                // (`NativeAutomationPage.swift:148`): the baseline draws the title and
+                // a glyph, no second sentence, so the Android-only hint is gone.
                 InfoRow(
                     title = UiStrings.AUTOMATION_NOT_FOUND,
                     value = null,
-                    subtitle = UiStrings.AUTOMATION_NOT_FOUND_HINT,
                     tone = PageTone.DEGRADED,
                 )
             }
             return@LazyColumn
         }
         state.historyNotice?.let { notice ->
+            // `Section { Text(notice).font(.footnote).foregroundStyle(.secondary) }`
+            // (`NativeAutomationPage.swift:184`–`:186`): the group is untitled on the
+            // baseline, so the notice is one 13 pt secondary line and not a 投递记录
+            // row.
             item(key = "automation.history.notice") {
-                InfoRow(title = UiStrings.AUTOMATION_HISTORY_TITLE, value = null, subtitle = notice)
+                AutomationSecondaryNote(text = notice)
             }
         }
         when (state.historyStatus) {
@@ -1619,11 +1653,17 @@ private fun AutomationDeliveryRow(delivery: AutomationDeliveryView) {
     ) {
         BasicText(
             text = delivery.deliveredAt,
-            style = type.secondary.copy(color = tokens.colors.primary),
+            // `NativeAutomationPage.swift:192`: `.font(.subheadline.weight(.medium))`
+            // (15 pt medium) for the delivered time.
+            style = type.subheadline.copy(
+                color = tokens.colors.primary,
+                fontWeight = FontWeight.Medium,
+            ),
         )
         BasicText(
             text = UiStrings.AUTOMATION_PLANNED_AT_FORMAT.format(delivery.scheduledAt),
-            style = type.caption.copy(color = tokens.colors.tertiary),
+            // `NativeAutomationPage.swift:193`: `.font(.caption)` in secondary ink.
+            style = type.caption.copy(color = tokens.colors.secondary),
         )
         delivery.prompt?.let { prompt ->
             BasicText(
@@ -1835,13 +1875,29 @@ private fun ScheduleEditorPage(
                 // `Toggle("修改计划时间", isOn: $changeTiming)` (`:260`): only an
                 // existing schedule offers the choice, and the row is the target.
                 item(key = "editor.change-timing") {
+                    // `Toggle("修改计划时间", isOn: $changeTiming)`
+                    // (`NativeAutomationPage.swift:260`) is a switch on the baseline,
+                    // not a word: the row keeps the label on the left and the control
+                    // on the right, and the two words above are the switch's own
+                    // state description instead of a replacement for it.
+                    val on = draft.changeTiming
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag(UiPageTags.AUTOMATION_EDITOR_CHANGE_TIMING)
                             .heightIn(min = tokens.geometry.pageRowMinHeight)
-                            .clickable(role = Role.Switch) { update(draft.copy(changeTiming = !draft.changeTiming)) }
-                            .semantics(mergeDescendants = true) { role = Role.Switch }
+                            .toggleable(
+                                value = on,
+                                role = Role.Switch,
+                                onValueChange = { next -> update(draft.copy(changeTiming = next)) },
+                            )
+                            .semantics(mergeDescendants = true) {
+                                stateDescription = if (on) {
+                                    UiStrings.AUTOMATION_EDITOR_TOGGLE_ON
+                                } else {
+                                    UiStrings.AUTOMATION_EDITOR_TOGGLE_OFF
+                                }
+                            }
                             .padding(
                                 horizontal = tokens.geometry.pageOuterMarginH,
                                 vertical = tokens.spacing.badgeInsetV,
@@ -1852,21 +1908,11 @@ private fun ScheduleEditorPage(
                         BasicText(
                             text = UiStrings.AUTOMATION_EDITOR_CHANGE_TIMING,
                             style = LocalUiType.current.body.copy(color = tokens.colors.primary),
+                            modifier = Modifier.weight(1f),
                         )
-                        BasicText(
-                            text = if (draft.changeTiming) {
-                                UiStrings.AUTOMATION_EDITOR_TOGGLE_ON
-                            } else {
-                                UiStrings.AUTOMATION_EDITOR_TOGGLE_OFF
-                            },
-                            style = LocalUiType.current.caption.copy(
-                                color = if (draft.changeTiming) {
-                                    tokens.colors.success
-                                } else {
-                                    tokens.colors.tertiary
-                                },
-                            ),
-                        )
+                        // The row owns the gesture (`toggleable` above), so the
+                        // switch is the visual half of one control, not a second one.
+                        Switch(checked = on, onCheckedChange = null)
                     }
                 }
             }
@@ -2282,6 +2328,49 @@ private fun AutomationNoteRow(text: String) {
 }
 
 /**
+ * The schedule's prompt as the baseline draws it on the detail page:
+ * `Text(schedule.prompt).textSelection(.enabled)` (`NativeAutomationPage.swift:134`),
+ * body size, no row label.
+ */
+@Composable
+private fun AutomationParagraph(text: String) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    SelectionContainer {
+        BasicText(
+            text = text,
+            style = type.body.copy(color = tokens.colors.primary),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    horizontal = tokens.geometry.pageOuterMarginH,
+                    vertical = tokens.spacing.badgeInsetV,
+                ),
+        )
+    }
+}
+
+/**
+ * A 13 pt secondary sentence: the baseline's `.font(.footnote)` line under an
+ * untitled group (`NativeAutomationPage.swift:185`, the history's notice).
+ */
+@Composable
+private fun AutomationSecondaryNote(text: String) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    BasicText(
+        text = text,
+        style = type.secondary.copy(color = tokens.colors.secondary),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = tokens.geometry.pageOuterMarginH,
+                vertical = tokens.spacing.badgeInsetV,
+            ),
+    )
+}
+
+/**
  * The catalog row's one-line meta.
  *
  * iOS renders `"\(sessionTitle) · \(schedule.detail)"` where `detail` is itself
@@ -2305,7 +2394,6 @@ internal object NativeAutomationPageTokens {
         "colors.onAccent",
         "colors.primary",
         "colors.secondary",
-        "colors.success",
         "colors.tertiary",
         "geometry.pageListRowMinHeight",
         "geometry.pageOuterMarginH",

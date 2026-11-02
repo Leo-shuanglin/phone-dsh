@@ -80,8 +80,8 @@ private const val FENCE: String = "```"
  *
  * An unterminated fence is the rest of the document as a code block, which is what
  * a reader expects of a file whose author forgot the closing marker (and unlike the
- * chat streamer's `splitFences`, there is no "more text is coming" here: the file
- * is on disk).
+ * chat streamer's `MarkdownParser`, there is no "more text is coming" here: the
+ * file is on disk).
  */
 public fun parseMarkdown(text: String): List<MarkdownBlock> {
     val blocks = mutableListOf<MarkdownBlock>()

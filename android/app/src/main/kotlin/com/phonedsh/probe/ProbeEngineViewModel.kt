@@ -483,6 +483,22 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     private val journalPaths = JournalPaths(workspaceRoot)
 
     /**
+     * The 本 session 产物 fact: which workspace files this session's turns wrote.
+     *
+     * One instance per process, over the same materialized tree the files page and
+     * the preview read (`WalPaths.materializedWorkspace`). It measures the tree
+     * around each chat turn rather than parsing tool arguments or scanning the
+     * folder — see [HostSessionArtifacts] for why neither of those can answer the
+     * page's question. Nothing is persisted: after a cold start the host has
+     * measured no turn, so it claims nothing and the page lists every file as 未归属.
+     */
+    private val sessionArtifacts = HostSessionArtifacts(walPaths.materializedWorkspace)
+
+    /** The artifact fact the shell collects; one value per turn measurement. */
+    internal val artifactFacts: kotlinx.coroutines.flow.StateFlow<com.phonedsh.ui.page.SessionArtifactsFacts> =
+        sessionArtifacts.facts
+
+    /**
      * The journal lane behind `JOURNAL` (`0x30`).
      *
      * The store is recovered inside `host.start()`, before the HELLO is final:
@@ -1290,6 +1306,9 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     internal fun newChatSession(): String {
         val at = clock.nowMillis()
         val id = "chat-$at-${++chatOrdinal}"
+        // A new conversation is a new session: it must not inherit the previous
+        // one's 本 session 产物 attribution.
+        sessionArtifacts.clear()
         chatIo.launch { chatStore.save(ChatRecord(id, "", at, emptyList(), emptyList())) }
         mutableSessions.update { snapshot ->
             snapshot.copy(
@@ -1610,6 +1629,10 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         )
         chatTurnJob = turnScope.launch(Dispatchers.IO) {
             var outcome: ChatTurnOutcome? = null
+            // The 本 session 产物 fact's baseline: every workspace file the person
+            // already had is *not* this turn's output. Taken after the awaits and
+            // before the prompt, on this IO thread (see HostSessionArtifacts).
+            sessionArtifacts.beginTurn()
             try {
                 withTimeout(HOST_READY_TIMEOUT_MILLIS) { host.ready.first { it } }
                 withTimeout(ENGINE_READY_TIMEOUT_MILLIS) {
@@ -1642,6 +1665,10 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             } finally {
                 chatRunner = null
                 turnRunning.set(false)
+                // Close the measurement even on a failed or stopped turn: a file a
+                // tool really wrote is on disk whether or not the answer settled, and
+                // the page must list it rather than losing it with the error path.
+                sessionArtifacts.endTurn()
                 mutableChat.update {
                     it.copy(running = false, streaming = "", activeTurnNodeId = null)
                 }
@@ -1680,6 +1707,9 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     /** Appends the node(s) one Worker event produces. */
     private fun onChatEvent(chatId: String, event: HostEvent) {
+        // The 本 session 产物 fact's corroborating signal (a named write tool's path).
+        // The bytes are the evidence; this only catches a same-size rewrite.
+        sessionArtifacts.observe(event)
         when (event.kind) {
             HostEventKind.TURN_STARTED -> mutableChat.update { current ->
                 if (current.chatId != chatId) {

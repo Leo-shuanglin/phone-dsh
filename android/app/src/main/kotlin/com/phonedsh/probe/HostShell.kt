@@ -160,6 +160,10 @@ internal fun HostShell(
     // L69: the chat page's one state. Collected here so a Worker event rebuilds the
     // page on the next frame; the view model is its only writer.
     val chatUi by engine.chat.collectAsState()
+    // L81: the 本 session 产物 attribution. Collected so a finished turn rebuilds the
+    // artifacts page with the paths it wrote; the diff itself runs on the turn's IO
+    // thread, never here.
+    val artifactFacts by engine.artifactFacts.collectAsState()
     val facts: PdshNavFacts = remember(
         state,
         handshake,
@@ -324,7 +328,7 @@ internal fun HostShell(
                                 Log.i(TAG_NAV, "PREF_WRITE ${write.wire}")
                                 settingsRevision++
                             } else {
-                                notice = "宿主未实现：${settingsWriteLabel(write)}，本次未保存"
+                                notice = "本宿主没有保存「${settingsWriteLabel(write)}」的命令，本次没有保存"
                             }
                         },
                         // The four generic pickers (语言 / 外观 / 工作步骤展示 / 收起时机 /
@@ -338,7 +342,7 @@ internal fun HostShell(
                                 )
                                 settingsRevision++
                             } else {
-                                notice = "宿主未实现：${preferenceRowLabel(choice.rowId)}，本次未保存"
+                                notice = "本宿主没有保存「${preferenceRowLabel(choice.rowId)}」的命令，本次没有保存"
                             }
                         },
                         onToggleDeveloperTools = { value ->
@@ -431,6 +435,10 @@ internal fun HostShell(
                         onChatAddImages = onPickImages,
                         onChatRemoveAttachment = engine::removeChatAttachment,
                         onChatDismissNotice = engine::dismissChatNotice,
+                        // L81: the 本 session 产物 page's attribution fact. The page
+                        // reads the real materialized workspace; this is what tells
+                        // it which of those files this session's turns wrote.
+                        artifacts = artifactFacts,
                     )
                 }
             }
@@ -571,6 +579,15 @@ private fun handleHostAction(
             }
         }
 
+        // 工作文件夹's 重试: this host owns exactly one workspace fact (the
+        // materialized tree's existence), so the retry is a real re-read — the
+        // settings revision forces the next facts walk, and nothing is claimed that
+        // was not measured again.
+        PdshHostAction.RefreshWorkspace -> {
+            onSettingsChanged()
+            "已重新读取：工作文件夹"
+        }
+
         // §1 assigns the MCP save to the host, so the gesture is a handoff. The
         // registry lives in the Worker (`/dsh/home/mcp.json`) and is edited through
         // the `phone/mcpUpsert` host tool, which this build does not register: a
@@ -578,7 +595,11 @@ private fun handleHostAction(
         is PdshHostAction.SaveMcpServer ->
             "本次未保存：本宿主没有改写 MCP 注册表的工具（phone/mcpUpsert）"
 
-        else -> "宿主未实现：${actionLabel(action)}，本次未提交"
+        // Every remaining action names a command this build does not carry. The
+        // line is specific instead of a template, and it never says a write landed:
+        // the page keeps whatever it was showing, and the person is told why.
+        // 新会话默认权限 and the settings writes above are the same shape (L74).
+        else -> "本宿主没有「${actionLabel(action)}」这条命令，页面保持只读，本次没有改动"
     }
 }
 
@@ -814,8 +835,13 @@ private fun hostRouteNote(route: PdshRoute): String? = when (route) {
     is PdshRoute.DeviceSession ->
         "演示数据：记录来自内存传输，不是真实设备会话"
 
-    is PdshRoute.SessionArtifacts ->
-        "演示数据：产物来自内存存储，不是真实设备文件"
+    // 本 session 产物 is not demo data any more (L81): the page lists the real
+    // materialized workspace and its 本 session rows come from the host's own
+    // per-turn write measurement. The page prints its own read states (暂无工作区 +
+    // 重试, 无法读取产物 + 重试, the two sections), so a route-wide line would be a
+    // second, weaker version of its disclosure — the same reason the files and
+    // preview routes have none.
+    is PdshRoute.SessionArtifacts -> null
 
     // The settings family's reference sheets render their own state: the route
     // hands each page the host's facts (聊天外观, 手机权限 — whose rows are the

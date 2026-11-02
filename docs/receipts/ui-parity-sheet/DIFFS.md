@@ -1382,3 +1382,111 @@ about 的 2.23% 里状态条占 1.45%、卡 0.71%（字 + 圆角边）、标题�
 4. `page_structure_check.py` 用大括号切函数：一个 `= expr` 体函数会让它把后续声明吞进
    span，`完成` 的 `text = label` 就被读成 unresolved-action（本次真实踩到）。已改成块体
    规避，但 checker 本身值得修。
+
+---
+
+# 十三、L84（2026-11-02）：chat 的真缺渲染器（表格 / 数学 / 字面 HTML / 脚注 / 已编辑卡）
+
+这一节只碰 `page-chat-official`。**样本是我（L84）搬的，不是 L78 搬的**：L78 的 §12.4 明确写了
+「本轮没有改样本」，`ChatParitySamples.chatOfficial()` 在本 lane 开工时仍是「hello test 123 +
+一段回答 + 统计」。为让渲染器真的被采到，本 lane 按 `NativeShell.swift:953-1040`
+（`PreviewChatItems.official`）逐字转写：用户消息、context 块、reasoning 行、bash、6 次 edit、
+长 Markdown、由 6 次 edit 派生的「已编辑 6 个文件」卡。**这不是为了凑数字改样本**——改的是
+「两侧内容不同」，不是把 Android 样本裁成 iOS 截图的样子。
+
+## 13.1 iOS 的五个渲染器各自做了什么（逐项行号）
+
+| 项 | 解析 | 绘制 | 结论 |
+|---|---|---|---|
+| 表格 | `NativeMarkdownModel.swift:164-178`：GFM `Table` → `.table(header, rows, alignments)` | `NativeMarkdownBody.swift:103-105` 分派 → `NativeMarkdownTable:132-199`：`ViewThatFits` 网格（`:151-162`）/ 逐行卡片（`:164-192`）二选一；行 `:201-242`，表头 semibold + `NativeChatTheme.selector` 底（`:224`），每格底部 0.5 线（`:221`），格内 16h/10v（`:219-220`），GFM 对齐在 `:227-241` | **真表格**，不是等宽文本。手机宽度下 `ViewThatFits` 走网格分支 |
+| 数学 `$$…$$` | `NativeMarkdownModel.swift:101-106`：`$$…$$`/`\[…\]` → ```` ```math ```` 块；`:108-118`：`\(…\)`/`$…$` → 代码 span 占位；`:205-208` 再变 `.math` | **真排版**：display 用 `NativeMathView`（SwiftMath `MTMathUILabel`，`NativeMarkdownBody.swift:324-344`）横滚（`:108-111`）；行内用 `MathImage` 出图（`:285-290`），失败才回退成原样 TeX | 不是原样显示；`ios-chat-official.png` 里 `E = mc²` 是排出来的 |
+| 字面 HTML | `HTMLBlock` → `.paragraph([.html(rawHTML)])`（`NativeMarkdownModel.swift:179`）；`InlineHTML` → `.html`（`:215`） | `case .html(let value): return Text(value)`（`NativeMarkdownBody.swift:293`） | **原样当文本**：不解析、不转义、无 WebView。Android 保留 `<b>…</b>` 字样就是照做 |
+| 脚注 `[^note]` | `:85-99` 抽走 `[^id]:` 定义行、把 `[^id]` 换成标记；`:221-235` 变 `.footnote`；`:51-59` 在正文后追加「**脚注**」段 + 每个定义一段 | 引用画成 9 pt、上移 6 pt 的上标（`NativeMarkdownBody.swift:291-292`） | 有引用上标 + 脚注节。**定义正文被丢**：`:56` 把定义的块子节点喂给 inline 解析器，什么都不产出；基线里就只剩 `[note]`，Android 按这个输出照做 |
+| 已编辑卡 | `NativeTranscriptProjector.swift:155-193`：按 turn 扫 `toolCall`、状态 `.ok`、工具 ∈ {write, edit, str_replace_editor}，从 **arguments** 取 path/old/new，LCS 在 `:240-254`；模型 `NativeConversationModels.swift:226-242` | `NativeChangedFilesCard.swift:5-100`：60 pt 表头（`:44-46`）+ 40×40 图标（`:19-29`）+ 标题（单文件用文件名，多文件「已编辑 N 个文件」，`:31-32`）+ `+N -M`（`:36-41`）；≤4 行（`:12`、`:51-74`）；>4 时「全部 N 个文件 ⌄」/「收起」（`:75-90`）；`colors.input` 底 + 0.5 描边 + 12 圆角（`:93-97`）；位置 `ChatPage.swift:3699-3701` | 真卡，不是一行字 |
+
+## 13.2 Android 补了什么、没补什么
+
+补（`ui/surface/MarkdownModel.kt` / `MarkdownBody.kt` / `ChangedFilesCard.kt`，`ChatRows.kt` 接上）：
+
+* **块间距 20 pt、正文 24 pt 行距**：`NativeMarkdownBody.swift:27/33`；旧的 `splitFences` 只有
+  5 pt 间距、行距按字体默认（约 20.3），这是长回答页尾部整体位移的主因之一。
+* **表格**：表头 `colors.approvalCard`（= iOS `NativeChatTheme.selector` `#F5F6F7`）底、每格底部
+  0.5 线、GFM 左/中/右对齐、等分列宽。
+* **数学**：一个有界 TeX 子集（变量斜体、`^`/`_` 上下标、常见符号表），display 横滚；**未知命令
+  原样保留**（不吞内容）。不是 TeX 引擎，也不假装是。
+* **字面 HTML**：文本原样，`<b>` 不上屏为粗体——与 iOS `Text(value)` 一致。
+* **脚注**：行内小号上标 + 文末「脚注」节（含 iOS 现状的定义正文丢失）。
+* **内联**：`**粗体**`、`*斜体*`、`~~删除线~~`、`` `code` ``、链接下划线。
+* **已编辑卡**：数据来自 `ChatScreenState.from` 对 tool-call `arguments` 的扫描（新增
+  `ChatRow.Assistant.changes`，默认空），`lineDelta` 逐字移植 iOS 的 LCS（`+N -M` 同值，
+  单测 `ChangedFilesCardTest` / `ChangedFilesProjectionTest` 锁定），折叠 4 行 + 「全部 N 个文件 ⌄」。
+* **首帧滚到尾**：`ChatPage.kt` 的 `LaunchedEffect` 原来在首帧拿不到 `totalItemsCount`，带历史的
+  会话会停在顶部；iOS 是 `scrollTo(tail, anchor: .bottom)`（`ChatPage.swift:1278`），改成等首帧
+  布局后 `scrollToItem(last, Int.MAX_VALUE)`。
+
+没补（都写清原因）：
+
+1. **表格的「逐行卡片」回退**（`NativeMarkdownBody.swift:164-192`）：Compose `Row` 没有
+   `ViewThatFits`；402 pt 基线永远走网格分支，回退分支没有可比较的对象，先不写。
+2. **MathImage/SwiftMath 等价排版**：自写子集能排出 `E = mc²`、`x²+y²=z²`，但不是 TeX 引擎；
+   分式/根号/矩阵等按原始 TeX 文本显示（iOS 会排出来）。
+3. **图片**（`case .image`）：iOS 会拉 `AsyncImage`/本地图；Android 仍按文本显示。
+4. **链接跳转**：只有颜色 + 下划线，没有 `openURL` 路由。
+5. **列表 checkbox 图标**：iOS 用 `checkmark.square.fill`/`square`，Android 用 `[x]`/`[ ]` 文本。
+6. **heading 的 24/22 pt**：tokens.json 没有这两个角色，用 20 pt `emptyStateTitle`。
+
+## 13.3 复测数字
+
+同一张并排图、两种量法（L78 §12.1 的切法 + 原图逐像素，任一通道差 >2 记不同）：
+
+| 口径 | 修前 | 修后 |
+|---|---:|---:|
+| sheet 面板切法（603×1311） | 26.52 % | **21.86 %** |
+| 原图 1206×2622 | 25.14 % | **19.41 %** |
+
+## 13.4 剩下的 19.41 % 在哪里（量出来的，不是猜的）
+
+把 Android 原图相对 iOS 逐行平移、找全局最优位移：**-50 px（16.7 pt）时 330..1990 这段的差从
+17.4 % 降到 8.59 %**。也就是说这一张剩下的差**主要是一段整体上移，不是某一块没画**。拆开：
+
+| 差异 | 量值 | 归属 |
+|---|---:|---|
+| 卡底 → composer 顶 | iOS 184 px / Android 217 px（**+33 px ≈ 11 pt**） | 页面几何（transcript 底距 + composer 顶距），不在本 lane 的渲染器里 |
+| composer 卡顶 | iOS 2154 / Android 2136（Android 高 18 px = 6 pt） | 同上，L78 的 chat 家族共用几何 |
+| 尾部内部（代码块底 → 卡顶） | iOS 565 px / Android 615 px（**+50 px**） | Compose 文本盒 vs SwiftUI：两行段落 48 pt vs 44.3 pt；display 数学块 Android 61 px vs iOS 的 SwiftMath 图高约 44 px（图片没有行盒）。试过 `LineHeightStyle` trim，实测把 19.41 推到 19.71，已回退 |
+| 状态栏带 0–62 pt | 1.45 % 帧 | iOS 系统 chrome，capture 条件（L78 §12.5） |
+| composer 与统计行字形/投影 | 2100–2500 带 20–63 % | L78 §12.5 的地板 |
+| 字形栅格 | 全帧 | CoreText vs Minikin |
+
+卡本身不是差异源：卡高 iOS 841 px / Android 842 px，行高 44 pt、表头 60 pt、`+6 -6`、
+`全部 6 个文件` 都对上了；它整体跟着尾部上移 50 px，所以整块被记成不同。
+
+## 13.5 越界（单独列，别埋）
+
+1. **`ui/state/ChatScreenState.kt`**：可写清单里没有它。为了让卡有数据（`ToolEntry.filePath` 在
+   生产路径永远是 null，全仓只有测试赋值），按 L84 与协调方的约定只做三处增量：
+   `ChatRow.Assistant.changes`（默认空）、`from()` 收尾按 turn 扫 `arguments`、卡片模型放
+   `ui/surface/`。没有改 `RunBuilder.add` 的既有语义，没有改别的 row 类型。
+2. **`ChatParitySamples.chatOfficial()` 的样本**：见本节开头——是 L84 按 iOS 源码转写的，
+   不是 L78 换的。测试只加了内容，没有动别的状态。
+3. `ChatPage.kt` 的首帧滚尾修正（见 13.2）会改变其他 chat 状态的 capture 像素（它们都是短内容，
+   `Arrangement.Bottom` 之下不受影响；但 assistant 的正文行距/块距从 5 pt/20.3 变成 20 pt/24，
+   那张 `page-chat-assistant.png` 已过期）。本 lane 只重采了 `page-chat-official`。
+
+## 13.6 门禁
+
+* `:lib:testDebugUnitTest :app:assembleDebug` **PASS**。
+* `phone-android-tests` **PASS**：2027 tests / 0 failing（`:lib` 752）。
+* `phone-p0-conformance` **PASS**（`ui_check` 含 token/provenance/contrast、page-structure 1 known / 0 new）。
+
+## 13.7 open questions
+
+1. **那 17 pt 的尾部上移是页面几何，不是渲染器**：`transcript` 的底距与 composer 顶距如果按
+   `ios-chat-official.png` 收一次，这一张还有约 8 个点可拿（dy=-50 时该带 8.59 %）。归属是 chat
+   页几何（L78 的家族），本 lane 没动。
+2. **iOS 自己丢了脚注定义正文**（`NativeMarkdownModel.swift:56` 把块节点当 inline 解析）。Android
+   照做才和基线一致；如果 iOS 修，`MarkdownParser.parse` 的脚注节要一起改。
+3. `ToolEntry.filePath` 的投影缺口仍在：卡片自己走 arguments，但工具行的「打开文件」chip 在生产
+   路径仍永远不显示。
+4. 卡片的 40×40 图标是文本字形（▤），iOS 是文件类型图标集；表格的逐行卡片回退、图片、链接路由
+   按 13.2 的清单后补。

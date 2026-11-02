@@ -347,8 +347,21 @@ class NativeAutomationPageTest {
         // The child page's bar keeps the iOS inline title (定时任务), not a new one.
         compose.onNodeWithText(UiStrings.AUTOMATION_TITLE).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.AUTOMATION_DETAIL).assertIsDisplayed()
+        // `Section("提醒")` (`NativeAutomationPage.swift:129`): 名称 / 规则 / 下次计划
+        // / 状态, then the prompt. L82 added the group's header and its 名称 row.
+        compose.onNodeWithText(UiStrings.AUTOMATION_SECTION_REMINDER).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.AUTOMATION_NAME).assertIsDisplayed()
+        compose.onNodeWithText("每日构建").assertIsDisplayed()
         compose.onNodeWithText(UiStrings.AUTOMATION_NEXT_RUN).assertIsDisplayed()
         compose.onNodeWithText("2026-11-02 09:00").assertIsDisplayed()
+        // `Section("投递记录")` (`:136`): the route plus the baseline's own
+        // `最近投递：…` sentence (`:142`–`:145`).
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_DETAIL)
+            .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_HISTORY_OPEN))
+        compose.onNodeWithText(UiStrings.AUTOMATION_SECTION_HISTORY).assertIsDisplayed()
+        compose.onNodeWithText(
+            UiStrings.AUTOMATION_LATEST_DELIVERY_FORMAT.format("2026-10-31 09:00"),
+        ).assertIsDisplayed()
 
         compose.onNodeWithTag(UiPageTags.AUTOMATION_DETAIL)
             .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_EDIT))
@@ -394,11 +407,17 @@ class NativeAutomationPageTest {
         compose.onNodeWithTag(UiPageTags.AUTOMATION_LIST)
             .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_ROW_PREFIX + "daily"))
         compose.onNodeWithTag(UiPageTags.AUTOMATION_ROW_PREFIX + "daily").performClick()
+        // The 提醒 and 投递记录 groups now precede the two verb rows (`:129`–`:146`),
+        // so a 640 dp viewport scrolls to them first.
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_DETAIL)
+            .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_EDIT))
         compose.onNodeWithText(UiStrings.AUTOMATION_EDIT_SHORT).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.AUTOMATION_DELETE).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.AUTOMATION_EDIT_SHORT).performClick()
         assertEquals(1, edited)
 
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_DETAIL)
+            .performScrollToNode(hasTestTag(UiPageTags.AUTOMATION_DELETE))
+        compose.onNodeWithText(UiStrings.AUTOMATION_DELETE).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.AUTOMATION_DELETE).performClick()
         // `NativeAutomationPage.swift:102`–`:109`: the destructive verb and a cancel.
         compose.onNode(isDialog()).assertIsDisplayed()

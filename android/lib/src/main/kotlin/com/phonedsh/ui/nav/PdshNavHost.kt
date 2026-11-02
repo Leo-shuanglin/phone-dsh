@@ -157,9 +157,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import com.phonedsh.domain.connector.DeviceConnectionEntry
 import com.phonedsh.domain.connector.DeviceConnectionSource
-import com.phonedsh.domain.connector.DeviceItemKind
 import com.phonedsh.domain.connector.DeviceSessionSource
-import com.phonedsh.domain.connector.DeviceTranscriptProjector
 import com.phonedsh.domain.connector.Endpoint
 import com.phonedsh.domain.connector.InMemoryConnector
 import com.phonedsh.domain.connector.InMemoryDeviceSessionProvider
@@ -173,14 +171,14 @@ import com.phonedsh.ui.page.DeviceConnectionLocalState
 import com.phonedsh.ui.page.DeviceConnectionScreenState
 import com.phonedsh.ui.page.DeviceSessionLocalState
 import com.phonedsh.ui.page.DeviceSessionScreenState
-import com.phonedsh.ui.page.InMemorySessionArtifactSource
 import com.phonedsh.ui.page.NativeDeviceConnectionPage
 import com.phonedsh.ui.page.NativeDeviceSessionPage
-import com.phonedsh.ui.page.SessionArtifactEvidence
 import com.phonedsh.ui.page.SessionArtifactRef
+import com.phonedsh.ui.page.SessionArtifactsFacts
 import com.phonedsh.ui.page.SessionArtifactsLocalState
 import com.phonedsh.ui.page.SessionArtifactsPage
 import com.phonedsh.ui.page.SessionArtifactsScreenState
+import com.phonedsh.ui.page.WorkspaceSessionArtifactSource
 import kotlinx.coroutines.launch
 
 // Appended by the L25 lane: the two embedded subpages it implemented
@@ -194,9 +192,11 @@ import java.time.ZoneId
 // Appended by the L29 lane: the one preview face (`PdshRoute.Preview`). The surface
 // lives in its own package so it can carry the resolver, the pager and the file
 // source together; the route is the only thing the router has to know about it.
+import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import com.phonedsh.ui.surface.preview.PreviewPage
 import com.phonedsh.ui.surface.preview.PreviewShare
+import com.phonedsh.ui.surface.preview.PreviewWorkspace
 import com.phonedsh.ui.surface.preview.rememberPreviewSource
 import java.io.File
 
@@ -322,6 +322,13 @@ private fun RouteBackLevel(
  *   over. A host that measures its own root passes it here; a host with no
  *   workspace passes a path that does not exist and the pages say "not reported"
  *   instead of inventing one.
+ * @param artifacts the host's measured write fact for the 本 session 产物 page: the
+ *   workspace-relative paths this session's own turns wrote. It is the *only*
+ *   attribution the workspace listing gets — the default (`null` paths) claims
+ *   nothing, so an unmeasured host lists every workspace file as 未归属 rather than
+ *   fabricating a provenance. The host that owns the turn lane fills it from its
+ *   per-turn workspace diff (see `:app`'s `HostSessionArtifacts`); a host with no
+ *   chat lane leaves it alone.
  * @param backLevel the host's one inner-level back chain (see [PdshBackLevel]), or
  *   `null` when the host keeps none. A route whose "one step back" is inside the
  *   page (the settings sheet's 新会话默认权限 child, the files list's folder
@@ -357,6 +364,9 @@ public fun PdshNavHost(
     preferencesWritable: FactState = FactState.UNKNOWN,
     chatSubpages: ChatSubpageFacts = ChatSubpageFacts(),
     workspaceRoot: File? = null,
+    // L81: the 本 session 产物 attribution fact. Default `null` paths = this host
+    // measured no turn, so the page claims nothing (every workspace file is 未归属).
+    artifacts: SessionArtifactsFacts = SessionArtifactsFacts(),
     backLevel: PdshBackLevel? = null,
     // The phone-permissions page is the one page whose 请求 is not a write this file
     // can perform: a system permission prompt belongs to the Activity, so the gesture
@@ -434,7 +444,7 @@ public fun PdshNavHost(
             PdshRoute.DeviceConnection -> DeviceConnectionRoute(onNavigate, onBack)
             is PdshRoute.DeviceSession -> DeviceSessionRoute(route.deviceId, onBack)
             is PdshRoute.SessionArtifacts ->
-                SessionArtifactsRoute(route.sessionId, onBack, backLevel)
+                SessionArtifactsRoute(route.sessionId, artifacts, workspaceRoot, onBack, backLevel)
             PdshRoute.AgentPresets -> AgentPresetsRoute(onBack)
             PdshRoute.PluginInventory -> PluginInventoryRoute(facts, onBack, onNavigate)
             PdshRoute.PhonePermissions -> PhonePermissionsRoute(
@@ -677,6 +687,10 @@ private fun WorkspaceFoldersRoute(
             local = local.apply(WorkspaceFoldersUiEvent.CancelDelete)
         },
         onDeleteCancel = { local = local.apply(WorkspaceFoldersUiEvent.CancelDelete) },
+        // 重试 on a failed folder read: the host re-reads the one workspace fact it
+        // owns and the page re-projects it (the L75 gap this closes — the page had
+        // the verb, no caller passed it).
+        onRetry = { onHostAction(PdshHostAction.RefreshWorkspace) },
     )
 }
 
@@ -828,6 +842,11 @@ private fun ToolsRoute(
                 ),
             )
         },
+        // 取消 exists only while a run is in flight (`state.running`), and this host
+        // has no exec channel: the run verb above is a handoff whose answer names
+        // that fact, so no run can ever be in flight and this control cannot be
+        // drawn. It is wired to nothing rather than to a fabricated cancel command;
+        // a host that really runs commands owns `phone/shellCancel` and fills this.
         onCancel = {},
         onBack = onBack,
     )
@@ -918,10 +937,22 @@ private fun PreviewRoute(
  */
 @Composable
 private fun ExportRoute(onBack: () -> Unit) {
+    // 写入诊断包 is a host command this build does not carry: there is no diagnostic
+    // bundle format, no writer and no provider root to share it from. The page is a
+    // real settings row, so it stays reachable and its 写入 verb answers instead of
+    // doing nothing: the attempt is recorded and the page prints its failure line.
+    // The route note (`hostRouteNote`) already says the command is missing before
+    // the button is pressed, so this line is the second half of the same fact.
+    var refused by remember { mutableStateOf(false) }
     ExportPage(
-        state = ExportScreenState.from(ExportFacts()),
+        state = ExportScreenState.from(
+            ExportFacts(failure = UiStrings.EXPORT_UNAVAILABLE.takeIf { refused }),
+        ),
         onBack = onBack,
-        onWrite = {},
+        onWrite = { refused = true },
+        // No written file exists, so there is nothing to share and nothing to retry.
+        onShare = null,
+        onRetry = null,
     )
 }
 
@@ -1325,21 +1356,37 @@ private fun DeviceSessionRoute(deviceId: String, onBack: () -> Unit) {
 }
 
 /**
- * 本 session 产物: the artifacts a session's transcript proves, plus the rest.
+ * 本 session 产物: the workspace files this session's turns wrote, plus the rest.
  *
- * The store is read page by page until it stops offering a cursor, exactly as the
- * baseline's `loadArtifacts` loop does. The open gesture checks the file is still
- * there and otherwise reports the baseline's 文件已不在本机产物存储中; a file that
- * does exist has no preview on this host, and the page says that too instead of
- * silently doing nothing.
+ * The store is this host's materialized workspace
+ * ([WorkspaceSessionArtifactSource]), and the attribution is the host's measured
+ * fact ([SessionArtifactsFacts.writtenPaths]) — not a transcript parse and not a
+ * bare directory scan (see the fact's own doc for why both fail this page's
+ * subject). Read page by page until the store stops offering a cursor, exactly as
+ * the baseline's `loadArtifacts` loop does.
+ *
+ * The open gesture resolves the path inside the workspace root, reads the first
+ * text page through the same [PreviewFileSource] the preview surface uses, and asks
+ * `PreviewShare` for the `content://` uri the file is shared at. A path the store
+ * no longer holds reports the baseline's 文件已不在本机产物存储中 (`:168`); a
+ * workspace that is not on disk yet reports the no-workspace line with a retry.
  */
 @Composable
 private fun SessionArtifactsRoute(
     sessionId: String,
+    facts: SessionArtifactsFacts,
+    workspaceRoot: File?,
     onBack: () -> Unit,
     backLevel: PdshBackLevel?,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current.applicationContext
+    // The same tree the files page and the preview surface read; a host with no
+    // workspace passes a path that does not exist, and the page says so.
+    val root = remember(context, workspaceRoot) {
+        workspaceRoot?.toPath() ?: PreviewWorkspace.defaultRoot(context.filesDir)
+    }
+    val source = remember(root) { WorkspaceSessionArtifactSource(root) }
     var artifacts by remember { mutableStateOf(emptyList<SessionArtifactRef>()) }
     var waiting by remember { mutableStateOf(true) }
     var failure by remember { mutableStateOf<String?>(null) }
@@ -1357,7 +1404,7 @@ private fun SessionArtifactsRoute(
             val loaded = mutableListOf<SessionArtifactRef>()
             var cursor = 0
             while (true) {
-                val page = demoArtifactSource.list(cursor, ARTIFACT_PAGE_SIZE)
+                val page = source.list(cursor, ARTIFACT_PAGE_SIZE)
                 loaded += page.items
                 val next = page.nextCursor ?: break
                 cursor = next
@@ -1365,16 +1412,24 @@ private fun SessionArtifactsRoute(
             artifacts = loaded
             failure = null
         } catch (t: Throwable) {
-            failure = UiStrings.ARTIFACTS_LOAD_FAILED.format(t.message ?: "")
+            // A workspace that is not there yet is not a store failure: the store
+            // said exactly that, and the page's own line names it.
+            failure = if (t is java.io.IOException &&
+                t.message == WorkspaceSessionArtifactSource.NO_WORKSPACE_REASON
+            ) {
+                UiStrings.ARTIFACTS_NO_WORKSPACE
+            } else {
+                UiStrings.ARTIFACTS_LOAD_FAILED.format(t.message ?: "")
+            }
         } finally {
             waiting = false
         }
     }
 
-    LaunchedEffect(sessionId) { load() }
-    val state = SessionArtifactsScreenState.from(
+    LaunchedEffect(sessionId, source, facts) { load() }
+    val state = SessionArtifactsScreenState.fromWorkspace(
         artifacts = artifacts,
-        evidence = demoArtifactEvidence,
+        facts = facts,
         local = local,
         waiting = waiting,
         failure = failure,
@@ -1384,23 +1439,49 @@ private fun SessionArtifactsRoute(
         onOpen = { artifact ->
             local = SessionArtifactsLocalState(openingId = artifact.artifactId)
             scope.launch {
-                val present = runCatching { demoArtifactSource.fileExists(artifact.artifactId) }
-                    .getOrDefault(false)
+                val file = runCatching { source.fileFor(artifact.artifactId) }.getOrNull()
+                val content = runCatching { source.content(artifact.artifactId) }.getOrNull()
                 // A file the store still holds opens the preview subpage
                 // (`SessionArtifactsPage.swift:101`, `:296`); one it does not is the
                 // baseline's 文件已不在本机产物存储中 alert (`:168`).
-                local = if (present) {
-                    SessionArtifactsLocalState(preview = SessionArtifactPreview(artifact))
+                local = if (file != null) {
+                    SessionArtifactsLocalState(
+                        preview = SessionArtifactPreview(
+                            artifact = artifact,
+                            contentUri = PreviewShare.uriFor(context, file)?.toString(),
+                            text = content?.text,
+                            loadedBytes = content?.loadedBytes,
+                            totalBytes = content?.totalBytes ?: artifact.byteCount,
+                        ),
+                    )
                 } else {
                     SessionArtifactsLocalState()
                 }
-                openFailure = if (present) null else UiStrings.ARTIFACTS_MISSING_FILE
+                openFailure = if (file != null) null else UiStrings.ARTIFACTS_MISSING_FILE
             }
         },
         onDone = onBack,
         onRetry = { scope.launch { load() } },
         onDismissOpenFailure = { openFailure = null },
         onClosePreview = { local = SessionArtifactsLocalState() },
+        // The real share: the provider grants the receiving app read access to the
+        // one file through the uri the preview already carries, so the workspace
+        // stays app-private and no `file://` uri is ever exposed.
+        onShare = { preview ->
+            val uri = preview.contentUri?.let(Uri::parse)
+            if (uri == null) {
+                false
+            } else {
+                PreviewShare.start(
+                    context,
+                    PreviewShare.intentFor(
+                        uri = uri,
+                        mime = PreviewShare.mimeOf(preview.artifact.name),
+                        title = UiStrings.ARTIFACTS_PREVIEW_SHARE_CHOOSER,
+                    ),
+                )
+            }
+        },
     )
 }
 
@@ -1455,33 +1536,6 @@ private fun demoDeviceSessionSource(deviceId: String): DeviceSessionSource = Dev
 /** The scripted transcript and its live tail, built once. */
 private val demoSessionTransport: InMemoryDeviceSessionTransport by lazy {
     InMemoryDeviceSessionTransport.demo()
-}
-
-/** The artifact store double: two files still present, one already gone. */
-private val demoArtifactSource: InMemorySessionArtifactSource by lazy {
-    InMemorySessionArtifactSource(
-        artifacts = listOf(
-            SessionArtifactRef("art_weekly_doc", "weekly-report.docx", 48_120),
-            SessionArtifactRef("art_budget_sheet", "budget.xlsx", 12_800),
-            SessionArtifactRef("art_old_draft", "旧草稿.pdf", 230_400),
-        ),
-        present = setOf("art_weekly_doc", "art_budget_sheet"),
-    )
-}
-
-/**
- * The attribution evidence: the demo transcript's own tool rows, projected by the
- * same `:domain` projector the session page uses. `art_weekly_doc` and
- * `art_budget_sheet` are named by successful producing calls, so they land in
- * 本 session; `art_old_draft` is claimed by nobody and lands in 未归属.
- */
-private val demoArtifactEvidence: List<SessionArtifactEvidence> by lazy {
-    DeviceTranscriptProjector.items(
-        InMemoryDeviceSessionTransport.demoRecords(),
-        InMemoryDeviceSessionTransport.DEMO_SESSION_ID,
-    )
-        .filter { it.kind == DeviceItemKind.TOOL_CALL }
-        .map { SessionArtifactEvidence.from(it) }
 }
 
 /** The fixtures' device id, protocol and address: the demo devices' own values. */

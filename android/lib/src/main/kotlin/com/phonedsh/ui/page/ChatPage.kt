@@ -132,6 +132,7 @@ import com.phonedsh.ui.surface.FoldedPendingRow
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -1174,8 +1175,16 @@ private fun ChatTranscript(
     }
     LaunchedEffect(state.rows.size) {
         if (scrolledAway || state.rows.isEmpty()) return@LaunchedEffect
-        val total = listState.layoutInfo.totalItemsCount
-        if (total > 0) listState.scrollToItem(total - 1)
+        // A session opened with history composes its rows and its layout in the
+        // same frame, so `totalItemsCount` is still 0 when this effect starts and a
+        // pre-populated transcript used to stand at its *top* (the official preview
+        // capture showed the first row while iOS showed the last). iOS opens at the
+        // tail: wait for the list's first layout, then land on the last row.
+        val total = snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
+        // The offset past the last row's height clamps to the list's own end, so the
+        // viewport lands on the *tail* of the last (possibly viewport-taller) answer
+        // instead of its first line.
+        listState.scrollToItem(total - 1, Int.MAX_VALUE)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {

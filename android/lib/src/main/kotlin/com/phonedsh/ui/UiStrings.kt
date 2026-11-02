@@ -680,7 +680,9 @@ public object UiStrings {
     // reads a clock.
     public const val AUTOMATION_TITLE: String = "定时任务"
     public const val AUTOMATION_EMPTY: String = "还没有定时任务"
-    public const val AUTOMATION_EMPTY_HINT: String = "到点让它自己跑，结果回到原会话。"
+    // `NativeAutomationPage.swift:23`: the baseline's sentence uses a half-width
+    // comma; L11 recorded the difference and left the copy alone, L82 aligns it.
+    public const val AUTOMATION_EMPTY_HINT: String = "到点让它自己跑,结果回到原会话。"
     public const val AUTOMATION_NEW: String = "新建任务"
     // The bar's 新建 and the empty block's 新建任务 are two different labels in the
     // baseline: the toolbar item is 新建 (`NativeAutomationPage.swift:83`), the
@@ -743,8 +745,20 @@ public object UiStrings {
     public const val AUTOMATION_HISTORY_MORE: String = "加载更早记录"
     public const val AUTOMATION_DELIVERED_AT: String = "投递时间"
     public const val AUTOMATION_PLANNED_AT: String = "计划时间"
-    public const val AUTOMATION_PLANNED_AT_FORMAT: String = "计划时间 %s"
+    // `Text("计划时间：\(item.scheduledAt)")` (`NativeAutomationPage.swift:193`):
+    // the baseline's line is one sentence with a full-width colon, not a label plus
+    // a value.
+    public const val AUTOMATION_PLANNED_AT_FORMAT: String = "计划时间：%s"
     public const val AUTOMATION_META_FORMAT: String = "%s · %s"
+
+    // L82: the four row labels `ScheduleDetailPage` / `ScheduleHistoryPage` draw and
+    // this page did not have (`NativeAutomationPage.swift:129`, `:130`, `:136`,
+    // `:142`–`:145`). `AUTOMATION_LATEST_DELIVERY` above is a detail *row* label the
+    // baseline does not draw there; the baseline's line is the one below it.
+    public const val AUTOMATION_SECTION_REMINDER: String = "提醒"
+    public const val AUTOMATION_NAME: String = "名称"
+    public const val AUTOMATION_SECTION_HISTORY: String = "投递记录"
+    public const val AUTOMATION_LATEST_DELIVERY_FORMAT: String = "最近投递：%s"
 
     // NativeConfigurationPage: the session-level settings groups and the plugin
     // inventory. Values are host-formatted; an unread value is 未知.
@@ -926,8 +940,12 @@ public object UiStrings {
     public const val BACKGROUND_SECTION_CELLS: String = "矩阵结果"
     public const val BACKGROUND_SECTION_TRANSITIONS: String = "迁移记录"
     public const val BACKGROUND_SCENARIO: String = "场景"
-    public const val BACKGROUND_SCENARIO_BACKGROUND: String = "退到后台"
-    public const val BACKGROUND_SCENARIO_LOCK: String = "锁屏"
+    // The two segment words the baseline's `Picker("Scenario")` draws
+    // (`BackgroundPage.swift:31` -> `ProbeKit/BackgroundProbe.swift:37-38`:
+    // "Background" / "Lock"). The L82 lane reads the picker's own options as
+    // control labels, so they keep the baseline language like the section titles.
+    public const val BACKGROUND_SCENARIO_BACKGROUND: String = "Background"
+    public const val BACKGROUND_SCENARIO_LOCK: String = "Lock"
     public const val BACKGROUND_PHASE: String = "阶段"
     public const val BACKGROUND_STATUS: String = "状态说明"
     public const val BACKGROUND_RUNNING: String = "运行中"
@@ -1015,6 +1033,11 @@ public object UiStrings {
     public const val EXPORT_FAILED: String = "导出诊断包读取失败"
     public const val EXPORT_WRITE_FAILED: String = "写报告失败，上一份报告还在"
     public const val EXPORT_UNMEASURED_HINT: String = "未测量的值显示为未知，不会当成空报告"
+    // L81: 写报告 answers with this because this host carries no diagnostic-bundle
+    // command (no format, no writer, no provider root to share one from). The page
+    // is a real settings row, so the verb stays and the answer names the gap.
+    public const val EXPORT_UNAVAILABLE: String =
+        "本宿主没有导出诊断包的命令，本次没有写出任何文件。"
 
     // DailyBriefPage: the snapshot, the items, the sources and this run's issues.
     public const val DAILY_BRIEF_TITLE: String = "每日简报"
@@ -1028,7 +1051,10 @@ public object UiStrings {
     public const val DAILY_BRIEF_ITEMS_EMPTY: String = "还没有可显示的内容"
     public const val DAILY_BRIEF_ITEMS_EMPTY_NO_SOURCE: String =
         "先添加一个 RSS 或 Atom 来源。已有内容会保存在本机，离线也能看。"
-    public const val DAILY_BRIEF_ITEMS_EMPTY_SOURCES: String = "下拉或点刷新；失败时不会清空上一期。"
+    // `DailyBriefPage.swift:82`: "下拉或点右上角刷新；失败时不会清空上一期。" The
+    // toolbar's 刷新 is the top-right control on both platforms, and the baseline
+    // sentence names it.
+    public const val DAILY_BRIEF_ITEMS_EMPTY_SOURCES: String = "下拉或点右上角刷新；失败时不会清空上一期。"
     public const val DAILY_BRIEF_SOURCE_COUNT: String = "%d 个来源"
     public const val DAILY_BRIEF_SECTION_SOURCES: String = "资讯来源"
     public const val DAILY_BRIEF_SHARE: String = "分享本期"
@@ -1305,8 +1331,9 @@ public object UiStrings {
         "宿主会为这一格请求一个持续处理窗口；被系统拒绝时退回普通后台任务。" +
             "设备跑过并记录下 arm 之前，这一项记为未验证。"
     public const val BACKGROUND_REQUIRED_WINDOW: String = "要求的窗口"
-    public const val BACKGROUND_WINDOW_10MIN: String = "10 分钟（PLAN）"
-    public const val BACKGROUND_WINDOW_60S: String = "60 秒（UI 检查）"
+    // `Picker("Required window")`'s two segment words (`BackgroundPage.swift:44-45`).
+    public const val BACKGROUND_WINDOW_10MIN: String = "10 minutes (PLAN)"
+    public const val BACKGROUND_WINDOW_60S: String = "60 seconds (UI check)"
     public const val BACKGROUND_REQUIRED_NOTE: String =
         "只有 10 分钟这一格满足 PLAN 矩阵；60 秒那次只是 UI 冒烟，导出为 PARTIAL。"
     public const val BACKGROUND_INSTRUCTION_BACKGROUND: String =
@@ -1427,6 +1454,13 @@ public object UiStrings {
     public const val SYSTEM_EVENT_RETRY: String = "模型请求重试"
     public const val SYSTEM_EVENT_COMPACTION: String = "上下文整理"
     public const val SYSTEM_EVENT_HOST: String = "主机事件"
+
+    // Changed-files card (NativeChangedFilesCard.swift:31-32, :78). The count and
+    // the file name are the card's own data; the words are the baseline's.
+    public const val CHANGED_FILES_TITLE: String = "已编辑 %d 个文件"
+    public const val CHANGED_FILES_SINGLE: String = "已编辑 %s"
+    public const val CHANGED_FILES_ALL: String = "全部 %d 个文件"
+    public const val CHANGED_FILES_COLLAPSE: String = "收起"
 
     // Message actions (NativeMessageActions.swift) and attachments.
     public const val MESSAGE_COPY: String = "复制"
@@ -1608,6 +1642,11 @@ public object UiStrings {
     // The open-failure alert's single button (`SessionArtifactsPage.swift:108`,
     // `role: .cancel`).
     public const val ARTIFACTS_ACKNOWLEDGE: String = "好"
+    // L81: the workspace-backed store's one extra read state. The workspace tree is
+    // created by the first write into it, so "not there yet" is a waiting state with
+    // a retry, never "this session produced nothing".
+    public const val ARTIFACTS_NO_WORKSPACE: String =
+        "宿主还没有可读的工作区；第一轮写入后这里会列出产物。"
     // -----------------------------------------------------------------------
     // L14 lane: the three B-group pages (appended, never reordered).
     // -----------------------------------------------------------------------

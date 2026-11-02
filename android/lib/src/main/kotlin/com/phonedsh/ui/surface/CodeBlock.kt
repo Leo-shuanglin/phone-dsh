@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: MIT
 //
 // Mirror: `ios-code-block.png` (the component swatch) and the code card inside
-// `ios-chat-assistant.png`. The iOS page renders an answer as markdown; the one
-// block kind both baseline screenshots show is the triple-backtick fence, so this
-// is the only structure `ChatRows.splitFences` recognises and the only one drawn
-// here.
+// `ios-chat-assistant.png`. The iOS page renders an answer's fenced blocks with
+// `DSSCodeBlock` (`NativeMarkdownBody.swift:100-102`); this card is its Android
+// counterpart and is reached from `MarkdownBody`'s `.code` block.
 //
 // Measured baseline (`Components.swift:151-225`, `ios-code-block.png`):
 //

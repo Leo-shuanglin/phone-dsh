@@ -504,7 +504,11 @@ private fun homeButtonStyle(primary: Boolean): TextStyle {
  */
 private fun sessionHandOff(onHostNotice: (String) -> Unit): (String) -> Unit = { gesture ->
     Log.i(TAG_SESSIONS, "host session gesture handed off: $gesture")
-    onHostNotice("宿主未实现：${sessionGestureLabel(gesture)}，本次未提交")
+    // L81: the sentence names the command the gesture needed instead of a generic
+    // refusal template. The list itself is a real host read, so nothing here is
+    // implied to have changed: the page keeps its rows and says why the gesture
+    // could not move one.
+    onHostNotice("本宿主没有「${sessionGestureLabel(gesture)}」的命令，页面保持只读，本次没有改动")
 }
 
 /** Flips one folder's fold; every folder starts expanded, like the baseline. */
