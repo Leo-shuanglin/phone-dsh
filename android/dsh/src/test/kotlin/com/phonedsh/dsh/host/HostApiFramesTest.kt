@@ -46,6 +46,16 @@ class HostApiFramesTest {
         }
     }
 
+    @Test
+    fun `an overflowing status must not wrap into a valid HTTP code`() {
+        // 2^32 + 200 narrows to 200 if the Long is converted before the range
+        // check. The decoder must reject it as a malformed head.
+        assertNull(
+            "an overflowing status must not become 200",
+            HostApiFrames.head(fields("4294967496")),
+        )
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `HostApiHead refuses the invented status zero`() {
         HostApiHead(status = 0, headers = emptyMap())

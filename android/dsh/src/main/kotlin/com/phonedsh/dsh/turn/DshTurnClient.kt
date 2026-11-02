@@ -399,8 +399,9 @@ class DshTurnClient(
          * A mux line is UTF-8, and the Worker writes one line per 4 MiB chunk
          * boundary (see `plugins/worker-entry/src/mux-bridge.ts` `writeMuxFrame`),
          * so a multi-byte character can straddle two chunks. Decoding each chunk
-         * on its own would replace that character with U+FFFD and make the whole
-         * line unparsable — the line is then silently dropped. Splitting the raw
+         * on its own replaces that character with U+FFFD: inside a JSON string the
+         * line can still parse with silently corrupted text, while elsewhere the
+         * damage can make the line unparsable and it is dropped. Splitting the raw
          * bytes and decoding only complete lines keeps every character intact.
          */
         private val lines = NdjsonLineBuffer()
@@ -458,6 +459,10 @@ class DshTurnClient(
          * deadline. Breaking on it (the previous behaviour) ended the turn after
          * 45 s of silence even though [timeoutMillis] allowed 180 s, which is
          * exactly what a long tool run or a slow first token looks like.
+         *
+         * Each read is also capped by the overall remaining budget: a final quiet
+         * window must not extend the caller's [timeoutMillis] by a full
+         * [nextTimeoutMillis].
          */
         suspend fun collectEvents(
             timeoutMillis: Long = TURN_TIMEOUT_MILLIS,
@@ -466,8 +471,11 @@ class DshTurnClient(
         ): List<HostEvent> {
             val events = ArrayList<HostEvent>()
             val deadline = System.currentTimeMillis() + timeoutMillis
-            while (System.currentTimeMillis() < deadline) {
-                val item = next(nextTimeoutMillis)
+            while (true) {
+                val remainingBudget = deadline - System.currentTimeMillis()
+                if (remainingBudget <= 0L) break
+                val readWindow = minOf(nextTimeoutMillis.coerceAtLeast(1L), remainingBudget)
+                val item = next(readWindow)
                 if (item == null) {
                     if (finished) break
                     continue

@@ -26,7 +26,9 @@ import com.phonedsh.dsh.host.WalUplink
 import com.phonedsh.hostevents.HostEventKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -159,5 +161,31 @@ class DshTurnStreamTest {
             "collection must not wait for the full turn budget",
             System.currentTimeMillis() - started < 5_000,
         )
+    }
+
+    @Test
+    fun `the overall deadline caps a longer per-read window`() = runBlocking {
+        val exchange = HostApiExchange(1)
+        val follow = follow(exchange)
+        val started = System.currentTimeMillis()
+        val events = withTimeout(2_000) {
+            // A 10 s read window must not extend a 150 ms overall budget.
+            follow.collectEvents(timeoutMillis = 150, nextTimeoutMillis = 10_000) { false }
+        }
+        val elapsed = System.currentTimeMillis() - started
+        assertTrue("the quiet stream must end at the overall deadline", events.isEmpty())
+        assertTrue("collection must stop near 150 ms, was ${elapsed} ms", elapsed < 1_500)
+    }
+
+    @Test
+    fun `cancelling collection interrupts the outstanding read promptly`() = runBlocking {
+        val exchange = HostApiExchange(1)
+        val follow = follow(exchange)
+        val job = launch(Dispatchers.Default) {
+            follow.collectEvents(timeoutMillis = 10_000, nextTimeoutMillis = 5_000) { false }
+        }
+        delay(50)
+        withTimeout(2_000) { job.cancelAndJoin() }
+        assertTrue("the read loop must end cancelled", job.isCancelled)
     }
 }
