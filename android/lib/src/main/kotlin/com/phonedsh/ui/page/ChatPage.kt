@@ -66,6 +66,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.lazy.LazyColumn
@@ -92,6 +93,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -168,6 +170,7 @@ import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
 import kotlinx.coroutines.flow.first
+import kotlin.math.abs
 import kotlinx.coroutines.launch
 
 /**
@@ -1722,30 +1725,61 @@ private fun ChatTranscript(
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
-    // True while the last row is on screen: the only condition that lets a new row
-    // pull the viewport (iOS `nearBottom`).
-    val nearBottom by remember(listState) {
+    val nearBottomTolerancePx = with(LocalDensity.current) { HomeMetrics.navButton.toPx() }
+    // Seeing the last index is not enough: a very tall last row can remain visible
+    // while the reader is still far from its tail. Compare its measured bottom to
+    // the actual viewport edge, including LazyColumn's bottom content padding.
+    val nearBottom by remember(listState, nearBottomTolerancePx) {
         derivedStateOf {
             val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
-            last.index >= info.totalItemsCount - 1
+            if (info.totalItemsCount == 0) return@derivedStateOf true
+            val tail = info.visibleItemsInfo.firstOrNull { it.index == info.totalItemsCount - 1 }
+                ?: return@derivedStateOf false
+            val viewportBottom = info.viewportEndOffset - info.afterContentPadding
+            abs(tail.offset + tail.size - viewportBottom) <= nearBottomTolerancePx
         }
     }
     // "The reader scrolled away" is a user gesture, not a measurement: only a
     // user drag can set it, and being near the tail again clears it (iOS
     // `userScrolledAway` + `nearBottom`).
-    var scrolledAway by remember { mutableStateOf(false) }
+    var scrolledAway by remember(state.sessionID) { mutableStateOf(false) }
     // True while this composable itself is placing the viewport. A programmatic
     // scroll is not a reader gesture: without this flag the open-at-tail scroll
     // counts as "the reader scrolled away", the pill appears over a transcript
     // nobody touched, and the next rows update refuses to follow the tail.
-    var autoScrolling by remember { mutableStateOf(false) }
+    var autoScrolling by remember(state.sessionID) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val rowsIdentityKey = remember(state.rows) {
+        state.rows.joinToString(separator = "\u0000") { it.id }
+    }
+    var scrollSessionID by remember { mutableStateOf(state.sessionID) }
+
+    suspend fun scrollToTail(animate: Boolean) {
+        val itemCount = listState.layoutInfo.totalItemsCount
+        if (itemCount <= 1) return
+        autoScrolling = true
+        try {
+            val tailIndex = itemCount - 1
+            if (animate) listState.animateScrollToItem(tailIndex) else listState.scrollToItem(tailIndex)
+            withFrameNanos { }
+            val info = listState.layoutInfo
+            val tail = info.visibleItemsInfo.firstOrNull { it.index == tailIndex } ?: return
+            val viewportBottom = info.viewportEndOffset - info.afterContentPadding
+            val remaining = (tail.offset + tail.size - viewportBottom).coerceAtLeast(0)
+            if (remaining > 0) {
+                if (animate) listState.animateScrollBy(remaining.toFloat())
+                else listState.scrollBy(remaining.toFloat())
+            }
+        } finally {
+            autoScrolling = false
+        }
+    }
+
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress to nearBottom }.collect { (scrolling, near) ->
             if (autoScrolling) return@collect
             if (scrolling && !near) scrolledAway = true
-            if (near) scrolledAway = false
+            if (!scrolling && near) scrolledAway = false
         }
     }
     // The tail is keyed on the rows' *identity*, not only their count: a restored
@@ -1753,34 +1787,54 @@ private fun ChatTranscript(
     // and a LazyColumn that cannot match a previous key starts again at the top.
     // Keyed on `size` that replacement was invisible, so the transcript stayed on
     // its first message (measured on the phone, 2026-11-02).
-    val rowsKey = remember(state.rows) {
-        state.rows.joinToString(separator = "\u0000") { it.id }
+    // Row identities handle append/history replacement. The session key is
+    // separate so switching after reading away opens the new conversation at its
+    // tail, even if its row ids match the previous session's ids.
+    LaunchedEffect(state.sessionID, rowsIdentityKey) {
+        val switchedSession = scrollSessionID != state.sessionID
+        if (switchedSession) {
+            scrollSessionID = state.sessionID
+            scrolledAway = false
+        }
+        if (state.rows.isEmpty()) return@LaunchedEffect
+        if (!switchedSession && listState.isScrollInProgress) {
+            snapshotFlow { listState.isScrollInProgress }.first { !it }
+            withFrameNanos { }
+        }
+        if (!switchedSession && scrolledAway) return@LaunchedEffect
+        snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 1 }
+        withFrameNanos { }
+        if (!switchedSession && (scrolledAway || listState.isScrollInProgress)) return@LaunchedEffect
+        scrollToTail(animate = false)
     }
-    LaunchedEffect(rowsKey) {
-        if (scrolledAway || state.rows.isEmpty()) return@LaunchedEffect
-        // A session opened with history composes its rows and its layout in the
-        // same frame, so `totalItemsCount` is still 0 when this effect starts and a
-        // pre-populated transcript used to stand at its *top* (the official preview
-        // capture showed the first row while iOS showed the last). iOS opens at the
-        // tail: wait for the list's first layout, then land on the last row.
-        val total = snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
-        autoScrolling = true
-        try {
-            // Land on the last row, then scroll the remaining distance so a last
-            // row taller than the viewport shows its *end* (iOS opens at the tail
-            // of the answer, not at its first line). Measuring the remainder is
-            // what `scrollToItem(Int.MAX_VALUE)` was trying to do by overflowing
-            // the offset, which lands nowhere on a real device.
-            listState.scrollToItem(total - 1)
+
+    // Streaming text can grow under the same row id. Images/math can change row
+    // height asynchronously, and the IME changes viewport height; none changes
+    // the identity key above. Follow those layout changes only while the reader
+    // is at the tail and no touch/fling is active.
+    LaunchedEffect(listState, state.sessionID, rowsIdentityKey) {
+        var previousSizes: Map<Int, Int>? = null
+        var previousViewportHeight: Int? = null
+        snapshotFlow {
             val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()
-            if (last != null && last.index >= total - 1) {
-                val past = last.offset + last.size -
-                    (info.viewportEndOffset - info.afterContentPadding)
-                if (past > 0) listState.scrollBy(past.toFloat())
+            info.visibleItemsInfo.associate { it.index to it.size } to
+                (info.viewportEndOffset - info.viewportStartOffset)
+        }.collect { (currentSizes, viewportHeight) ->
+            val previous = previousSizes
+            val previousViewport = previousViewportHeight
+            previousSizes = currentSizes
+            previousViewportHeight = viewportHeight
+            val rowHeightChanged = previous != null && currentSizes.any { (index, size) ->
+                previous[index]?.let { it != size } == true
             }
-        } finally {
-            autoScrolling = false
+            val viewportChanged = previousViewport != null && previousViewport != viewportHeight
+            if (!(rowHeightChanged || viewportChanged) || state.rows.isEmpty() || scrolledAway ||
+                autoScrolling || listState.isScrollInProgress
+            ) return@collect
+            withFrameNanos { }
+            if (!scrolledAway && !autoScrolling && !listState.isScrollInProgress) {
+                scrollToTail(animate = false)
+            }
         }
     }
 
@@ -1864,9 +1918,7 @@ private fun ChatTranscript(
                         .clickable(role = Role.Button) {
                             scrolledAway = false
                             scope.launch {
-                                listState.animateScrollToItem(
-                                    (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0),
-                                )
+                                scrollToTail(animate = true)
                             }
                         }
                         .padding(
