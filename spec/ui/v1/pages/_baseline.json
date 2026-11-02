@@ -1,36 +1,8 @@
 {
  "schema": "pdsh.ui.page-structure-baseline/1",
- "note": "Reconciled against iOS PR22 and the current Android source inventory. This ratchet now holds 48 observed divergences on 9 pages; it only shrinks. Removed the obsolete HomeDrawer comparison against legacy SessionsPage, the resolved grouped Settings index labels, NativeWorkbench picker options now represented by its source-extracted Picker, and source-resolved chat drawer action. No divergence or whitelist entry was added. Newly exposed HomeDrawer source gaps and other strict findings remain visible until their owning lane closes them.",
+ "note": "Reconciled against iOS PR22 and the current Android source inventory. This ratchet now holds 44 observed divergences on 9 pages; it only shrinks. Removed the obsolete HomeDrawer comparison against legacy SessionsPage, the resolved grouped Settings index labels, NativeWorkbench picker options now represented by its source-extracted Picker, and source-resolved chat drawer action. No divergence or whitelist entry was added. Newly exposed HomeDrawer source gaps and other strict findings remain visible until their owning lane closes them. Current header menu now uses the actual PR22 工作区/插件与工具 labels; the four resolved old-label entries were removed.",
  "contracts": 34,
  "divergences": [
-  {
-   "page": "chat",
-   "kind": "extra-action",
-   "name": "右侧边栏",
-   "lane": "C",
-   "reason": "PR22 makes ChatPage the home and draws the HomeSpec header/menu: drawer button, session title + folder subtitle, 设备+更多 (工作区/插件与工具/产物/运行状态/导出), and the composer's voice/collapse controls. Android ChatPage.kt still renders the pre-PR22 header/menu, so this control is not the PR22 one. Lane C owns the home/header/menu; lane D owns the composer/voice controls. Android renders an extra `右侧边栏` the PR22 home does not expose."
-  },
-  {
-   "page": "chat",
-   "kind": "extra-action",
-   "name": "本会话设置",
-   "lane": "C",
-   "reason": "PR22 makes ChatPage the home and draws the HomeSpec header/menu: drawer button, session title + folder subtitle, 设备+更多 (工作区/插件与工具/产物/运行状态/导出), and the composer's voice/collapse controls. Android ChatPage.kt still renders the pre-PR22 header/menu, so this control is not the PR22 one. Lane C owns the home/header/menu; lane D owns the composer/voice controls. Android renders an extra `本会话设置` the PR22 home does not expose."
-  },
-  {
-   "page": "chat",
-   "kind": "missing-action",
-   "name": "工作区",
-   "lane": "C",
-   "reason": "PR22 makes ChatPage the home and draws the HomeSpec header/menu: drawer button, session title + folder subtitle, 设备+更多 (工作区/插件与工具/产物/运行状态/导出), and the composer's voice/collapse controls. Android ChatPage.kt still renders the pre-PR22 header/menu, so this control is not the PR22 one. Lane C owns the home/header/menu; lane D owns the composer/voice controls. The PR22 home exposes `工作区`; Android does not render it."
-  },
-  {
-   "page": "chat",
-   "kind": "missing-action",
-   "name": "插件与工具",
-   "lane": "C",
-   "reason": "PR22 makes ChatPage the home and draws the HomeSpec header/menu: drawer button, session title + folder subtitle, 设备+更多 (工作区/插件与工具/产物/运行状态/导出), and the composer's voice/collapse controls. Android ChatPage.kt still renders the pre-PR22 header/menu, so this control is not the PR22 one. Lane C owns the home/header/menu; lane D owns the composer/voice controls. The PR22 home exposes `插件与工具`; Android does not render it."
-  },
   {
    "page": "model-provider-settings",
    "kind": "extra-action",

@@ -530,3 +530,18 @@ run's device is the dedicated AVD on port 5738 and the key it types is generated
 per run, so no credential is ever written to this tree. A red step is the
 deliverable: the line names the assertion, the measured value and the logcat
 line that explains it.
+
+### Ordinary filesystem permissions in isolated root test containers
+
+`with-owner-fs-permissions.py <command> ...` preserves a normal caller unchanged.
+When Fleet runs as Linux UID0, it drops only the current process tree's
+`CAP_DAC_OVERRIDE`/`CAP_DAC_READ_SEARCH`, execs, and proves a private chmod-0500
+directory rejects writes before running the original command. It never changes
+the image, shared service, file ownership, or test assertions. This addresses the
+observed root-only EchoJobAdapter permission-fixture mismatch; it is a test
+environment adapter, not production filesystem policy. A failed capability or
+permission proof exits2; no test is skipped. Each isolated stage uses it directly:
+
+```sh
+python3 android/tools/with-owner-fs-permissions.py bash android/tools/with-android-toolchain.sh ./gradlew :dsh:testDebugUnitTest --no-daemon --max-workers=2
+```
