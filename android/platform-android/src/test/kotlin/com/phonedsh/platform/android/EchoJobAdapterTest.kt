@@ -21,6 +21,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -50,6 +51,31 @@ class EchoJobAdapterTest {
         PosixModeControl.write(sessions, 0b111_000_000)
         Files.write(sessions.resolve("s1.jsonl"), "session secret".toByteArray(Charsets.UTF_8))
         tripwire = BuildSealTripwire(nowMs = { 1_700_000_000_000L })
+    }
+
+    /**
+     * A `chmod 000` root only refuses a process the kernel's DAC actually
+     * confines. uid 0 bypasses it, so a job run under a root host would read
+     * the sealed file and turn a correct seal into a red test. Skip that
+     * environment exactly as `BuildSealTest` does for its denial assertions;
+     * the device suite and the Mac owner's non-root host run the assertion.
+     */
+    private fun requirePermissionEnforcement() {
+        assumeTrue(
+            "the test user can read a 000 directory, so this OS does not enforce permissions",
+            PosixModeControl.let { control ->
+                val probe = Files.createDirectories(home.resolve("probe-dir"))
+                control.write(probe, 0)
+                val denied = try {
+                    Files.newDirectoryStream(probe).close()
+                    false
+                } catch (_: IOException) {
+                    true
+                }
+                control.write(probe, 0b111_000_000)
+                denied
+            },
+        )
     }
 
     private fun runtime(missingRoot: Boolean = false): BuildRuntime {
@@ -102,6 +128,7 @@ class EchoJobAdapterTest {
 
     @Test
     fun aBenignJobRunsEndToEndAndReportsNoAccess() = runBlocking {
+        requirePermissionEnforcement()
         var modeWhileRunning = -1
         var readWhileRunning: Boolean? = null
         val launcher = ScriptedLauncher {
