@@ -115,7 +115,7 @@ final class NativeChatPresentationTests: XCTestCase {
         XCTAssertEqual(preferences.textFontSize, 17)
         XCTAssertEqual(preferences.codeFontSize, 14)
         XCTAssertEqual(preferences.terminalFontSize, 13)
-        XCTAssertEqual(NativeChatTheme.bodySize, 14)
+        XCTAssertEqual(NativeParityTokens.bodySize, 14)
         XCTAssertEqual(preferences.shortcut(for: .send).identity, "return")
         XCTAssertEqual(preferences.shortcut(for: .alternate).identity, "command+return")
         XCTAssertEqual(preferences.shortcutConflict(NativeShortcut(key: "return"), for: .alternate), .send)

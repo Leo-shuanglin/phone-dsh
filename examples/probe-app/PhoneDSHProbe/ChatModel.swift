@@ -529,16 +529,7 @@ final class ChatModel {
     private var restartPolicyHighSamples = 0
     private var restartPolicySawTermination = false
     private var restartPolicyBudget: BudgetTable?
-    /// The host whose `start()` refused a persisted `Failed` controller.
-    ///
-    /// D14 only leaves `Failed` through an explicit user acknowledgement
-    /// (`PhoneDSHHost.reset()`), and that acknowledgement needs the very host
-    /// instance `start()` just threw from. The App used to drop it, which made
-    /// the escape hatch unreachable: one failure — for example the transient
-    /// navigation error WebKit returns while it rebuilds its page process —
-    /// kept the engine down on every later launch.
     private var failedHost: PhoneDSHHost?
-    /// True while ``failedHost`` waits for the user's acknowledgement.
     private(set) var engineNeedsReset = false
     /// One automatic reset per process launch (see ``start(autoRecover:)``).
     /// A fault that survives it keeps the manual button and stays fail-loud.
@@ -546,6 +537,12 @@ final class ChatModel {
     private var foregroundResumeRequested = false
     private var backgroundParkRequested = false
     var canSend: Bool { harness != nil && sessionID != nil && transcriptReady && !busy && !parked && !hostLifecycleTransition }
+    var canStartBySending: Bool {
+        ChatEngineLifecycle.canStartBySending(hostIsStopped: host == nil,
+                                              busy: busy,
+                                              parked: parked,
+                                              hostLifecycleTransition: hostLifecycleTransition)
+    }
     private(set) var modelProviderIssue: String? = "请先配置模型服务和 API Key"
 
     func refreshModelProviderReadiness() {
@@ -904,53 +901,79 @@ final class ChatModel {
 
     // MARK: Lifecycle
 
-    /// Boots the host and adopts the persisted session.
-    ///
-    /// - Parameter autoRecover: the launch path passes `true`. Launching the
-    ///   App is the user's intent to have the engine running, so a boot that
-    ///   hits a persisted `Failed` controller (D14) acknowledges it once
-    ///   instead of parking the person on a button. Only one automatic attempt
-    ///   per process is made: a fault that survives it stays fail-loud.
+    private struct HostLaunch {
+        let host: PhoneDSHHost
+        let budgets: BudgetTable
+        let selectedProfile: ProviderProfile?
+        let egressHosts: Set<String>
+    }
+
+    /// Boots the host and adopts the persisted session. Launching and sending
+    /// may acknowledge one persisted `Failed` controller per process.
     func start(autoRecover: Bool = false) async {
         guard host == nil, !busy else { return }
-        // A persisted `Failed` controller refuses a plain boot. Every caller
-        // that asks for the engine — the launch path, the empty-state button,
-        // the composer — therefore goes through the acknowledgement instead of
-        // failing again on the same gate.
         if engineNeedsReset, failedHost != nil {
             await restartEngine()
             return
         }
         busy = true
         defer { busy = false }
+        guard let launch = makeHostLaunch() else { return }
+        restoreCachedTranscriptIfAvailable()
+        statusLine = "Booting the Worker…"
+        appendStatus("Booting the host (Worker bundle + image)…")
+        observeHost(launch.host)
+        do {
+            try await launch.host.start()
+        } catch {
+            Self.appendDiagnostic("host start failed: \(error)")
+            reportError("引擎停了：\(Self.condensed(String(describing: error)))")
+            hostEventTask?.cancel(); hostEventTask = nil
+            let state = await launch.host.state
+            guard ChatEngineLifecycle.needsReset(afterStartIn: state) else {
+                failedHost = nil
+                engineNeedsReset = false
+                return
+            }
+            failedHost = launch.host
+            engineNeedsReset = true
+            if autoRecover, !autoRecoveryAttempted {
+                autoRecoveryAttempted = true
+                Task { @MainActor [weak self] in
+                    await self?.restartEngineWhenIdle()
+                }
+            }
+            return
+        }
+        await adoptRunningHost(launch.host,
+                               budgets: launch.budgets,
+                               selectedProfile: launch.selectedProfile,
+                               egressHosts: launch.egressHosts)
+    }
+
+    private func makeHostLaunch() -> HostLaunch? {
         guard let bundle = WorkerBundleLocator.bundle() else {
             reportError("引擎停了")
-            return
+            return nil
         }
         guard anchor.isInWindow else {
             reportError("The page anchor is not in a window yet; try again")
-            return
+            return nil
         }
         do {
             try FileManager.default.createDirectory(at: workspaceRoot, withIntermediateDirectories: true)
         } catch {
             reportError("Cannot create the workspace: \(error)")
-            return
+            return nil
         }
 
         let egressHosts = Self.egressHosts(from: egressAllow)
-        // The provider document is the only model configuration authority.
-        // It is read at every start, so deleting or switching a service can
-        // never leave the previous endpoint/key active in this process. A
-        // missing selection still boots the complete Web surface: model calls
-        // fail later with the host credential provider's unauthorized error,
-        // and Settings → 模型服务 stays reachable.
+        // The provider document is read for every new host, including reset.
         var selectedProfile: ProviderProfile?
         var allowedModelHosts = Set<String>()
         var credentialProvider: any CredentialProvider = PhoneModelProviderSettings.shared
             .makeEgressOnlyCredentialProvider(egressAllowHosts: egressHosts)
         var environment: [String: String] = [
-            // The host gateway injects the real key; the Worker never holds it.
             "DEEPSEEK_API_KEY": "phone-host-injects-key",
             "DSH_TELEMETRY_DISABLED": "1",
         ]
@@ -972,10 +995,6 @@ final class ChatModel {
             modelName = ""
             appendStatus("Model service settings are invalid; booting without a model route: \(error.localizedDescription)")
         }
-        // The same independent-search plan the Web surface uses: independent
-        // mode adds its exact gateway host rule and wraps only the search
-        // paths with the dedicated Keychain; follow-model is limited to the
-        // official DeepSeek Messages endpoint the shipped provider supports.
         var launchPlan = ModelProviderLaunchPlan(allowedModelHosts: allowedModelHosts,
                                                  credentialProvider: credentialProvider,
                                                  environment: environment)
@@ -995,17 +1014,12 @@ final class ChatModel {
         allowedModelHosts = launchPlan.allowedModelHosts
         credentialProvider = launchPlan.credentialProvider
         environment = launchPlan.environment
-        // Model POSTs keep the gateway's 429/5xx backoff; egress POSTs do not
-        // (PR #1 review finding). Only the selected profile's standard model
-        // endpoints are replay-safe, so expand its base URL here.
         let replaySafeModelEndpoints = selectedProfile?.endpointURL
             .map { PhoneDSHConfiguration.standardModelEndpoints(baseURL: $0) } ?? []
         var configuration = PhoneDSHConfiguration(
             workspaceRoot: workspaceRoot,
             token: "",
             origin: URL(string: "http://127.0.0.1:1")!,
-            // Budgets follow the device: the 12 GiB row is selected only at or
-            // above 12 GiB (budgets.md §4).
             deviceTier: DeviceTier.forPhysicalMemory(ProcessInfo.processInfo.physicalMemory),
             bundle: bundle,
             allowedModelHosts: allowedModelHosts,
@@ -1015,21 +1029,11 @@ final class ChatModel {
             egressAuthorizer: mcpPolicy,
             drainDeadline: ChatHostConfiguration.defaultDrainDeadline,
             helloTimeout: ChatHostConfiguration.defaultHelloTimeout)
-        // One line states what the host actually enforces. The Worker's
-        // published manifest can lag behind a rebuilt bundle; this is the
-        // number the write path uses.
         appendStatus("Engine budgets: tier=\(configuration.deviceTier) "
             + "workspace=\(configuration.budgets.workspaceBytes / 1_048_576) MiB "
             + "vfs=\(configuration.budgets.vfsLogicalBytes / 1_048_576) MiB "
             + "single=\(configuration.budgets.singleFileBytes / 1_048_576) MiB "
             + "hot=\(configuration.budgets.wasiHotInstanceBytes / 1_048_576) MiB")
-        // Publish the real read-only accelerators only when the linked Rust
-        // library advertises them. Without the XCFramework `acceleratorNames`
-        // is empty, so the host keeps advertising none instead of faking a
-        // capability. `phone`/`ctx` are registered by the library but need an
-        // injected PhoneToolBridge (there is no MCP bridge in this host yet),
-        // so `channelAcceleratorNames` keeps them out of the host HELLO and the
-        // EXEC_REQ whitelist instead of advertising commands that would exit 69.
         let toolBridge = CompositePhoneToolBridge(
             office: OfficeToolBridge(presenter: OfficePresenter()),
             phone: PhoneCapabilityBridge())
@@ -1046,45 +1050,15 @@ final class ChatModel {
         configuration.engine.bootTimeout = ChatHostConfiguration.defaultBootTimeout
         configuration.engine.environment = environment
         let anchor = self.anchor
-        let newHost = PhoneDSHHost(configuration: configuration, engineFactory: { configuration in
+        let host = PhoneDSHHost(configuration: configuration, engineFactory: { configuration in
             await anchor.makeEngine(configuration)
         })
-        // Show the last conversation from disk immediately; the engine boots
-        // in the background and replaces it when the host history arrives.
-        restoreCachedTranscriptIfAvailable()
-        statusLine = "Booting the Worker…"
-        appendStatus("Booting the host (Worker bundle + image)…")
-        observeHost(newHost)
-        do {
-            try await newHost.start()
-        } catch {
-            Self.appendDiagnostic("host start failed: \(error)")
-            reportError("引擎停了：\(Self.condensed(String(describing: error)))")
-            hostEventTask?.cancel(); hostEventTask = nil
-            // Keep the failed host instead of discarding it: it is the only
-            // object that can perform the explicit reset a persisted `Failed`
-            // controller needs before it may boot again.
-            failedHost = newHost
-            engineNeedsReset = true
-            // The launch path retries through the reset once, after `busy` is
-            // released (this call still holds it). A second failure in the
-            // same launch keeps the manual button and the fail-loud state.
-            if autoRecover, !autoRecoveryAttempted {
-                autoRecoveryAttempted = true
-                Task { @MainActor [weak self] in
-                    await self?.restartEngineWhenIdle()
-                }
-            }
-            return
-        }
-        await adoptRunningHost(newHost,
-                               budgets: configuration.budgets,
-                               selectedProfile: selectedProfile,
-                               egressHosts: egressHosts)
+        return HostLaunch(host: host,
+                          budgets: configuration.budgets,
+                          selectedProfile: selectedProfile,
+                          egressHosts: egressHosts)
     }
 
-    /// Waits for the boot attempt that scheduled it to release `busy`, then
-    /// performs the launch-path reset.
     private func restartEngineWhenIdle() async {
         var waited = 0
         while busy && waited < 40 {
@@ -1094,25 +1068,13 @@ final class ChatModel {
         await restartEngine()
     }
 
-    /// Makes sure the engine is running before an operation that needs it —
-    /// a new message from the composer is the important one: the person
-    /// typed, so boot instead of dropping the send. `start()` routes a
-    /// persisted `Failed` controller through the reset path by itself.
     private func ensureEngineRunning() async {
         guard host == nil, !busy else { return }
         await start(autoRecover: true)
     }
 
-    /// The explicit user acknowledgement D14 requires before a persisted
-    /// `Failed` controller may boot again.
-    ///
-    /// A failed host refuses every plain ``start()``, so without this the App
-    /// could stay dead until someone edited `Documents/chat-host/host-state.json`
-    /// by hand. The engine is not "broken" in that state: the same build boots
-    /// normally once the acknowledgement is recorded.
-    ///
-    /// - Note: does nothing while a boot is in flight or the host is running;
-    ///   ``engineNeedsReset`` is the flag the UI keys its button off.
+    /// Rebuilds with the latest settings, acknowledges the persisted failure,
+    /// and then follows the same session-adoption path as a normal start.
     func restartEngine() async {
         guard host == nil, !busy else { return }
         guard let failed = failedHost else {
@@ -1124,21 +1086,37 @@ final class ChatModel {
         statusLine = "Restarting the engine…"
         appendStatus("User reset: clearing the persisted failed controller")
         do {
-            try await failed.reset()
+            try await failed.stop()
         } catch {
             reportError("引擎无法重新启动：\(Self.condensed(String(describing: error)))")
-            failedHost = failed
-            engineNeedsReset = true
             return
         }
-        observeHost(failed)
-        let profile = (try? PhoneModelProviderSettings.shared.load())?.selected
-        await adoptRunningHost(
-            failed,
-            budgets: BudgetTable.table(for: DeviceTier.forPhysicalMemory(
-                ProcessInfo.processInfo.physicalMemory)),
-            selectedProfile: profile,
-            egressHosts: Self.egressHosts(from: egressAllow))
+        failedHost = nil
+        engineNeedsReset = false
+        guard let launch = makeHostLaunch() else { return }
+        restoreCachedTranscriptIfAvailable()
+        observeHost(launch.host)
+        do {
+            do {
+                try await launch.host.start()
+            } catch {
+                let state = await launch.host.state
+                guard ChatEngineLifecycle.needsReset(afterStartIn: state) else { throw error }
+                try await launch.host.reset()
+            }
+        } catch {
+            Self.appendDiagnostic("host reset failed: \(error)")
+            reportError("引擎无法重新启动：\(Self.condensed(String(describing: error)))")
+            hostEventTask?.cancel(); hostEventTask = nil
+            let state = await launch.host.state
+            failedHost = ChatEngineLifecycle.needsReset(afterStartIn: state) ? launch.host : nil
+            engineNeedsReset = failedHost != nil
+            return
+        }
+        await adoptRunningHost(launch.host,
+                               budgets: launch.budgets,
+                               selectedProfile: launch.selectedProfile,
+                               egressHosts: launch.egressHosts)
     }
 
     /// Parses the comma-separated egress allow list the settings page stores.
@@ -1658,6 +1636,7 @@ final class ChatModel {
                 switch event {
                 case .stateChanged(_, let to):
                     self.hostState = "\(to)"
+                    if to == .failed { self.hostDidFail(host) }
                 case .error(let message):
                     // Keep the raw host text: the friendly summary alone made
                     // a WAL recovery failure look like a model-service error.
@@ -1676,6 +1655,36 @@ final class ChatModel {
                 }
             }
         }
+    }
+
+    private func hostDidFail(_ failed: PhoneDSHHost) {
+        guard host === failed else { return }
+        pumpTask?.cancel(); pumpTask = nil
+        hostEventTask?.cancel(); hostEventTask = nil
+        host = nil
+        failedHost = failed
+        engineNeedsReset = true
+        harness = nil
+        sessionID = nil
+        transcriptReady = false
+        pendingPermission = nil
+        pendingQuestion = nil
+        availableAccessModes = []
+        currentAccessMode = nil
+        accessModeError = nil
+        startedAt = nil
+        turnRunning = false
+        parked = false
+        foregroundResumeRequested = false
+        backgroundParkRequested = false
+        hostLifecycleTransition = false
+        if keepingAlive {
+            stopBackgroundHeartbeat()
+            keepAlive.stop()
+            keepingAlive = false
+            endBackgroundTask()
+        }
+        syncIdleTimer()
     }
 
     // MARK: Unattended test hook

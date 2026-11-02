@@ -2347,7 +2347,7 @@ struct ChatPage: View {
     private var composerEnabled: Bool {
         guard model.pendingQuestion == nil, model.pendingPermission == nil, !isSelectingAccessMode else { return false }
         if model.turnRunning { return busyEnterMode == "steer" ? model.canSteer : model.canSend }
-        return model.canSend
+        return model.canSend || model.canStartBySending
     }
 
     private var canSubmit: Bool {
