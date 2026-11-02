@@ -17,7 +17,6 @@
 package com.phonedsh.ui.surface
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +24,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,14 +35,31 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -51,6 +68,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
+import com.phonedsh.ui.ChatMetrics
+import com.phonedsh.ui.icon.PdshIcon
+import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
@@ -150,17 +170,36 @@ public fun Composer(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    val shape = RoundedCornerShape(tokens.radius.composer)
+    val shape = RoundedCornerShape(ChatMetrics.COMPOSER_RADIUS_PT.dp)
+    val focusRequester = remember { FocusRequester() }
+    // Keep selection/composition data from the platform editor while the host
+    // continues to own the plain-text draft. External command/reference picks
+    // are synchronized without resetting an in-progress IME composition.
+    var fieldValue by remember { mutableStateOf(TextFieldValue(text)) }
+    SideEffect {
+        if (fieldValue.text != text && fieldValue.composition == null) {
+            fieldValue = TextFieldValue(text, selection = TextRange(text.length))
+        }
+    }
+
+    fun handleHardwareEnter(event: KeyEvent): Boolean {
+        if (event.key != Key.Enter || event.type != KeyEventType.KeyDown || event.isShiftPressed) return false
+        // Leave Enter to the IME while it owns a composing region; sending then
+        // would commit only a prefix of CJK input.
+        if (fieldValue.composition != null) return false
+        if (!onMenuSubmit() && enabled && canSubmit) onSend()
+        return true
+    }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .testTag(UiTags.COMPOSER)
             .padding(
-                start = tokens.geometry.composerOuterMarginH,
-                end = tokens.geometry.composerOuterMarginH,
-                top = tokens.geometry.composerOuterMarginTop,
-                bottom = tokens.geometry.composerOuterMarginBottom,
+                start = ChatMetrics.COMPOSER_OUTER_MARGIN_H_PT.dp,
+                end = ChatMetrics.COMPOSER_OUTER_MARGIN_H_PT.dp,
+                top = ChatMetrics.COMPOSER_OUTER_MARGIN_TOP_PT.dp,
+                bottom = ChatMetrics.COMPOSER_OUTER_MARGIN_BOTTOM_PT.dp,
             ),
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
@@ -168,48 +207,63 @@ public fun Composer(
             modifier = Modifier
                 .fillMaxWidth()
                 .onPreviewKeyEvent(onMenuKey)
-                .background(color = tokens.colors.input, shape = shape)
-                .border(width = tokens.stroke.hairline, color = tokens.colors.borderLight, shape = shape),
+                .heightIn(min = ChatMetrics.COMPOSER_HEIGHT_PT.dp)
+                .shadow(
+                    elevation = tokens.shadow.composerRadius,
+                    shape = shape,
+                    clip = false,
+                    ambientColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = tokens.shadow.composerOpacity),
+                    spotColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = tokens.shadow.composerOpacity),
+                )
+                .background(color = tokens.colors.surface, shape = shape)
+                // ChatPage.swift's card tap focuses the editor; nested button
+                // click targets consume their own tap and keep their actions.
+                .pointerInput(enabled, focusRequester) {
+                    detectTapGestures(onTap = { if (enabled) focusRequester.requestFocus() })
+                }
+                .testTag(COMPOSER_CARD_TAG),
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    // iOS: leading 14, trailing 8, top 8 (`ChatPage.swift:1849-1852`).
-                    // The spec has no 14 or 8 *horizontal* length, so leading reuses
-                    // the 12 pt outer margin and trailing the 6 pt icon gap. The port
-                    // top has its own token (`composerPortTop`): it happens to equal
-                    // the control row's bottom inset, but it is a different edge.
-                    .padding(
-                        start = tokens.geometry.composerOuterMarginTop,
-                        end = tokens.spacing.iconText,
-                        top = tokens.geometry.composerPortTop,
-                    ),
+                    .padding(top = ChatMetrics.COMPOSER_PORT_TOP_PT.dp),
             ) {
-                Box {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            start = ChatMetrics.COMPOSER_PORT_LEADING_PT.dp,
+                            end = ChatMetrics.COMPOSER_PORT_TRAILING_PT.dp,
+                        ),
+                ) {
                     if (text.isEmpty()) {
                         BasicText(
                             text = placeholder,
-                            style = type.body.copy(color = tokens.colors.tertiary),
-                            maxLines = 1,
+                            style = type.body.copy(color = tokens.colors.inputPlaceholder),
+                            maxLines = 2,
                             modifier = Modifier.padding(
-                                start = tokens.spacing.iconText,
-                                top = tokens.spacing.iconText,
+                                start = ChatMetrics.COMPOSER_PLACEHOLDER_LEADING_PT.dp,
+                                top = ChatMetrics.COMPOSER_PLACEHOLDER_TOP_PT.dp,
                             ),
                         )
                     }
                     BasicTextField(
-                        value = text,
+                        value = fieldValue,
                         onValueChange = { value ->
-                            if (value.length > MAX_DRAFT_CHARS) {
-                                onTextChange(value.take(MAX_DRAFT_CHARS))
+                            fieldValue = if (value.text.length > MAX_DRAFT_CHARS) {
+                                val clipped = value.text.take(MAX_DRAFT_CHARS)
+                                value.copy(text = clipped, selection = TextRange(clipped.length), composition = null)
+                            } else value
+                            if (value.text.length > MAX_DRAFT_CHARS) {
+                                onTextChange(value.text.take(MAX_DRAFT_CHARS))
                                 onTruncated()
                             } else {
-                                onTextChange(value)
+                                onTextChange(value.text)
                             }
                         },
                         enabled = enabled,
                         textStyle = type.body.copy(
-                            color = if (enabled) tokens.colors.primary else tokens.colors.tertiary,
+                            color = tokens.colors.textPrimary,
                         ),
                         cursorBrush = SolidColor(tokens.colors.accent),
                         keyboardOptions = KeyboardOptions(
@@ -222,15 +276,17 @@ public fun Composer(
                         ),
                         keyboardActions = KeyboardActions(
                             onSend = {
-                                if (!onMenuSubmit() && enabled && canSubmit) onSend()
+                                if (fieldValue.composition == null && !onMenuSubmit() && enabled && canSubmit) onSend()
                             },
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(
-                                min = tokens.geometry.composerMinHeight,
-                                max = tokens.geometry.composerMaxHeight,
+                                min = ChatMetrics.COMPOSER_TEXT_MIN_HEIGHT_PT.dp,
+                                max = ChatMetrics.COMPOSER_PORT_MAX_HEIGHT_PT.dp,
                             )
+                            .focusRequester(focusRequester)
+                            .onPreviewKeyEvent(::handleHardwareEnter)
                             .testTag(UiTags.COMPOSER_FIELD)
                             .semantics {
                                 contentDescription = placeholder
@@ -241,55 +297,31 @@ public fun Composer(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        // The tool row keeps clear of the keys: iOS reserves 40 pt on
-                        // the trailing edge so nothing slides under the send key.
-                        // Its vertical insets are the spec's own control tokens now:
-                        // 10 top / 8 bottom (`ChatPage.swift:1868-1869`; `86a39aac`
-                        // took the bottom from 12 to 8). The old code reused the
-                        // 12 pt outer top margin for both, which is what made the
-                        // card taller than the iOS baseline.
-                        //
-                        // The row itself is the iOS 32 pt frame
-                        // (`composerControlRowHeight`); the controls inside keep
-                        // their 28 pt edge. With only `composerControlSize` as a
-                        // floor the row measured 30.86 dp, which was the last
-                        // missing dp of the card height.
+                        // PR22 keeps actions inline in composerControls. The model
+                        // is measured only after the action cluster takes its width.
                         .padding(
-                            end = tokens.geometry.composerTrailingReserve,
-                            top = tokens.geometry.composerControlTop,
-                            bottom = tokens.geometry.composerControlBottom,
+                            start = ChatMetrics.COMPOSER_CONTROL_LEADING_PT.dp,
+                            end = ChatMetrics.COMPOSER_CONTROL_TRAILING_PT.dp,
+                            top = ChatMetrics.COMPOSER_CONTROL_TOP_PT.dp,
+                            bottom = ChatMetrics.COMPOSER_CONTROL_BOTTOM_PT.dp,
                         )
-                        .defaultMinSize(minHeight = tokens.geometry.composerControlRowHeight),
                 ) {
-                    controls?.invoke()
-                }
-            }
-            // The two keys live in the card's bottom-trailing corner, not in the
-            // tool row: the row is what they reserve space from.
-            Row(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(tokens.spacing.iconText),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
-            ) {
-                if (running && canSubmit) {
-                    StopKey(
-                        diameter = tokens.geometry.inlineStopDiameter,
-                        onClick = onStop,
-                    )
-                }
-                if (mode == ComposerMode.STOP) {
-                    StopKey(
-                        diameter = tokens.geometry.sendButtonDiameter,
-                        onClick = onStop,
-                    )
-                } else {
-                    SendKey(
-                        enabled = enabled && canSubmit,
-                        label = sendLabel,
-                        onClick = onSend,
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().height(ChatMetrics.COMPOSER_CONTROL_ROW_HEIGHT_PT.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(modifier = Modifier.weight(1f).fillMaxWidth()) { controls?.invoke() }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (running && canSubmit) StopKey(onClick = onStop)
+                            if (mode == ComposerMode.STOP) {
+                                StopKey(onClick = onStop)
+                            } else {
+                                SendKey(enabled = enabled && canSubmit, label = sendLabel, onClick = onSend)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -325,7 +357,7 @@ public fun Composer(
     }
 }
 
-/** The accent send key: 34 pt circle, `colors.accent`, dimmed while it cannot send. */
+/** The 36pt source circle is trailing-aligned inside a 44pt Android tap target. */
 @Composable
 private fun SendKey(
     enabled: Boolean,
@@ -336,47 +368,58 @@ private fun SendKey(
     val type = LocalUiType.current
     Box(
         modifier = Modifier
-            .size(tokens.geometry.sendButtonDiameter)
-            .clip(CircleShape)
-            // The fill carries the disabled state, not a layer alpha: an `.alpha()`
-            // after `.background()` dims what is drawn *inside* the layer, which left
-            // the disabled key at full saturation with only its glyph faded. iOS's
-            // disabled fill measures `#D7E0FF`, i.e. the accent at 20 % over white.
-            .background(tokens.colors.accent.copy(alpha = if (enabled) 1f else DISABLED_FILL_ALPHA))
+            .size(ChatMetrics.SEND_HIT_PT.dp)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .testTag(UiTags.COMPOSER_SEND)
             .semantics { contentDescription = label },
-        contentAlignment = Alignment.Center,
+        contentAlignment = Alignment.CenterEnd,
     ) {
-        BasicText(
-            text = ARROW_UP,
-            style = type.secondary.copy(color = tokens.colors.onAccent),
-        )
+        Box(
+            modifier = Modifier.size(ChatMetrics.SEND_DIAMETER_PT.dp)
+                .clip(CircleShape)
+                .background(if (enabled) tokens.colors.primaryButton else tokens.colors.userBubble)
+                .testTag(COMPOSER_SEND_CIRCLE_TAG),
+            contentAlignment = Alignment.Center,
+        ) {
+            PdshIconView(
+                icon = PdshIcon.SEND,
+                size = ChatMetrics.SEND_GLYPH_PT.dp,
+                tint = if (enabled) tokens.colors.primaryButtonInk else tokens.colors.iconMuted,
+                contentDescription = null,
+            )
+        }
     }
 }
 
-/** The stop key: `colors.secondary` circle with a filled square (iOS `stop.fill`). */
+/** Same trailing-aligned source circle; adjacent targets leave an 8pt visual gap. */
 @Composable
 private fun StopKey(
-    diameter: androidx.compose.ui.unit.Dp,
     onClick: () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
     Box(
         modifier = Modifier
-            .size(diameter)
-            .clip(CircleShape)
-            .background(tokens.colors.secondary)
+            .size(ChatMetrics.SEND_HIT_PT.dp)
             .clickable(role = Role.Button, onClick = onClick)
             .testTag(UiTags.COMPOSER_STOP)
             .semantics { contentDescription = UiStrings.COMPOSER_STOP_LABEL },
-        contentAlignment = Alignment.Center,
+        contentAlignment = Alignment.CenterEnd,
     ) {
-        BasicText(
-            text = STOP_GLYPH,
-            style = type.secondary.copy(color = tokens.colors.onAccent),
-        )
+        Box(
+            modifier = Modifier.size(ChatMetrics.SEND_DIAMETER_PT.dp)
+                .clip(CircleShape)
+                .background(tokens.colors.primaryButton)
+                .testTag(COMPOSER_STOP_CIRCLE_TAG),
+            contentAlignment = Alignment.Center,
+        ) {
+            androidx.compose.foundation.Canvas(Modifier.size(ChatMetrics.STOP_GLYPH_PT.dp)) {
+                drawRoundRect(
+                    color = tokens.colors.primaryButtonInk,
+                    size = androidx.compose.ui.geometry.Size(size.width, size.height),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(ChatMetrics.STOP_GLYPH_RADIUS_PT.dp.toPx()),
+                )
+            }
+        }
     }
 }
 
@@ -425,12 +468,8 @@ private fun ContextRing(percent: Int) {
 
 /** The draft cap the field enforces (iOS `value.count > 8_000`). */
 private const val MAX_DRAFT_CHARS: Int = 8_000
+private const val COMPOSER_CARD_TAG: String = "pdsh.composer.card"
 
-/**
- * The disabled send key's fill alpha: the baseline's `#D7E0FF` is the accent at
- * 20 % over white (`ios-chat-default.png`, sampled at the key's centre).
- */
-private const val DISABLED_FILL_ALPHA: Float = 0.2f
-
-private const val ARROW_UP: String = "↑"
-private const val STOP_GLYPH: String = "■"
+/** Tag for the 36pt painted send circle inside its 44pt tap target. */
+private const val COMPOSER_SEND_CIRCLE_TAG: String = "pdsh.composer.send-circle"
+private const val COMPOSER_STOP_CIRCLE_TAG: String = "pdsh.composer.stop-circle"

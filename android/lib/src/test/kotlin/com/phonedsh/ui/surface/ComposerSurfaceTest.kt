@@ -12,12 +12,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.geometry.Offset
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
@@ -118,6 +127,50 @@ class ComposerSurfaceTest {
             },
         )
         compose.onNodeWithTag(CONTROLS_TAG).assertIsDisplayed()
+    }
+
+    @Test
+    @OptIn(ExperimentalTestApi::class)
+    fun `hardware enter sends only after the editor has no composing region`() {
+        var sent = 0
+        show(text = "hello", canSubmit = true, onSend = { sent += 1 })
+        compose.onNodeWithTag(UiTags.COMPOSER_FIELD).performClick()
+        compose.onNodeWithTag(UiTags.COMPOSER_FIELD).performKeyInput {
+            keyDown(Key.Enter)
+            keyUp(Key.Enter)
+        }
+        assertEquals(1, sent)
+    }
+
+    @Test
+    @OptIn(ExperimentalTestApi::class)
+    fun `open card and primary action meet PR22 minimum geometry`() {
+        show(text = "", canSubmit = false)
+        val cardBounds = compose.onNodeWithTag(UiTags.COMPOSER).getUnclippedBoundsInRoot()
+        val sendBounds = compose.onNodeWithTag(UiTags.COMPOSER_SEND).getUnclippedBoundsInRoot()
+        val cardHeight = (cardBounds.bottom - cardBounds.top).value
+        val sendHitWidth = (sendBounds.right - sendBounds.left).value
+        val sendCircleBounds = compose.onNodeWithTag("pdsh.composer.send-circle", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val sendDiameter = (sendCircleBounds.right - sendCircleBounds.left).value
+        assertEquals(true, cardHeight >= 104f)
+        assertEquals(44f, sendHitWidth, 0.1f)
+        assertEquals(36f, sendDiameter, 0.1f)
+    }
+
+    @Test
+    @OptIn(ExperimentalTestApi::class)
+    fun `blank card tap focuses input and send child still invokes its action`() {
+        var sent = 0
+        show(text = "hello", canSubmit = true, onSend = { sent += 1 })
+        compose.onNodeWithTag(UiTags.COMPOSER_FIELD).assertIsNotFocused()
+        compose.onNodeWithTag("pdsh.composer.card").performTouchInput {
+            // Two physical pixels inside the top-left card corner: outside the
+            // port's sourced 8pt top / 11pt leading insets and clear of controls.
+            click(Offset(2f, 2f))
+        }
+        compose.onNodeWithTag(UiTags.COMPOSER_FIELD).assertIsFocused()
+        compose.onNodeWithTag(UiTags.COMPOSER_SEND).performClick()
+        assertEquals(1, sent)
     }
 
     private fun show(

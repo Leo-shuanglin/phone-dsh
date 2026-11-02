@@ -123,9 +123,12 @@ import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
 import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.ui.ChatMetrics
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.UiMetrics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
+import com.phonedsh.ui.icon.PdshIcon
+import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.projection.CanonicalJson
 import com.phonedsh.ui.state.AccessModeOption
 import com.phonedsh.ui.state.ChatEmpty
@@ -146,6 +149,8 @@ import com.phonedsh.ui.state.TodoDockItem
 import com.phonedsh.ui.surface.ApprovalCard
 import com.phonedsh.ui.surface.Composer
 import com.phonedsh.ui.surface.ComposerMode
+import com.phonedsh.ui.surface.composer.ComposerToolbar
+import com.phonedsh.ui.surface.composer.ComposerAvailability
 import com.phonedsh.ui.surface.FoldedPendingRow
 import com.phonedsh.ui.surface.MarkdownBody
 import com.phonedsh.ui.theme.LocalUiTokens
@@ -265,6 +270,10 @@ public fun ChatPage(
     schedules: List<ChatScheduleRow>? = null,
     onOpenJobs: (() -> Unit)? = null,
     onOpenSchedules: (() -> Unit)? = null,
+    /** Explicit host routes; missing capability remains unavailable. */
+    composerAvailability: ComposerAvailability = ComposerAvailability(),
+    /** Reads the most recent assistant reply aloud when the host supplies a route. */
+    onSpeakRecentReply: (() -> Unit)? = null,
 ) {
     val tokens = LocalUiTokens.current
     // `colors.background` is tier: unmeasured (a dynamic system colour), so an
@@ -431,6 +440,8 @@ public fun ChatPage(
                 onPickReference = onPickReference,
                 onDismissNotice = onDismissComposerNotice,
                 onReloadCommands = onReloadCommands,
+                availability = composerAvailability,
+                onSpeakRecentReply = onSpeakRecentReply,
             )
         }
     }
@@ -1132,10 +1143,12 @@ private fun QuestionCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
                     ) {
-                        BasicText(
-                            text = if (selected) SELECTED_GLYPH else EMPTY_GLYPH,
-                            style = type.secondary.copy(color = tokens.colors.accent),
-                        )
+                        Box(
+                            modifier = Modifier.size(20.dp).border(tokens.stroke.hairline, tokens.colors.borderLight, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (selected) Box(Modifier.size(8.dp).background(tokens.colors.accent, CircleShape))
+                        }
                         BasicText(
                             text = option,
                             style = type.secondary.copy(
@@ -1214,6 +1227,8 @@ private fun QuestionTakeover(
     onSubmit: (String) -> Unit,
     onDismiss: () -> Unit,
     maxHeight: Dp,
+    canSubmit: Boolean,
+    canDismiss: Boolean,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -1252,7 +1267,7 @@ private fun QuestionTakeover(
     val busy = question.submitting == true
     val last = index == items.lastIndex
     val answered = draft.selected.isNotEmpty() || draft.custom.trim().isNotEmpty()
-    val canRespond = question.channelAvailable != false
+    val canRespond = canSubmit && question.channelAvailable == true
 
     fun update(next: QuestionDraft) {
         drafts = drafts + (item.id to next)
@@ -1323,23 +1338,17 @@ private fun QuestionTakeover(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHAT_HEADER_GROUP_GAP_PT.dp)) {
-                BasicText(
-                    text = if (minimized) "⌃" else "⌄",
-                    style = type.secondary.copy(color = tokens.colors.secondary),
-                    modifier = Modifier.size(ChatMetrics.QUESTION_HEADER_ACTION_SIZE_PT.dp, ChatMetrics.QUESTION_HEADER_ACTION_SIZE_PT.dp)
-                        .clickable(enabled = !busy, role = Role.Button) { minimized = !minimized }
-                        .semantics {
-                            contentDescription = if (minimized) "展开问题卡片" else "收起问题卡片"
-                        },
+                ComposerIconAction(
+                    icon = if (minimized) PdshIcon.CHEVRON_DOWN else PdshIcon.CHEVRON_UP,
+                    label = if (minimized) "展开问题卡片" else "收起问题卡片",
+                    enabled = !busy,
+                    onClick = { minimized = !minimized },
                 )
-                BasicText(
-                    text = "×",
-                    style = type.secondary.copy(color = tokens.colors.secondary),
-                    modifier = Modifier.size(ChatMetrics.QUESTION_HEADER_ACTION_SIZE_PT.dp, ChatMetrics.QUESTION_HEADER_ACTION_SIZE_PT.dp)
-                        .clickable(enabled = !busy, role = Role.Button) {
-                            if (canRespond) onDismiss() else validationError = "当前无法提交，请稍候再试。"
-                        }
-                        .semantics { contentDescription = "放弃整组问题" },
+                ComposerIconAction(
+                    icon = PdshIcon.CLOSE,
+                    label = "放弃整组问题",
+                    enabled = !busy && canDismiss,
+                    onClick = { onDismiss() },
                 )
             }
         }
@@ -1390,7 +1399,13 @@ private fun QuestionTakeover(
                     horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
                 ) {
                     if (item.multiple) {
-                        BasicText(text = if (selected) "☑" else "□", style = type.secondary.copy(color = tokens.colors.accent))
+                        Box(
+                            modifier = Modifier.size(20.dp)
+                                .border(tokens.stroke.hairline, tokens.colors.borderLight, RoundedCornerShape(4.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (selected) PdshIconView(PdshIcon.CHECK, 14.dp, tokens.colors.accent, null)
+                        }
                     } else {
                         Box(Modifier.size(ChatMetrics.QUESTION_OPTION_MARK_SIZE_PT.dp).background(tokens.colors.selector, CircleShape), contentAlignment = Alignment.Center) {
                             BasicText(text = (optionIndex + 1).toString(), style = type.caption.copy(color = tokens.colors.secondary))
@@ -1420,7 +1435,7 @@ private fun QuestionTakeover(
                 horizontalArrangement = Arrangement.spacedBy(ChatMetrics.QUESTION_HEADER_STACK_GAP_PT.dp),
             ) {
                 if (item.options.isNotEmpty()) {
-                    BasicText("＋", style = type.secondary.copy(color = tokens.colors.secondary))
+                    PdshIconView(PdshIcon.PLUS, 16.dp, tokens.colors.secondary, null)
                 }
                 Box(Modifier.weight(1f)) {
                     BasicTextField(
@@ -1448,6 +1463,9 @@ private fun QuestionTakeover(
             (question.submissionError ?: validationError)?.let { error ->
                 BasicText(text = error, style = type.caption.copy(color = tokens.colors.warning))
             }
+            if (!canRespond && question.submissionError == null && validationError == null) {
+                BasicText(UiStrings.QUESTION_UNAVAILABLE, style = type.caption.copy(color = tokens.colors.tertiary))
+            }
             Column(modifier = Modifier.padding(
                 top = ChatMetrics.QUESTION_FOOTER_TOP_PT.dp,
                 start = ChatMetrics.QUESTION_FOOTER_INSET_H_PT.dp,
@@ -1455,13 +1473,13 @@ private fun QuestionTakeover(
                 bottom = ChatMetrics.QUESTION_PANEL_BOTTOM_PT.dp,
             )) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ChatMetrics.QUESTION_PAGER_GAP_PT.dp)) {
-                    QuestionPagerButton("‹", "上一题", enabled = index > 0 && !busy) { index -= 1 }
+                    QuestionPagerButton(PdshIcon.CHEVRON_LEFT, "上一题", enabled = index > 0 && !busy) { index -= 1 }
                     BasicText(
                         text = "${index + 1} / ${items.size}",
                         style = type.secondary.copy(fontSize = ChatMetrics.QUESTION_OPTION_TEXT_SIZE_PT.sp, color = tokens.colors.secondary),
                         modifier = Modifier.semantics { contentDescription = "第 ${index + 1} 题，共 ${items.size} 题" },
                     )
-                    QuestionPagerButton("›", "下一题", enabled = !last && !busy) { index += 1 }
+                    QuestionPagerButton(PdshIcon.CHEVRON_RIGHT, "下一题", enabled = !last && !busy) { index += 1 }
                     Spacer(Modifier.weight(1f))
                 }
                 Row(
@@ -1469,7 +1487,7 @@ private fun QuestionTakeover(
                     verticalAlignment = Alignment.Bottom,
                     horizontalArrangement = Arrangement.spacedBy(ChatMetrics.QUESTION_FOOTER_GAP_PT.dp),
                 ) {
-                    QuestionActionText("跳过", enabled = !busy) { skip() }
+                    QuestionActionText("跳过", enabled = !busy && canRespond) { skip() }
                     Spacer(Modifier.weight(1f))
                     Box(
                         modifier = Modifier.defaultMinSize(minHeight = ChatMetrics.QUESTION_ACTION_HEIGHT_PT.dp)
@@ -1499,15 +1517,29 @@ private fun hasRecommendedSuffix(label: String): Boolean = Regex(
 ).containsMatchIn(label)
 
 @Composable
-private fun QuestionPagerButton(text: String, label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun QuestionPagerButton(icon: PdshIcon, label: String, enabled: Boolean, onClick: () -> Unit) {
     val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
-    BasicText(
-        text = text,
-        style = type.secondary.copy(color = if (enabled) tokens.colors.secondary else tokens.colors.tertiary),
-        modifier = Modifier.size(ChatMetrics.QUESTION_PAGER_TARGET_PT.dp).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+    Box(
+        modifier = Modifier.size(ChatMetrics.QUESTION_PAGER_TARGET_PT.dp)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .semantics { contentDescription = label },
-    )
+        contentAlignment = Alignment.Center,
+    ) {
+        PdshIconView(icon, 16.dp, if (enabled) tokens.colors.secondary else tokens.colors.tertiary, null)
+    }
+}
+
+@Composable
+private fun ComposerIconAction(icon: PdshIcon, label: String, enabled: Boolean, onClick: () -> Unit) {
+    val tokens = LocalUiTokens.current
+    Box(
+        modifier = Modifier.size(ChatMetrics.QUESTION_HEADER_ACTION_SIZE_PT.dp)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        PdshIconView(icon, 16.dp, if (enabled) tokens.colors.secondary else tokens.colors.tertiary, null)
+    }
 }
 
 @Composable
@@ -1538,6 +1570,8 @@ private fun PlanReviewTakeover(
     item: PendingQuestionItem,
     onApprove: (String) -> Unit,
     onRequestChanges: () -> Unit,
+    canApprove: Boolean,
+    canRequestChanges: Boolean,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -1579,29 +1613,32 @@ private fun PlanReviewTakeover(
             if (question.submissionError != null) {
                 BasicText(question.submissionError, style = type.caption.copy(color = tokens.colors.warning))
             }
+            if (!canApprove && question.submissionError == null) {
+                BasicText(UiStrings.QUESTION_UNAVAILABLE, style = type.caption.copy(color = tokens.colors.tertiary))
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText), verticalAlignment = Alignment.CenterVertically) {
                 Row(
-                    modifier = Modifier.clickable(enabled = !busy, role = Role.Button, onClick = onRequestChanges)
+                    modifier = Modifier.clickable(enabled = !busy && canRequestChanges, role = Role.Button, onClick = onRequestChanges)
                         .border(tokens.stroke.hairline, tokens.colors.borderLight, RoundedCornerShape(ChatMetrics.PLAN_REVIEW_BUTTON_RADIUS_PT.dp))
                         .padding(horizontal = tokens.spacing.cardInset, vertical = tokens.spacing.iconText)
                         .testTag(PLAN_REVIEW_CHANGE_TAG),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(ChatMetrics.PLAN_REVIEW_BUTTON_GAP_PT.dp),
                 ) {
-                    BasicText("✎", style = type.caption.copy(color = tokens.colors.secondary))
+                    PdshIconView(PdshIcon.EDIT, 14.dp, tokens.colors.secondary, null)
                     BasicText("要求修改", style = type.secondary.copy(color = tokens.colors.primary))
                 }
                 Box(
                     modifier = Modifier.weight(1f).defaultMinSize(minHeight = ChatMetrics.PLAN_REVIEW_BUTTON_HEIGHT_PT.dp)
-                        .background(if (busy) tokens.colors.border else tokens.colors.ctaOverride, RoundedCornerShape(ChatMetrics.PLAN_REVIEW_BUTTON_RADIUS_PT.dp))
-                        .clickable(enabled = !busy, role = Role.Button) {
+                        .background(if (!busy && canApprove) tokens.colors.ctaOverride else tokens.colors.border, RoundedCornerShape(ChatMetrics.PLAN_REVIEW_BUTTON_RADIUS_PT.dp))
+                        .clickable(enabled = !busy && canApprove, role = Role.Button) {
                             val value = JsonArray(listOf(JsonString(item.approveWireLabel.orEmpty())))
                             onApprove(CanonicalJson.write(JsonObject(mapOf(item.id to value))))
                         }
                         .testTag(PLAN_REVIEW_APPROVE_TAG),
                     contentAlignment = Alignment.Center,
                 ) {
-                    BasicText("同意执行", style = type.secondary.copy(color = tokens.colors.onAccent))
+                    BasicText("同意执行", style = type.secondary.copy(color = if (!busy && canApprove) tokens.colors.onAccent else tokens.colors.tertiary))
                 }
             }
         }
@@ -2165,6 +2202,8 @@ private fun ComposerDock(
     onPickReference: (String) -> Unit,
     onDismissNotice: () -> Unit,
     onReloadCommands: () -> Unit,
+    availability: ComposerAvailability,
+    onSpeakRecentReply: (() -> Unit)?,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -2311,12 +2350,16 @@ private fun ComposerDock(
                     item = plan,
                     onApprove = { json -> onSubmitAnswer(pendingQuestion, json) },
                     onRequestChanges = { onDismissQuestion(pendingQuestion) },
+                    canApprove = availability.approvePlans,
+                    canRequestChanges = availability.requestPlanChanges,
                 )
             } else {
                 QuestionTakeover(
                     question = pendingQuestion,
                     onSubmit = { json -> onSubmitAnswer(pendingQuestion, json) },
                     onDismiss = { onDismissQuestion(pendingQuestion) },
+                    canSubmit = availability.answerQuestions && pendingQuestion.channelAvailable == true,
+                    canDismiss = availability.dismissQuestions,
                     maxHeight = minOf(
                         LocalConfiguration.current.screenHeightDp.dp * 0.6f,
                         ChatMetrics.QUESTION_MAX_HEIGHT_PT.dp,
@@ -2358,6 +2401,8 @@ private fun ComposerDock(
                 controls = {
                     ComposerControls(
                         state = state,
+                        availability = availability,
+                        onSpeakRecentReply = onSpeakRecentReply,
                         onDraftChange = onDraftChange,
                         onAddImages = onAddImages,
                         onAddFiles = onAddFiles,
@@ -2400,7 +2445,12 @@ private fun GoalBarView(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(ChatMetrics.GOAL_BAR_GAP_PT.dp),
     ) {
-        GoalTargetGlyph()
+            PdshIconView(
+                icon = PdshIcon.GAUGE,
+                size = ChatMetrics.GOAL_BAR_ICON_SIZE_PT.dp,
+                tint = tokens.colors.secondary,
+                contentDescription = null,
+            )
         Column(modifier = Modifier.weight(1f)) {
             BasicText(
                 text = goalBarPhaseLabel(goal.phase),
@@ -2433,26 +2483,15 @@ private fun GoalBarView(
                     .padding(tokens.spacing.iconText),
             )
         }
-        BasicText(
-                text = DISMISS_GLYPH,
-                style = type.caption.copy(color = tokens.colors.secondary),
-                modifier = Modifier
-                    .clickable(enabled = onClear != null, role = Role.Button, onClick = { onClear?.invoke() })
-                    .semantics { contentDescription = UiStrings.GOAL_CLEAR_TARGET }
-                    .testTag(UiPageTags.GOAL_CLEAR)
-                    .padding(tokens.spacing.iconText),
-        )
-    }
-}
-
-@Composable
-private fun GoalTargetGlyph() {
-    val tokens = LocalUiTokens.current
-    androidx.compose.foundation.Canvas(Modifier.size(ChatMetrics.GOAL_BAR_ICON_SIZE_PT.dp)) {
-        val stroke = ChatMetrics.GOAL_BAR_ICON_STROKE_TENTH_PT.dp.toPx()
-        drawCircle(tokens.colors.secondary, radius = size.minDimension * 0.36f, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
-        drawCircle(tokens.colors.secondary, radius = size.minDimension * 0.1f)
-        drawLine(tokens.colors.secondary, androidx.compose.ui.geometry.Offset(size.width * 0.7f, size.height * 0.3f), androidx.compose.ui.geometry.Offset(size.width * 0.98f, size.height * 0.02f), stroke)
+        Box(
+            modifier = Modifier
+                .clickable(enabled = onClear != null, role = Role.Button, onClick = { onClear?.invoke() })
+                .semantics { contentDescription = UiStrings.GOAL_CLEAR_TARGET }
+                .testTag(UiPageTags.GOAL_CLEAR)
+                .padding(tokens.spacing.iconText),
+        ) {
+            PdshIconView(PdshIcon.CLOSE, 16.dp, tokens.colors.secondary, null)
+        }
     }
 }
 
@@ -2497,7 +2536,7 @@ private fun TodoDock(items: List<TodoDockItem>, modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
         ) {
-            TodoChecklistIcon()
+            PdshIconView(PdshIcon.LIST, 20.dp, tokens.colors.secondary, null)
             BasicText("任务", style = type.secondary.copy(fontSize = ChatMetrics.TODO_TEXT_SIZE_PT.sp, color = tokens.colors.primary))
             BasicText(
                 progress,
@@ -2506,9 +2545,11 @@ private fun TodoDock(items: List<TodoDockItem>, modifier: Modifier = Modifier) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            BasicText(
-                if (collapsed) "⌃" else "⌄",
-                style = type.secondary.copy(color = tokens.colors.tertiary),
+            PdshIconView(
+                icon = if (collapsed) PdshIcon.CHEVRON_DOWN else PdshIcon.CHEVRON_UP,
+                size = 16.dp,
+                tint = tokens.colors.tertiary,
+                contentDescription = null,
             )
         }
         if (!collapsed) {
@@ -2536,19 +2577,6 @@ private fun TodoDock(items: List<TodoDockItem>, modifier: Modifier = Modifier) {
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun TodoChecklistIcon() {
-    val tokens = LocalUiTokens.current
-    androidx.compose.foundation.Canvas(Modifier.size(ChatMetrics.TODO_CHECKLIST_ICON_PT.dp)) {
-        val stroke = ChatMetrics.TODO_GLYPH_STROKE_PT.dp.toPx()
-        val dot = ChatMetrics.TODO_GLYPH_DOT_RADIUS_PT.dp.toPx()
-        listOf(ChatMetrics.TODO_GLYPH_ROW1_Y_PT, ChatMetrics.TODO_GLYPH_ROW2_Y_PT).forEach { y ->
-            drawCircle(tokens.colors.tertiary, radius = dot, center = androidx.compose.ui.geometry.Offset(ChatMetrics.TODO_GLYPH_BULLET_X_PT.dp.toPx(), y.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
-            drawLine(tokens.colors.tertiary, start = androidx.compose.ui.geometry.Offset(ChatMetrics.TODO_GLYPH_LINE_START_X_PT.dp.toPx(), y.dp.toPx()), end = androidx.compose.ui.geometry.Offset(ChatMetrics.TODO_GLYPH_LINE_END_X_PT.dp.toPx(), y.dp.toPx()), strokeWidth = stroke)
         }
     }
 }
@@ -2618,26 +2646,21 @@ private fun AttachmentStrip(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
             ) {
-                BasicText(
-                    text = IMAGE_GLYPH,
-                    style = type.caption.copy(color = tokens.colors.secondary),
-                )
+                PdshIconView(PdshIcon.DOCUMENT, 16.dp, tokens.colors.secondary, null)
                 BasicText(
                     text = attachment.name,
                     style = type.caption.copy(color = tokens.colors.primary),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                BasicText(
-                    text = DISMISS_GLYPH,
-                    style = type.caption.copy(color = tokens.colors.secondary),
+                Box(
                     modifier = Modifier
                         .clickable(role = Role.Button) { onRemove(index) }
                         .semantics {
                             contentDescription = UiStrings.COMPOSER_REMOVE_IMAGE.format(attachment.name)
                         }
                         .padding(tokens.spacing.iconText),
-                )
+                ) { PdshIconView(PdshIcon.CLOSE, 14.dp, tokens.colors.secondary, null) }
             }
         }
     }
@@ -2849,12 +2872,14 @@ private fun ReferenceMenuView(
 }
 
 /**
- * The tool row docked inside the card (iOS `composerControls`): the plus menu, the
- * permissions menu, the model menu and the running spinner.
+ * The tool row docked inside the card (iOS `composerControls`): plus, permissions,
+ * model, followed by the action cluster in the same constrained row.
  */
 @Composable
 private fun ComposerControls(
     state: ChatScreenState,
+    availability: ComposerAvailability,
+    onSpeakRecentReply: (() -> Unit)?,
     onDraftChange: (String) -> Unit,
     onAddImages: () -> Unit,
     onAddFiles: () -> Unit,
@@ -2862,27 +2887,21 @@ private fun ComposerControls(
     onSelectModel: (String, String?) -> Unit,
 ) {
     val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
     val composer = state.composer
     var addOpen by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
-    ) {
+    ComposerToolbar(
+        add = {
         Box {
-            BasicText(
-                text = PLUS_GLYPH,
-                style = type.secondary.copy(color = tokens.colors.primary),
+            Box(
                 modifier = Modifier
-                    .size(tokens.geometry.composerControlSize)
-                    .clip(CircleShape)
-                    .background(tokens.colors.selector)
+                    .size(width = 40.dp, height = 44.dp)
                     .clickable(enabled = composer.enabled, role = Role.Button) { addOpen = true }
                     .semantics { contentDescription = UiStrings.COMPOSER_ADD_MENU }
-                    .testTag(UiPageTags.COMPOSER_ADD)
-                    .padding(tokens.spacing.iconText),
-            )
+                    .testTag(UiPageTags.COMPOSER_ADD),
+                contentAlignment = Alignment.Center,
+            ) {
+                PdshIconView(PdshIcon.PLUS, HomeMetrics.COMPOSER_ICON_PT.dp, tokens.colors.primaryButton, null)
+            }
             DropdownMenu(expanded = addOpen, onDismissRequest = { addOpen = false }) {
                 DropdownMenuItem(
                     text = { Text(UiStrings.COMPOSER_ADD_COMMAND) },
@@ -2899,41 +2918,31 @@ private fun ComposerControls(
                         onPickReferenceTrigger(onDraftChange)
                     },
                 )
-                DropdownMenuItem(
+                if (availability.addImages) DropdownMenuItem(
                     text = { Text(UiStrings.COMPOSER_ADD_IMAGE) },
-                    onClick = {
-                        addOpen = false
-                        onAddImages()
-                    },
+                    onClick = { addOpen = false; onAddImages() },
                 )
-                DropdownMenuItem(
+                if (availability.addFiles) DropdownMenuItem(
                     text = { Text(UiStrings.COMPOSER_ADD_FILE) },
-                    onClick = {
-                        addOpen = false
-                        onAddFiles()
-                    },
+                    onClick = { addOpen = false; onAddFiles() },
+                )
+                if (availability.speakRecentReply && onSpeakRecentReply != null) DropdownMenuItem(
+                    text = { Text("朗读最近回复") },
+                    onClick = { addOpen = false; onSpeakRecentReply() },
                 )
             }
         }
-        AccessModeMenuButton(state = state, onSelect = onSelectAccessMode)
-        Box(modifier = Modifier.weight(1f))
-        ModelMenuButton(state = state, onSelect = onSelectModel)
-        if (composer.running) {
-            CircularProgressIndicator(
-                color = tokens.colors.tertiary,
-                strokeWidth = tokens.stroke.hairline,
-                modifier = Modifier
-                    .size(tokens.geometry.composerControlSize)
-                    .semantics { contentDescription = UiStrings.COMPOSER_RUNNING },
-            )
-        }
-    }
+        },
+        access = { AccessModeMenuButton(state = state, available = availability.selectAccessMode, onSelect = onSelectAccessMode) },
+        model = { ModelMenuButton(state = state, available = availability.selectModel, onSelect = onSelectModel) },
+    )
 }
 
 /** The permissions menu: the translated modes, the current one checked. */
 @Composable
 private fun AccessModeMenuButton(
     state: ChatScreenState,
+    available: Boolean,
     onSelect: (String) -> Unit,
 ) {
     val tokens = LocalUiTokens.current
@@ -2944,25 +2953,17 @@ private fun AccessModeMenuButton(
     Box {
         Row(
             modifier = Modifier
-                .defaultMinSize(minHeight = tokens.geometry.composerControlSize)
-                .clickable(enabled = menu.enabled, role = Role.Button) { open = true }
+                .defaultMinSize(minWidth = 40.dp)
+                .height(44.dp)
+                .clickable(enabled = menu.enabled && available, role = Role.Button) { open = true }
                 .semantics { contentDescription = UiStrings.ACCESS_MODE_LABEL.format(menu.label) }
-                .testTag(UiPageTags.COMPOSER_ACCESS_MODE)
-                .padding(tokens.spacing.iconText),
+                .testTag(UiPageTags.COMPOSER_ACCESS_MODE),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+            // Native ChatPage.swift composerControls uses a 2pt shield/chevron gap.
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            // iOS draws `lock.shield` + `chevron.down` as bare glyphs (no capsule). The
-            // mark has to be a monochrome dingbat: an emoji rasterises in colour and
-            // breaks the grey control row.
-            BasicText(
-                text = SHIELD_GLYPH,
-                style = type.secondary.copy(color = tokens.colors.secondary),
-            )
-            BasicText(
-                text = CHEVRON,
-                style = type.caption.copy(color = tokens.colors.secondary),
-            )
+            PdshIconView(PdshIcon.LOCK_SHIELD, 20.dp, tokens.colors.iconMuted, null)
+            PdshIconView(PdshIcon.CHEVRON_DOWN, 10.dp, tokens.colors.iconMuted, null)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             val error = menu.error
@@ -3048,40 +3049,45 @@ private fun AccessModeMenuButton(
 @Composable
 private fun ModelMenuButton(
     state: ChatScreenState,
+    available: Boolean,
     onSelect: (String, String?) -> Unit,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     val menu = state.modelMenu
+    val modelTint = if (menu.enabled) tokens.colors.textPrimary else tokens.colors.textPlaceholder
+    val modelStyle = type.body.copy(
+        color = modelTint,
+    )
     var open by remember { mutableStateOf(false) }
     Box {
         Row(
             modifier = Modifier
+                .height(44.dp)
+                .fillMaxWidth()
                 .defaultMinSize(minHeight = tokens.geometry.composerControlSize)
-                .clickable(enabled = menu.enabled, role = Role.Button) { open = true }
+                .clickable(enabled = menu.enabled && available, role = Role.Button) { open = true }
                 .semantics { contentDescription = UiStrings.MODEL_LABEL }
-                .testTag(UiPageTags.COMPOSER_MODEL_MENU)
-                .padding(tokens.spacing.iconText),
+                .testTag(UiPageTags.COMPOSER_MODEL_MENU),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+            // HomeSpec.swift modelNameBlock uses six points between name and effort.
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             BasicText(
                 text = menu.label,
-                style = type.secondary.copy(color = tokens.colors.primary),
+                style = modelStyle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).testTag(COMPOSER_MODEL_LABEL_TAG),
             )
             if (menu.effortTitle != null) {
                 BasicText(
                     text = menu.effortTitle,
-                    style = type.secondary.copy(color = tokens.colors.secondary),
+                    style = modelStyle,
                     maxLines = 1,
                 )
             }
-            BasicText(
-                text = CHEVRON,
-                style = type.caption.copy(color = tokens.colors.secondary),
-            )
+            PdshIconView(PdshIcon.CHEVRON_DOWN, 12.dp, tokens.colors.textSecondary, null)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             if (menu.unavailable) {
@@ -3189,10 +3195,7 @@ private fun ComposerMenuOption(
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
         if (selected) {
-            BasicText(
-                text = CHECK_GLYPH,
-                style = type.secondary.copy(color = tokens.colors.accent),
-            )
+            PdshIconView(PdshIcon.CHECK, 16.dp, tokens.colors.accent, null)
         }
         BasicText(
             text = title,
@@ -3267,15 +3270,8 @@ private const val QUESTION: String = "question"
 private const val MORE_GLYPH: String = "⋯"
 private const val LOCK_GLYPH: String = "⛨"
 private const val COMMAND_GLYPH: String = "⌘"
-private const val SHIELD_GLYPH: String = "⛨"
-private const val PLUS_GLYPH: String = "+"
-private const val CHEVRON: String = "▾"
-private const val IMAGE_GLYPH: String = "▣"
-private const val EMPTY_GLYPH: String = "○"
-private const val SELECTED_GLYPH: String = "◉"
 
 /** The menu's "this one is in force" mark (iOS `Label(title, systemImage: "checkmark")`). */
-private const val CHECK_GLYPH: String = "✓"
 
 /** iOS `arrow.down` on the 回到最新 capsule. */
 private const val BACK_TO_LATEST_GLYPH: String = "↓"
@@ -3838,6 +3834,7 @@ private const val TODO_PENDING: String = "pending"
 private const val TODO_DOCK_TAG: String = "pdsh.chat.todo-dock"
 private const val TODO_DOCK_ROW_TAG: String = "pdsh.chat.todo-row."
 private const val QUESTION_TAKEOVER_TAG: String = "pdsh.chat.question-takeover"
+private const val COMPOSER_MODEL_LABEL_TAG: String = "pdsh.composer.model-label"
 private const val PLAN_REVIEW_TAKEOVER_TAG: String = "pdsh.chat.plan-review-takeover"
 private const val PLAN_REVIEW_APPROVE_TAG: String = "pdsh.chat.plan-review-approve"
 private const val PLAN_REVIEW_CHANGE_TAG: String = "pdsh.chat.plan-review-change"
