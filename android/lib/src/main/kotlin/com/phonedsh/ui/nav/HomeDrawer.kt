@@ -6,6 +6,8 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -29,6 +31,13 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.isTraversalGroup
@@ -95,7 +104,10 @@ public fun HomeDrawer(
     modifier: Modifier = Modifier,
     state: HomeDrawerUiState = rememberHomeDrawerUiState(),
 ) {
-    val tokens = LocalUiTokens.current
+    // NativeShell.swift explicitly forces the drawer panel to light appearance.
+    val inheritedTokens = LocalUiTokens.current
+    val width = LocalConfiguration.current.screenWidthDp.dp
+    val tokens = if (!inheritedTokens.dark) inheritedTokens else com.phonedsh.ui.theme.UiTokens.resolve(false, width)
     val type = LocalUiType.current
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
     var draft by rememberSaveable { mutableStateOf("") }
@@ -168,7 +180,19 @@ public fun HomeDrawer(
         usePlatformDefaultWidth = false,
         dismissOnBackPress = true,
         dismissOnClickOutside = true,
+        decorFitsSystemWindows = false,
     )) {
+      val dialogView = LocalView.current
+      SideEffect {
+          (dialogView.parent as? DialogWindowProvider)?.window?.let { window ->
+              // The composable owns the source's single 28% scrim. A second
+              // platform dim would darken both the page and the status bar twice.
+              window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+              window.setLayout(android.view.WindowManager.LayoutParams.MATCH_PARENT, android.view.WindowManager.LayoutParams.MATCH_PARENT)
+              androidx.core.view.WindowCompat.getInsetsController(window, dialogView).isAppearanceLightStatusBars = true
+          }
+      }
+      CompositionLocalProvider(LocalUiTokens provides tokens) {
       BoxWithConstraints(modifier.fillMaxSize().semantics {
         paneTitle = "会话抽屉"
         isTraversalGroup = true
@@ -176,7 +200,10 @@ public fun HomeDrawer(
         val panelWidth = minOf(SessionsMetrics.drawerWidth, maxWidth - HomeMetrics.NAV_BUTTON_PT.dp)
         Row(Modifier.fillMaxSize()) {
         Column(
-            Modifier.width(panelWidth).fillMaxHeight().background(tokens.colors.page)
+            Modifier.width(panelWidth).fillMaxHeight()
+                .clip(RoundedCornerShape(topEnd = SessionsMetrics.DRAWER_PANEL_RADIUS_PT.dp, bottomEnd = SessionsMetrics.DRAWER_PANEL_RADIUS_PT.dp))
+                .background(tokens.colors.page)
+                .windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top))
                 .focusGroup().testTag(HomeDrawerTags.PANEL),
         ) {
             Column(
@@ -269,7 +296,7 @@ public fun HomeDrawer(
                 tokens.colors.textSecondary, tokens.colors.textPlaceholder,
                 Modifier.fillMaxWidth().testTag(HomeDrawerTags.SETTINGS))
         }
-        Box(Modifier.weight(1f).fillMaxHeight().background(Color.Black.copy(alpha = 0.34f))
+        Box(Modifier.weight(1f).fillMaxHeight().background(Color.Black.copy(alpha = SessionsMetrics.DRAWER_SCRIM_ALPHA))
             .clickable(role = Role.Button, onClick = ::dismissDrawer)
             .semantics { contentDescription = "关闭抽屉" }
             .testTag(HomeDrawerTags.SCRIM))
@@ -322,6 +349,7 @@ public fun HomeDrawer(
             }
         }
       }
+      }
     }
 }
 
@@ -345,12 +373,15 @@ private fun EntryRow(label: String, icon: PdshIcon, detail: String, enabled: Boo
                      modifier: Modifier = Modifier, action: () -> Unit) {
     val colors = LocalUiTokens.current.colors
     val type = LocalUiType.current
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
     Row(modifier.fillMaxWidth().height(SessionsMetrics.ACTION_ROW_HEIGHT_PT.dp)
-        .background(colors.surface, RoundedCornerShape(SessionsMetrics.DRAWER_CARD_RADIUS_PT.dp))
-        .clickable(enabled = enabled, role = Role.Button, onClick = action)
+        .background(if (pressed) colors.userBubble.copy(alpha = SessionsMetrics.DRAWER_PRESS_ALPHA) else Color.Transparent,
+            RoundedCornerShape(SessionsMetrics.DRAWER_CARD_RADIUS_PT.dp))
+        .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = action)
         .semantics { if (!enabled) stateDescription = if (detail.isNotEmpty()) detail else if (unavailable) "不可用" else "不可用" }
         .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        PdshIconView(icon, SessionsMetrics.DRAWER_ROW_GLYPH_REF_PT.dp, colors.textSecondary, null, Modifier.size(24.dp))
+        PdshIconView(icon, SessionsMetrics.DRAWER_ROW_GLYPH_REF_PT.dp, if (enabled) colors.textPrimary else colors.textPlaceholder, null, Modifier.size(24.dp))
         Spacer(Modifier.width(SessionsMetrics.DRAWER_ROW_SPACING_PT.dp))
         Text(label, style = type.body.copy(color = if (enabled) colors.textPrimary else colors.textPlaceholder))
         Spacer(Modifier.weight(1f))
@@ -440,19 +471,21 @@ private fun FolderGroup(id: String, title: String, sessions: List<HomeDrawerSess
 
 @Composable
 private fun SettingsBar(engine: HomeDrawerEngineState, page: Color, onOpen: (() -> Unit)?, primary: Color, secondary: Color, muted: Color, modifier: Modifier) {
+    val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val footerBottom = maxOf(bottomInset, 12.dp) + 4.dp
     Row(modifier.background(page).clickable(enabled = onOpen != null, role = Role.Button) { onOpen?.invoke() }
         .semantics { contentDescription = "设置，${engine.label}"; if (onOpen == null) stateDescription = "不可用" }
-        .padding(horizontal = HomeMetrics.CHROME_INSET_PT.dp).padding(top = 12.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        .padding(horizontal = HomeMetrics.CHROME_INSET_PT.dp).padding(top = 12.dp, bottom = footerBottom), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(36.dp).background(LocalUiTokens.current.colors.surface, CircleShape), contentAlignment = Alignment.Center) {
             PdshIconView(PdshIcon.GEAR, 18.dp, primary, null)
         }
-        Spacer(Modifier.width(12.dp)); Text("设置", style = LocalUiType.current.body.copy(color = primary))
+        Spacer(Modifier.width(12.dp)); Text("设置", style = LocalUiType.current.body.copy(color = primary, fontWeight = FontWeight.SemiBold))
         Spacer(Modifier.weight(1f)); Box(Modifier.size(7.dp).background(when (engine) {
             HomeDrawerEngineState.READY, HomeDrawerEngineState.RUNNING -> LocalUiTokens.current.colors.homeSuccess
             HomeDrawerEngineState.CONFIGURATION_REQUIRED -> LocalUiTokens.current.colors.pageWarning
             else -> muted
         }, CircleShape))
-        Spacer(Modifier.width(6.dp)); Text(engine.label, style = LocalUiType.current.caption.copy(color = secondary), maxLines = 1)
+        Spacer(Modifier.width(6.dp)); Text(engine.label, style = LocalUiType.current.listItem.copy(color = secondary, lineHeight = TextUnit.Unspecified), maxLines = 1)
         Spacer(Modifier.width(8.dp)); PdshIconView(PdshIcon.CHEVRON_RIGHT, 12.dp, muted, null)
     }
 }

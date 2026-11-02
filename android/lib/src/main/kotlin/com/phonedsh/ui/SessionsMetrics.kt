@@ -26,11 +26,20 @@ import androidx.compose.ui.unit.dp
 public object SessionsMetrics {
     // ------------------------------------------------------------------ drawer
 
-    /** PR22 drawer is a full-screen home surface, not a 320 pt column. Source: `HomeDrawer.swift` (no width frame; `.background(HomeSpec.page)`). Confidence: exact. */
-    public const val DRAWER_WIDTH_PT: Int = 430
+    /** HomeDrawer's owning SessionsDrawerPanel fixes 320pt (`NativeShell.swift:235,240`), including on a 430pt phone. */
+    public const val DRAWER_WIDTH_PT: Int = 320
 
-    /** Drawer reading width: the 430 pt screen minus 2 x 20 (`HomeSpec.contentInset`). Source: `HomeDrawer.swift:198,253`. Confidence: inferred. */
-    public const val DRAWER_CONTENT_WIDTH_PT: Int = 390
+    /** Folder reading width inside the actual 320pt panel: 20pt content insets. */
+    public const val DRAWER_CONTENT_WIDTH_PT: Int = 280
+
+    /** NativeShell.swift:244-247 clips the modal panel's trailing corners to 22pt. */
+    public const val DRAWER_PANEL_RADIUS_PT: Int = 22
+
+    /** NativeShell.swift:131: one modal scrim at 28%, without additional platform dim. */
+    public const val DRAWER_SCRIM_ALPHA: Float = 0.28f
+
+    /** HomeDrawerRowStyle: HomeSpec.userBubble at 70% only while pressed. */
+    public const val DRAWER_PRESS_ALPHA: Float = 0.7f
 
     /** Outer row-card inset inside the drawer. Source: `HomeDrawer.swift:140,278` (`.padding(.horizontal, 8)`). Confidence: exact. */
     public const val ROW_INSET_PT: Int = 8
