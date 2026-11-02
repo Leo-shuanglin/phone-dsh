@@ -793,9 +793,9 @@ test('an idle consumer cannot renew a frozen clock forever', async () => {
       await new Promise(resolve => setTimeout(resolve, 400))
       try {
         await settleWithin(response.arrayBuffer(), 500, 'idle consumer with a frozen clock')
-        return { error: undefined, module }
+        return { error: undefined, module, metrics: module.deliveryMetricsSnapshot() }
       } catch (error) {
-        return { error, module }
+        return { error, module, metrics: module.deliveryMetricsSnapshot() }
       }
     })
     assert.ok(observed.error !== undefined)
