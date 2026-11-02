@@ -140,14 +140,21 @@ internal fun AboutSurface(
  * @param onBack return to the settings index.
  * @param backLevel the host's inner-level back chain; the sheet-level back leaves
  *   the open page first, then the index.
+ * @param onAction the host action channel, used by the one row here that is an
+ *   action rather than a page (revoking the session's Ubuntu approval).
  */
 @Composable
 internal fun DeveloperToolsSurface(
     facts: PdshNavFacts,
     onBack: () -> Unit,
     backLevel: PdshBackLevel? = null,
+    onAction: (PdshHostAction) -> Unit = {},
 ) {
     var open by remember { mutableStateOf<DevTool?>(null) }
+    // The revoke row is an action, not a page: it clears the session's Ubuntu
+    // approval and leaves the index open, so the person sees the row's own
+    // answer instead of landing on a screen with nothing on it.
+    var revoked by remember { mutableStateOf<String?>(null) }
     // The surface always owns the one level while it is the sheet's body: a page
     // open means "back to the index", the index means "back to the settings".
     SurfaceBackLevel(backLevel, enabled = true) {
@@ -163,6 +170,19 @@ internal fun DeveloperToolsSurface(
                         title = entry.label,
                         value = null,
                         onClick = { open = entry },
+                    )
+                }
+                item {
+                    InfoRow(
+                        title = REVOKE_UBUNTU_TITLE,
+                        // The value is the host's answer, never a local guess: the
+                        // row only says something after the host wrote back.
+                        value = revoked,
+                        onClick = {
+                            revoked = null
+                            onAction(PdshHostAction.RevokeUbuntuApproval)
+                            revoked = REVOKE_UBUNTU_ANSWER
+                        },
                     )
                 }
             }
@@ -245,3 +265,15 @@ private fun SurfaceBackLevel(backLevel: PdshBackLevel?, enabled: Boolean, onBack
 
 /** The 开发者工具 header. The baseline deleted this page, so there is no iOS word. */
 private const val DEV_TOOLS_TITLE: String = "开发者工具"
+
+/** The revoke row: it names the thing and the scope, not just the verb. */
+private const val REVOKE_UBUNTU_TITLE: String = "撤销本地 Ubuntu 授权（本会话）"
+
+/**
+ * What the row says after the action is dispatched.
+ *
+ * It stops short of "revoked": the host owns the gate and this surface cannot see
+ * whether one was granted, so the sentence says what was asked, and the next
+ * `ubuntu run` is what proves it either way.
+ */
+private const val REVOKE_UBUNTU_ANSWER: String = "已请求撤销；下一次 ubuntu run 会重新询问"

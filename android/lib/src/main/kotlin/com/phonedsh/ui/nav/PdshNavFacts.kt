@@ -205,6 +205,20 @@ public sealed interface PdshHostAction {
     }
 
     /**
+     * Drop the approval this session already gave the local Ubuntu environment.
+     *
+     * Design §3 promises the person can revoke "at any time within this session";
+     * until this action existed the only way was to stop the whole local engine,
+     * which ends the session the approval belonged to. The host clears its gate
+     * for the current session and the next `ubuntu run` asks again. A host that
+     * granted nothing answers that nothing was revoked rather than claiming a
+     * change it did not make.
+     */
+    public data object RevokeUbuntuApproval : PdshHostAction {
+        override val wire: String = "ubuntu.approval.revoke"
+    }
+
+    /**
      * Ask the host to test one draft against its endpoint.
      *
      * A host with no test command answers with that fact; the page never claims a

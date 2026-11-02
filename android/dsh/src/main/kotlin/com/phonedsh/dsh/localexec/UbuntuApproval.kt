@@ -294,16 +294,23 @@ class UbuntuApprovalGate(
      * Idempotent, and safe to call while a dialog is open — that dialog's answer
      * binds to the session it named, and [endSession] after it clears again.
      */
-    fun endSession() {
+    fun endSession(): Boolean {
         synchronized(this) {
+            val had = decision != null
             session = null
             decision = null
             decidedAtMs = 0L
+            return had
         }
     }
 
-    /** The user's "revoke this session": the next run asks again. Same as [endSession]. */
-    fun revoke() = endSession()
+    /**
+     * The user's "revoke this session": the next run asks again. Same as
+     * [endSession], and it reports whether there was anything to undo — the
+     * settings row says "nothing was granted" instead of claiming a change it
+     * did not make.
+     */
+    fun revoke(): Boolean = endSession()
 
     /**
      * The session a current grant/denial is bound to, for tests and diagnostics.

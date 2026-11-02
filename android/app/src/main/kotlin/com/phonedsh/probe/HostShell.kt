@@ -26,6 +26,7 @@
 // after the worker is ready.
 package com.phonedsh.probe
 
+import com.phonedsh.dsh.localexec.UbuntuApproval
 import android.util.Log
 import android.view.View
 import androidx.compose.foundation.background
@@ -378,6 +379,20 @@ private fun handleHostAction(
         is PdshHostAction.RunShellCommand ->
             "只读：本宿主列出了本机可执行的加速器，但没有调用 exec 桥的命令，本次未运行"
 
+        // Design §3 promises a revoke "at any time within this session". Before
+        // this branch the only way was to stop the local engine, which ends the
+        // session the approval belonged to — a revoke that costs the thing it
+        // was revoking for. The answer is the gate's own, never a local guess:
+        // nothing granted means nothing was revoked, and the sentence says so.
+        PdshHostAction.RevokeUbuntuApproval -> run {
+            val revoked = UbuntuApproval.revoke()
+            if (revoked) {
+                "已撤销本会话的本地 Ubuntu 授权；下一次 ubuntu run 会重新询问"
+            } else {
+                "本会话没有已授予的本地 Ubuntu 授权，没有可撤销的东西"
+            }
+        }
+
         // §1 assigns the MCP save to the host, so the gesture is a handoff. The
         // registry lives in the Worker (`/dsh/home/mcp.json`) and is edited through
         // the `phone/mcpUpsert` host tool, which this build does not register: a
@@ -518,6 +533,7 @@ private fun actionLabel(action: PdshHostAction): String = when (action) {
     is PdshHostAction.SaveProvider -> "保存模型服务"
     is PdshHostAction.DeleteProvider -> "删除模型服务"
     is PdshHostAction.TestProvider -> "测试模型服务"
+    PdshHostAction.RevokeUbuntuApproval -> "撤销本地 Ubuntu 授权"
     is PdshHostAction.SetWebSearchEnabled -> "网页搜索开关"
     is PdshHostAction.SelectWebSearchBackend -> "网页搜索后端"
     PdshHostAction.RefreshWebSearch -> "重新读取网页搜索"

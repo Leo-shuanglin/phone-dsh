@@ -895,6 +895,7 @@ private fun SettingsRoute(
             facts = facts,
             onBack = { surface = SettingsSurface.NONE },
             backLevel = backLevel,
+            onAction = onHostAction,
         )
     } else if (permissionDefaults) {
         PermissionDefaultsPage(
