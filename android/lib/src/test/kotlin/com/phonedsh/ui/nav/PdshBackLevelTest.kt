@@ -63,7 +63,7 @@ class PdshBackLevelTest {
 
     /** Opens the settings sheet's 新会话默认权限 child page. */
     private fun openPermissionDefaults() {
-        compose.onNodeWithTag(UiPageTags.SETTINGS_ROW_PREFIX + SettingsScreenState.PERMISSION_ROW_ID)
+        compose.onNodeWithTag(UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "permissionDefaults")
             .performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
     }
@@ -85,7 +85,7 @@ class PdshBackLevelTest {
         compose.runOnIdle { assertFalse("the index has no inner level", level.available) }
 
         openPermissionDefaults()
-        compose.onNodeWithTag(UiPageTags.PERMISSION_DEFAULTS_NOTE).assertIsDisplayed()
+        compose.onNodeWithTag(com.phonedsh.ui.page.PERMISSION_DEFAULTS_NOTE_TAG).assertIsDisplayed()
         compose.runOnIdle {
             assertTrue("the child page registered one level", level.available)
             assertTrue("the gesture leaves the child page", level.consume())
@@ -94,7 +94,7 @@ class PdshBackLevelTest {
 
         // Back stayed inside the sheet: the index is showing again, and the child
         // page is gone (a popped route would have rendered `home` instead).
-        compose.onNodeWithTag(UiPageTags.PERMISSION_DEFAULTS_NOTE).assertDoesNotExist()
+        compose.onNodeWithTag(com.phonedsh.ui.page.PERMISSION_DEFAULTS_NOTE_TAG).assertDoesNotExist()
         compose.onNodeWithTag(UiTags.SETTINGS_LIST).assertIsDisplayed()
         compose.runOnIdle {
             assertFalse("the level is closed once the child page is", level.available)
@@ -151,6 +151,6 @@ class PdshBackLevelTest {
         }
         compose.waitForIdle()
         openPermissionDefaults()
-        compose.onNodeWithTag(UiPageTags.PERMISSION_DEFAULTS_NOTE).assertIsDisplayed()
+        compose.onNodeWithTag(com.phonedsh.ui.page.PERMISSION_DEFAULTS_NOTE_TAG).assertIsDisplayed()
     }
 }

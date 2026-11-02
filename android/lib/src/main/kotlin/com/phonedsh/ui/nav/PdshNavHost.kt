@@ -274,7 +274,7 @@ public class PdshBackLevel {
  * @param onBack leaves that level.
  */
 @Composable
-private fun RouteBackLevel(
+internal fun RouteBackLevel(
     backLevel: PdshBackLevel?,
     enabled: Boolean,
     onBack: () -> Unit,
@@ -1264,6 +1264,7 @@ private fun SettingsRoute(
     } else {
         SettingsPage(
             state = SettingsScreenState.from(settings),
+            backLevel = backLevel,
             licenseEntries = facts.licenses?.map { license ->
                 com.phonedsh.ui.page.AndroidLicenseNotice(
                     name = license.name ?: license.id,

@@ -1036,6 +1036,7 @@ public fun SettingsPage(
     onOpenArchivedSessions: (() -> Unit)? = null,
     onSelectDefaultPermission: ((PermissionTier) -> Unit)? = null,
     licenseEntries: List<AndroidLicenseNotice>? = null,
+    backLevel: com.phonedsh.ui.nav.PdshBackLevel? = null,
 ) {
     // The old tab enum is retained as the deep-link vocabulary used by the host.
     // A non-General incoming tab is still rendered as the requested pushed page.
@@ -1045,6 +1046,9 @@ public fun SettingsPage(
     }
 
     var page by remember { mutableStateOf(SettingsIndexPage.ROOT) }
+    com.phonedsh.ui.nav.RouteBackLevel(backLevel, page != SettingsIndexPage.ROOT) {
+        page = SettingsIndexPage.ROOT
+    }
     val tokens = LocalUiTokens.current
     val preferences = state.preferences
     val lifecycle = state.engineLifecycle
