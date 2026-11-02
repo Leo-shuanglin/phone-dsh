@@ -950,6 +950,11 @@ private fun ExportRoute(onBack: () -> Unit) {
         ),
         onBack = onBack,
         onWrite = { refused = true },
+        // The baseline writes on appear. Nothing is written here, so the page must
+        // not run a write on entry: the answer comes from the gesture, not from
+        // opening the page (a failure line that appears before a tap would look like
+        // a read error).
+        onOpen = null,
         // No written file exists, so there is nothing to share and nothing to retry.
         onShare = null,
         onRetry = null,

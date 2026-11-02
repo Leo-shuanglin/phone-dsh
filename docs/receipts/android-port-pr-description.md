@@ -1637,3 +1637,66 @@ PASS 4 选 CSV 进工作区
 | 5 | **真机验证** | 全部证据仍是模拟器，`device` = 0 格 |
 | 6 | **arm64-only JNI / 调试签名** | 32 位机型装得上用不了；不能上架 |
 | 7 | **`ubuntu` 只能 mock** | 跑不了真编译 |
+
+---
+
+## 二十五、七步验收：6 PASS / 1 FAIL，第 6 步从不过变成过
+
+### 第 6 步（预览/分享产物）FAIL → PASS
+
+**原因**：`SessionArtifactsPage` 自己写着「演示数据：产物来自内存存储，不是真实设备文件」，
+列的是 `weekly-report.docx / budget.xlsx / 旧草稿.pdf`。真实产物 `orders-summary.md`（78 B）确实在
+`files/xl/materialized/workspace`，**但页面读不到它**。
+
+**修法**：新增 `WorkspaceSessionArtifactSource`（读文件页/预览页用的同一棵树），
+归属由 `:app` 的 `HostSessionArtifacts` **测量**：每轮 turn 开始/结束各给 workspace 拍一次快照（size+mtime），
+**差分 = 本轮写的文件**；写工具在 `tool_call.arguments.path` 点名的路径作**时机**，字节由差分证实。
+
+**为什么不用另两条路**（写进 fact 的 KDoc）：
+- **扫 `/dsh/workspace`**：分不出「本会话」和「人导进来的 CSV / 上个会话残留」。验收现场就是证据：
+  `orders-summary.md` 进「本 session」，而人导入的 `orders.csv` 留在「未归属」——**目录扫描会把两者混成一个来源。**
+- **只解析 tool_call**：写东西的几乎都是 `bash`，路径埋在 shell 语法里（`printf … > …`、`tee`、heredoc、`cp`），
+  **正则会漏也会编。**
+
+设备证据：
+
+```
+PASS 步骤6: 产物 orders-summary.md（78 B）在产物页可打开，预览显示 325.21，
+点「分享」后前台是 com.android.intentresolver/ChooserActivityLauncher
+```
+
+### 第 7 步仍然红，但已经查清是什么
+
+**不是持久化问题**：把设备上的 `databases/phonedsh-domain.db` 拉下来查过，
+`session` 域里那条记录**同时含 `325.21` 与 `CSV-END`**，`chat: restored 1 conversation(s) rows=10`。
+
+**真实原因是恢复后的对话列表停在顶部**（dump 里有「回到最新」浮层，可见的是第 1–6 行），
+而验收脚本**只向上滚 4 次找 prompt、不向下找回答**。之前只有一条回合时第 2 行就在视口里，三条回合让它暴露。
+
+**修它要动 `LazyListState`**（`ChatPage.kt`），是下一轮的事。
+
+### 空回调：从「12 空 + 23 从没被传」到三种处置
+
+| 处置 | 例子 |
+|---|---|
+| **接了** | `onToggleError` / `onCancel` / `onConfirm`（纯本地）；`TaskScreenPage.onShowTaskScreen`；**`onShare`**（产物预览 + 每日简报，真 `ACTION_SEND` chooser）；**`onRetry`**（`WorkspaceFoldersPage` → `RefreshWorkspace` 真分支） |
+| **停画** | `ProbesPage.onReset`/`onRunGroup`；`BackgroundPage` 三个矩阵回调 + `onCancel`；`ExportPage.onShare`/`onRetry`——**传 null，页面自画 disabled，不是死按钮** |
+| **诚实拒绝** | `Memory`×3、`Probes.onRunAll`、`Background.onStart`、`DailyBrief.onRefresh`、`SessionActivity.onRefresh`、`Shell.onCancel`——需要引擎没有的能力。新增 `SurfaceAnswerBand` 在页底画 4s 具体说明 |
+
+**模板句已删干净**：
+
+> `handleHostAction` 的 `else -> "宿主未实现：…，本次未提交"` 与 `HostSessionsScreen.sessionHandOff` 的同一句
+> 改成「本宿主没有「X」这条命令…本次没有改动」。
+> **`grep "本次未提交"` 在主流程为 0。**
+
+### 最终账
+
+```
+18/18 门禁 PASS
+:lib 752 tests · :app 100 tests · 合计 2034 / 0 failing
+
+七步验收：1 PASS · 2 PASS · 3 PASS · 4 PASS · 5 PASS · 6 PASS · 7 FAIL（滚动位置）
+```
+
+**顺带一条环境坑**（值得记）：`avdmanager create avd` 默认给 **320×640**，
+第 1 步会挂在「编辑器滚不到 API 密钥」——必须把 `hw.lcd` 改成 1080×2400/420。
