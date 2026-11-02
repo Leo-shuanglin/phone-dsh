@@ -206,9 +206,10 @@ public object UiStrings {
     public const val SETTINGS_ROW_SEND: String = "发送消息时"
     public const val SETTINGS_ROW_EXPORT: String = "导出诊断"
 
-    // Android has no LicensesPage: the iOS one lists SwiftTerm and swift-nio.
+    // The iOS list names SwiftTerm/swift-nio, which this app does not ship. The
+    // Android build distributes AndroidX/Compose, Kotlin and kotlinx instead.
     public const val SETTINGS_LICENSES_ANDROID_ONLY: String =
-        "iOS 依赖的许可清单在 Android 不适用（这个 App 没有 SwiftTerm / swift-nio）。"
+        "Android 分发 AndroidX / Jetpack Compose、Kotlin、kotlinx.coroutines 与 Ktor；不含 iOS 的 SwiftTerm / swift-nio。"
 
     // The permission pair. 未设置 is the baseline's wording for a tier it cannot name.
     public const val SETTINGS_PERMISSION_UNSET: String = "未设置"
@@ -1815,7 +1816,7 @@ public object UiStrings {
     public const val MCP_SECTION_SERVER: String = "服务器"
     public const val MCP_SECTION_AUTH: String = "认证头与设备密钥"
     public const val MCP_AUTH_FOOTER: String =
-        "值只存在这台手机的钥匙串里，不会写进配置文件，也不会进日志。留空就是保留已经存过的值。"
+        "值只写入本机应用私有存储；设备支持时使用 Android Keystore 加密。不会写进配置文件，也不会进日志。留空就是保留已经存过的值。"
 
     // The editor's header rows and the two verbs that add and delete them
     // (`MCPSettingsPage.swift:206,209,213,224,260`).
@@ -1824,7 +1825,7 @@ public object UiStrings {
     public const val MCP_REMOVE_HEADER: String = "移除这个认证头"
     public const val MCP_FIELD_HEADER_NAME: String = "Header，例如 Authorization"
     public const val MCP_FIELD_HEADER_ENV: String = "环境变量名（可留空自动生成）"
-    public const val MCP_FIELD_HEADER_VALUE: String = "认证值（只写入设备钥匙串）"
+    public const val MCP_FIELD_HEADER_VALUE: String = "认证值（只写入应用私有存储）"
     public const val MCP_FIELD_HEADER_VALUE_STORED: String = "已保存；留空保持不变"
     public const val MCP_FIELD_HEADER_HINT: String = "留空这一行不会覆盖已经存过的值"
 
@@ -2365,8 +2366,11 @@ public object UiStrings {
     public const val PERMISSION_DEFAULTS_SCOPE: String = "只影响之后新开的会话，当前会话保持不变。"
     public const val PERMISSION_DEFAULTS_SCOPE_EN: String =
         "Only new sessions use this default; the current session is unchanged."
-    public const val LICENSES_SWIFTTERM: String = "SwiftTerm"
-    public const val LICENSES_SWIFT_NIO: String = "swift-nio"
+    // Legacy constant names retained for source compatibility. The values name
+    // the libraries this Android artifact actually distributes, not iOS's
+    // SwiftTerm/swift-nio (which the app does not ship).
+    public const val LICENSES_SWIFTTERM: String = "AndroidX / Jetpack Compose"
+    public const val LICENSES_SWIFT_NIO: String = "Kotlin · kotlinx.coroutines · Ktor"
     public const val LICENSES_MIT: String = "MIT"
     public const val LICENSES_APACHE: String = "Apache 2.0"
     public const val SETTINGS_EN: String = "Settings"
@@ -2417,9 +2421,10 @@ public object UiStrings {
     public const val PROVIDER_URL_PLACEHOLDER: String = "https://api.deepseek.com/v1"
     public const val PROVIDER_SECTION_CONNECTION: String = "连接信息"
     public const val PROVIDER_SECTION_CONNECTION_EN: String = "Connection"
-    public const val PROVIDER_CONNECTION_FOOTER: String = "填写这三项，然后获取模型。密钥仅保存在这台手机的钥匙串中。"
+    public const val PROVIDER_CONNECTION_FOOTER: String =
+        "填写这三项，然后获取模型。密钥保存在本机应用私有存储中；设备支持时使用 Android Keystore 加密。"
     public const val PROVIDER_CONNECTION_FOOTER_EN: String =
-        "Enter these three fields, then fetch models. Keys stay in this phone’s Keychain."
+        "Enter these three fields, then fetch models. Keys stay in this app’s private storage; Android Keystore encryption is used when available."
     public const val PROVIDER_FETCHING: String = "正在获取模型…"
     public const val PROVIDER_FETCH: String = "获取模型"
     public const val PROVIDER_MODEL_FOOTER: String = "获取后选择默认模型。接口不支持模型列表时，可在高级设置中手动添加。"

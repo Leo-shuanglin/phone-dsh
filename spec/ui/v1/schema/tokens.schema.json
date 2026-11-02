@@ -73,6 +73,21 @@
               },
               "baselineInconsistency": {
                 "type": "boolean"
+              },
+              "lightAlpha": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "darkAlpha": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "semantic": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 80
               }
             }
           }
@@ -709,7 +724,7 @@
             "properties": {
               "source": {
                 "type": "string",
-                "pattern": "^(unmeasured|system:[A-Za-z0-9 .,'()#-]+|platform default, not measured in this repo|[A-Za-z][A-Za-z0-9]*\\.swift:[0-9]+)$"
+                "pattern": "^(unmeasured|system:[A-Za-z0-9 .,'()#-]+|platform default, not measured in this repo|Sources/PhoneDSH/Background/TaskScreen\\.swift:[0-9]+|[A-Za-z][A-Za-z0-9]*\\.swift:[0-9]+)$"
               },
               "tier": {
                 "enum": [
@@ -765,6 +780,120 @@
                   "null"
                 ],
                 "pattern": "^typography\\.[A-Za-z][A-Za-z0-9]*$"
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 240
+              }
+            }
+          }
+        },
+        "aliases": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^(colors|geometry|typography|spacing|radius|stroke|motion)\\.[A-Za-z][A-Za-z0-9]*$"
+            }
+          }
+        },
+        "shadows": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "opacity",
+              "radius",
+              "y",
+              "source",
+              "note"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "opacity": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "radius": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "y": {
+                "type": "number",
+                "minimum": -100,
+                "maximum": 100
+              },
+              "source": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9]*\\.swift:[0-9]+"
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 240
+              }
+            }
+          }
+        },
+        "componentCompatibility": {
+          "type": "object",
+          "description": "Active platform component roles kept distinct from canonical HomeSpec signature inventories.",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "tokens",
+              "note"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "tokens": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 24,
+                "items": {
+                  "type": "string",
+                  "pattern": "^(colors|geometry|typography|spacing|radius|stroke|motion)\\.[A-Za-z][A-Za-z0-9]*$"
+                }
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 240
+              }
+            }
+          }
+        },
+        "componentMetrics": {
+          "type": "object",
+          "description": "Non-token HomeSpec behaviour values generated into HomeSpecData from their owning source.",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "value",
+              "unit",
+              "source",
+              "expect",
+              "note"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "value": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "unit": {
+                "const": "opacity"
+              },
+              "source": {
+                "type": "string",
+                "pattern": "^HomeSpec\\.swift:[0-9]+$"
+              },
+              "expect": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 120
               },
               "note": {
                 "type": "string",

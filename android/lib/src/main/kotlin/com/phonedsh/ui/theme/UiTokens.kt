@@ -1,10 +1,10 @@
 // Resolved token values for one theme mode.
 // SPDX-License-Identifier: MIT
 //
-// Every value here comes from `spec/ui/v1/tokens.json` through the generated
-// `UiTokenData`; nothing is re-typed. A `null` channel in the spec (only
-// `colors.background`) stays unmeasured and resolves to [Color.Unspecified] so
-// the caller renders on the platform surface instead of an invented colour.
+// Every value here comes from `spec/ui/v1/tokens.json` through generated
+// `UiTokenData`; nothing is re-typed. A semantic colour with no literal Android
+// projection (UIKit system colours, glass material) stays [Color.Unspecified]:
+// that marks a real gap instead of inventing a sample.
 package com.phonedsh.ui.theme
 
 import androidx.compose.runtime.Immutable
@@ -17,14 +17,14 @@ import com.phonedsh.ui.theme.generated.TokenDp
 import com.phonedsh.ui.theme.generated.TokenGeometry
 import com.phonedsh.ui.theme.generated.UiTokenData
 
-/** The parity colour tokens plus the appended PR22 HomeSpec palette, resolved for one mode. */
+/** The parity colour roles plus the appended PR22 HomeSpec palette, resolved for one mode. */
 @Immutable
 public data class UiColors(
     public val primary: Color,
     public val secondary: Color,
     public val tertiary: Color,
     public val caption: Color,
-    /** `colors.background` is `tier: unmeasured`; [Color.Unspecified] means "platform surface". */
+    /** `colors.background` is the published alias of HomeSpec.page. */
     public val background: Color,
     public val input: Color,
     public val selector: Color,
@@ -34,89 +34,38 @@ public data class UiColors(
     public val border: Color,
     public val borderLight: Color,
     public val accent: Color,
+    /** NativeParityTokens success for retained session components. */
     public val success: Color,
     public val danger: Color,
     public val warning: Color,
     public val onAccent: Color,
-    /** Page-layer override for the approval CTA (baseline inconsistency, mirrored on purpose). */
+    /** Legacy approval CTA accent alias; HomeSpec primary buttons use their own roles. */
     public val ctaOverride: Color,
-    /**
-     * The page-layer fixed blue (`NativePagePalette.accentFill`). iOS has two
-     * blues: the theme `accent` #3964FE on the approval card, and this one on
-     * the sessions / schedules / draft / workspace CTAs. Appended, not inserted:
-     * a positional construction that predates it cannot silently shift.
-     */
+    /** The page-layer fill (`NativePagePalette.accentFill`), distinct from the parity accent. */
     public val pageAccent: Color,
-    /** The switch's on-track (`UIColor.systemGreen`). */
+    /** Unresolved `UIColor.systemGreen`; Color.Unspecified is not an implementation. */
     public val switchOn: Color,
-    /** System `.primary` (label): the ink iOS gives page rows. */
+    /** Unresolved `.primary`; Android does not resolve this adaptive label here. */
     public val systemLabel: Color,
-    /** System `.secondary` (secondaryLabel): the ink iOS gives page captions. */
+    /** Unresolved `.secondary`; Android does not resolve this adaptive label here. */
     public val systemSecondary: Color,
-    /**
-     * The page fill (`NativePagePalette.page`): white in light, black in dark.
-     *
-     * L75: the pages iOS paints with `.background(NativePagePalette.page)` — files,
-     * workspace-folders and the preview — are white, while `colors.background` is
-     * unmeasured (a dynamic system colour). Reading that unresolved token leaves
-     * the Material surface (#F2F3F5) showing through, one grey step off the
-     * baseline. Appended last so no positional construction shifts.
-     */
+    /** Canonical HomeSpec page fill (#F7F7F7 / #101012). */
     public val page: Color,
-    /**
-     * The task screen's pure black (`TaskScreenPage.swift:66`).
-     *
-     * L75: the screen is defined as "pure black, low brightness" and the engine's
-     * `PhoneDSH.Background.TaskScreen` does not read the theme, so this is black in
-     * both appearances. No other token is black in light mode, which is why the
-     * page cannot borrow one.
-     */
+    /** Verified pure black task-screen fill in both appearances. */
     public val taskScreen: Color,
-    /**
-     * L80: the grouped-list page fill (`UIColor.systemGroupedBackground`), #F2F2F7
-     * in light. `page-shell` used `selector` (#F2F3F5) for the whole frame; a
-     * three-channel delta of (0,1,2) turned 54% of the frame into "different".
-     * Appended, never inserted.
-     */
+    /** Unresolved `UIColor.systemGroupedBackground`. */
     public val groupedBackground: Color,
-    /**
-     * L79: the settings segmented picker's capsule track, #EEEEEF in light
-     * (`ios-settings.png` 71,563 px). `selector` (#F2F3F5) is the app's own
-     * segmented fill and is 4-6/255 away, which covers the whole 370x32 pt track.
-     * Appended, never inserted.
-     */
+    /** No current PR22 owner; retained as an unresolved compatibility slot. */
     public val segmentTrack: Color,
-    /**
-     * L79: the ink `.font(.footnote).foregroundStyle(.secondary)` actually
-     * renders, #7F7F7F — measured on the same two PNGs as [systemSecondary], which
-     * the `LabeledContent` values use (#8A8A8E). Appended, never inserted.
-     */
+    /** Unresolved footnote `.secondary` role. */
     public val settingsFootnoteInk: Color,
-    /**
-     * L78: the user bubble's fill (`NativeChatTheme.bubble` →
-     * `NativeParityTokens.userBubble`), #EDF3FE in light — measured on
-     * `ios-chat-assistant.png`. `selector` (#F2F3F5) is the app's control fill and
-     * is grey, not blue. Appended, never inserted.
-     */
+    /** HomeSpec user bubble fill (#E8E8E8 / #2C2C2E). */
     public val userBubble: Color,
-    /**
-     * L78: the approval card's fill (`NativeChatTheme.selector` =
-     * `NativeParityTokens.selector`), #F5F6F7 in light — `ios-chat-permission.png`
-     * samples it. `selector` (#F2F3F5) is the app's segmented control fill and is
-     * 3/255 off in the green channel, which covers the card's whole area. Appended,
-     * never inserted.
-     */
+    /** NativeParityTokens selector role for retained approval components. */
     public val approvalCard: Color,
-    /**
-     * L79: a grouped card's row separator, #E8E8E8 in light — every hairline in
-     * `ios-settings.png` is that value, while `border` (#E4E4E8) is 4/255 away and
-     * turned every separator row into "different". Appended, never inserted.
-     */
+    /** Unresolved `UIColor.separator` compatibility role. */
     public val separator: Color,
     // ---- PR22 HomeSpec palette (430x932pt) --------------------------------
-    // Appended: every earlier field keeps its position and meaning. The three
-    // fields that already existed under a HomeSpec name (`page`, `userBubble`,
-    // `success`) keep the name and take the PR22 value; the rest are new names.
     /** `HomeSpec.surface`: nav buttons, composer, step-list card, table body. */
     public val surface: Color,
     /** `HomeSpec.primaryButton`: the black pill / send-stop fill (#191919 light). */
@@ -129,7 +78,7 @@ public data class UiColors(
     public val textSecondary: Color,
     /** `HomeSpec.textTertiary`: every step-list row. */
     public val textTertiary: Color,
-    /** `HomeSpec.textSubtle`: nav subtitle; card placeholder is #7F7E83. */
+    /** `HomeSpec.textSubtle`: nav subtitle. */
     public val textSubtle: Color,
     /** `HomeSpec.textPlaceholder`: timestamp and row values. */
     public val textPlaceholder: Color,
@@ -139,8 +88,16 @@ public data class UiColors(
     public val iconMuted: Color,
     /** `HomeSpec.borderList`: 1pt step-list card border (#E2E2E2 light). */
     public val borderList: Color,
+    /** HomeSpec success (#3DC979 in both appearances), distinct from parity success. */
+    public val homeSuccess: Color,
+    /** NativeParityTokens surface (#FFFFFF / #151517), distinct from HomeSpec surface. */
+    public val sessionSurface: Color,
+    /** NativePagePalette warning, distinct from the parity warning role. */
+    public val pageWarning: Color,
+    /** NativePagePalette danger, distinct from the parity danger role. */
+    public val pageDanger: Color,
 ) {
-    /** True when the spec could not measure `colors.background` (it never could: a dynamic system colour). */
+    /** True only if the background compatibility slot is unresolved. */
     public val backgroundUnmeasured: Boolean get() = background == Color.Unspecified
 }
 
@@ -156,7 +113,6 @@ public data class UiSpacing(
     public val codeExpandInset: Dp,
     public val jsonStack: Dp,
     public val jsonChevronGap: Dp,
-    // L80: the DSSCodeBlock chrome lengths, each pointed at a Components.swift line.
     public val codeHeaderHeight: Dp,
     public val codeLineSpacing: Dp,
     public val codeWrapButton: Dp,
@@ -202,7 +158,6 @@ public data class UiMotion(
     public fun easing(curve: String): androidx.compose.animation.core.Easing =
         when (curve) {
             LINEAR -> androidx.compose.animation.core.LinearEasing
-            // CSS-style easeOut; the spec names the curve, not the control points.
             EASE_OUT -> androidx.compose.animation.core.CubicBezierEasing(0f, 0f, 0.58f, 1f)
             else -> androidx.compose.animation.core.LinearEasing
         }
@@ -221,9 +176,9 @@ public data class UiMotion(
 /**
  * Page-layer geometry tokens. `unit` is `pt` (dp on Android) or `screenRatio`.
  *
- * The first block is the geometry the six signature surfaces declare; the
- * page-level block at the end is declared for pages and is not part of any
- * signature surface (`spec/ui/v1/README.md` §4 page-level subsection).
+ * The first block is geometry the six signature surfaces declare; the page-level
+ * block at the end is declared for pages. Compatibility names resolve through
+ * declared aliases in `tokens.json`.
  */
 @Immutable
 public data class UiGeometry(
@@ -238,31 +193,32 @@ public data class UiGeometry(
     public val toolCardInset: Dp,
     public val terminalCardMaxHeight: Dp,
     public val bubblePadding: Dp,
-    /** User-bubble horizontal text inset (PR13's 16 h). */
+    /** User-bubble horizontal text inset (PR22 16 h). */
     public val bubblePaddingH: Dp,
-    /** User-bubble vertical text inset (PR13's 10 v). */
+    /** User-bubble vertical text inset (PR22 12 v). */
     public val bubblePaddingV: Dp,
-    /** Gap between the bubble and its queue label (`ChatPage.swift:891`, 6). */
+    /** Gap between the bubble and its queue label (`ChatPage.swift:941`, 6). */
     public val bubbleBadgeGap: Dp,
     public val bubbleLineSpacing: Dp,
+    /** Screen-width compatibility cap; use [maxBubbleWidth] with an actual container where available. */
     public val bubbleMaxWidth: Dp,
     public val cardPadding: Dp,
     public val cardOuterMarginH: Dp,
     public val cardOuterMarginV: Dp,
     public val primaryButtonHeight: Dp,
     public val secondaryButtonHeight: Dp,
-    /** `geometry.cardAreaMaxHeightRatio` is a `screenRatio`, not a dp: keep it unit-free. */
+    /** `geometry.cardAreaMaxHeightRatio` is a `screenRatio`, not a dp. */
     public val cardAreaMaxHeightRatio: Float,
     public val composerMinHeight: Dp,
     public val composerMaxHeight: Dp,
-    /** Input port top inset (`ChatPage.swift:1852`), its own token — same 8 as the row bottom, different meaning. */
+    /** Input port top inset; its own token, same 8 as the row bottom. */
     public val composerPortTop: Dp,
     public val composerControlSize: Dp,
-    /** Fixed tool-row height (`ChatPage.swift:1867`, `.frame(height: 32)`), not the control edge. */
+    /** Fixed tool-row height (`geometry.composerControlHeight`, 44). */
     public val composerControlRowHeight: Dp,
-    /** Tool-row top inset (`ChatPage.swift:1868`). */
+    /** Tool-row top inset. */
     public val composerControlTop: Dp,
-    /** Tool-row bottom inset (`ChatPage.swift:1869`, tightened to 8 by `86a39aac`). */
+    /** Tool-row bottom inset. */
     public val composerControlBottom: Dp,
     public val sendButtonDiameter: Dp,
     public val inlineStopDiameter: Dp,
@@ -276,18 +232,24 @@ public data class UiGeometry(
     public val bannerInsetV: Dp,
     public val toolFailureBannerInset: Dp,
     // Page-level geometry: declared for the page layer, not for a signature surface.
-    // `PageGeometryTokenTest` requires each of these to have at least two page users.
     public val pageOuterMarginH: Dp,
     public val pageHeaderMinHeight: Dp,
     public val pageRowMinHeight: Dp,
     public val pageListRowMinHeight: Dp,
     public val statusDotDiameter: Dp,
-    // L75: the iOS 26 toolbar capsule (完成 / 添加 / the files cube). Two page
-    // users each — `FilesPage` and `WorkspaceFoldersPage` — which is what
-    // `PageGeometryTokenTest` asks of a page-layer length.
     public val pageBarButtonInsetH: Dp,
     public val pageBarButtonElevation: Dp,
+    /** PR22 runtime rule: `(containerWidth - 2 * contentInset) * ratio`. */
+    public val bubbleMaxWidthRatio: Float,
+    /** Grouped list/form minimum row height (HomeSpec 48). */
+    public val defaultMinListRowHeight: Dp,
+    /** HomeSpec primary capsule height (50). */
+    public val homePrimaryButtonHeight: Dp,
 )
+
+/** Computes the PR22 bubble maximum from the actual container width. */
+public fun UiGeometry.maxBubbleWidth(containerWidth: Dp, contentInset: Dp): Dp =
+    ((containerWidth.value - 2f * contentInset.value) * bubbleMaxWidthRatio).dp
 
 /**
  * PR22 HomeSpec shadow helpers.
@@ -317,23 +279,24 @@ public data class UiTokens(
     public val stroke: UiStroke,
     public val motion: UiMotion,
     public val geometry: UiGeometry,
-    /**
-     * PR22 HomeSpec shadow helpers, appended. Android elevation is a different
-     * primitive; a consumer maps these (black opacity, SwiftUI radius, y) to its
-     * own `shadow()`/elevation at the drawing site and says so.
-     */
     public val shadow: UiShadow,
 ) {
     public companion object {
-        /** Resolves every token for [dark] straight from the generated spec model. */
-        public fun resolve(dark: Boolean): UiTokens = UiTokens(
+        /**
+         * Resolves every token for [dark] straight from the generated spec model.
+         *
+         * [viewportWidth] feeds only the legacy fixed-width bubble cap; a layout
+         * with a narrower local container must call [maxBubbleWidth] with the
+         * real container width instead.
+         */
+        public fun resolve(dark: Boolean, viewportWidth: Dp = Dp.Unspecified): UiTokens = UiTokens(
             dark = dark,
             colors = UiColors(
                 primary = UiTokenData.colorPrimary.color(dark),
                 secondary = UiTokenData.colorSecondary.color(dark),
                 tertiary = UiTokenData.colorTertiary.color(dark),
                 caption = UiTokenData.colorCaption.color(dark),
-                background = UiTokenData.colorBackground.color(dark),
+                background = UiTokenData.colorPage.color(dark),
                 input = UiTokenData.colorInput.color(dark),
                 selector = UiTokenData.colorSelector.color(dark),
                 code = UiTokenData.colorCode.color(dark),
@@ -342,8 +305,9 @@ public data class UiTokens(
                 border = UiTokenData.colorBorder.color(dark),
                 borderLight = UiTokenData.colorBorderLight.color(dark),
                 accent = UiTokenData.colorAccent.color(dark),
-                // PR22 re-bases success on HomeSpec (#3DC979 light) from #22C55E.
-                success = homeColor(dark, HomeSpecData.SUCCESS_LIGHT, HomeSpecData.SUCCESS_DARK),
+                // Legacy success consumers read the NativeParityTokens role
+                // (declared alias colors.success -> colors.sessionSuccess).
+                success = UiTokenData.colorSessionSuccess.color(dark),
                 danger = UiTokenData.colorDanger.color(dark),
                 warning = UiTokenData.colorWarning.color(dark),
                 onAccent = UiTokenData.colorOnAccent.color(dark),
@@ -352,28 +316,29 @@ public data class UiTokens(
                 switchOn = UiTokenData.colorSwitchOn.color(dark),
                 systemLabel = UiTokenData.colorSystemLabel.color(dark),
                 systemSecondary = UiTokenData.colorSystemSecondary.color(dark),
-                // PR22 page is HomeSpec.page (#F7F7F7 / #101012), not the old white/black.
-                page = homeColor(dark, HomeSpecData.PAGE_LIGHT, HomeSpecData.PAGE_DARK),
+                page = UiTokenData.colorPage.color(dark),
                 taskScreen = UiTokenData.colorTaskScreen.color(dark),
                 groupedBackground = UiTokenData.colorGroupedBackground.color(dark),
                 segmentTrack = UiTokenData.colorSegmentTrack.color(dark),
                 settingsFootnoteInk = UiTokenData.colorSettingsFootnoteInk.color(dark),
-                separator = UiTokenData.colorSeparator.color(dark),
-                // PR22 user bubble is the neutral HomeSpec grey (#E8E8E8 / #2C2C2E),
-                // not the older blue-tinted parity bubble.
-                userBubble = homeColor(dark, HomeSpecData.USER_BUBBLE_LIGHT, HomeSpecData.USER_BUBBLE_DARK),
+                userBubble = UiTokenData.colorUserBubble.color(dark),
                 approvalCard = UiTokenData.colorApprovalCard.color(dark),
-                surface = homeColor(dark, HomeSpecData.SURFACE_LIGHT, HomeSpecData.SURFACE_DARK),
-                primaryButton = homeColor(dark, HomeSpecData.PRIMARY_BUTTON_LIGHT, HomeSpecData.PRIMARY_BUTTON_DARK),
-                primaryButtonInk = homeColor(dark, HomeSpecData.PRIMARY_BUTTON_INK_LIGHT, HomeSpecData.PRIMARY_BUTTON_INK_DARK),
-                textPrimary = homeColor(dark, HomeSpecData.TEXT_PRIMARY_LIGHT, HomeSpecData.TEXT_PRIMARY_DARK),
-                textSecondary = homeColor(dark, HomeSpecData.TEXT_SECONDARY_LIGHT, HomeSpecData.TEXT_SECONDARY_DARK),
-                textTertiary = homeColor(dark, HomeSpecData.TEXT_TERTIARY_LIGHT, HomeSpecData.TEXT_TERTIARY_DARK),
-                textSubtle = homeColor(dark, HomeSpecData.TEXT_SUBTLE_LIGHT, HomeSpecData.TEXT_SUBTLE_DARK),
-                textPlaceholder = homeColor(dark, HomeSpecData.TEXT_PLACEHOLDER_LIGHT, HomeSpecData.TEXT_PLACEHOLDER_DARK),
-                inputPlaceholder = homeColor(dark, HomeSpecData.INPUT_PLACEHOLDER_LIGHT, HomeSpecData.INPUT_PLACEHOLDER_DARK),
-                iconMuted = homeColor(dark, HomeSpecData.ICON_MUTED_LIGHT, HomeSpecData.ICON_MUTED_DARK),
-                borderList = homeColor(dark, HomeSpecData.BORDER_LIST_LIGHT, HomeSpecData.BORDER_LIST_DARK),
+                separator = UiTokenData.colorSeparator.color(dark),
+                surface = UiTokenData.colorSurface.color(dark),
+                primaryButton = UiTokenData.colorPrimaryButton.color(dark),
+                primaryButtonInk = UiTokenData.colorPrimaryButtonInk.color(dark),
+                textPrimary = UiTokenData.colorTextPrimary.color(dark),
+                textSecondary = UiTokenData.colorTextSecondary.color(dark),
+                textTertiary = UiTokenData.colorTextTertiary.color(dark),
+                textSubtle = UiTokenData.colorTextSubtle.color(dark),
+                textPlaceholder = UiTokenData.colorTextPlaceholder.color(dark),
+                inputPlaceholder = UiTokenData.colorInputPlaceholder.color(dark),
+                iconMuted = UiTokenData.colorIconMuted.color(dark),
+                borderList = UiTokenData.colorBorderList.color(dark),
+                homeSuccess = UiTokenData.colorSuccess.color(dark),
+                sessionSurface = UiTokenData.colorSessionSurface.color(dark),
+                pageWarning = UiTokenData.colorPageWarning.color(dark),
+                pageDanger = UiTokenData.colorPageDanger.color(dark),
             ),
             spacing = UiSpacing(
                 iconText = UiTokenData.spacingIconText.dp(),
@@ -426,7 +391,14 @@ public data class UiTokens(
                 bubblePaddingV = UiTokenData.geometryBubblePaddingV.dp(),
                 bubbleBadgeGap = UiTokenData.geometryBubbleBadgeGap.dp(),
                 bubbleLineSpacing = UiTokenData.geometryBubbleLineSpacing.dp(),
-                bubbleMaxWidth = UiTokenData.geometryBubbleMaxWidth.dp(),
+                // The Dp compatibility slot derives from the current viewport;
+                // callers with a narrower local container use maxBubbleWidth().
+                bubbleMaxWidth = if (viewportWidth != Dp.Unspecified) {
+                    ((viewportWidth.value - 2f * UiTokenData.geometryContentInset.value) *
+                        UiTokenData.geometryBubbleMaxWidthRatio.value).dp
+                } else {
+                    Dp.Unspecified
+                },
                 cardPadding = UiTokenData.geometryCardPadding.dp(),
                 cardOuterMarginH = UiTokenData.geometryCardOuterMarginH.dp(),
                 cardOuterMarginV = UiTokenData.geometryCardOuterMarginV.dp(),
@@ -458,6 +430,9 @@ public data class UiTokens(
                 statusDotDiameter = UiTokenData.geometryStatusDotDiameter.dp(),
                 pageBarButtonInsetH = UiTokenData.geometryPageBarButtonInsetH.dp(),
                 pageBarButtonElevation = UiTokenData.geometryPageBarButtonElevation.dp(),
+                bubbleMaxWidthRatio = UiTokenData.geometryBubbleMaxWidthRatio.ratio(),
+                defaultMinListRowHeight = UiTokenData.geometryDefaultMinListRowHeight.dp(),
+                homePrimaryButtonHeight = UiTokenData.geometryHomePrimaryButtonHeight.dp(),
             ),
             shadow = UiShadow(
                 floatingOpacity = HomeSpecData.Shadow.FLOATING_OPACITY,
@@ -471,9 +446,13 @@ public data class UiTokens(
     }
 }
 
-/** Resolves one colour token; an unmeasured channel is never replaced by a guess. */
-internal fun TokenColor.color(dark: Boolean): Color =
-    (if (dark) this.dark else this.light)?.let { Color(it) } ?: Color.Unspecified
+/** Resolves literal colour tokens; semantic and unmeasured colours remain unresolved. */
+internal fun TokenColor.color(dark: Boolean): Color {
+    if (semantic != null) return Color.Unspecified
+    val value = (if (dark) this.dark else this.light) ?: return Color.Unspecified
+    val alpha = if (dark) darkAlpha else lightAlpha
+    return Color(value).copy(alpha = alpha)
+}
 
 /** A `pt` token is a dp on Android (the unit only changes at render time, through the font scale). */
 internal fun TokenDp.dp(): Dp = value.dp
@@ -495,7 +474,3 @@ public const val PT: String = "pt"
 
 /** The one unit-free geometry unit the page layer uses. */
 public const val RATIO: String = "screenRatio"
-
-/** PR22 HomeSpec colours are Long ARGB constants (0xFFRRGGBB). */
-private fun homeColor(dark: Boolean, light: Long, darkValue: Long): Color =
-    Color(if (dark) darkValue else light)

@@ -101,15 +101,30 @@ URL_RE = re.compile(r"(?i)\b(?:https?|ftp|wss?)://|(?<![\w/])www\.[a-z0-9-]+\.[a
 # Assembled from parts so this checker carries no absolute path literal of its own.
 ABSOLUTE_USER_PATH = "/" + "Users" + "/"
 
-# PR22 HomeSpec.swift is the single UI authority. Old 402pt theme/component files
-# are no longer accepted provenance for a colour/type/spacing token: leaving them
-# accepted is how the superseded values survived the first port.
+# PR22 HomeSpec owns the product roles; retained component roles point to their
+# current iOS owner. Old 402pt component sources remain excluded.
 AUTHORITY_FILE = "HomeSpec.swift"
-# HomeSpec is the authority for the product roles and for spacing. The ShimmerText
-# effect is motion-only in PR22 (the text uses the process font), so there is no
-# component typography exception; geometry/radius stay on HomeSpec or a page.
-TYPE_SOURCE_FILES = (AUTHORITY_FILE,)
-GEOMETRY_SOURCE_FILES = (AUTHORITY_FILE,)
+TYPE_SOURCE_FILES = (
+    AUTHORITY_FILE, "NativeParityTokens.swift", "NativeChatPreferences.swift",
+    "NativeChatTheme.swift", "Components.swift", "DSHComponents.swift",
+    "MarkdownBody.swift", "SettingsChrome.swift",
+)
+GEOMETRY_SOURCE_FILES = (
+    AUTHORITY_FILE, "Components.swift", "NativeMessageRows.swift", "ChatPage.swift",
+    "NativeToolDetailCards.swift", "NativeDeviceSessionPage.swift",
+    "NativeComposerStats.swift", "NativeShell.swift", "FilesPage.swift",
+)
+COMPONENT_COLOR_SOURCE_FILES = (
+    "NativeParityTokens.swift", "Components.swift", "ChatPage.swift",
+    "TaskScreenPage.swift", "Sources/PhoneDSH/Background/TaskScreen.swift",
+)
+SDK_TASK_SCREEN_SOURCE_RE = re.compile(
+    r"^Sources/PhoneDSH/Background/TaskScreen\.swift:[0-9]+$"
+)
+
+
+def is_swift_source(source: str) -> bool:
+    return bool(SWIFT_SOURCE_RE.match(source) or SDK_TASK_SCREEN_SOURCE_RE.match(source))
 
 
 class CheckError(Exception):
@@ -335,7 +350,7 @@ def check_provenance(document) -> list:
                 raise CheckError(f"provenance.{token}: source unmeasured needs tier unmeasured")
         if tier == "unmeasured":
             # A value that cannot be read as a constant: it may still name the definition site.
-            if source != "unmeasured" and not (isinstance(source, str) and SWIFT_SOURCE_RE.match(source)):
+            if source != "unmeasured" and not (isinstance(source, str) and is_swift_source(source)):
                 raise CheckError(f"provenance.{token}: unmeasured source must be 'unmeasured' or file.swift:line")
             if group == "colors":
                 color = document["colors"][token.split(".")[1]]
@@ -344,12 +359,13 @@ def check_provenance(document) -> list:
             unmeasured.append(token)
             continue
         if not isinstance(source, str) or not (
-            SWIFT_SOURCE_RE.match(source)
+            is_swift_source(source)
             or SYSTEM_SOURCE_RE.match(source)
             or source == PLATFORM_DEFAULT_SOURCE
         ):
             raise CheckError(
-                f"provenance.{token}: source {source!r} is not file.swift:line, system:... or the platform-default marker"
+                f"provenance.{token}: source {source!r} is not file.swift:line, the allowed SDK path, "
+                "system:... or the platform-default marker"
             )
         if tier == "system":
             if group == "typography":
@@ -362,7 +378,7 @@ def check_provenance(document) -> list:
             elif not SYSTEM_SOURCE_RE.match(source):
                 raise CheckError(f"provenance.{token}: tier system needs a system: source")
             continue
-        if not SWIFT_SOURCE_RE.match(source):
+        if not is_swift_source(source):
             raise CheckError(f"provenance.{token}: tier {tier} needs a file.swift:line source")
         filename = source.split(":")[0]
         if group == "colors":
@@ -372,9 +388,22 @@ def check_provenance(document) -> list:
                     raise CheckError(
                         f"provenance.{token}: a page-tier colour needs baselineInconsistency: true"
                     )
-            elif tier != "theme" or filename != AUTHORITY_FILE:
+            elif tier == "theme" and filename == AUTHORITY_FILE:
+                pass
+            elif tier == "component":
+                if filename not in COMPONENT_COLOR_SOURCE_FILES:
+                    raise CheckError(
+                        f"provenance.{token}: component colour owner must be one of "
+                        + ", ".join(COMPONENT_COLOR_SOURCE_FILES)
+                    )
+                if not isinstance(entry.get("expect"), str):
+                    raise CheckError(
+                        f"provenance.{token}: component colours need an exact source-line expect anchor"
+                    )
+            else:
                 raise CheckError(
-                    f"provenance.{token}: colours must come from {AUTHORITY_FILE} (tier theme); "
+                    f"provenance.{token}: theme colours must come from {AUTHORITY_FILE}; "
+                    "component colours must be source-anchored with tier component; "
                     f"got {filename} / {tier!r}"
                 )
         elif group in ("typography", "spacing"):
@@ -422,13 +451,15 @@ def check_provenance_sources(root: Path, document) -> tuple:
     checked = 0
     for token, entry in sorted((document.get("provenance") or {}).items()):
         source = entry.get("source")
-        if not isinstance(source, str) or not SWIFT_SOURCE_RE.match(source):
+        if not isinstance(source, str) or not is_swift_source(source):
             continue
         filename, line_text = source.split(":")
         line_number = int(line_text)
-        path = files.get(filename)
+        path = root / filename if SDK_TASK_SCREEN_SOURCE_RE.match(source) else files.get(filename)
         if path is None:
-            raise CheckError(f"provenance.{token}: stale source {source!r}; {filename} is not in the PR22 probe app")
+            raise CheckError(
+                f"provenance.{token}: stale source {source!r}; {filename} is not in the allowed iOS sources"
+            )
         lines = read_text(path).splitlines()
         if not 1 <= line_number <= len(lines):
             raise CheckError(
@@ -436,28 +467,65 @@ def check_provenance_sources(root: Path, document) -> tuple:
             )
         cited = lines[line_number - 1]
         expect = entry.get("expect")
+        leaf = token.split(".", 1)[1]
+        group = token.split(".", 1)[0]
+        tier = entry.get("tier")
         if isinstance(expect, str):
             if expect not in cited:
                 raise CheckError(
                     f"provenance.{token}: stale source {source!r}; expected {expect!r} on that line"
                 )
-            checked += 1
-            continue
-        leaf = token.split(".", 1)[1]
-        group = token.split(".", 1)[0]
+            if not (group == "colors" and tier == "component"):
+                checked += 1
+                continue
         evidence = False
         if group == "colors":
             color = document["colors"][leaf]
-            light = color.get("light") or ""
-            dark = color.get("dark") or ""
-            upper = cited.upper()
-            evidence = (
-                leaf in cited
-                and bool(light)
-                and bool(dark)
-                and f"0X{light[1:].upper()}" in upper
-                and f"0X{dark[1:].upper()}" in upper
-            )
+            if tier == "component":
+                # Parse both channels and alpha from the actual Swift owner line;
+                # `expect` anchors the semantic role but cannot bless a changed value.
+                values = re.search(
+                    r"light:\s*0x([0-9A-Fa-f]{6}).*dark:\s*0x([0-9A-Fa-f]{6})", cited
+                )
+                if values:
+                    source_light = "#" + values.group(1).upper()
+                    source_dark = "#" + values.group(2).upper()
+                elif ".white" in cited or "Color.white" in cited:
+                    source_light = source_dark = "#FFFFFF"
+                elif ".black" in cited or "Color.black" in cited:
+                    source_light = source_dark = "#000000"
+                else:
+                    source_light = source_dark = None
+                if source_light != color.get("light"):
+                    raise CheckError(
+                        f"provenance.{token}: light value {color.get('light')!r} does not match source {source_light!r}"
+                    )
+                if source_dark != color.get("dark"):
+                    raise CheckError(
+                        f"provenance.{token}: dark value {color.get('dark')!r} does not match source {source_dark!r}"
+                    )
+                alphas = re.search(
+                    r"lightAlpha:\s*([0-9.]+).*darkAlpha:\s*([0-9.]+)", cited
+                )
+                source_light_alpha, source_dark_alpha = (
+                    (float(alphas.group(1)), float(alphas.group(2))) if alphas else (1.0, 1.0)
+                )
+                if abs(float(color.get("lightAlpha", 1)) - source_light_alpha) > 1e-9:
+                    raise CheckError(f"provenance.{token}: light alpha does not match source")
+                if abs(float(color.get("darkAlpha", 1)) - source_dark_alpha) > 1e-9:
+                    raise CheckError(f"provenance.{token}: dark alpha does not match source")
+                evidence = True
+            else:
+                light = color.get("light") or ""
+                dark = color.get("dark") or ""
+                upper = cited.upper()
+                evidence = (
+                    leaf in cited
+                    and bool(light)
+                    and bool(dark)
+                    and f"0X{light[1:].upper()}" in upper
+                    and f"0X{dark[1:].upper()}" in upper
+                )
         elif group == "typography":
             base = document["typography"]["styles"][leaf].get("baseSize")
             evidence = leaf in cited and numeric_literal_on_line(base, cited)
@@ -472,7 +540,81 @@ def check_provenance_sources(root: Path, document) -> tuple:
                 f"provenance.{token}: stale source {source!r}; the line no longer names the token or its value"
             )
         checked += 1
+    for metric, entry in sorted((document.get("componentMetrics") or {}).items()):
+        source = entry.get("source")
+        if not isinstance(source, str) or not SWIFT_SOURCE_RE.match(source):
+            raise CheckError(f"componentMetrics.{metric}: source must be HomeSpec.swift:line")
+        filename, line_text = source.split(":")
+        lines = read_text(files.get(filename)).splitlines() if files.get(filename) else []
+        line_number = int(line_text)
+        if not 1 <= line_number <= len(lines):
+            raise CheckError(f"componentMetrics.{metric}: stale source {source!r}")
+        cited = lines[line_number - 1]
+        if entry.get("expect") not in cited:
+            raise CheckError(f"componentMetrics.{metric}: source {source!r} lost its expect anchor")
+        if not numeric_literal_on_line(entry.get("value"), cited):
+            raise CheckError(f"componentMetrics.{metric}: value does not match source {source!r}")
+        checked += 1
+    for role, entry in sorted((document.get("shadows") or {}).items()):
+        source = entry.get("source")
+        if not isinstance(source, str) or not is_swift_source(source):
+            raise CheckError(f"shadows.{role}: source must be a Swift file:line owner")
+        filename, line_text = source.split(":")
+        path = root / filename if SDK_TASK_SCREEN_SOURCE_RE.match(source) else files.get(filename)
+        lines = read_text(path).splitlines() if path is not None else []
+        line_number = int(line_text)
+        if not 1 <= line_number <= len(lines):
+            raise CheckError(f"shadows.{role}: stale source {source!r}")
+        cited = lines[line_number - 1]
+        match = re.search(
+            r"shadow\(color: \.black\.opacity\(([0-9.]+)\), radius: ([0-9.]+), y: ([0-9.]+)\)",
+            cited,
+        )
+        if match is None:
+            raise CheckError(f"shadows.{role}: source {source!r} no longer holds a shadow literal")
+        for index, part in enumerate(("opacity", "radius", "y")):
+            if abs(float(entry.get(part)) - float(match.group(index + 1))) > 1e-9:
+                raise CheckError(f"shadows.{role}.{part} does not match source {source!r}")
+        checked += 1
     return checked, True
+
+
+# ---------------------------------------------------------------------------
+# Rule 4c: compatibility tables resolve to real canonical leaves.
+# ---------------------------------------------------------------------------
+
+
+def check_aliases(document) -> int:
+    aliases = document.get("aliases") or {}
+    if not isinstance(aliases, dict):
+        raise CheckError("aliases must be an object")
+    checked = 0
+    for family, table in aliases.items():
+        if family not in ("colors", "typography", "spacing", "radius", "stroke", "motion", "geometry"):
+            raise CheckError(f"aliases has unknown token family {family!r}")
+        if not isinstance(table, dict):
+            raise CheckError(f"aliases.{family} must be an object")
+        for alias, target in table.items():
+            if not isinstance(target, str) or resolve_token(document, target) is None:
+                raise CheckError(f"aliases.{family}.{alias} targets unknown token {target!r}")
+            if target.split(".", 1)[0] != family:
+                raise CheckError(f"aliases.{family}.{alias} must target the same token family")
+            checked += 1
+    compatibility = document.get("componentCompatibility") or {}
+    if not isinstance(compatibility, dict):
+        raise CheckError("componentCompatibility must be an object")
+    surfaces = document.get("signatureSurfaces") or {}
+    for surface, entry in compatibility.items():
+        if surface not in surfaces:
+            raise CheckError(f"componentCompatibility.{surface} has no signature surface")
+        tokens = entry.get("tokens") if isinstance(entry, dict) else None
+        if not isinstance(tokens, list) or not tokens:
+            raise CheckError(f"componentCompatibility.{surface}.tokens must be a non-empty list")
+        for token in tokens:
+            if resolve_token(document, token) is None:
+                raise CheckError(f"componentCompatibility.{surface} names unknown token {token!r}")
+        checked += len(tokens)
+    return checked
 
 
 # ---------------------------------------------------------------------------
@@ -1041,6 +1183,7 @@ def run(root: Path, strict: bool) -> int:
 
         sourced, sourced_checked = check_provenance_sources(root, document)
         geometry_count = check_geometry(document)
+        alias_count = check_aliases(document)
         references = check_surfaces(document)
         contrast_lines, contrast_failures, deferred, pair_count = check_contrast(document, strict)
         for line in contrast_lines:
@@ -1055,7 +1198,13 @@ def run(root: Path, strict: bool) -> int:
         page_count, page_checked = check_pages(root, readme)
 
         for reference in unmeasured:
-            report.unmeasured(f"  token    {reference} (value null, source unmeasured)")
+            group, leaf = reference.split(".", 1)
+            if group == "geometry":
+                entry = document["geometry"][leaf]
+                detail = f"value {entry.get('value')} {entry.get('unit')}"
+            else:
+                detail = "value null"
+            report.unmeasured(f"  token    {reference} ({detail}, tier unmeasured)")
         if sourced_checked:
             report.unmeasured(f"  source   {sourced} file:line provenance anchors resolved against the PR22 probe app")
         else:

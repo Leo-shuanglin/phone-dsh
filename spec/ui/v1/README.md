@@ -47,9 +47,10 @@ page/component 出处；只有页面层几何/动效可标 `tier: page`；WCAG �
 README ≤ 345 行（PR22 新增类型/几何表，cap 319→345，规则变更记录在 `tools/ui_check.py`，不删页面）；数据文件里
 不出现外链、邮箱、绝对用户路径。
 
-`tokens.json` 是 token 的唯一来源；`golden/tokens.golden.json` 只是 schema 示例，不是规范来源。来源分级：
-**颜色、字号/行高与间距一律来自 `HomeSpec.swift`；0.5 hairline 与动效来自 owning component/page；圆角与页面层几何
-允许来自 `HomeSpec.swift` 或 owning page**，页面层标 `tier: page`；取不到就记 `unmeasured`，不写假值。
+`tokens.json` 是生成 Kotlin 的唯一来源；`golden/tokens.golden.json` 只是 schema 示例。来源分级：
+**HomeSpec 主题色/字号/行高/间距来自 `HomeSpec.swift`；PR22 仍在用的组件色/字号/几何来自其当前
+`NativeParityTokens.swift`、`Components.swift` 等 owning 文件；旧名只通过 `aliases` 指向规范 leaf**，不复制第二张表；
+取不到就记 `unmeasured`，不写假值。Swift 只进入已复核的 JSON provenance，生成器不再并行解析 Swift/HTML。
 
 ## 1. 页面清单
 
@@ -62,8 +63,6 @@ README ≤ 345 行（PR22 新增类型/几何表，cap 319→345，规则变更�
 | ChatPage | PR22 首页：对话、输入坞、审批/问题卡、目标条；空对话也是首页 | RootView 的默认原生面（NativeShell） | 根页；自绘页头：抽屉 / 改名 / 设备+更多（含产物、工作区、运行状态、插件与工具、导出） | must |
 | SessionsPage | 抽屉会话列表（PR22 已不是产品首页） | **预览专用（`-uiPreview sessions`、`DrawerPreview`）；产品抽屉换 HomeDrawer** | 预览壳；选中会话即关闭 | later |
 | SessionActivityPage | 单会话的步骤/用量/上下文 | **触发点缺失（sheet 已接线但无人置位，基线不可达）** | sheet | later |
-| SessionHistoryPage | 历史回合列表与单回合详情（Android 承接页，iOS 无 struct） | 页头 `⋯` →「历史」，或 ChatPage 的目标行 | push；回合详情复用 ChatPage 的折叠规则 | later |
-| GoalDetailPage | 单个目标的 objective / 状态 / 动作（Android 承接页，iOS 无 struct） | ChatPage 的目标条 | sheet；打开失败保留上一个目标（fail-quiet） | later |
 | FilesPage | 工作区文件树、导入 | Chat 工具写出路径；文件段内联 | 页面栈；文件行 push `PreviewSurface`（独立预览面，契约 `pages/preview-surface.json`） | must |
 | NativeWorkbenchPage | 会话内工作面板（文件 / 命令两段） | 对话里点工具写出的文件路径 | sheet，`完成` 关闭 | must |
 | PDSHShellPage | 只读加速器命令（argv 来自 caps） | 文件段旁的「命令」段 | 段内页面 | must |

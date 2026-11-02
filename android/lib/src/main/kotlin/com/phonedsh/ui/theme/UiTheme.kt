@@ -16,14 +16,33 @@ import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.phonedsh.ui.theme.generated.HomeSpecData
 import com.phonedsh.ui.theme.generated.TokenType
 import com.phonedsh.ui.theme.generated.UiTokenData
+import kotlin.math.max
+
+/**
+ * User typographic preferences from the host's persisted settings.
+ *
+ * The values are base points, never pre-scaled: [UiType.applyPreferences] keeps
+ * the token's size/line-height ratio and the platform font scale remains the
+ * only multiplier. A `null` field keeps the reviewed PR22 default, so a fresh
+ * install renders body 16/24, code 14 and terminal 13 (the source defaults in
+ * `NativeChatPreferences.swift:47-53`).
+ */
+@Immutable
+public data class UiTypePreferences(
+    public val textSizePt: Float? = null,
+    public val codeSizePt: Float? = null,
+    public val terminalSizePt: Float? = null,
+    public val fontFamily: FontFamily? = null,
+)
 
 /** The parity typography roles plus the appended PR22 HomeSpec roles. */
 @Immutable
@@ -38,43 +57,21 @@ public data class UiType(
     public val shimmer: TextStyle,
     public val jsonLabel: TextStyle,
     public val jsonBody: TextStyle,
-    /** System type role: Material `titleMedium` is the declared Android mapping (±2pt tolerance). */
+    /** iOS `.titleMedium` mapping. */
     public val headline: TextStyle,
-    /** System type role: Material `titleSmall` is the declared Android mapping (±2pt tolerance). */
+    /** iOS `.titleSmall` mapping. */
     public val subheadline: TextStyle,
-    /**
-     * System type role: iOS `.largeTitle` — 34 pt / 700. Declared by the spec as
-     * `typography.largeTitle`; a page dimension title (settings index) reads it.
-     *
-     * Deliberately the last fields: appending keeps every earlier field's position
-     * and meaning, so a positional construction or a destructuring that predates the
-     * two system roles cannot silently shift ([fromSpec] uses named arguments).
-     */
+    /** iOS `.largeTitle` (34/700); the settings index reads it. */
     public val largeTitle: TextStyle,
-    /**
-     * System type role: iOS `.body` row label — 17 pt / 400. Declared by the spec as
-     * `typography.rowLabel`; settings / session / file list rows read it.
-     *
-     * @see largeTitle for why the new fields are appended, not inserted.
-     */
+    /** Grouped settings row label; the canonical 16/24 body token. */
     public val rowLabel: TextStyle,
-    /**
-     * 14 pt "text preference" role (`NativeParityTokens.bodySize`): tool rows,
-     * folds and in-card copy use `.system(size: 14)` on iOS. Appended for the
-     * same positional reason as [largeTitle].
-     */
+    /** General code preference role; fresh default 14, user override preserved. */
     public val controlBody: TextStyle,
-    /**
-     * The empty-state title: iOS `ContentUnavailableView` draws it at ~20 pt
-     * (measured ink 19.7 against Android's 17). Appended, never inserted.
-     */
+    /** Compatibility alias to `.largeTitle` for empty-state titles. */
     public val emptyStateTitle: TextStyle,
     // ---- PR22 HomeSpec type roles (430x932pt) ----------------------------
-    // Appended after the parity roles so no earlier position shifts. Sizes and
-    // line boxes come from `HomeSpec.swift`; the two weights the Swift file
-    // writes as `.semibold`/`.medium` and the CSS weights come from
-    // `docs/design/ios-home-design-spec-no-overview.html`, both through the
-    // generated `HomeSpecData.types` table.
+    // Appended after the parity roles so no earlier position shifts. Sizes,
+    // weights and line boxes all come from reviewed `spec/ui/v1/tokens.json`.
     /** Nav title: 17.5 / 600 / 22. */
     public val navTitle: TextStyle,
     /** Nav subtitle (folder name): 14.5 / 400 / 20. */
@@ -82,9 +79,9 @@ public data class UiType(
     /**
      * PR22 home body: 16 / 24.
      *
-     * `body` above stays the parity 17 pt role because the existing bubble
-     * surface test and the unported page layer compile against it; the PR22 home
-     * page reads this role. Appended, so no earlier position shifts.
+     * This is the same canonical value as [body]; [body] itself is 16/24 now so
+     * a page that predates the explicit `homeBody` role also renders the PR22
+     * size instead of the retired 17 pt parity default.
      */
     public val homeBody: TextStyle,
     /** Process row: 15 / 400 / 24. */
@@ -95,8 +92,12 @@ public data class UiType(
     public val buttonLabel: TextStyle,
     /** Tag: 12 / 500. */
     public val tagLabel: TextStyle,
-    /** Tab bar label: 10.5 / 500 / 14. */
+    /** Tab bar label: 10.5 / 500 / 14 (retained; the home uses a drawer). */
     public val tabLabel: TextStyle,
+    /** Fresh terminal preference default: 13 pt monospaced; user override preserved. */
+    public val terminal: TextStyle,
+    /** Secondary UIKit navigation title: 17 / 600, distinct from in-page 17.5 navTitle. */
+    public val pageTitle: TextStyle,
 ) {
     public companion object {
         /** Builds the styles from `typography.styles`; `sp` carries the system font scale. */
@@ -108,25 +109,69 @@ public data class UiType(
             codeLabel = UiTokenData.typeCodeLabel.style(),
             codeAction = UiTokenData.typeCodeAction.style(),
             codeExpand = UiTokenData.typeCodeExpand.style(),
-            shimmer = UiTokenData.typeShimmer.style(),
-            jsonLabel = UiTokenData.typeJsonLabel.style(),
-            jsonBody = UiTokenData.typeJsonBody.style(),
-            headline = UiTokenData.typeHeadline.style(),
-            subheadline = UiTokenData.typeSubheadline.style(),
+            // Compatibility roles resolve through declared aliases, never a
+            // second hand-typed style table.
+            shimmer = UiTokenData.typeProcess.style(),
+            jsonLabel = UiTokenData.typeTagLabel.style(),
+            jsonBody = UiTokenData.typeCode.style(),
+            headline = UiTokenData.typeNavTitle.style(),
+            subheadline = UiTokenData.typeNavSubtitle.style(),
             largeTitle = UiTokenData.typeLargeTitle.style(),
-            rowLabel = UiTokenData.typeRowLabel.style(),
-            controlBody = UiTokenData.typeControlBody.style(),
-            emptyStateTitle = UiTokenData.typeEmptyStateTitle.style(),
-            navTitle = HomeSpecData.types.getValue("typography.navTitle").style(),
-            navSubtitle = HomeSpecData.types.getValue("typography.navSubtitle").style(),
-            homeBody = HomeSpecData.types.getValue("typography.body").style(),
-            processBody = HomeSpecData.types.getValue("typography.processBody").style(),
-            listItem = HomeSpecData.types.getValue("typography.listItem").style(),
-            buttonLabel = HomeSpecData.types.getValue("typography.buttonLabel").style(),
-            tagLabel = HomeSpecData.types.getValue("typography.tagLabel").style(),
-            tabLabel = HomeSpecData.types.getValue("typography.tabLabel").style(),
+            rowLabel = UiTokenData.typeBody.style(),
+            controlBody = UiTokenData.typeCode.style(),
+            emptyStateTitle = UiTokenData.typeLargeTitle.style(),
+            navTitle = UiTokenData.typeNavTitle.style(),
+            navSubtitle = UiTokenData.typeNavSubtitle.style(),
+            homeBody = UiTokenData.typeBody.style(),
+            processBody = UiTokenData.typeProcess.style(),
+            listItem = UiTokenData.typeListItem.style(),
+            buttonLabel = UiTokenData.typeButtonLabel.style(),
+            tagLabel = UiTokenData.typeTagLabel.style(),
+            tabLabel = UiTokenData.typeTabLabel.style(),
+            terminal = UiTokenData.typeTerminal.style(),
+            pageTitle = UiTokenData.typePageTitle.style(),
         )
     }
+}
+
+/**
+ * Applies persisted user sizes to the reviewed roles.
+ *
+ * Only the roles the host actually persists are touched: body/homeBody share
+ * the text preference, [code]/[controlBody]/[jsonBody] share the code
+ * preference and [terminal] keeps its own. A preference equal to the reviewed
+ * default is a no-op, so the 16/24, 14 and 13 source values remain exact.
+ */
+public fun UiType.applyPreferences(preferences: UiTypePreferences): UiType {
+    if (preferences.textSizePt == null && preferences.codeSizePt == null &&
+        preferences.terminalSizePt == null && preferences.fontFamily == null
+    ) return this
+    val family = preferences.fontFamily
+    fun TextStyle.withSize(sizePt: Float?): TextStyle {
+        if (sizePt == null) return if (family == null) this else copy(fontFamily = family)
+        val base = fontSize.value
+        val ratio = if (fontSize.isSp && base > 0f) lineHeight.value / base else 0f
+        return copy(
+            fontSize = sizePt.sp,
+            lineHeight = if (ratio > 0f) max(sizePt, sizePt * ratio).sp else lineHeight,
+            fontFamily = family ?: fontFamily,
+        )
+    }
+    val textBody = body.withSize(preferences.textSizePt)
+    val codeRole = code.withSize(preferences.codeSizePt)
+    return copy(
+        body = textBody,
+        homeBody = textBody,
+        rowLabel = textBody,
+        // NativeChatTheme.secondaryFont/captionFont are fixed system roles, not
+        // user-preference roles; the text preference does not resize them.
+        code = codeRole,
+        controlBody = codeRole,
+        jsonBody = codeRole,
+        // Code toolbar labels/actions are fixed component roles, not the code
+        // preference: NativeChatTheme.codeFont() only feeds code blocks.
+        terminal = terminal.withSize(preferences.terminalSizePt),
+    )
 }
 
 /** `baseSize` is emitted in `sp` so the platform scale is the only multiplier. */
@@ -134,8 +179,8 @@ internal fun TokenType.style(): TextStyle = TextStyle(
     fontSize = baseSize.sp,
     fontWeight = FontWeight(weight),
     fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
-    // HomeSpec's 16/24, 14/22, 17.5/22 roles carry an explicit line box; the
-    // older parity roles leave it Unspecified so the platform leading applies.
+    // HomeSpec's 16/24, 14/22, 17.5/22 roles carry an explicit line box; roles
+    // the source leaves unstated keep the platform leading.
     lineHeight = lineHeight?.sp ?: TextUnit.Unspecified,
 )
 
@@ -152,15 +197,17 @@ public val LocalUiType: ProvidableCompositionLocal<UiType> =
  *
  * There is deliberately no MaterialTheme wrapper: the spec's chrome is drawn
  * from the token table, and a Material colour scheme would silently introduce a
- * second source of colour for `background` (which the spec marks unmeasured).
+ * second source of colour for the page role.
  */
 @Composable
 public fun PdshTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    typePreferences: UiTypePreferences = UiTypePreferences(),
     content: @Composable () -> Unit,
 ) {
-    val tokens = remember(darkTheme) { UiTokens.resolve(darkTheme) }
-    val type = remember { UiType.fromSpec() }
+    val viewportWidth = LocalConfiguration.current.screenWidthDp.dp
+    val tokens = remember(darkTheme, viewportWidth) { UiTokens.resolve(darkTheme, viewportWidth) }
+    val type = remember(typePreferences) { UiType.fromSpec().applyPreferences(typePreferences) }
     androidx.compose.runtime.CompositionLocalProvider(
         LocalUiTokens provides tokens,
         LocalUiType provides type,

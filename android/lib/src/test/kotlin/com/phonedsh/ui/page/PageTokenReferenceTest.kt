@@ -21,6 +21,8 @@
 // The test reads the real spec file, never a copy, so a spec edit reaches it.
 package com.phonedsh.ui.page
 
+import com.phonedsh.agentcore.JsonObject
+import com.phonedsh.agentcore.JsonString
 import com.phonedsh.ui.SpecFixtures
 import com.phonedsh.ui.surfaces
 import com.phonedsh.ui.tokenNames
@@ -82,7 +84,7 @@ class PageTokenReferenceTest {
     fun `every token a page reads exists in tokens json`() {
         val known = SpecFixtures.tokenNames()
         pages.forEach { (file, declared) ->
-            (references(file) + declared).forEach { reference ->
+            (references(file) + declared.map(::canonicalToken)).forEach { reference ->
                 assertTrue(
                     "$file reads '$reference', which is not a token in spec/ui/v1/tokens.json",
                     reference in known,
@@ -95,7 +97,7 @@ class PageTokenReferenceTest {
     fun `each page declares exactly the tokens its source reads`() {
         pages.forEach { (file, declared) ->
             val actual = references(file).toSet()
-            val expected = declared.toSet()
+            val expected = declared.map(::canonicalToken).toSet()
             val drift = INVENTORY_DRIFT[file]
             if (drift == null) {
                 assertEquals(
@@ -106,12 +108,12 @@ class PageTokenReferenceTest {
             } else {
                 assertEquals(
                     "$file: the recorded missing inventory changed; repair the page or update the record",
-                    drift.missing,
+                    drift.missing.map(::canonicalToken).toSet(),
                     actual - expected,
                 )
                 assertEquals(
                     "$file: the recorded extra inventory changed; repair the page or update the record",
-                    drift.extra,
+                    drift.extra.map(::canonicalToken).toSet(),
                     expected - actual,
                 )
             }
@@ -167,14 +169,27 @@ class PageTokenReferenceTest {
         // earlier file-level rule fired on any geometry reference, which made a
         // correct page fail and would have taught the next person to sprinkle the
         // marker until the test went quiet.
+        // HomeMetrics owns the HomeSpec grid; those lengths are page geometry, not
+        // a surface's private layout. Only the remaining surface geometry needs the
+        // reuse marker when a page reads it.
+        val homeMetrics = sourceFromRepo("android/lib/src/main/kotlin/com/phonedsh/ui/HomeMetrics.kt")
+        val homeMetricsOwned = (SpecFixtures.tokens["geometry"] as JsonObject).members.keys
+            .filter { homeMetrics.contains("const val ${upperSnake(it)}") }
+            .map { "geometry.$it" }
+            .toSet()
         val surfaceOwned = SpecFixtures.surfaces().flatMap { it.tokens }
             .filter { it.startsWith("geometry.") }
+            .map(::canonicalToken)
+            .filterNot { it in homeMetricsOwned }
             .map { it.removePrefix("geometry.") }
             .toSet()
 
         pages.keys.forEach { file ->
             val source = source(file)
-            val borrowed = surfaceOwned.filter { source.contains("tokens.geometry.$it") }
+            val borrowed = TOKEN_REF.findAll(source)
+                .map { canonicalToken("${it.groupValues[1]}.${it.groupValues[2]}") }
+                .filter { it.startsWith("geometry.") && it.removePrefix("geometry.") in surfaceOwned }
+                .map { it.removePrefix("geometry.") }.distinct().toList()
             if (borrowed.isEmpty()) return@forEach
             assertTrue(
                 "$file borrows signature-surface geometry $borrowed without an " +
@@ -206,15 +221,31 @@ class PageTokenReferenceTest {
     /** Every token spelling the file's source reads through the theme locals. */
     private fun references(file: String): List<String> {
         val source = source(file)
-        val direct = TOKEN_REF.findAll(source).map { "${it.groupValues[1]}.${it.groupValues[2]}" }
+        val direct = TOKEN_REF.findAll(source)
+            .map { canonicalToken("${it.groupValues[1]}.${it.groupValues[2]}") }
         val typography = TYPOGRAPHY_REF.findAll(source)
-            .map { "typography.${it.groupValues[1]}" }
+            .map { canonicalToken("typography.${it.groupValues[1]}") }
             .filter { it in SPEC_TOKENS }
         return (direct + typography).toSet().toList()
     }
 
+    /** Resolves generated compatibility spellings through the JSON canonical map. */
+    private fun canonicalToken(token: String): String {
+        val family = token.substringBefore('.')
+        val leaf = token.substringAfter('.', missingDelimiterValue = "")
+        val aliases = (SpecFixtures.tokens["aliases"] as? JsonObject)?.get(family) as? JsonObject
+            ?: return token
+        return (aliases[leaf] as? JsonString)?.value ?: token
+    }
+
     private fun source(file: String): String =
         String(Files.readAllBytes(pageDir().resolve(file)), Charsets.UTF_8)
+
+    private fun sourceFromRepo(relative: String): String =
+        String(Files.readAllBytes(SpecFixtures.repoRoot.resolve(relative)), Charsets.UTF_8)
+
+    private fun upperSnake(name: String): String =
+        name.replace(Regex("([a-z0-9])([A-Z])"), "$1_$2").uppercase()
 
     private fun pageDir(): Path =
         SpecFixtures.repoRoot.resolve("android/lib/src/main/kotlin/com/phonedsh/ui/page")
@@ -231,7 +262,7 @@ class PageTokenReferenceTest {
          */
         val INVENTORY_DRIFT: Map<String, InventoryDrift> = mapOf(
             "WorkspaceFoldersPage.kt" to InventoryDrift(
-                missing = setOf("colors.input", "typography.rowLabel", "typography.subheadline"),
+                missing = setOf("colors.input", "typography.subheadline"),
                 extra = setOf("geometry.statusDotDiameter"),
             ),
             "ModelProviderSettingsPage.kt" to InventoryDrift(

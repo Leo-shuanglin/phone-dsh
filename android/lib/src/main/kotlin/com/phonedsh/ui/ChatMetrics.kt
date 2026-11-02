@@ -120,10 +120,10 @@ public object ChatMetrics {
     /** Icon-to-title gap. Source: design spec (`间隔 6`). Confidence: exact. */
     public const val DISCLOSURE_ICON_GAP_PT: Int = 6
 
-    /** Expanded thinking body's leading indent. Source: `NativeMessageRows.swift:82` (`.padding(.leading, 22)`). Confidence: exact. */
+    /** Expanded thinking body's leading indent. Source: `NativeMessageRows.swift:92` (`.padding(.leading, 22)`). Confidence: exact. */
     public const val THINKING_CONTENT_INDENT_PT: Int = 22
 
-    /** Expanded thinking body's vertical inset. Source: `NativeMessageRows.swift:83` (`.padding(.vertical, 4)`). Confidence: exact. */
+    /** Expanded thinking body's vertical inset. Source: `NativeMessageRows.swift:93` (`.padding(.vertical, 4)`). Confidence: exact. */
     public const val THINKING_CONTENT_VERTICAL_PT: Int = 4
 
     /** Closed-turn process control row height. PR22 uses the 24 pt process row. Source: `HomeSpec.processRowHeight`. Confidence: exact. */
@@ -134,8 +134,13 @@ public object ChatMetrics {
     /** User bubble corner radius. Source: `HomeSpec.bubbleRadius = 24`, top-trailing square. Confidence: exact. */
     public const val USER_BUBBLE_RADIUS_PT: Int = 24
 
-    /** User bubble maximum width: 80% of the 390 pt content column. Source: `ChatPage.swift:3906` (`(width - 2 * contentInset) * 0.8`). Confidence: exact. */
-    public const val USER_BUBBLE_MAX_WIDTH_PT: Int = 312
+    /**
+     * User-bubble maximum width runtime rule: `(containerWidth - 2 * contentInset) * 0.8`.
+     * Source: `ChatPage.swift:3906`. The 312 pt result belongs to the 430 pt frame;
+     * a split pane or narrow container must pass its own width.
+     */
+    public fun userBubbleMaxWidth(containerWidth: Dp, contentInset: Dp): Dp =
+        ((containerWidth.value - 2f * contentInset.value) * HomeMetrics.BUBBLE_MAX_WIDTH_RATIO).dp
 
     // The user bubble's 16 h / 10 v text insets (`ChatPage.swift:3738-3739`) are
     // **not** declared here any more: L22 landed the spec split, so the bubble
@@ -190,8 +195,8 @@ public object ChatMetrics {
     /** Composer outer side inset. Source: `HomeSpec.chromeInset = 16`. Confidence: exact. */
     public const val COMPOSER_OUTER_MARGIN_H_PT: Int = 16
 
-    /** Composer outer top inset. Not stated by PR22; kept from the previous measured render. Confidence: inferred. */
-    public const val COMPOSER_OUTER_MARGIN_TOP_PT: Int = 12
+    /** Composer outer top inset. Source: `ChatPage.swift:1931` (`.padding(.top, 8)`). Confidence: exact. */
+    public const val COMPOSER_OUTER_MARGIN_TOP_PT: Int = 8
 
     /**
      * Composer outer bottom inset, now **0**.
@@ -625,9 +630,6 @@ public object ChatMetrics {
 
     /** [DISCLOSURE_ROW_HEIGHT_PT] as a Compose length. */
     public val disclosureRowHeight: Dp get() = DISCLOSURE_ROW_HEIGHT_PT.dp
-
-    /** [USER_BUBBLE_MAX_WIDTH_PT] as a Compose length. */
-    public val userBubbleMaxWidth: Dp get() = USER_BUBBLE_MAX_WIDTH_PT.dp
 
     /** [COMPOSER_WIDTH_PT] as a Compose length. */
     public val composerWidth: Dp get() = COMPOSER_WIDTH_PT.dp

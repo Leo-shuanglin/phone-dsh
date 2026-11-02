@@ -25,6 +25,19 @@ class UiStringsPr22Test {
     }
 
     @Test
+    fun `Android platform copy names Android storage and actual dependencies`() {
+        assertTrue(UiStrings.PROVIDER_CONNECTION_FOOTER.contains("Android Keystore"))
+        assertFalse(UiStrings.PROVIDER_CONNECTION_FOOTER.contains("钥匙串"))
+        assertFalse(UiStrings.PROVIDER_CONNECTION_FOOTER_EN.contains("Keychain"))
+        assertTrue(UiStrings.MCP_AUTH_FOOTER.contains("Android Keystore"))
+        assertFalse(UiStrings.MCP_AUTH_FOOTER.contains("钥匙串"))
+        assertFalse(UiStrings.LICENSES_SWIFTTERM.contains("SwiftTerm"))
+        assertFalse(UiStrings.LICENSES_SWIFT_NIO.contains("swift-nio"))
+        assertTrue(UiStrings.SETTINGS_LICENSES_ANDROID_ONLY.contains("AndroidX"))
+        assertTrue(UiStrings.SETTINGS_LICENSES_ANDROID_ONLY.contains("Ktor"))
+    }
+
+    @Test
     fun `reused labels carry the PR22 wording`() {
         assertEquals(UiStrings.MCP_FIELD_NAME, UiStrings.PROVIDER_NAME_LABEL)
         assertEquals(UiStrings.PROVIDER_KEY_SECTION, UiStrings.PROVIDER_KEY_LABEL)
@@ -161,8 +174,8 @@ class UiStringsPr22Test {
             "ARCHIVED_RESTORE_FOOTER_EN" to "Restored sessions return to their folder.",
             "PERMISSION_DEFAULTS_SCOPE" to "只影响之后新开的会话，当前会话保持不变。",
             "PERMISSION_DEFAULTS_SCOPE_EN" to "Only new sessions use this default; the current session is unchanged.",
-            "LICENSES_SWIFTTERM" to "SwiftTerm",
-            "LICENSES_SWIFT_NIO" to "swift-nio",
+            "LICENSES_SWIFTTERM" to "AndroidX / Jetpack Compose",
+            "LICENSES_SWIFT_NIO" to "Kotlin · kotlinx.coroutines · Ktor",
             "LICENSES_MIT" to "MIT",
             "LICENSES_APACHE" to "Apache 2.0",
             "SETTINGS_EN" to "Settings",
@@ -207,8 +220,8 @@ class UiStringsPr22Test {
             "PROVIDER_URL_PLACEHOLDER" to "https://api.deepseek.com/v1",
             "PROVIDER_SECTION_CONNECTION" to "连接信息",
             "PROVIDER_SECTION_CONNECTION_EN" to "Connection",
-            "PROVIDER_CONNECTION_FOOTER" to "填写这三项，然后获取模型。密钥仅保存在这台手机的钥匙串中。",
-            "PROVIDER_CONNECTION_FOOTER_EN" to "Enter these three fields, then fetch models. Keys stay in this phone’s Keychain.",
+            "PROVIDER_CONNECTION_FOOTER" to "填写这三项，然后获取模型。密钥保存在本机应用私有存储中；设备支持时使用 Android Keystore 加密。",
+            "PROVIDER_CONNECTION_FOOTER_EN" to "Enter these three fields, then fetch models. Keys stay in this app’s private storage; Android Keystore encryption is used when available.",
             "PROVIDER_FETCHING" to "正在获取模型…",
             "PROVIDER_FETCH" to "获取模型",
             "PROVIDER_MODEL_FOOTER" to "获取后选择默认模型。接口不支持模型列表时，可在高级设置中手动添加。",

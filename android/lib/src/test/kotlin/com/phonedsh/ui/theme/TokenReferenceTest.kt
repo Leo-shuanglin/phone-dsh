@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: MIT
 // and nothing else.
 //
-// The test reads the spec file itself (never a copy) and asserts three things:
-//  1. every token name a component references exists in `tokens.json`;
-//  2. each component's declared inventory equals the spec's own
-//     `signatureSurfaces.<id>.tokens` list — a missing or extra token fails;
-//  3. the generated `UiTokenData` is byte-for-byte in sync with the spec, so a
-//     stale build generator cannot drift from the single source.
+// The test reads the spec file itself (never a copy) and asserts:
+//  1. the canonical generated table is byte-for-byte in sync with the spec,
+//     including line heights, alpha channels and semantic roles;
+//  2. every token a component references exists (compatibility names resolve
+//     through the declared aliases);
+//  3. each component's active reads outside the HomeSpec signature equal the
+//     explicit `componentCompatibility` declaration for that surface;
+//  4. the resolved theme carries the reviewed values, not a second table.
 package com.phonedsh.ui.theme
 
 import com.phonedsh.agentcore.JsonArray
@@ -29,7 +31,9 @@ import com.phonedsh.ui.surface.ToolRowTokens
 import com.phonedsh.ui.theme.generated.UiTokenData
 import com.phonedsh.ui.theme.generated.UiTypeScale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -58,26 +62,26 @@ class TokenReferenceTest {
     }
 
     @Test
-    fun `each component inventory equals the spec surface token list`() {
+    fun `active component reads outside the HomeSpec signature are explicit`() {
         val declaredBySpec = SpecFixtures.surfaces().associate { it.id to it.tokens.toSet() }
+        val compatibility = componentCompatibility()
         inventories().forEach { inventory ->
+            val activeReadSet = (inventory.declared + inventory.gaps).toSet()
+            val declaredHomeSpec = declaredBySpec.getValue(inventory.id)
             assertEquals(
-                "${inventory.id}: component inventory must match signatureSurfaces.${inventory.id}.tokens",
-                declaredBySpec.getValue(inventory.id),
-                inventory.declared.toSet(),
+                "${inventory.id}: component compatibility roles must be declared once in tokens.json",
+                activeReadSet - declaredHomeSpec,
+                compatibility[inventory.id].orEmpty(),
+            )
+            assertTrue(
+                "${inventory.id}: HomeSpec contract references must remain real JSON tokens",
+                declaredHomeSpec.all { it in SpecFixtures.tokenNames() },
+            )
+            assertTrue(
+                "${inventory.id}: every active read must still be a real JSON token",
+                activeReadSet.all { it in SpecFixtures.tokenNames() },
             )
         }
-    }
-
-    @Test
-    fun `documented gaps are small and named`() {
-        // A gap is a token the component needs but the spec's surface list does not
-        // declare. It is reviewed, never silent: keep the list explicit.
-        val gaps = inventories().filter { it.gaps.isNotEmpty() }.associate { it.id to it.gaps.toSet() }
-        // Empty today: the two gaps these surfaces used to carry (the primary ink and
-        // the internal control gap) are declared by the spec now. The test stays so a
-        // future gap has to be written down here rather than added silently.
-        assertEquals(emptyMap<String, Set<String>>(), gaps)
     }
 
     @Test
@@ -93,6 +97,19 @@ class TokenReferenceTest {
             assertEquals("colors.$key light", argb(entry, "light"), generated.light)
             assertEquals("colors.$key dark", argb(entry, "dark"), generated.dark)
             assertEquals("colors.$key unmeasured", generated.light == null || generated.dark == null, generated.unmeasured)
+            assertEquals(
+                "colors.$key light alpha",
+                (entry["lightAlpha"] as? JsonNumber)?.raw?.toFloat() ?: 1f,
+                generated.lightAlpha,
+                0f,
+            )
+            assertEquals(
+                "colors.$key dark alpha",
+                (entry["darkAlpha"] as? JsonNumber)?.raw?.toFloat() ?: 1f,
+                generated.darkAlpha,
+                0f,
+            )
+            assertEquals("colors.$key semantic", (entry["semantic"] as? JsonString)?.value, generated.semantic)
         }
 
         val styles = (tokens["typography"] as JsonObject)["styles"] as JsonObject
@@ -102,6 +119,11 @@ class TokenReferenceTest {
             assertEquals("typography.$key size", number(entry, "baseSize").toFloat(), generated.baseSize, 0f)
             assertEquals("typography.$key weight", number(entry, "weight").toInt(), generated.weight)
             assertEquals("typography.$key mono", (entry["mono"] as JsonBool).value, generated.mono)
+            assertEquals(
+                "typography.$key lineHeight",
+                (entry["lineHeight"] as? JsonNumber)?.raw?.toFloat(),
+                generated.lineHeight,
+            )
         }
 
         for (family in listOf("spacing", "radius", "stroke")) {
@@ -111,11 +133,7 @@ class TokenReferenceTest {
                 "radius" -> UiTokenData.radius
                 else -> UiTokenData.stroke
             }
-            assertEquals(
-                "$family tokens",
-                json.members.keys.map { "$family.$it" }.toSet(),
-                generated.keys,
-            )
+            assertEquals("$family tokens", json.members.keys.map { "$family.$it" }.toSet(), generated.keys)
             json.members.forEach { (key, raw) ->
                 assertEquals("$family.$key", (raw as JsonNumber).raw.toFloat(), generated.getValue("$family.$key").value, 0f)
             }
@@ -160,34 +178,43 @@ class TokenReferenceTest {
             assertTrue(
                 "geometry.$key scalesWith must be null or a typography token",
                 scalesWith == null || scalesWith is JsonNull || (
-                    scalesWith is JsonString && "typography.${scalesWith.value}" in typography
+                    scalesWith is JsonString && scalesWith.value in typography
                     ),
             )
         }
-        // `typography.scale` says the platform scale is the only multiplier; Android
-        // implements it by emitting `sp`, so the driver name must stay `font-scale`.
-        assertEquals("system", (SpecFixtures.tokens["typography"] as JsonObject)
-            .let { (it["scale"] as JsonObject).text("mode") })
+        assertEquals(
+            "system",
+            (SpecFixtures.tokens["typography"] as JsonObject).let { (it["scale"] as JsonObject).text("mode") },
+        )
         assertEquals("font-scale", UiTypeScale.ANDROID_DRIVER)
     }
 
     @Test
     fun `the resolved theme reads the generated values`() {
-        val light = UiTokens.resolve(dark = false)
-        val dark = UiTokens.resolve(dark = true)
-        assertEquals(Color(0xFF3964FE), light.colors.accent)
+        val light = UiTokens.resolve(dark = false, viewportWidth = 430f.dp)
+        val dark = UiTokens.resolve(dark = true, viewportWidth = 430f.dp)
+        assertEquals(Color(0xFF1A1A1A), light.colors.accent)
         assertEquals(Color(0xFF679EFE), dark.colors.accent)
-        // 2026-11-02: the approval card's CTA is the theme accent (#3964FE,
-        // `ChatPage.swift:4459`); the page-layer #2F5BFF moved to `pageAccent`.
-        assertEquals(Color(0xFF3964FE), light.colors.ctaOverride)
-        assertEquals(Color(0xFF3964FE), dark.colors.ctaOverride)
-        assertEquals(Color(0xFF2F5BFF), light.colors.pageAccent)
-        assertEquals(Color(0xFF34C759), light.colors.switchOn)
-        assertEquals(Color(0xFF000000), light.colors.systemLabel)
-        assertEquals(Color(0xFFFFFFFF), dark.colors.systemLabel)
-        assertEquals(Color(0xFF8A8A8E), light.colors.systemSecondary)
-        // PR22 HomeSpec palette: the three names that already existed take the
-        // HomeSpec value, and the new roles are appended.
+        assertEquals(Color(0xFF1A1A1A), light.colors.ctaOverride)
+        assertEquals(Color(0xFF679EFE), dark.colors.ctaOverride)
+        assertEquals(Color(0xFF191919), light.colors.pageAccent)
+        assertEquals(Color(0xFF3A3A3C), dark.colors.pageAccent)
+        assertEquals(Color.Unspecified, light.colors.switchOn)
+        assertEquals(Color.Unspecified, light.colors.systemLabel)
+        assertEquals(Color.Unspecified, dark.colors.systemLabel)
+        assertEquals(Color.Unspecified, light.colors.systemSecondary)
+        assertEquals(Color(0xFF1A1A1A), light.colors.primary)
+        assertEquals(Color(0xFFF9FAFB), dark.colors.primary)
+        assertEquals(Color(0xFF555555), light.colors.secondary)
+        assertEquals(Color(0xFFCFD3D6), dark.colors.secondary)
+        assertEquals(Color(0xFF888888), light.colors.tertiary)
+        assertEquals(Color(0xFFADB2B8), dark.colors.tertiary)
+        assertEquals(0.10f, UiTokenData.colorBorder.lightAlpha, 0f)
+        assertEquals(0.12f, UiTokenData.colorBorder.darkAlpha, 0f)
+        assertEquals(0.04f, UiTokenData.colorBorderLight.lightAlpha, 0f)
+        assertEquals(0.06f, UiTokenData.colorBorderLight.darkAlpha, 0f)
+        assertEquals(Color(0xFF151517), UiTokenData.colors.getValue("colors.sessionSurface").color(true))
+        // HomeSpec has separate text/success roles and does not overwrite parity aliases.
         assertEquals(Color(0xFFF7F7F7), light.colors.page)
         assertEquals(Color(0xFF101012), dark.colors.page)
         assertEquals(Color(0xFFFFFFFF), light.colors.surface)
@@ -205,25 +232,38 @@ class TokenReferenceTest {
         assertEquals(Color(0xFF888888), light.colors.textPlaceholder)
         assertEquals(Color(0xFF8B8B8B), light.colors.inputPlaceholder)
         assertEquals(Color(0xFFA9A9A9), light.colors.iconMuted)
+        assertEquals(Color(0xFF3DC979), light.colors.homeSuccess)
+        assertEquals(Color(0xFF3DC979), dark.colors.homeSuccess)
+        assertEquals(Color(0xFF000000), light.colors.taskScreen)
+        assertEquals(Color(0xFF000000), dark.colors.taskScreen)
         assertEquals(Color(0xFF3DC979), light.colors.success)
+        assertEquals(Color(0xFF22C55E), dark.colors.success)
         assertEquals(Color(0xFFE2E2E2), light.colors.borderList)
         assertEquals(0.05f, light.shadow.floatingOpacity, 0f)
         assertEquals(5f, light.shadow.floatingRadius.value, 0f)
         assertEquals(0.08f, light.shadow.composerOpacity, 0f)
-        // The values the resolved theme must carry are the *current* spec's, not the
-        // ones this test was written against: L9 re-based the two radii and the bubble
-        // cap on the iOS implementation (`NativeParityTokens.swift:115-116` radiusXL =
-        // 20 / radiusPanel = 28, `:98` userBubbleMaxWidth = 277). The hardcoded 22 was
-        // the old truth here, not an implementation error.
-        assertEquals(20f, light.radius.bubble.value, 0f)
-        assertEquals(28f, light.radius.composer.value, 0f)
-        assertEquals(277f, light.geometry.bubbleMaxWidth.value, 0f)
+        assertEquals(24f, light.radius.bubble.value, 0f)
+        assertEquals(24f, light.radius.composer.value, 0f)
+        assertEquals(12f, light.radius.card.value, 0f)
+        assertEquals(12f, light.radius.codeBlock.value, 0f)
+        assertEquals(312f, light.geometry.bubbleMaxWidth.value, 0f)
+        assertEquals(272f, UiTokens.resolve(false, 380f.dp).geometry.bubbleMaxWidth.value, 0f)
+        assertEquals(312f, light.geometry.maxBubbleWidth(430f.dp, 20f.dp).value, 0f)
+        assertEquals(272f, light.geometry.maxBubbleWidth(380f.dp, 20f.dp).value, 0f)
         assertEquals(0.4f, light.geometry.cardAreaMaxHeightRatio, 0f)
-        // `colors.background` cannot be measured (a dynamic system colour): it must
-        // stay unspecified rather than become an invented fill.
-        assertTrue(light.colors.backgroundUnmeasured)
+        // NativeChatTheme.background is HomeSpec.page, so preserve the measured fill.
+        assertEquals(Color(0xFFF7F7F7), light.colors.background)
+        assertEquals(Color(0xFF101012), dark.colors.background)
+        assertFalse(light.colors.backgroundUnmeasured)
         assertTrue(light.motion.shimmerRepeat)
         assertEquals("easeOut", light.motion.disclosureCurve)
+    }
+
+    private fun componentCompatibility(): Map<String, Set<String>> {
+        val inventory = SpecFixtures.tokens["componentCompatibility"] as? JsonObject ?: return emptyMap()
+        return inventory.members.mapValues { (_, raw) ->
+            ((raw as JsonObject)["tokens"] as JsonArray).values.map { (it as JsonString).value }.toSet()
+        }
     }
 
     private fun inventories(): List<Inventory> = listOf(

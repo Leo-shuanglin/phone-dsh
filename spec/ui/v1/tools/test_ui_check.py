@@ -72,6 +72,13 @@ class UiCheckTests(unittest.TestCase):
             probe.mkdir(parents=True)
             (probe / "ChatPage.swift").write_text("struct ChatPage: View {}\n", encoding="utf-8")
             (probe / "MemoryPage.swift").write_text("struct MemoryPage: View {}\n", encoding="utf-8")
+        # One measured source lives in the repository's PhoneDSH SDK, outside
+        # the probe app. Copy only this explicit owner path for provenance tests.
+        sdk_source = ROOT / "Sources" / "PhoneDSH" / "Background" / "TaskScreen.swift"
+        if sdk_source.is_file():
+            sdk_target = self.root / "Sources" / "PhoneDSH" / "Background" / "TaskScreen.swift"
+            sdk_target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(sdk_source, sdk_target)
 
     # -- helpers ---------------------------------------------------------
 
@@ -255,6 +262,81 @@ class UiCheckTests(unittest.TestCase):
         document["provenance"]["colors.textPrimary"]["source"] = "NativeChatTheme.swift:8"
         self.write_tokens(document)
         self.assert_fails(run_checker(self.root), "must come from HomeSpec.swift")
+
+    def test_component_colour_uses_its_nativeparity_owner(self) -> None:
+        document = self.tokens()
+        document["provenance"]["colors.sessionPrimary"] = {
+            "source": "NativeParityTokens.swift:18",
+            "tier": "component",
+            "expect": "labelPrimary",
+        }
+        self.write_tokens(document)
+        self.assert_passes(run_checker(self.root))
+
+    def test_component_colour_light_value_is_bound_to_source(self) -> None:
+        document = self.tokens()
+        document["colors"]["sessionPrimary"]["light"] = "#FF00FF"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "light value '#FF00FF' does not match source '#1A1A1A'")
+
+    def test_component_colour_dark_value_is_bound_to_source(self) -> None:
+        document = self.tokens()
+        document["colors"]["sessionPrimary"]["dark"] = "#FF00FF"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "dark value '#FF00FF' does not match source '#F9FAFB'")
+
+    def test_component_colour_alpha_is_bound_to_source(self) -> None:
+        document = self.tokens()
+        document["colors"]["sessionBorderL2"]["lightAlpha"] = 0.2
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "light alpha does not match source")
+
+    def test_component_colour_rejects_non_owner_file(self) -> None:
+        document = self.tokens()
+        document["provenance"]["colors.sessionPrimary"]["source"] = "NativeChatTheme.swift:10"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "component colour owner must be one of")
+
+    def test_component_colour_requires_an_exact_source_anchor(self) -> None:
+        document = self.tokens()
+        document["provenance"]["colors.sessionPrimary"].pop("expect", None)
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "need an exact source-line expect anchor")
+
+    def test_sdk_task_screen_color_uses_repo_relative_owner(self) -> None:
+        document = self.tokens()
+        document["colors"]["taskScreen"] = {"light": "#000000", "dark": "#000000", "note": "Task screen."}
+        document["provenance"]["colors.taskScreen"] = {
+            "source": "Sources/PhoneDSH/Background/TaskScreen.swift:157",
+            "tier": "component",
+            "expect": "Color.black",
+        }
+        self.write_tokens(document)
+        self.assert_passes(run_checker(self.root))
+
+    def test_home_component_metric_value_is_bound_to_its_source(self) -> None:
+        document = self.tokens()
+        document["componentMetrics"]["homePrimaryButtonDisabledOpacity"]["value"] = 0.5
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "value does not match source")
+
+    def test_home_component_metric_source_line_is_bound(self) -> None:
+        document = self.tokens()
+        document["componentMetrics"]["homePrimaryButtonPressedOpacity"]["source"] = "HomeSpec.swift:219"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "lost its expect anchor")
+
+    def test_alias_target_must_be_a_real_token(self) -> None:
+        document = self.tokens()
+        document["aliases"]["colors"]["primary"] = "colors.noSuchRole"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "targets unknown token")
+
+    def test_component_compatibility_token_must_exist(self) -> None:
+        document = self.tokens()
+        document["componentCompatibility"]["bubble"]["tokens"].append("geometry.invented")
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "names unknown token")
 
     def test_stale_provenance_line_fails(self) -> None:
         document = self.tokens()

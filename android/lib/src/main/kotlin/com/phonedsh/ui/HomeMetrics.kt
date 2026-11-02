@@ -1,16 +1,15 @@
 // PR22 home (任务 tab) grid, size and radius constants, declared once.
 // SPDX-License-Identifier: MIT
 //
-// Authority: `examples/probe-app/PhoneDSHProbe/HomeSpec.swift` at PR22
-// (`edd68746`), measured at 430x932pt. The numbers are *not* typed here:
-// `:lib:generateUiTokens` reads the Swift literals and emits `HomeSpecData`
-// (see `android/lib/build.gradle.kts`), and this object is the single Android
-// declaration site that re-exports them under one stable name. A page reads
-// `HomeMetrics.chromeInset` (Dp) or `HomeMetrics.CHROME_INSET_PT` (the raw
-// point value) and never re-types 16.
+// Authority: reviewed `spec/ui/v1/tokens.json`, whose values trace to PR22 iOS
+// owners. The numbers are *not* typed here: `:lib:generateUiTokens` emits
+// `HomeSpecData` as a compatibility facade from that JSON, and this object is the
+// single Android declaration site that re-exports them under one stable name. A
+// page reads `HomeMetrics.chromeInset` (Dp) or `HomeMetrics.CHROME_INSET_PT` (the
+// raw point value) and never re-types 16.
 //
-// `HomeMetricsTest` parses the Swift source and fails if a constant is added,
-// removed or changed without this file following.
+// `HomeMetricsTest` compares this facade and the generated data to the JSON
+// source; the Swift source is never a second Kotlin table.
 package com.phonedsh.ui
 
 import androidx.compose.ui.unit.Dp
@@ -99,6 +98,18 @@ public object HomeMetrics {
     /** Step-list row height. */
     public const val LIST_ROW_HEIGHT_PT: Float = HomeSpecData.LIST_ROW_HEIGHT
 
+    /** Grouped list/Form default minimum row height (HomeSpec 48, separate from compact 22pt rows). */
+    public const val DEFAULT_MIN_LIST_ROW_HEIGHT_PT: Float = HomeSpecData.DEFAULT_MIN_LIST_ROW_HEIGHT
+
+    /** HomeSpec primary action capsule height (50). */
+    public const val HOME_PRIMARY_BUTTON_HEIGHT_PT: Float = HomeSpecData.HOME_PRIMARY_BUTTON_HEIGHT
+
+    /** `HomePrimaryButtonStyle` disabled fill opacity. */
+    public const val HOME_PRIMARY_BUTTON_DISABLED_OPACITY: Float = HomeSpecData.HOME_PRIMARY_BUTTON_DISABLED_OPACITY
+
+    /** `HomePrimaryButtonStyle` pressed content opacity. */
+    public const val HOME_PRIMARY_BUTTON_PRESSED_OPACITY: Float = HomeSpecData.HOME_PRIMARY_BUTTON_PRESSED_OPACITY
+
     /** Open composer minimum height. */
     public const val COMPOSER_OPEN_MIN_HEIGHT_PT: Float = HomeSpecData.COMPOSER_OPEN_MIN_HEIGHT
 
@@ -118,6 +129,9 @@ public object HomeMetrics {
 
     /** Top-trailing corner of `HomeSpec.bubbleShape`: `UnevenRoundedRectangle` sets it to 0. */
     public const val BUBBLE_TOP_TRAILING_RADIUS_PT: Float = HomeSpecData.BUBBLE_TOP_TRAILING_RADIUS
+
+    /** Runtime bubble cap rule: `(containerWidth - 2 * contentInset) * ratio`; never a fixed width. */
+    public const val BUBBLE_MAX_WIDTH_RATIO: Float = HomeSpecData.BUBBLE_MAX_WIDTH_RATIO
 
     /** White step-list card radius. */
     public const val LIST_CARD_RADIUS_PT: Float = HomeSpecData.LIST_CARD_RADIUS
@@ -140,6 +154,8 @@ public object HomeMetrics {
     public val processRowHeight: Dp get() = PROCESS_ROW_HEIGHT_PT.dp
     public val processIcon: Dp get() = PROCESS_ICON_PT.dp
     public val listRowHeight: Dp get() = LIST_ROW_HEIGHT_PT.dp
+    public val defaultMinListRowHeight: Dp get() = DEFAULT_MIN_LIST_ROW_HEIGHT_PT.dp
+    public val homePrimaryButtonHeight: Dp get() = HOME_PRIMARY_BUTTON_HEIGHT_PT.dp
     public val composerOpenMinHeight: Dp get() = COMPOSER_OPEN_MIN_HEIGHT_PT.dp
     public val sendButton: Dp get() = SEND_BUTTON_PT.dp
     public val composerIcon: Dp get() = COMPOSER_ICON_PT.dp

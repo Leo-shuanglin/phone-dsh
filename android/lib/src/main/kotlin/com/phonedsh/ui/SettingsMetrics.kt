@@ -159,19 +159,18 @@ public object SettingsMetrics {
     /**
      * One grouped row's rendered height.
      *
-     * Source: PNG check separators in `settings-chat.png` at y=1179, 1336, 1493, 1912,
-     * 2069, 2226 px → a 157 px pitch = 52.33 pt, four times. The source declares
-     * no row height (default `List`), and the value is the 17 pt line box plus
-     * the system's vertical padding. The token `geometry.pageRowMinHeight` (44)
-     * is the *minimum*, not this render. Confidence: measured.
+     * PR22's `HomeSpec.homeGroupedList()` sets
+     * `.environment(\.defaultMinListRowHeight, 48)`, so 48 is the source-owned
+     * minimum. The old 402 pt capture measured 52.33 pt for the pre-PR22
+     * 17 pt list; that render is superseded. Confidence: exact (PR22 source).
      */
-    public const val ROW_HEIGHT_PT: Float = 52.33f
+    public const val ROW_HEIGHT_PT: Float = 48f
 
     /** PR22 grouped-list default row minimum. Source: `HomeSpec.homeGroupedList()` (`.environment(\.defaultMinListRowHeight, 48)`). Confidence: exact. */
     public const val ROW_MIN_HEIGHT_PT: Int = 48
 
-    /** Row vertical padding implied by [ROW_HEIGHT_PT]: (52.33 - 20.33 line box) / 2. Not written in source. Source: arithmetic on [ROW_HEIGHT_PT] and the 17 pt line box. Confidence: inferred. */
-    public const val ROW_VERTICAL_PADDING_PT: Float = 16f
+    /** Row vertical padding implied by [ROW_HEIGHT_PT]: (48 - 24 line box) / 2. Source: arithmetic on [ROW_HEIGHT_PT] and the 16/24 body role. Confidence: inferred. */
+    public const val ROW_VERTICAL_PADDING_PT: Float = 12f
 
     /** Row content leading inset inside the card. Source: PNG check label glyph starts x=98 px; card starts x=48 px → 16.7 pt (16 pt inset plus ~0.7 pt glyph bearing). Confidence: measured (glyph), inferred (the 16 pt). */
     public const val ROW_CONTENT_INSET_PT: Int = 16

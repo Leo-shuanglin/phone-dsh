@@ -29,10 +29,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * The shared 402 pt metrics (iOS PR #13) and the viewport they are measured in.
+ * The shared PR22 430 x 932 pt metrics and the viewport they are measured in.
  *
  * Every value is in points (dp on Android: the capture sets density 480, so
- * `1 pt == 3 px` and a 402 pt frame is 1206 px wide). The pixel numbers are
+ * `1 pt == 3 px` and the 430 pt frame is 1290 px wide). The pixel numbers are
  * derived from the point numbers, never typed twice.
  *
  * Nothing here is a drawing value: a composable that reads [headerHeight] or

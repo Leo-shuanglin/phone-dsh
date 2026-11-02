@@ -1,128 +1,69 @@
-// HomeSpec mirror discipline: the PR22 home table has one Android declaration site.
+// HomeSpec compatibility facade is generated from the reviewed JSON authority.
 // SPDX-License-Identifier: MIT
-//
-// The test reads the authoritative Swift source and the generated code, never a
-// hand-copied Kotlin number:
-//  1. every `static let ...: CGFloat` in HomeSpec.swift is emitted exactly once
-//     into `HomeSpecData` and re-exported exactly once by `HomeMetrics`;
-//  2. every HomeSpec colour is emitted as light/dark and the resolved `UiColors`
-//     field carries it (page, surface, bubble, buttons, text roles, success,
-//     border);
-//  3. the eight home type roles carry the Swift size/line and the HTML/Swift
-//     weight, and `UiType` exposes them;
-//  4. no page source and no HomeMetrics line re-types a dp/sp literal;
-//  5. the generated table is not stale relative to the Swift source.
 package com.phonedsh.ui
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.phonedsh.ui.theme.UiType
+import com.phonedsh.agentcore.JsonNumber
+import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.ui.theme.UiTokens
+import com.phonedsh.ui.theme.UiType
+import com.phonedsh.ui.theme.UiTypePreferences
+import com.phonedsh.ui.theme.applyPreferences
+import com.phonedsh.ui.theme.generated.HomeSpecData
+import com.phonedsh.ui.theme.generated.UiTokenData
+import com.phonedsh.ui.theme.maxBubbleWidth
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.file.Files
-import java.nio.file.Path
 
 class HomeMetricsTest {
-    private val home: String by lazy { read("examples/probe-app/PhoneDSHProbe/HomeSpec.swift") }
-    private val html: String by lazy { read("docs/design/ios-home-design-spec-no-overview.html") }
     private val generated: String by lazy {
-        read("android/lib/build/generated/ui-tokens/kotlin/com/phonedsh/ui/theme/generated/HomeSpecData.kt")
-    }
-    private val metrics: String by lazy {
-        read("android/lib/src/main/kotlin/com/phonedsh/ui/HomeMetrics.kt")
-    }
-
-    @Test
-    fun `every HomeSpec CGFloat is generated and mirrored exactly once`() {
-        val numbers = numericConstants()
-        assertTrue("HomeSpec.swift must expose its grid/size/radius table", numbers.size >= 30)
-        numbers.forEach { (key, value) ->
-            val constant = upperSnake(key)
-            assertTrue(
-                "HomeSpecData is missing $constant = $value (regenerate :lib:generateUiTokens)",
-                generated.contains("public const val $constant: Float = ${value}f"),
-            )
-            val uses = Regex("HomeSpecData\\.$constant\\b").findAll(metrics).count()
-            assertEquals("HomeMetrics must re-export $constant exactly once", 1, uses)
-            assertTrue(
-                "HomeMetrics must expose ${constant}_PT from HomeSpecData.$constant",
-                metrics.contains("${constant}_PT: Float = HomeSpecData.$constant"),
-            )
-        }
-        assertTrue(
-            "HomeMetrics must expose the tag size HomeSpec writes as a literal",
-            metrics.contains("TAG_LABEL_SIZE_PT: Float = HomeSpecData.TAG_LABEL_SIZE"),
-        )
-        assertTrue(
-            "HomeMetrics must expose the bubble's square top-trailing corner",
-            metrics.contains("BUBBLE_TOP_TRAILING_RADIUS_PT: Float = HomeSpecData.BUBBLE_TOP_TRAILING_RADIUS"),
+        String(
+            Files.readAllBytes(
+                SpecFixtures.repoRoot.resolve(
+                    "android/lib/build/generated/ui-tokens/kotlin/com/phonedsh/ui/theme/generated/HomeSpecData.kt",
+                ),
+            ),
+            Charsets.UTF_8,
         )
     }
 
     @Test
-    fun `the resolved palette carries every HomeSpec colour`() {
-        val colours = colourConstants()
-        assertTrue("HomeSpec.swift must expose its palette", colours.size >= 12)
-        colours.forEach { (key, pair) ->
-            val constant = upperSnake(key)
-            assertTrue("HomeSpecData is missing ${constant}_LIGHT", generated.contains("${constant}_LIGHT: Long = ${pair.first}L"))
-            assertTrue("HomeSpecData is missing ${constant}_DARK", generated.contains("${constant}_DARK: Long = ${pair.second}L"))
-        }
+    fun `HomeMetrics compatibility constants are emitted from JSON only`() {
+        assertTrue(generated.contains("Source: spec/ui/v1/tokens.json"))
+        assertFalse(generated.contains("HomeSpec.swift"))
+        assertFalse(generated.contains("ios-home-design-spec"))
 
-        val light = UiTokens.resolve(dark = false).colors
-        val dark = UiTokens.resolve(dark = true).colors
-        assertEquals(colors("page", false), light.page)
-        assertEquals(colors("page", true), dark.page)
-        assertEquals(colors("surface", false), light.surface)
-        assertEquals(colors("userBubble", false), light.userBubble)
-        assertEquals(colors("primaryButton", false), light.primaryButton)
-        assertEquals(colors("primaryButtonInk", false), light.primaryButtonInk)
-        assertEquals(colors("textPrimary", false), light.textPrimary)
-        assertEquals(colors("textSecondary", false), light.textSecondary)
-        assertEquals(colors("textTertiary", false), light.textTertiary)
-        assertEquals(colors("textSubtle", false), light.textSubtle)
-        assertEquals(colors("textPlaceholder", false), light.textPlaceholder)
-        assertEquals(colors("inputPlaceholder", false), light.inputPlaceholder)
-        assertEquals(colors("iconMuted", false), light.iconMuted)
-        assertEquals(colors("success", false), light.success)
-        assertEquals(colors("borderList", false), light.borderList)
-        assertEquals(colors("page", true), dark.page)
-        assertEquals(colors("surface", true), dark.surface)
-        assertEquals(colors("primaryButton", true), dark.primaryButton)
+        val geometry = SpecFixtures.tokens["geometry"] as JsonObject
+        val spacing = SpecFixtures.tokens["spacing"] as JsonObject
+        val radius = SpecFixtures.tokens["radius"] as JsonObject
+        assertEquals(number(geometry, "chromeInset"), HomeMetrics.CHROME_INSET_PT, 0f)
+        assertEquals(number(geometry, "contentInset"), HomeMetrics.CONTENT_INSET_PT, 0f)
+        assertEquals(number(spacing, "paragraphGap"), HomeMetrics.PARAGRAPH_GAP_PT, 0f)
+        assertEquals(number(radius, "bubble"), HomeMetrics.BUBBLE_RADIUS_PT, 0f)
+        assertEquals(number(geometry, "bubbleMaxWidthRatio"), HomeMetrics.BUBBLE_MAX_WIDTH_RATIO, 0f)
+        assertEquals(312f, ChatMetrics.userBubbleMaxWidth(430f.dp, 20f.dp).value, 0f)
+        assertEquals(272f, ChatMetrics.userBubbleMaxWidth(380f.dp, 20f.dp).value, 0f)
+        assertEquals(312f, UiTokens.resolve(false).geometry.maxBubbleWidth(430f.dp, 20f.dp).value, 0f)
     }
 
     @Test
-    fun `the home type roles carry the Swift size and line and the spec weight`() {
-        val body = numbers()
-        val navTitle = cssFont(".navtitle b")
-        val navSubtitle = cssFont(".navtitle span")
-        val prose = cssFont(".body")
-        val process = cssFont(".proc")
-        val listItem = cssFont(".listcard div")
-        val tab = cssFont(".tabbar div")
-
-        assertRole("navTitle", body.getValue("navTitleSize"), navTitle.first,
-            body.getValue("navTitleLine"))
-        assertRole("navSubtitle", body.getValue("navSubtitleSize"), navSubtitle.first,
-            body.getValue("navSubtitleLine"))
-        assertRole("body", body.getValue("bodySize"), prose.first,
-            body.getValue("bodyLine"))
-        assertRole("processBody", body.getValue("processSize"), process.first, process.third)
-        assertRole("listItem", body.getValue("listItemSize"), listItem.first,
-            body.getValue("listItemLine"))
-        assertRole("buttonLabel", body.getValue("bodySize"), swiftWeight("HomeSpec"), null)
-        assertRole("tagLabel", 12f, tagWeight(), null)
-        assertRole("tabLabel", body.getValue("tabLabelSize"), tab.first, tab.third)
-
+    fun `home typography resolves JSON size weight and line boxes`() {
         val type = UiType.fromSpec()
-        assertEquals(17.5f.sp, type.navTitle.fontSize)
+        assertEquals(UiTokenData.types.getValue("typography.navTitle").baseSize.sp, type.navTitle.fontSize)
         assertEquals(FontWeight(600), type.navTitle.fontWeight)
         assertEquals(22.sp, type.navTitle.lineHeight)
         assertEquals(14.5f.sp, type.navSubtitle.fontSize)
         assertEquals(20.sp, type.navSubtitle.lineHeight)
+        // The old 17 pt body is retired: every body consumer now renders 16/24.
+        assertEquals(16.sp, type.body.fontSize)
+        assertEquals(24.sp, type.body.lineHeight)
         assertEquals(16.sp, type.homeBody.fontSize)
         assertEquals(24.sp, type.homeBody.lineHeight)
         assertEquals(15.sp, type.processBody.fontSize)
@@ -134,7 +75,73 @@ class HomeMetricsTest {
         assertEquals(12.sp, type.tagLabel.fontSize)
         assertEquals(FontWeight(500), type.tagLabel.fontWeight)
         assertEquals(10.5f.sp, type.tabLabel.fontSize)
-        assertEquals(14.sp, type.tabLabel.lineHeight)
+        // No active home tab bar exists; HomeSpec states only the size, so the
+        // line box stays platform-owned rather than an invented 14.
+        assertEquals(androidx.compose.ui.unit.TextUnit.Unspecified, type.tabLabel.lineHeight)
+        assertEquals(13.sp, type.terminal.fontSize)
+        assertEquals(FontWeight.Normal, type.terminal.fontWeight)
+        assertEquals(FontFamily.Monospace, type.terminal.fontFamily)
+        assertEquals(17.sp, type.pageTitle.fontSize)
+        assertEquals(FontWeight(600), type.pageTitle.fontWeight)
+    }
+
+    @Test
+    fun `HomeSpec list and primary-action modifiers stay JSON sourced`() {
+        val tokens = SpecFixtures.tokens
+        val geometry = tokens["geometry"] as JsonObject
+        val interactions = tokens["componentMetrics"] as JsonObject
+        assertEquals(48, HomeMetrics.DEFAULT_MIN_LIST_ROW_HEIGHT_PT.toInt())
+        assertEquals(50, HomeMetrics.HOME_PRIMARY_BUTTON_HEIGHT_PT.toInt())
+        assertEquals(0.25f, HomeMetrics.HOME_PRIMARY_BUTTON_DISABLED_OPACITY, 0f)
+        assertEquals(0.8f, HomeMetrics.HOME_PRIMARY_BUTTON_PRESSED_OPACITY, 0f)
+        assertEquals(number(geometry, "defaultMinListRowHeight"), HomeMetrics.DEFAULT_MIN_LIST_ROW_HEIGHT_PT, 0f)
+        assertEquals(number(geometry, "homePrimaryButtonHeight"), HomeMetrics.HOME_PRIMARY_BUTTON_HEIGHT_PT, 0f)
+        assertEquals(
+            number(interactions, "homePrimaryButtonDisabledOpacity"),
+            HomeMetrics.HOME_PRIMARY_BUTTON_DISABLED_OPACITY,
+            0f,
+        )
+        assertEquals(
+            number(interactions, "homePrimaryButtonPressedOpacity"),
+            HomeMetrics.HOME_PRIMARY_BUTTON_PRESSED_OPACITY,
+            0f,
+        )
+        assertEquals(48f, HomeMetrics.defaultMinListRowHeight.value, 0f)
+        assertEquals(50f, HomeMetrics.homePrimaryButtonHeight.value, 0f)
+        assertTrue(generated.contains("const val DEFAULT_MIN_LIST_ROW_HEIGHT: Float = 48f"))
+        assertTrue(generated.contains("const val HOME_PRIMARY_BUTTON_HEIGHT: Float = 50f"))
+        assertTrue(generated.contains("const val HOME_PRIMARY_BUTTON_DISABLED_OPACITY: Float = 0.25f"))
+        assertTrue(generated.contains("const val HOME_PRIMARY_BUTTON_PRESSED_OPACITY: Float = 0.8f"))
+    }
+
+    @Test
+    fun `HomeSpec palette resolves from canonical JSON values`() {
+        val light = UiTokens.resolve(false).colors
+        val dark = UiTokens.resolve(true).colors
+        assertEquals(Color(HomeSpecData.PAGE_LIGHT), light.page)
+        assertEquals(Color(HomeSpecData.PAGE_DARK), dark.page)
+        assertEquals(Color(HomeSpecData.TEXT_PRIMARY_LIGHT), light.textPrimary)
+        assertEquals(Color(HomeSpecData.TEXT_PRIMARY_DARK), dark.textPrimary)
+        assertEquals(Color(HomeSpecData.SUCCESS_LIGHT), light.homeSuccess)
+        assertEquals(Color(HomeSpecData.SUCCESS_DARK), dark.homeSuccess)
+        assertEquals(Color(HomeSpecData.USER_BUBBLE_LIGHT), light.userBubble)
+        assertEquals(Color(HomeSpecData.BORDER_LIST_DARK), dark.borderList)
+    }
+
+    @Test
+    fun `persisted text preference changes the body role but fresh defaults stay 16-24`() {
+        val type = UiType.fromSpec()
+        assertEquals(16.sp, type.body.fontSize)
+        assertEquals(24.sp, type.body.lineHeight)
+        // No stored preference is a no-op, not a silent 17 pt fallback.
+        assertEquals(type, type.applyPreferences(UiTypePreferences()))
+        val larger = type.applyPreferences(UiTypePreferences(textSizePt = 22f))
+        assertEquals(22.sp, larger.body.fontSize)
+        assertEquals(33.sp, larger.body.lineHeight)
+        assertEquals(22.sp, larger.homeBody.fontSize)
+        // Fixed secondary/caption roles are not user-preference roles.
+        assertEquals(type.secondary, larger.secondary)
+        assertEquals(type.code, larger.code)
     }
 
     @Test
@@ -148,81 +155,56 @@ class HomeMetricsTest {
                 assertTrue("${file.fileName} re-types a length: $found", found.isEmpty())
             }
         }
+        val metrics = String(
+            Files.readAllBytes(
+                SpecFixtures.repoRoot.resolve("android/lib/src/main/kotlin/com/phonedsh/ui/HomeMetrics.kt"),
+            ),
+            Charsets.UTF_8,
+        )
         val homeFound = length.findAll(metrics).map { it.value }.toList()
         assertTrue("HomeMetrics.kt re-types a length: $homeFound", homeFound.isEmpty())
-        // The only literal the file is allowed to hold is the structural square
-        // corner of HomeSpec.bubbleShape (0), which is not a measured value.
         val assignments = Regex("""=\s*[1-9][0-9]*\.?[0-9]*f""").findAll(metrics).map { it.value }.toList()
         assertTrue("HomeMetrics.kt hand-types a measured value: $assignments", assignments.isEmpty())
     }
 
-    private fun assertRole(name: String, size: Float, weight: Int, line: Float?) {
-        val generatedRole = Regex(
-            """\"typography\.$name\" to TokenType\(\"typography\.$name\", ([0-9.]+)f, (\d+), false, (null|[0-9.]+f)\)"""
-        ).find(generated) ?: error("HomeSpecData has no generated type role $name")
-        assertEquals("$name size", size, generatedRole.groupValues[1].toFloat(), 0f)
-        assertEquals("$name weight", weight, generatedRole.groupValues[2].toInt())
-        if (line == null) {
-            assertEquals("$name line", "null", generatedRole.groupValues[3])
-        } else {
-            assertEquals("$name line", line, generatedRole.groupValues[3].removeSuffix("f").toFloat(), 0f)
+
+    @Test
+    fun `every HomeSpec constant is generated and re-exported exactly once`() {
+        val home = String(
+            Files.readAllBytes(
+                SpecFixtures.repoRoot.resolve("examples/probe-app/PhoneDSHProbe/HomeSpec.swift"),
+            ),
+            Charsets.UTF_8,
+        )
+        val table = Regex("""static let (\w+): CGFloat = ([0-9.]+)""")
+            .findAll(home)
+            .associate { it.groupValues[1] to it.groupValues[2] }
+        assertTrue("HomeSpec.swift must expose its full CGFloat table", table.size >= 30)
+        val metrics = String(
+            Files.readAllBytes(
+                SpecFixtures.repoRoot.resolve("android/lib/src/main/kotlin/com/phonedsh/ui/HomeMetrics.kt"),
+            ),
+            Charsets.UTF_8,
+        )
+        table.forEach { (key, value) ->
+            val constant = key.replace(Regex("([a-z0-9])([A-Z])"), "$1_$2").uppercase()
+            val emitted = Regex("const val $constant: Float = ([0-9.]+)f")
+                .find(generated)?.groupValues?.get(1)?.toFloat()
+                ?: error("HomeSpecData is missing $constant = $value")
+            assertEquals("HomeSpecData.$constant", value.toFloat(), emitted, 0f)
+            val uses = Regex("HomeSpecData\\.$constant\\b").findAll(metrics).count()
+            assertEquals("HomeMetrics must re-export $constant exactly once", 1, uses)
         }
+        // The structural square corner is not a `static let`; it is still owned once.
+        assertTrue(metrics.contains("BUBBLE_TOP_TRAILING_RADIUS_PT: Float = HomeSpecData.BUBBLE_TOP_TRAILING_RADIUS"))
     }
 
-    private fun cssFont(selector: String): Triple<Int, Float, Float> {
-        val block = Regex(Regex.escape(selector) + """\s*\{([^}]*)\}""").find(html)
-            ?.groupValues?.get(1) ?: error("design spec has no selector $selector")
-        val font = Regex("""font:\s*(\d+)\s+([0-9.]+)px/([0-9.]+)px""").find(block)
-            ?: error("design spec selector $selector has no font shorthand")
-        return Triple(font.groupValues[1].toInt(), font.groupValues[2].toFloat(), font.groupValues[3].toFloat())
-    }
-
-    private fun tagWeight(): Int {
-        val m = Regex("""font\(\.system\(size: 12, weight: \.(\w+)\)\)""").find(home)
-            ?: error("HomeSpec.HomeTag has no 12pt weight")
-        return weight(m.groupValues[1])
-    }
-
-    private fun swiftWeight(anchor: String): Int {
-        val m = Regex("""font\(\.system\(size: HomeSpec\.bodySize, weight: \.(\w+)\)\)""").find(home)
-            ?: error("$anchor has no body-size semibold role")
-        return weight(m.groupValues[1])
-    }
-
-    private fun weight(name: String): Int = when (name) {
-        "regular" -> 400
-        "medium" -> 500
-        "semibold" -> 600
-        "bold" -> 700
-        else -> error("unknown Swift weight .$name")
-    }
-
-    private fun colors(key: String, dark: Boolean): Color {
-        val pair = colourConstants().getValue(key)
-        return Color(if (dark) pair.second else pair.first)
-    }
-
-    private fun numbers(): Map<String, Float> = numericConstants()
-
-    private fun numericConstants(): Map<String, Float> =
-        Regex("""static let (\w+): CGFloat = ([0-9.]+)""").findAll(home)
-            .associate { it.groupValues[1] to it.groupValues[2].toFloat() }
-
-    private fun colourConstants(): Map<String, Pair<Long, Long>> =
-        Regex("""static let (\w+) = NativeParityTokens\.color\(light: 0x([0-9A-Fa-f]{6}), dark: 0x([0-9A-Fa-f]{6})\)""")
-            .findAll(home).associate { m ->
-                m.groupValues[1] to (
-                    ("FF" + m.groupValues[2].uppercase()).toLong(16) to
-                        ("FF" + m.groupValues[3].uppercase()).toLong(16)
-                    )
-            }
-
-    private fun upperSnake(name: String): String =
-        name.replace(Regex("([a-z0-9])([A-Z])"), "$1_$2").uppercase()
-
-    private fun read(relative: String): String {
-        val path: Path = SpecFixtures.repoRoot.resolve(relative)
-        assertTrue("missing $relative", Files.exists(path))
-        return String(Files.readAllBytes(path), Charsets.UTF_8)
+    private fun number(objectValue: JsonObject, key: String): Float {
+        val value = objectValue[key]
+        return when (value) {
+            is JsonNumber -> value.raw.toFloat()
+            is JsonObject -> (value["value"] as JsonNumber).raw.toFloat()
+            else -> error("$key is not a numeric token")
+        }
     }
 }
