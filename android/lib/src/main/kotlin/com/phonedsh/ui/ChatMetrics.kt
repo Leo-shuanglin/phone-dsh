@@ -202,6 +202,9 @@ public object ChatMetrics {
     /** Assistant body content margin. Source: `NativeChatTheme.swift:48`. Confidence: exact. */
     public const val MESSAGE_CONTENT_MARGIN_PT: Int = 20
 
+    /** NativeComposerStats.swift: compact/detailed row both pad top by2, including empty detailed row. */
+    public const val COMPOSER_STATS_TOP_PT: Int = 2
+
     // ----------------------------------------------------------------- composer
 
     /** Open composer width at 430 pt: `430 - 2 x 16`. Source: `HomeSpec.chromeInset`, design spec `左右边距 16, 宽 398`. Confidence: exact. */

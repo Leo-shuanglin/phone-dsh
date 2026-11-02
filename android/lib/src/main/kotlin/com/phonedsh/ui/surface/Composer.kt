@@ -329,32 +329,33 @@ public fun Composer(
                 }
             }
         }
-        if (stat != null || contextPercent != null) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                // ios-chat-official.png: the stats line sits under the card's leading
-                // edge (x 29.3), not centred under it.
-                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText, Alignment.Start),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (stat != null) {
-                    StatPill(modifier = Modifier.testTag(UiTags.COMPOSER_STAT)) {
-                        BasicText(
-                            text = stat,
-                            style = type.secondary.copy(color = tokens.colors.tertiary),
-                            maxLines = 1,
-                        )
-                    }
+        Row(
+            // NativeComposerStats retains an empty detailed HStack with
+            // 2pt top padding. The 6pt parent gap therefore remains even
+            // when no metrics have arrived; hiding it shifts the card 8pt.
+            modifier = Modifier.fillMaxWidth().padding(top = com.phonedsh.ui.ChatMetrics.COMPOSER_STATS_TOP_PT.dp),
+            // ios-chat-official.png: the stats line sits under the card's leading
+            // edge (x 29.3), not centred under it.
+            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText, Alignment.Start),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (stat != null) {
+                StatPill(modifier = Modifier.testTag(UiTags.COMPOSER_STAT)) {
+                    BasicText(
+                        text = stat,
+                        style = type.secondary.copy(color = tokens.colors.tertiary),
+                        maxLines = 1,
+                    )
                 }
-                if (contextPercent != null) {
-                    StatPill {
-                        ContextRing(percent = contextPercent)
-                        BasicText(
-                            text = "$contextPercent%",
-                            style = type.secondary.copy(color = tokens.colors.tertiary),
-                            maxLines = 1,
-                        )
-                    }
+            }
+            if (contextPercent != null) {
+                StatPill {
+                    ContextRing(percent = contextPercent)
+                    BasicText(
+                        text = "$contextPercent%",
+                        style = type.secondary.copy(color = tokens.colors.tertiary),
+                        maxLines = 1,
+                    )
                 }
             }
         }
