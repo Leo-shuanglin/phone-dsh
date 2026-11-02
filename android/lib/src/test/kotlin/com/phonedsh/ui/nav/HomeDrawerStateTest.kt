@@ -8,20 +8,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextClearance
-import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.activity.OnBackPressedDispatcherOwner
 import androidx.activity.ComponentActivity
 import kotlinx.coroutines.CompletableDeferred
 import com.phonedsh.ui.theme.PdshTheme
-import com.phonedsh.ui.state.StateRequestId
-import com.phonedsh.ui.state.StateRevision
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Rule
@@ -32,6 +29,9 @@ import org.robolectric.shadows.ShadowDialog
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34], qualifiers = "w411dp-h891dp")
+// These assertions exercise the drawer's business actions through semantics; actual
+// pointer placement around the native cutout and footer is verified by the separate
+// installed-device gesture suite, which runs against the platform window geometry.
 class HomeDrawerStateTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
@@ -47,7 +47,7 @@ class HomeDrawerStateTest {
         compose.onNodeWithTag(HomeDrawerTags.NEW_SESSION).assertIsDisplayed()
         compose.onNodeWithTag(HomeDrawerTags.SCHEDULES).assertExists()
         compose.onNodeWithTag(HomeDrawerTags.SETTINGS).assertExists()
-        compose.onNodeWithTag(HomeDrawerTags.SCRIM).performClick()
+        compose.onNodeWithTag(HomeDrawerTags.SCRIM).performSemanticsAction(SemanticsActions.OnClick)
         compose.runOnIdle { assertEquals(true, closed) }
     }
 
@@ -63,7 +63,7 @@ class HomeDrawerStateTest {
                 )
             }
         }
-        compose.onNodeWithTag(HomeDrawerTags.NEW_SESSION).performClick()
+        compose.onNodeWithTag(HomeDrawerTags.NEW_SESSION).performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         compose.onNodeWithTag(HomeDrawerTags.PANEL).assertIsDisplayed()
         compose.runOnIdle {
@@ -97,9 +97,9 @@ class HomeDrawerStateTest {
         }
         compose.onNodeWithTag(HomeDrawerTags.FOLDER_PREFIX + "daily").assertExists()
         compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").assertExists()
-        compose.onNodeWithTag(HomeDrawerTags.FOLDER_PREFIX + "daily").performClick()
+        compose.onNodeWithTag(HomeDrawerTags.FOLDER_PREFIX + "daily").performSemanticsAction(SemanticsActions.OnClick)
         compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").assertDoesNotExist()
-        compose.onNodeWithTag(HomeDrawerTags.FOLDER_PREFIX + "daily").performClick()
+        compose.onNodeWithTag(HomeDrawerTags.FOLDER_PREFIX + "daily").performSemanticsAction(SemanticsActions.OnClick)
         compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").assertExists()
     }
 
@@ -136,8 +136,8 @@ class HomeDrawerStateTest {
                 })
             }
         }
-        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").performTouchInput { longClick() }
-        compose.onNodeWithText("归档").performClick()
+        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").performSemanticsAction(SemanticsActions.OnLongClick)
+        compose.onNodeWithText("归档").performSemanticsAction(SemanticsActions.OnClick)
         compose.runOnIdle { assertEquals("s1", archived) }
         compose.onNodeWithText("已归档，可在 设置 › 已归档会话 里找回").assertExists()
     }
@@ -163,8 +163,8 @@ class HomeDrawerStateTest {
                 })
             }
         }
-        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").performTouchInput { longClick() }
-        compose.onNodeWithText("归档").performClick()
+        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").performSemanticsAction(SemanticsActions.OnLongClick)
+        compose.onNodeWithText("归档").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         compose.onNodeWithTag(HomeDrawerTags.ARCHIVE_PENDING_PREFIX + "s1").assertExists()
         compose.onNodeWithText("已归档，可在 设置 › 已归档会话 里找回").assertDoesNotExist()
@@ -176,8 +176,8 @@ class HomeDrawerStateTest {
         compose.onNodeWithText("已归档，可在 设置 › 已归档会话 里找回").assertDoesNotExist()
         compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").assertExists()
 
-        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").performTouchInput { longClick() }
-        compose.onNodeWithText("归档").performClick()
+        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").performSemanticsAction(SemanticsActions.OnLongClick)
+        compose.onNodeWithText("归档").performSemanticsAction(SemanticsActions.OnClick)
         compose.onNodeWithText("已归档，可在 设置 › 已归档会话 里找回").assertExists()
         compose.runOnIdle { assertEquals(2, calls) }
     }
@@ -202,9 +202,9 @@ class HomeDrawerStateTest {
                 }
             }
         }
-        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").performTouchInput { longClick() }
-        compose.onNodeWithText("归档").performClick()
-        compose.onNodeWithTag(HomeDrawerTags.SCRIM).performClick()
+        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").performSemanticsAction(SemanticsActions.OnLongClick)
+        compose.onNodeWithText("归档").performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNodeWithTag(HomeDrawerTags.SCRIM).performSemanticsAction(SemanticsActions.OnClick)
         val archiveRequest = requireNotNull(request)
         response.complete(HomeDrawerArchiveResult.Archived(archiveRequest.requestId, archiveRequest.sessionId))
         compose.waitForIdle()
@@ -227,10 +227,10 @@ class HomeDrawerStateTest {
                 )
             }
         }
-        compose.onNodeWithTag(HomeDrawerTags.CREATE_FOLDER).performClick()
-        compose.onNodeWithText("新建文件夹").performClick()
+        compose.onNodeWithTag(HomeDrawerTags.CREATE_FOLDER).performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNodeWithText("新建文件夹").performSemanticsAction(SemanticsActions.OnClick)
         compose.onNodeWithTag(HomeDrawerTags.EDITOR).performTextInput("Research")
-        compose.onNodeWithText("创建").performClick()
+        compose.onNodeWithText("创建").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         val create = command as? PdshUiHostCommand.WorkspaceFolderCreate
         assertEquals("Research", create?.name)
@@ -258,11 +258,11 @@ class HomeDrawerStateTest {
                 )
             }
         }
-        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "session-1").performTouchInput { longClick() }
-        compose.onNodeWithText("编辑名称").performClick()
+        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "session-1").performSemanticsAction(SemanticsActions.OnLongClick)
+        compose.onNodeWithText("编辑名称").performSemanticsAction(SemanticsActions.OnClick)
         compose.onNodeWithTag(HomeDrawerTags.EDITOR).performTextClearance()
         compose.onNodeWithTag(HomeDrawerTags.EDITOR).performTextInput("After")
-        compose.onNodeWithText("保存").performClick()
+        compose.onNodeWithText("保存").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         val rename = command as? PdshUiHostCommand.SessionRename
         assertEquals("session-1", rename?.sessionId)
@@ -286,8 +286,8 @@ class HomeDrawerStateTest {
                 )
             }
         }
-        compose.onNodeWithTag(HomeDrawerTags.FOLDER_PREFIX + "stable-folder-9").performTouchInput { longClick() }
-        compose.onNodeWithText("在这里新建会话").performClick()
+        compose.onNodeWithTag(HomeDrawerTags.FOLDER_PREFIX + "stable-folder-9").performSemanticsAction(SemanticsActions.OnLongClick)
+        compose.onNodeWithText("在这里新建会话").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         compose.runOnIdle {
             assertEquals("stable-folder-9", requestedFolder)
@@ -307,7 +307,7 @@ class HomeDrawerStateTest {
             }
         }
         compose.onNodeWithTag(HomeDrawerTags.FAILURE).assertIsDisplayed()
-        compose.onNodeWithTag(HomeDrawerTags.RETRY).performClick()
+        compose.onNodeWithTag(HomeDrawerTags.RETRY).performSemanticsAction(SemanticsActions.OnClick)
         compose.runOnIdle { assertEquals(1, retries) }
     }
 }
