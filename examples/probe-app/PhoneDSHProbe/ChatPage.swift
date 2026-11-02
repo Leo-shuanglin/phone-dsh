@@ -1202,7 +1202,13 @@ struct ChatPage: View {
                 .defaultScrollAnchor(.bottom)
                 .scrollBounceBehavior(.basedOnSize)
                 .onPreferenceChange(TranscriptContentHeightPreference.self) { height in
-                    transcriptContentHeight = height
+                    // The lazy stack reports a growing height while rows
+                    // materialize, and every write here invalidates this view:
+                    // a sub-pixel difference used to start layout again, which
+                    // reported another height. Only a real change publishes.
+                    if abs(transcriptContentHeight - height) > 0.5 {
+                        transcriptContentHeight = height
+                    }
                 }
                 .onPreferenceChange(TranscriptTailPreference.self) { tailY in
                     scrollTrace.tailOffsetY = tailY
