@@ -18,6 +18,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.runtime.mutableStateOf
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.page.UiPageTags
@@ -151,7 +153,10 @@ class PdshReachabilityTest {
         )
         compose.onNodeWithTag(UiPageTags.AUTOMATION_REFRESH).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.AUTOMATION_NEW).assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.AUTOMATION_REFRESH).performClick()
+        // Routing ownership is a semantics assertion. Robolectric reports the
+        // CJK text as 2px wide, making minimum touch targets overlap; native
+        // toolbar gesture coverage uses actual device font metrics.
+        compose.onNodeWithTag(UiPageTags.AUTOMATION_REFRESH).performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         compose.runOnIdle {
             assertEquals(listOf<PdshHostAction>(PdshHostAction.RefreshAutomation), actions)

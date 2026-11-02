@@ -2191,7 +2191,6 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                         sessionId = workerSessionId,
                     ).queueItems ?: error("inbox projection unavailable")
 
-                val before = readQueueProjection()
                 client.prompt(
                     sessionId = workerSessionId,
                     text = prompt,
@@ -2199,14 +2198,10 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     mode = if (mode == com.phonedsh.ui.state.EnterMode.STEER) "steer" else "queue",
                 )
                 val after = readQueueProjection()
-                if (mode == com.phonedsh.ui.state.EnterMode.QUEUE) {
-                    val beforeIds = before.mapNotNull { (it.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value }.toSet()
-                    val acceptedRows = after.filter { row ->
-                        row.text == prompt &&
-                            (row.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value?.let { it !in beforeIds } == true
-                    }
-                    check(acceptedRows.size == 1) { "queued prompt did not produce one new durable inbox row" }
-                }
+                // The successful prompt RPC acknowledges this exact request ID.
+                // A fresh projection may already be empty because the worker
+                // consumed it; do not infer its identity from text or row counts.
+
                 mutableChat.update { live ->
                     if (live.chatId != current.chatId || live.workerSessionId != workerSessionId) live else {
                         live.copy(

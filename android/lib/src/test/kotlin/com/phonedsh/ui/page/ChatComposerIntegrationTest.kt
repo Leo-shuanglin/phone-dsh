@@ -19,6 +19,12 @@ import androidx.compose.ui.unit.sp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
+import com.phonedsh.ui.nav.PdshActionAvailability
+import com.phonedsh.ui.nav.PdshUnavailableReason
+import com.phonedsh.ui.state.StateRequestId
+import com.phonedsh.ui.state.ManagedQueueItemState
+import com.phonedsh.ui.state.QueueItemId
+import com.phonedsh.ui.state.QueueItemStatus
 import com.phonedsh.ui.SpecFixtures
 import com.phonedsh.agentcore.JsonArray
 import com.phonedsh.agentcore.JsonBool
@@ -128,7 +134,7 @@ class ChatComposerIntegrationTest {
     }
 
     @Test
-    fun `a stopped turn exposes stop and preserves an unacknowledged failed draft`() {
+    fun `an active turn can stop while queue send is unavailable and preserves its draft`() {
         val nodes = SpecFixtures.projectCase("chat-basic").filterNot { node ->
             node.kind == UiStateKind.STATUS && node.props.string("reason") != null
         }
@@ -148,15 +154,21 @@ class ChatComposerIntegrationTest {
     @Test
     fun `queued messages retain their visible count and retry invokes the host`() {
         val nodes = SpecFixtures.projectCase("chat-basic")
-        val userId = nodes.first { it.nodeID.contains("user-message") }.nodeID
         val queued = ChatScreenState.from(
             nodes,
-            local = ChatLocalState(badges = mapOf(userId to UiStrings.QUEUED_TAG)),
-            host = ChatHostFacts(engineStarted = true),
+            host = ChatHostFacts(
+                engineStarted = true,
+                queueItems = listOf(
+                    ManagedQueueItemState(QueueItemId.Durable("queue-one"), "first queued message", QueueItemStatus.QUEUED),
+                    ManagedQueueItemState(QueueItemId.Durable("queue-two"), "second queued message", QueueItemStatus.QUEUED),
+                ),
+            ),
         )
         show(state = queued)
         compose.onNodeWithTag(UiTags.COMPOSER_QUEUE).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.QUEUED_COUNT.format(1)).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CHAT_QUEUE_HEADER_COUNT.format(2)).assertIsDisplayed().performClick()
+        compose.onNodeWithText("first queued message").assertIsDisplayed()
+        compose.onNodeWithText("second queued message").assertIsDisplayed()
     }
 
     @Test
@@ -186,7 +198,7 @@ class ChatComposerIntegrationTest {
                 currentModel = model,
             ),
         )
-        show(state = state, availability = ComposerAvailability(selectModel = true))
+        show(state = state, availability = ComposerAvailability(selectModel = true), onStop = {})
         val modelBounds = compose.onNodeWithTag(UiPageTags.COMPOSER_MODEL_MENU).getUnclippedBoundsInRoot()
         val stopBounds = compose.onNodeWithTag("pdsh.composer.stop-circle", useUnmergedTree = true).getUnclippedBoundsInRoot()
         val sendBounds = compose.onNodeWithTag("pdsh.composer.send-circle", useUnmergedTree = true).getUnclippedBoundsInRoot()
@@ -233,8 +245,8 @@ class ChatComposerIntegrationTest {
         onSpeakRecentReply: (() -> Unit)? = null,
         uiType: UiType? = null,
         onSubmitAnswer: (com.phonedsh.ui.state.PendingAnswer, String) -> Unit = { _, _ -> },
-        onStop: () -> Unit = {},
-        onRetry: () -> Unit = {},
+        onStop: (() -> Unit)? = null,
+        onRetry: (() -> Unit)? = null,
     ) {
         compose.setContent {
             PdshTheme {
@@ -242,12 +254,21 @@ class ChatComposerIntegrationTest {
                     state = state,
                     onDraftChange = {},
                     onSend = {},
-                    onStop = onStop,
+                    onStop = onStop ?: {},
                     onToggleRow = {},
                     onApprove = {},
                     onDeny = {},
                     onDismissBanner = {},
-                    onRetry = onRetry,
+                    onRetry = onRetry ?: {},
+                    stopAvailability = onStop?.let { stop ->
+                        PdshActionAvailability.Available { _: StateRequestId -> stop() }
+                    } ?: PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+                    timelineRetryAvailability = onRetry?.let { retry ->
+                        PdshActionAvailability.Available { retry() }
+                    } ?: PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+                    planApproveAvailability = if (availability.approvePlans) {
+                        PdshActionAvailability.Available { ask, json -> onSubmitAnswer(ask, json) }
+                    } else PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
                     onOpenSessions = {},
                     onAddImages = onAddImages,
                     onSpeakRecentReply = onSpeakRecentReply,

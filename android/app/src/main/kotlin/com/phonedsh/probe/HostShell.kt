@@ -928,7 +928,11 @@ internal fun HostShell(
                         onOpenDrawer = { drawerOpen = true },
                         onFilesImportRequest = onPickWorkspaceFile,
                         filesImportReceipt = filesImportReceipt,
-                        onSpeakText = onSpeakText,
+                        onSpeakText = onSpeakText?.let { speaker ->
+                            { text ->
+                                if (!speaker(text)) speechNotice = "系统语音服务未能启动朗读。"
+                            }
+                        },
                         // L62: the home face is the product home — the session list
                         // (option (a): the list is rendered *in* the home slot, so
                         // `popToHome()` and the launch face are the same screen). The

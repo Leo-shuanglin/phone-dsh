@@ -317,7 +317,10 @@ public fun Composer(
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            if (running && canSubmit) StopKey(onClick = onStop)
+                            // Stop remains available while a draft cannot yet be
+                            // queued/steered. Its host capability is independent
+                            // of the send action and the non-empty draft.
+                            if (running && mode != ComposerMode.STOP) StopKey(onClick = onStop)
                             if (mode == ComposerMode.STOP) {
                                 StopKey(onClick = onStop)
                             } else {
