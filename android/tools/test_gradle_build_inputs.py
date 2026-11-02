@@ -377,7 +377,12 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout)
             lines = proc.stdout.splitlines()
             self.assertIn(str(home / "pdsh" / "gradle"), lines, lines)
-            self.assertIn("-Duser.home={}".format(home), lines, lines)
+            # The wrapper appends to any pre-existing JAVA_TOOL_OPTIONS, so check
+            # that one line contains the expected property rather than equals it.
+            self.assertTrue(
+                any("-Duser.home={}".format(home) in line for line in lines),
+                lines,
+            )
 
 
 if __name__ == "__main__":
