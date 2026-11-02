@@ -52,6 +52,8 @@ KOTLIN_PACKAGES = {
 
 MODULES = (
     "platform",
+    "platform-android",
+    "domain",
     "core",
     "net",
     "controller",
@@ -61,6 +63,7 @@ MODULES = (
     "lib",
     "testkit",
     "app",
+    "lib-consumer-test",
 )
 
 SETTINGS = """// SPDX-License-Identifier: MIT
@@ -79,6 +82,8 @@ dependencyResolutionManagement {
 }
 rootProject.name = "fixture"
 include(":platform")
+include(":platform-android")
+include(":domain")
 include(":core")
 include(":net")
 include(":controller")
@@ -88,6 +93,7 @@ include(":dsh")
 include(":lib")
 include(":testkit")
 include(":app")
+include(":lib-consumer-test")
 """
 
 CATALOG = """# SPDX-License-Identifier: MIT
@@ -230,6 +236,21 @@ def make_fixture(root):
         android / "core" / "src" / "main" / "kotlin" / "com" / "phonedsh" / "wire" / "PackageMarker.kt",
         "// SPDX-License-Identifier: MIT\n// Fixture marker.\npackage com.phonedsh.wire\n",
     )
+    write(android / ".gitignore", "local.properties\n")
+    page_dir = (
+        android
+        / "lib"
+        / "src"
+        / "main"
+        / "kotlin"
+        / "com"
+        / "phonedsh"
+        / "ui"
+        / "page"
+    )
+    for index in range(structure_check.EXPECTED_UI_PAGES):
+        name = "ChatPage.kt" if index == 0 else "Fixture{:02d}Page.kt".format(index)
+        write(page_dir / name, "// SPDX-License-Identifier: MIT\npackage com.phonedsh.ui.page\n")
 
 
 class StructureCheckMutationTests(unittest.TestCase):
@@ -293,6 +314,53 @@ class StructureCheckMutationTests(unittest.TestCase):
     def test_wrong_minsdk_fails(self):
         self.mutate("android/app/build.gradle.kts", "minSdk = 26", "minSdk = 24")
         self.assert_fails("sdk-levels")
+
+    def test_missing_module_inventory_fails(self):
+        (self.root / "android" / "controller" / "build.gradle.kts").unlink()
+        self.assert_fails("module-inventory")
+
+    def test_unreviewed_module_inventory_fails(self):
+        write(
+            self.root / "android" / "ghost" / "build.gradle.kts",
+            "// SPDX-License-Identifier: MIT\n",
+        )
+        self.assert_fails("module-inventory")
+
+    def test_deleted_page_inventory_fails(self):
+        page_dir = (
+            self.root
+            / "android"
+            / "lib"
+            / "src"
+            / "main"
+            / "kotlin"
+            / "com"
+            / "phonedsh"
+            / "ui"
+            / "page"
+        )
+        (page_dir / "Fixture33Page.kt").unlink()
+        self.assert_fails("page-inventory")
+
+    def test_added_page_inventory_passes(self):
+        page_dir = (
+            self.root
+            / "android"
+            / "lib"
+            / "src"
+            / "main"
+            / "kotlin"
+            / "com"
+            / "phonedsh"
+            / "ui"
+            / "page"
+        )
+        write(page_dir / "NewLanePage.kt", "// SPDX-License-Identifier: MIT\n")
+        self.assert_passes("page-inventory")
+
+    def test_local_properties_not_ignored_fails(self):
+        (self.root / "android" / ".gitignore").write_text("build/\n", encoding="utf-8")
+        self.assert_fails("local-properties")
 
     def test_readme_missing_swift_module_fails(self):
         path = self.root / "android" / "README.md"
@@ -381,6 +449,17 @@ class StructureCheckMutationTests(unittest.TestCase):
         bad_path = "/" + "Users" + "/someone" + "/sdk"
         write(self.root / "android" / "abspath-note.md", "bad = \"{}\"\n".format(bad_path))
         self.assert_fails("absolute-paths")
+
+    def test_fixture_path_in_a_tools_test_is_exempt(self):
+        # The absolute-path check must not flag the fake scripts a bootstrap test
+        # needs (they start with #!/usr/bin/env bash). Test_*.py under tools is
+        # the only exempt location; a production script in the same directory is
+        # still checked by test_absolute_path_fails below.
+        write(
+            self.root / "android" / "tools" / "test_fixture.py",
+            "#!/usr/bin/env python3\n",
+        )
+        self.assert_passes("absolute-paths")
 
     def test_unverified_pin_annotation_required(self):
         self.mutate("android/gradle/libs.versions.toml", "# unverified pin", "# verified")

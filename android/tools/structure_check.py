@@ -9,12 +9,15 @@ one PASS/FAIL line; the process exits 1 if any check fails.
 Checks:
   settings-includes   include(...) set == module directories, both directions
   module-build-files  every included module has build.gradle.kts
+  module-inventory    the module set is the prepared PR22/PR14 13-module tree
+  page-inventory      the UI page layer still carries the prepared baseline pages
   sdk-levels          :lib and :app declare minSdk 26 and targetSdk 35
   readme-map          all 11 Sources/PhoneDSH* modules appear once in README
   kotlin-stubs        no TODO()/not-implemented stub left in src/main Kotlin
   repositories        only google()/mavenCentral() are allowed, plus the in-tree
                       publish repository (a path, never a URL)
   absolute-paths      no hard-coded home/SDK/toolchain absolute paths
+  local-properties    android/local.properties stays gitignored (machine-local)
   catalog-pins        every [versions] entry is marked "# unverified pin"
   android-16k-link-arg shell/crates/pdsh-jni/build.rs pins 16 KB pages for
                       Android targets only (plan P2a; a commented-out flag
@@ -34,6 +37,32 @@ from pathlib import Path
 
 SWIFT_PREFIX = "PhoneDSH"
 EXPECTED_SWIFT_MODULES = 11
+# The prepared PR14 baseline after the shared-shell merge. This is an inventory,
+# not a generic "number of include lines": a module that disappears (or appears
+# without a reviewed README mapping) is a structural change and must be seen.
+EXPECTED_MODULES = (
+    "platform",
+    "platform-android",
+    "domain",
+    "core",
+    "net",
+    "controller",
+    "engine",
+    "shell",
+    "dsh",
+    "lib",
+    "testkit",
+    "app",
+    "lib-consumer-test",
+)
+# PR22 replaces the old five-tab Chrome with the real App pages. The prepared
+# candidate carries 34 `*Page.kt` files under this directory. Later page lanes
+# may add files (the count is a floor), but deleting below the prepared tree is
+# a regression, not a refactor. `ChatPage.kt` is the PR22 home, so it is the one
+# file the inventory requires by name.
+UI_PAGE_DIR_REL = Path("android") / "lib" / "src" / "main" / "kotlin" / "com" / "phonedsh" / "ui" / "page"
+EXPECTED_UI_PAGES = 34
+REQUIRED_UI_PAGES = ("ChatPage.kt",)
 SDK_MODULES = {"lib": 26, "app": 26}
 TARGET_SDK = 35
 
@@ -235,6 +264,48 @@ def check_module_build_files(root):
     return True, "{0}/{0} modules declare build.gradle.kts".format(len(includes))
 
 
+def check_module_inventory(root):
+    """The include set must be exactly the reviewed 13-module tree."""
+    android = root / "android"
+    if not android.is_dir():
+        return False, "missing android/"
+    disk = set(module_dirs(android))
+    expected = set(EXPECTED_MODULES)
+    missing = sorted(expected - disk)
+    unexpected = sorted(disk - expected)
+    if missing or unexpected:
+        parts = []
+        if missing:
+            parts.append("missing modules: " + ", ".join(":" + name for name in missing))
+        if unexpected:
+            parts.append("unreviewed modules: " + ", ".join(":" + name for name in unexpected))
+        return False, "; ".join(parts)
+    return True, "{} modules match the prepared PR22/PR14 inventory".format(len(expected))
+
+
+def check_page_inventory(root):
+    """The UI page layer must keep the prepared PR22 page floor."""
+    directory = root / UI_PAGE_DIR_REL
+    if not directory.is_dir():
+        return False, "missing {}".format(UI_PAGE_DIR_REL.as_posix())
+    pages = sorted(path.name for path in directory.glob("*Page.kt") if path.is_file())
+    problems = []
+    if len(pages) < EXPECTED_UI_PAGES:
+        problems.append(
+            "found {} *Page.kt files, prepared baseline is {} (a page was deleted or renamed)".format(
+                len(pages), EXPECTED_UI_PAGES
+            )
+        )
+    for name in REQUIRED_UI_PAGES:
+        if name not in pages:
+            problems.append("required page missing: {}".format(name))
+    if problems:
+        return False, "; ".join(problems)
+    return True, "{} *Page.kt files (prepared floor {}), required anchors present".format(
+        len(pages), EXPECTED_UI_PAGES
+    )
+
+
 def check_sdk_levels(root):
     problems = []
     details = []
@@ -397,6 +468,11 @@ def check_absolute_paths(root):
             continue
         if "src" in path.parts and "test" in path.parts:
             continue
+        # The tool tests build fixture trees, and a fixture whose job is to prove
+        # that an absolute path is rejected has to contain one. Only test_*.py
+        # beside the checkers is exempt; production scripts and docs are not.
+        if path.parent.name == "tools" and path.name.startswith("test_"):
+            continue
         for number, line in enumerate(read_text(path).splitlines(), start=1):
             if number == 1 and line.startswith("#!"):
                 continue
@@ -406,6 +482,21 @@ def check_absolute_paths(root):
     if problems:
         return False, "hard-coded absolute path: " + "; ".join(problems[:5])
     return True, "0 hard-coded absolute paths"
+
+
+def check_local_properties_gitignored(root):
+    """The bootstrap writes sdk.dir into a machine-local, uncommitted file."""
+    path = root / "android" / ".gitignore"
+    if not path.is_file():
+        return False, "missing android/.gitignore"
+    entries = {
+        line.strip()
+        for line in read_text(path).splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    if "local.properties" not in entries:
+        return False, "android/.gitignore does not ignore local.properties"
+    return True, "android/local.properties is gitignored (machine-local sdk.dir)"
 
 
 def check_catalog_pins(root):
@@ -598,12 +689,15 @@ def check_android_16k_artifact(root):
 CHECKS = (
     ("settings-includes", check_settings_includes),
     ("module-build-files", check_module_build_files),
+    ("module-inventory", check_module_inventory),
+    ("page-inventory", check_page_inventory),
     ("sdk-levels", check_sdk_levels),
     ("readme-map", check_readme_map),
     ("kotlin-stubs", check_kotlin_stubs),
     ("nested-comments", check_nested_comments),
     ("repositories", check_repositories),
     ("absolute-paths", check_absolute_paths),
+    ("local-properties", check_local_properties_gitignored),
     ("catalog-pins", check_catalog_pins),
     ("android-16k-link-arg", check_android_16k_link_arg),
     ("android-16k-artifact", check_android_16k_artifact),
