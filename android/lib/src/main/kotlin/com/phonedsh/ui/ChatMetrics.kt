@@ -82,6 +82,13 @@ public object ChatMetrics {
     /** PR22 has no header hairline: the nav row floats on the page. Source: `ChatPage.swift:384` (`.background(HomeSpec.page)`). Confidence: exact. */
     public const val HEADER_DIVIDER_PT: Float = 0f
 
+    /** Folder glyph-to-label gap. Source: `ChatPage.swift:221`. Confidence: exact. */
+    public const val HOME_HEADER_FOLDER_GAP_PT: Int = 6
+    /** Folder glyph in the HomeSpec session subtitle. Source: `ChatPage.swift:223-224`. Confidence: exact. */
+    public const val HOME_HEADER_FOLDER_ICON_PT: Int = 13
+    /** Vertical text gap in system-event message rows. Source: `NativeMessageRows.swift:113`. Confidence: exact. */
+    public const val SYSTEM_EVENT_TEXT_GAP_PT: Int = 2
+
     // -------------------------------------------------------------- transcript
 
     /** PR22 content column at 430 pt: `430 - 2 x 20`. Source: `HomeSpec.contentInset`. Confidence: exact. */
@@ -92,6 +99,21 @@ public object ChatMetrics {
 
     /** Nav bottom -> timestamp gap. Source: design spec spacing table (`20`). Confidence: exact. */
     public const val TRANSCRIPT_TOP_INSET_PT: Int = 20
+
+    /** Clearance for the floating latest-message control. Source: `ChatPage.swift:1224-1225`. Confidence: exact. */
+    public const val TRANSCRIPT_LATEST_CLEARANCE_PT: Int = 48
+    /** Failed-message row inline gap. Source: `ChatPage.swift:955`. Confidence: exact. */
+    public const val FAILURE_LINE_GAP_PT: Int = 6
+    /** Failed-message row top gap. Source: `ChatPage.swift:976`. Confidence: exact. */
+    public const val FAILURE_LINE_TOP_PT: Int = 6
+    /** Failure banner body and action font size. Source: `ChatPage.swift:957-972,1025-1038`. Confidence: exact. */
+    public const val FAILURE_TEXT_SIZE_PT: Int = 13
+    /** Top error banner inline gap. Source: `ChatPage.swift:1023`. Confidence: exact. */
+    public const val FAILURE_BANNER_GAP_PT: Int = 12
+    /** Top error banner horizontal inset. Source: `ChatPage.swift:1045`. Confidence: exact. */
+    public const val FAILURE_BANNER_INSET_H_PT: Int = 4
+    /** Top error banner vertical inset. Source: `ChatPage.swift:1046`. Confidence: exact. */
+    public const val FAILURE_BANNER_INSET_V_PT: Int = 6
 
     /** Bottom clearance under the last row: composer height + 16. Source: design spec (`输入框高度 + 16`); open composer is 104. Confidence: inferred. */
     public const val TRANSCRIPT_BOTTOM_INSET_PT: Int = 104 + 16
@@ -316,6 +338,96 @@ public object ChatMetrics {
 
     /** Deny button height (the 44 pt hit minimum). Source: `ChatPage.swift:4460`. Confidence: exact. */
     public const val PERMISSION_DENY_HEIGHT_PT: Int = 44
+
+    /** Single-choice marker outer diameter in the current Android question fallback; source is the 20pt question marker in the PR22 reference capture. Confidence: image-measured. */
+    public const val QUESTION_RADIO_OUTLINE_PT: Int = 20
+    /** Selected radio center in the question fallback. Source: PR22 reference capture. Confidence: image-measured. */
+    public const val QUESTION_RADIO_DOT_PT: Int = 8
+    /** Multi-select checkbox frame. Source: `NativeQuestionComposer.swift:724`. Confidence: exact. */
+    public const val QUESTION_CHECKBOX_FRAME_PT: Int = 20
+    /** Multi-select checkbox corner radius. Source: `NativeQuestionComposer.swift:675-691`. Confidence: exact. */
+    public const val QUESTION_CHECKBOX_RADIUS_PT: Int = 4
+    /** Multi-select check glyph. Source: `NativeQuestionComposer.swift:691`. Confidence: exact. */
+    public const val QUESTION_CHECKBOX_GLYPH_PT: Int = 14
+    /** Legacy question-answer add icon. Source: PR22 reference capture. Confidence: image-measured. */
+    public const val QUESTION_ANSWER_ADD_ICON_PT: Int = 16
+    /** Question pager chevron drawing. Source: `NativeQuestionComposer.swift:723-724`. Confidence: exact. */
+    public const val QUESTION_PAGER_ICON_PT: Int = 13
+    /** Question header action glyph. Source: `NativeQuestionComposer.swift:723-724`. Confidence: exact. */
+    public const val QUESTION_HEADER_ACTION_GLYPH_PT: Int = 13
+    /** Plan-review change glyph. Source: `ChatPage.swift:1585`. Confidence: exact. */
+    public const val PLAN_REVIEW_CHANGE_GLYPH_PT: Int = 14
+    /** Goal clear glyph. Source: `ChatPage.swift:1514-1515`. Confidence: exact. */
+    public const val GOAL_CLEAR_GLYPH_PT: Int = 11
+    /** Todo dock leading checklist glyph. Source: `NativeTodoDock.swift:103-104`. Confidence: exact. */
+    public const val TODO_DOCK_GLYPH_PT: Int = 14
+    /** Todo dock disclosure chevron. Source: `NativeTodoDock.swift:130`. Confidence: exact. */
+    public const val TODO_DOCK_CHEVRON_PT: Int = 14
+    /** Pending attachment document glyph box. Source: PR22 reference capture. Confidence: image-measured. */
+    public const val ATTACHMENT_DOCUMENT_GLYPH_PT: Int = 16
+    /** Pending attachment remove glyph box. Source: PR22 reference capture. Confidence: image-measured. */
+    public const val ATTACHMENT_REMOVE_GLYPH_PT: Int = 14
+    /** Space between the access-mode shield and disclosure. Source: `ChatPage.swift` accessModeMenu. Confidence: exact. */
+    public const val ACCESS_MODE_ICON_GAP_PT: Int = 2
+    /** Access-mode shield glyph. Source: `ChatPage.swift:2210-2218`. Confidence: exact. */
+    public const val ACCESS_MODE_SHIELD_GLYPH_PT: Int = 20
+    /** Access-mode disclosure glyph. Source: `ChatPage.swift:2210-2218`. Confidence: exact. */
+    public const val ACCESS_MODE_CHEVRON_GLYPH_PT: Int = 10
+    /** Model name/effort gap. Source: `ChatPage.swift:2354`. Confidence: exact. */
+    public const val MODEL_EFFORT_GAP_PT: Int = 6
+    /** Model-menu disclosure glyph. Source: `ChatPage.swift:2363`. Confidence: exact. */
+    public const val MODEL_MENU_CHEVRON_GLYPH_PT: Int = 12
+    /** Composer menu row check glyph. Source: `ChatPage.swift` model/access menu selection rows. Confidence: exact. */
+    public const val COMPOSER_MENU_CHECK_GLYPH_PT: Int = 16
+
+    /** Queue dock header text/icon gap. Source: `ChatPage.swift:1632`. Confidence: exact. */
+    public const val CHAT_QUEUE_HEADER_GAP_PT: Int = 10
+    /** Queue dock leading glyph. Source: `ChatPage.swift:1625-1626`. Confidence: exact. */
+    public const val CHAT_QUEUE_HEADER_ICON_PT: Int = 14
+    /** Queue dock header line height. Source: `ChatPage.swift:1636`. Confidence: exact. */
+    public const val CHAT_QUEUE_HEADER_HEIGHT_PT: Int = 32
+    /** Queue dock title font size. Source: `ChatPage.swift:1628`. Confidence: exact. */
+    public const val CHAT_QUEUE_HEADER_FONT_PT: Int = 13
+    /** Queue header disclosure glyph size. Source: `ChatPage.swift:1633`. Confidence: exact. */
+    public const val CHAT_QUEUE_HEADER_CHEVRON_PT: Int = 12
+    /** Single-row queue marker glyph size. Source: `ChatPage.swift:1680`. Confidence: exact. */
+    public const val CHAT_QUEUE_ROW_GLYPH_PT: Int = 12
+    /** Single-row marker layout box width. Source: `ChatPage.swift:1682`. Confidence: exact. */
+    public const val CHAT_QUEUE_ROW_GLYPH_BOX_PT: Int = 16
+    /** Queue row title font size. Source: `ChatPage.swift:1685`. Confidence: exact. */
+    public const val CHAT_QUEUE_ROW_FONT_PT: Int = 13
+    /** Queue row action glyph size. Source: `ChatPage.swift:1729`. Confidence: exact. */
+    public const val CHAT_QUEUE_ACTION_GLYPH_PT: Int = 13
+    /** Queue row action painted icon frame. Source: `ChatPage.swift:1731`. Confidence: exact. */
+    public const val CHAT_QUEUE_ACTION_ICON_BOX_PT: Int = 28
+    /** Queue row action hit target width. Source: `ChatPage.swift:1732`. Confidence: exact. */
+    public const val CHAT_QUEUE_ACTION_TARGET_WIDTH_PT: Int = 34
+    /** Queue row action hit target height. Source: `ChatPage.swift:1732`. Confidence: exact. */
+    public const val CHAT_QUEUE_ACTION_TARGET_HEIGHT_PT: Int = 36
+    /** Queue row minimum height. Source: `ChatPage.swift:1721`. Confidence: exact. */
+    public const val CHAT_QUEUE_ROW_MIN_HEIGHT_PT: Int = 36
+    /** Queue row horizontal inset. Source: `ChatPage.swift:1720`. Confidence: exact. */
+    public const val CHAT_QUEUE_ROW_INSET_H_PT: Int = 10
+    /** Queue row content spacing. Source: `ChatPage.swift:1677`. Confidence: exact. */
+    public const val CHAT_QUEUE_ROW_GAP_PT: Int = 8
+    /** Queue dock vertical stack gap. Source: `ChatPage.swift:1619`. Confidence: exact. */
+    public const val CHAT_QUEUE_STACK_GAP_PT: Int = 4
+    /** Queue card vertical inset. Source: `ChatPage.swift:1654`. Confidence: exact. */
+    public const val CHAT_QUEUE_CARD_INSET_V_PT: Int = 2
+    /** Queue divider inset after the leading row glyph. Source: `ChatPage.swift:1649`. Confidence: exact. */
+    public const val CHAT_QUEUE_DIVIDER_INSET_PT: Int = 38
+    /** Pending-send row stack gap. Source: `ChatPage.swift:1753`. Confidence: exact. */
+    public const val CHAT_QUEUE_PENDING_STACK_GAP_PT: Int = 4
+    /** Pending-send row content gap. Source: `ChatPage.swift:1755`. Confidence: exact. */
+    public const val CHAT_QUEUE_PENDING_CONTENT_GAP_PT: Int = 8
+    /** Pending-send row text size. Source: `ChatPage.swift:1759,1762`. Confidence: exact. */
+    public const val CHAT_QUEUE_PENDING_TEXT_PT: Int = 13
+    /** Pending-send row height. Source: `ChatPage.swift:1769`. Confidence: exact. */
+    public const val CHAT_QUEUE_PENDING_HEIGHT_PT: Int = 28
+    /** Pending-send row horizontal inset. Source: `ChatPage.swift:1768`. Confidence: exact. */
+    public const val CHAT_QUEUE_PENDING_INSET_H_PT: Int = 10
+    /** Pending-send spinner size. Source: `ChatPage.swift:1756` (`controlSize(.mini)`). Confidence: inferred. */
+    public const val CHAT_QUEUE_PENDING_SPINNER_PT: Int = 12
 
     /** Expanded tool card corner radius. Source: `NativeToolCardChrome.swift:33` (`radiusLG` = 16). Confidence: exact. */
     public const val TOOL_CARD_RADIUS_PT: Int = 16

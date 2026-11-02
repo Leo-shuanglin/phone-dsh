@@ -83,4 +83,40 @@ class ChatRowsTimelineTest {
         compose.onNodeWithContentDescription("复制").performClick()
         compose.onNodeWithContentDescription("复制成功").assertIsDisplayed()
     }
+
+    @Test
+    fun `thinking disclosure shows only the actual bounded reasoning and its truncation receipt`() {
+        val row = ChatRow.Thinking(
+            id = "think-source",
+            summary = "summary only",
+            streaming = false,
+            fullReasoning = "reasoning from source",
+            fullReasoningTruncated = true,
+        )
+        compose.setContent {
+            PdshTheme {
+                ChatRowItem(row, expandedRowIds = setOf(row.id), onToggleRow = {})
+            }
+        }
+        compose.onNodeWithText("reasoning from source").assertIsDisplayed()
+        compose.onNodeWithText("仅显示部分思考内容").assertIsDisplayed()
+    }
+
+    @Test
+    fun `assistant markdown preserves the full resource URI through its host route`() {
+        val resource = "dsh-resource://file/session/session-A/dsh/workspace/docs/readme.md"
+        var opened: String? = null
+        compose.setContent {
+            PdshTheme {
+                ChatRowItem(
+                    ChatRow.Assistant("answer", "[Open file]($resource)"),
+                    expandedRowIds = emptySet(),
+                    onToggleRow = {},
+                    onOpenResource = { opened = it },
+                )
+            }
+        }
+        compose.onNodeWithText("Open file").performClick()
+        assertEquals(resource, opened)
+    }
 }

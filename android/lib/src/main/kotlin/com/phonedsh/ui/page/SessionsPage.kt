@@ -132,7 +132,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phonedsh.ui.SessionsMetrics
-import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.icon.PdshIcon
 import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.UiStrings
@@ -1341,13 +1340,12 @@ private fun SessionsFailureLine(
 /**
  * One session row, its long-press `DropdownMenu` and the current check mark.
  *
- * The baseline's row: `bubble.left` in a 17 pt box, the title on 16 pt, the
- * relative time at HomeSpec's 14/22 metadata role, a 56 pt source row floor, and a 288 pt hairline
+ * The standalone baseline's row: `bubble.left` 15pt ink in a 17pt box, a 16pt
+ * title, 13pt relative-time metadata, a 56pt row floor, and a 288pt hairline
  * pinned to the row's leading edge as an *overlay*.
  *
  * Two things the overlay placement changes, both measured on `ios-sessions-many`:
- * the row is exactly 56 pt tall (a sibling hairline used to add its 0.5 pt, so 20
- * rows drifted 14 pt), and the line sits on the boundary instead of above it.
+ * the row stays exactly 56pt tall, and the line sits on the boundary.
  *
  * Pressing the row paints it `NativePagePalette.toast` with a 12 pt radius for
  * 0.15 s (`SessionsPage.swift:583`, `:641-654`), which replaces the platform
@@ -1372,14 +1370,12 @@ private fun SessionItem(
         label = "session-row-press",
     )
     Box(modifier = Modifier.fillMaxWidth()) {
-        val rowShape = RoundedCornerShape(HomeMetrics.LIST_CARD_RADIUS_PT.dp)
+        val rowShape = RoundedCornerShape(SessionsMetrics.SESSION_ROW_PRESS_RADIUS_PT.dp)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = tokens.geometry.pageOuterMarginH)
                 .clip(rowShape)
-                .background(tokens.colors.surface, rowShape)
-                .border(1.dp, tokens.colors.borderList, rowShape)
                 .testTag(UiPageTags.SESSION_ROW)
                 .background(
                     color = tokens.colors.selector.copy(alpha = pressFill),
@@ -1394,7 +1390,7 @@ private fun SessionItem(
                 )
                 // Source floor is 56 pt; the 16 pt card inset plus 8 pt content
                 // inset puts the glyph at the same 24 pt baseline position.
-                .heightIn(min = SessionsMetrics.sessionRowHeight)
+                .heightIn(min = SessionsMetrics.standaloneSessionRowHeight)
                 .padding(horizontal = SessionsMetrics.SESSION_ROW_INNER_INSET_PT.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_GLYPH_GAP_PT.dp),
@@ -1415,16 +1411,15 @@ private fun SessionItem(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+                    horizontalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_METADATA_GAP_PT.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (row.timeLabel != null) {
                         BasicText(
                             text = row.timeLabel,
-                            style = type.secondary.copy(
+                            style = type.caption.copy(
                                 color = tokens.colors.textSecondary,
-                                fontSize = HomeMetrics.LIST_ITEM_SIZE_PT.sp,
-                                lineHeight = HomeMetrics.LIST_ITEM_LINE_PT.sp,
+                                fontSize = SessionsMetrics.SESSION_METADATA_SIZE_PT.sp,
                                 platformStyle = PlatformTextStyle(includeFontPadding = false),
                             ),
                         )
@@ -1435,36 +1430,34 @@ private fun SessionItem(
                     if (row.status == SessionRunStatus.RUNNING) {
                         BasicText(
                             text = SEPARATOR_GLYPH,
-                            style = type.secondary.copy(
-                                color = tokens.colors.textSecondary,
-                                fontSize = HomeMetrics.LIST_ITEM_SIZE_PT.sp,
-                                lineHeight = HomeMetrics.LIST_ITEM_LINE_PT.sp,
-                            ),
+                            style = type.caption.copy(color = tokens.colors.textSecondary, fontSize = SessionsMetrics.SESSION_METADATA_SIZE_PT.sp),
                         )
-                        Box(
-                            modifier = Modifier
-                                .size(SessionsMetrics.SESSION_RUNNING_DOT_PT.dp)
-                                .clip(CircleShape)
-                            .background(tokens.colors.textSecondary),
-                        )
-                        BasicText(
-                            text = UiStrings.RUNNING,
-                            style = type.secondary.copy(
-                                color = tokens.colors.textSecondary,
-                                fontSize = HomeMetrics.LIST_ITEM_SIZE_PT.sp,
-                                lineHeight = HomeMetrics.LIST_ITEM_LINE_PT.sp,
-                            ),
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_STATUS_DOT_GAP_PT.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(SessionsMetrics.SESSION_RUNNING_DOT_PT.dp)
+                                    .clip(CircleShape)
+                                    .background(tokens.colors.textSecondary),
+                            )
+                            BasicText(
+                                text = UiStrings.RUNNING,
+                                style = type.caption.copy(color = tokens.colors.textSecondary, fontSize = SessionsMetrics.SESSION_METADATA_SIZE_PT.sp),
+                            )
+                        }
                     }
                 }
             }
             if (row.selected) {
                 // `SessionsPage.swift:572`: `Spacer(minLength: 4)` between the
                 // title block and the check, on top of the 10 pt row gap.
-                Box(modifier = Modifier.width(SESSIONS_CHECK_GAP_PT.dp))
+                Box(modifier = Modifier.width(SessionsMetrics.SESSION_SELECTED_CHECK_GAP_PT.dp))
                 BasicText(
                     text = CHECK_GLYPH,
-                    style = type.headline.copy(
+                    style = type.body.copy(
+                        fontSize = SessionsMetrics.SESSION_SELECTED_CHECK_SIZE_PT.sp,
                         fontWeight = FontWeight.Normal,
                         color = tokens.colors.primary,
                     ),
@@ -2197,20 +2190,21 @@ internal object SessionsPageTokens {
         UiTokenNames.COLORS_DANGER,
         UiTokenNames.COLORS_INPUT,
         UiTokenNames.COLORS_ON_ACCENT,
+        UiTokenNames.COLORS_PAGE,
         UiTokenNames.COLORS_PRIMARY,
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_SELECTOR,
         UiTokenNames.COLORS_TERTIARY,
+        UiTokenNames.COLORS_TEXT_PRIMARY,
+        UiTokenNames.COLORS_TEXT_SECONDARY,
         UiTokenNames.GEOMETRY_CARD_OUTER_MARGIN_V,
         UiTokenNames.GEOMETRY_PAGE_HEADER_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
-        UiTokenNames.RADIUS_CARD,
         UiTokenNames.SPACING_BADGE_INSET_H,
         UiTokenNames.SPACING_BADGE_INSET_V,
         UiTokenNames.SPACING_CARD_INSET,
         UiTokenNames.SPACING_CODE_TOOLBAR,
-        UiTokenNames.SPACING_COPY_GAP,
         UiTokenNames.SPACING_ICON_TEXT,
         UiTokenNames.STROKE_HAIRLINE,
         UiTokenNames.TYPOGRAPHY_BODY,
@@ -2372,7 +2366,7 @@ private fun SessionRowGlyph(ink: Color) {
     ) {
         PdshIconView(
             icon = PdshIcon.CHAT_BUBBLE,
-            size = 24.dp,
+            size = SessionsMetrics.SESSION_GLYPH_SIZE_PT.dp,
             tint = ink,
             contentDescription = null,
         )
@@ -2386,7 +2380,6 @@ private fun SessionRowGlyph(ink: Color) {
 private const val WORKSPACE_MENU_GLYPH_W_PT: Float = 18.3f
 
 /** The baseline's row gap before the check mark: `Spacer(minLength: 4)` (`:572`). */
-private const val SESSIONS_CHECK_GAP_PT: Int = 4
 /** 402 pt capture: the new-session title was 12.4 pt too low after the search field. */
 private const val SESSIONS_SEARCH_TO_NEW_AIR_PT: Float = 31.6f
 /** 402 pt capture: restore the measured ~26.7 pt separator-to-blocked-copy gap. */

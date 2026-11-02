@@ -1,5 +1,6 @@
 // The chat rows: message bubbles, tool runs, injected context and system events.
 // SPDX-License-Identifier: MIT
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 //
 // Spec: `spec/ui/v1/README.md` §2 (component semantics), §3.1 (ScreenState) and
 // §4 (the six signature surfaces). A row is one `ScreenState` row; the fold over
@@ -9,22 +10,19 @@
 // disclosure row, the thinking row, the system-event row), `ChatPage.swift`
 // `ChatMessageRow` / `ToolRunRow` / `ContextInjectionCard` and
 // `NativeChatTimelineChrome.swift` `NativeContextSourceGroup`. The per-row gap
-// is `ChatPage.spacing(before:in:)`: 6 after a status row, 8 for a tool run or a
-// context group, 12 between two rows of the same kind and 20 when the kind
-// changes.
+// is 16 after a user bubble and 20 between every other transcript block.
 //
-// Geometry: the row's horizontal inset is the page-level `geometry.pageOuterMarginH`.
-// The gaps reuse signature-surface lengths that have no page-level token, and
-// each such reuse is marked `unverified geometry` where it is used; no value is
-// invented here.
+// Geometry comes from the shared source-derived HomeMetrics.
 package com.phonedsh.ui.page
 
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -43,6 +41,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -55,6 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -63,10 +65,11 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.phonedsh.ui.UiMetrics
 import com.phonedsh.ui.ChatMetrics
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
+import com.phonedsh.ui.icon.PdshIcon
 import com.phonedsh.ui.state.ChatRow
 import com.phonedsh.ui.state.ChatTurnState
 import com.phonedsh.ui.state.ChatProcessCategory
@@ -93,13 +96,14 @@ internal object ChatRowsTokens {
     val refs: List<String> = listOf(
         UiTokenNames.COLORS_ACCENT,
         UiTokenNames.COLORS_BORDER,
+        UiTokenNames.COLORS_BORDER_LIST,
         UiTokenNames.COLORS_DANGER,
         UiTokenNames.COLORS_PRIMARY,
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_SELECTOR,
+        UiTokenNames.COLORS_SURFACE,
         UiTokenNames.COLORS_TERTIARY,
         UiTokenNames.COLORS_WARNING,
-        UiTokenNames.GEOMETRY_BANNER_GAP,
         UiTokenNames.GEOMETRY_COMPOSER_CONTROL_SIZE,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_SUMMARY_DOT_DIAMETER,
@@ -134,7 +138,8 @@ internal fun ChatRowList(
     onToggleRow: (String) -> Unit,
     tag: String = UiTags.CHAT_LIST,
     modifier: Modifier = Modifier,
-    onOpenFile: (String) -> Unit = {},
+    onOpenFile: ((String) -> Unit)? = null,
+    onOpenResource: ((String) -> Unit)? = null,
 ) {
     LazyColumn(
         modifier = modifier
@@ -149,6 +154,7 @@ internal fun ChatRowList(
                     expandedRowIds = expandedRowIds,
                     onToggleRow = onToggleRow,
                     onOpenFile = onOpenFile,
+                    onOpenResource = onOpenResource,
                 )
             }
         }
@@ -165,21 +171,7 @@ internal fun ChatRowList(
 @Composable
 internal fun rowGap(previous: ChatRow?, current: ChatRow): Dp? {
     if (previous == null) return null
-    if (current is ChatRow.TurnTail) {
-        // TurnProcess owns its final answer in Android's collapsed aggregate row;
-        // it is the effective previous assistant for this official tail gap.
-        return if (previous is ChatRow.Assistant || previous is ChatRow.TurnProcess) IOS_RESPONSE_GAP else IOS_PROCESS_GAP
-    }
-    if (current is ChatRow.TurnProcess || previous is ChatRow.TurnProcess) {
-        return IOS_TURN_CONTROL_GAP
-    }
-    // iOS ChatPage.spacing(before:in:) uses 12pt whenever an assistant response
-    // is adjacent and 6pt for ordinary/process rows.
-    return if (previous is ChatRow.Assistant || current is ChatRow.Assistant) {
-        IOS_RESPONSE_GAP
-    } else {
-        IOS_PROCESS_GAP
-    }
+    return if (previous is ChatRow.User) HomeMetrics.paragraphGap else HomeMetrics.blockGap
 }
 
 /**
@@ -195,38 +187,38 @@ internal fun ChatRowItem(
     expandedRowIds: Set<String>,
     onToggleRow: (String) -> Unit,
     modifier: Modifier = Modifier,
-    onOpenFile: (String) -> Unit = {},
+    onOpenFile: ((String) -> Unit)? = null,
+    onOpenResource: ((String) -> Unit)? = null,
+    inListCard: Boolean = false,
 ) {
     val tokens = LocalUiTokens.current
-    // The transcript column, not the page margin: iOS insets the message column by
-    // `NativeParityTokens.transcriptSide` = 32 pt (`ChatPage.swift:1172`), which is
-    // the official 338 pt content column (`UiMetrics.CONTENT_COLUMN_INSET_PT`).
-    // ios-chat-assistant.png: assistant prose ink starts at x 33.7, the tool-row
-    // icon at x 32.7, and the user bubble's right edge is 369.7 = 402 - 32.3.
-    val horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp
+    // PR22 reading content uses the source HomeSpec's 20pt inset.
+    val horizontal = if (inListCard) Dp(0f) else HomeMetrics.contentInset
     when (row) {
         is ChatRow.User -> Column(
             modifier = modifier
                 .fillMaxWidth()
                 .padding(horizontal = horizontal),
-            verticalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+            verticalArrangement = Arrangement.spacedBy(HomeMetrics.paragraphGap),
         ) {
             // Two row elements, two edges: the bubble hugs the trailing edge,
             // the queue label hugs the leading edge (iOS `queueLine` sits in a
             // leading VStack under a trailing `userBubble`). The bubble surface
             // never learns that a label exists.
-            ChatBubble(
-                role = BubbleRole.USER,
-                text = row.text,
-                modifier = Modifier.align(Alignment.End),
-            )
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                MessageContextMenu(text = row.text, includeShare = true, modifier = Modifier.align(Alignment.CenterEnd)) {
+                    ChatBubble(
+                        role = BubbleRole.USER,
+                        text = row.text,
+                    // ChatBubble applies its own 20pt inset rule to the supplied
+                    // container width; this measured width is already the content column.
+                    containerWidth = maxWidth,
+                    )
+                }
+            }
             if (row.attachments.isNotEmpty()) {
                 AttachmentList(attachments = row.attachments, onOpenFile = onOpenFile)
             }
-            // ios-chat-assistant.png / -failed.png / -queued.png: the copy/share row
-            // sits under the bubble at the *leading* page edge. The bubble is
-            // right-aligned; its actions are not.
-            MessageActions(text = row.text, modifier = Modifier.align(Alignment.Start))
             if (row.badge != null) {
                 BubbleBadge(text = row.badge, modifier = Modifier.align(Alignment.Start))
             }
@@ -236,23 +228,27 @@ internal fun ChatRowItem(
             modifier = modifier
                 .fillMaxWidth()
                 .padding(horizontal = horizontal),
-            verticalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+            verticalArrangement = Arrangement.spacedBy(HomeMetrics.paragraphGap),
         ) {
             // iOS renders an answer as markdown (`NativeMarkdownBody`): prose,
             // headings, lists, quotes, fenced code, GFM tables, typeset math, raw
             // HTML kept literal and footnote references. `MarkdownBody` owns that
             // grammar; this row only places it.
-            MarkdownBody(
-                markdown = if (row.text.isEmpty()) EMPTY_ANSWER else row.text,
-                modifier = Modifier.testTag(UiTags.BUBBLE),
-            )
+            MessageContextMenu(text = row.text, includeShare = false) {
+                MarkdownBody(
+                    markdown = if (row.text.isEmpty()) EMPTY_ANSWER else row.text,
+                    modifier = Modifier.testTag(UiTags.BUBBLE),
+                    onOpenFile = onOpenFile,
+                    onOpenResource = onOpenResource,
+                )
+            }
             if (row.changes.isNotEmpty()) {
                 // iOS `assistantBody` is a 6 pt VStack and the card adds 4 pt of its
                 // own top padding (`NativeChangedFilesCard.swift:97`): 10 pt in total,
                 // which the column's 5 pt gap plus this 5 pt pad reproduces.
-                ChangedFilesCard(
+                if (onOpenFile != null) ChangedFilesCard(
                     changes = row.changes,
-                    modifier = Modifier.padding(top = tokens.spacing.copyGap),
+                    modifier = Modifier.padding(top = HomeMetrics.paragraphGap),
                     onOpenFile = onOpenFile,
                 )
             }
@@ -272,7 +268,10 @@ internal fun ChatRowItem(
                 streaming = row.streaming,
                 expanded = row.id in expandedRowIds,
                 onToggle = { onToggleRow(row.id) },
-                detail = if (row.summary.isEmpty()) null else row.summary,
+                detail = row.fullReasoning,
+                detailTruncated = row.fullReasoningTruncated,
+                onOpenFile = onOpenFile,
+                onOpenResource = onOpenResource,
             )
         }
 
@@ -281,7 +280,7 @@ internal fun ChatRowItem(
                 .fillMaxWidth()
                 .padding(horizontal = horizontal),
             // iOS `ToolRunRow`: a VStack of one disclosure line per call/result.
-            verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+            verticalArrangement = Arrangement.spacedBy(HomeMetrics.disclosureGap),
         ) {
             row.entries.forEach { entry ->
                 ToolEntryRow(
@@ -289,6 +288,8 @@ internal fun ChatRowItem(
                     expanded = entry.id in expandedRowIds,
                     onToggle = { onToggleRow(entry.id) },
                     onOpenFile = onOpenFile,
+                    onOpenResource = onOpenResource,
+                    inListCard = inListCard,
                 )
             }
         }
@@ -302,6 +303,7 @@ internal fun ChatRowItem(
             onToggle = { onToggleRow(row.id) },
             onToggleRow = onToggleRow,
             onOpenFile = onOpenFile,
+            onOpenResource = onOpenResource,
             modifier = modifier,
         )
 
@@ -311,6 +313,7 @@ internal fun ChatRowItem(
             onToggle = { onToggleRow(row.id) },
             onToggleRow = onToggleRow,
             onOpenFile = onOpenFile,
+            onOpenResource = onOpenResource,
             modifier = modifier,
         )
 
@@ -329,11 +332,10 @@ internal fun ChatRowItem(
             modifier = modifier
                 .fillMaxWidth()
                 .padding(horizontal = horizontal),
-            verticalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+            verticalArrangement = Arrangement.spacedBy(HomeMetrics.paragraphGap),
             horizontalAlignment = Alignment.End,
         ) {
             ChatBubble(role = BubbleRole.USER, text = row.text)
-            MessageActions(text = row.text, modifier = Modifier.align(Alignment.End))
         }
 
         is ChatRow.SystemEvent -> SystemEventRow(
@@ -352,7 +354,8 @@ private fun ProcessGroupRow(
     expandedRowIds: Set<String>,
     onToggle: () -> Unit,
     onToggleRow: (String) -> Unit,
-    onOpenFile: (String) -> Unit,
+    onOpenFile: ((String) -> Unit)?,
+    onOpenResource: ((String) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val tokens = LocalUiTokens.current
@@ -362,7 +365,7 @@ private fun ProcessGroupRow(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp)
+                    .padding(horizontal = HomeMetrics.contentInset)
                     .clickable(role = Role.Button, onClick = onToggle)
                     .semantics(mergeDescendants = true) {
                         contentDescription = row.title
@@ -387,13 +390,25 @@ private fun ProcessGroupRow(
             }
         }
         if (!row.showsHeader || expanded) {
-            Column(verticalArrangement = Arrangement.spacedBy(IOS_PROCESS_GAP)) {
+            Column(
+                modifier = if (row.showsHeader) Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = HomeMetrics.contentInset)
+                    .clip(RoundedCornerShape(HomeMetrics.listCardRadius))
+                    .background(tokens.colors.surface)
+                    .border(tokens.stroke.hairline, tokens.colors.borderList, RoundedCornerShape(HomeMetrics.listCardRadius))
+                    .padding(horizontal = tokens.spacing.cardInset, vertical = HomeMetrics.disclosureGap)
+                else Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(HomeMetrics.disclosureGap),
+            ) {
                 row.entries.forEach { entry ->
                     ChatRowItem(
                         row = entry,
                         expandedRowIds = expandedRowIds,
                         onToggleRow = onToggleRow,
                         onOpenFile = onOpenFile,
+                        onOpenResource = onOpenResource,
+                            inListCard = row.showsHeader,
                     )
                 }
             }
@@ -419,7 +434,8 @@ private fun TurnProcessRow(
     expandedRowIds: Set<String>,
     onToggle: () -> Unit,
     onToggleRow: (String) -> Unit,
-    onOpenFile: (String) -> Unit,
+    onOpenFile: ((String) -> Unit)?,
+    onOpenResource: ((String) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val tokens = LocalUiTokens.current
@@ -429,7 +445,7 @@ private fun TurnProcessRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp)
+                .padding(horizontal = HomeMetrics.contentInset)
                 .height(ChatMetrics.TURN_PROCESS_HEIGHT_PT.dp)
                 .clickable(enabled = row.foldable, role = Role.Button, onClick = onToggle)
                 .semantics(mergeDescendants = true) {
@@ -454,20 +470,21 @@ private fun TurnProcessRow(
             }
         }
         Box(
-            Modifier.fillMaxWidth().padding(horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp)
+            Modifier.fillMaxWidth().padding(horizontal = HomeMetrics.contentInset)
                 .height(tokens.stroke.hairline).background(tokens.colors.border),
         )
         val visibleEntries = if (expanded) row.entries else listOfNotNull(row.closingAssistant)
         if (visibleEntries.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(IOS_PROCESS_GAP)) {
+            Column(verticalArrangement = Arrangement.spacedBy(HomeMetrics.blockGap)) {
                 visibleEntries.forEachIndexed { index, entry ->
-                    val top = if (index == 0) IOS_TURN_CONTROL_GAP else rowGap(visibleEntries[index - 1], entry) ?: ChatMetrics.NO_GAP_PT.dp
+                    val top = if (index == 0) IOS_TURN_CONTROL_GAP else rowGap(visibleEntries[index - 1], entry) ?: HomeMetrics.blockGap
                     ChatRowItem(
                         row = entry,
                         expandedRowIds = expandedRowIds,
                         onToggleRow = onToggleRow,
                         onOpenFile = onOpenFile,
-                        modifier = Modifier.padding(top = top),
+                        onOpenResource = onOpenResource,
+                            modifier = Modifier.padding(top = top),
                     )
                 }
             }
@@ -509,7 +526,7 @@ private fun TurnTailRow(row: ChatRow.TurnTail, modifier: Modifier = Modifier) {
     }
     Row(
         modifier = modifier.fillMaxWidth()
-            .padding(horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp)
+            .padding(horizontal = HomeMetrics.contentInset)
             .padding(top = tokens.geometry.toolDetailVertical)
             .offset(x = -ChatMetrics.FLOW_GAP_PT.dp)
             .height(tokens.geometry.composerControlSize)
@@ -575,7 +592,9 @@ private fun ToolEntryRow(
     entry: ToolEntry,
     expanded: Boolean,
     onToggle: () -> Unit,
-    onOpenFile: (String) -> Unit = {},
+    onOpenFile: ((String) -> Unit)? = null,
+    onOpenResource: ((String) -> Unit)? = null,
+    inListCard: Boolean = false,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -587,16 +606,29 @@ private fun ToolEntryRow(
         expanded = expanded,
         onToggle = onToggle,
         showsSummaryWhenExpanded = true,
-        detail = if (canExpand || entry.filePath != null) {
+        detail = if (canExpand) {
             {
                 ToolDetail(
                     entry = entry,
                     canExpand = canExpand,
                     onOpenFile = onOpenFile,
+                    onOpenResource = onOpenResource,
                 )
             }
         } else {
             null
+        },
+        inListCard = inListCard,
+        categoryIcon = when (entry.variant) {
+            com.phonedsh.ui.state.ToolVariant.BASH -> PdshIcon.TERMINAL
+            com.phonedsh.ui.state.ToolVariant.READ -> PdshIcon.DOCUMENT
+            com.phonedsh.ui.state.ToolVariant.WRITE, com.phonedsh.ui.state.ToolVariant.EDIT -> PdshIcon.PENCIL
+            com.phonedsh.ui.state.ToolVariant.SEARCH -> PdshIcon.SEARCH
+            com.phonedsh.ui.state.ToolVariant.WEB_SEARCH, com.phonedsh.ui.state.ToolVariant.WEB_FETCH -> PdshIcon.GLOBE
+            com.phonedsh.ui.state.ToolVariant.QUESTION -> PdshIcon.INFO
+            com.phonedsh.ui.state.ToolVariant.PLAN -> PdshIcon.LIST
+            com.phonedsh.ui.state.ToolVariant.TODO -> PdshIcon.LIST
+            com.phonedsh.ui.state.ToolVariant.GENERIC -> PdshIcon.SPARKLE
         },
         modifier = Modifier.testTag(UiPageTags.CHAT_ROW_TOOL),
     )
@@ -615,7 +647,8 @@ private fun ToolEntryRow(
 private fun ToolDetail(
     entry: ToolEntry,
     canExpand: Boolean,
-    onOpenFile: (String) -> Unit,
+    onOpenFile: ((String) -> Unit)?,
+    onOpenResource: ((String) -> Unit)?,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -630,7 +663,7 @@ private fun ToolDetail(
                 // this version, so the tail is cut and the leading directories stay.
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
-                    .clickable(role = Role.Button, onClick = { onOpenFile(path) })
+                    .clickable(enabled = onOpenFile != null, role = Role.Button) { onOpenFile?.invoke(path) }
                     .testTag(UiPageTags.CHAT_ROW_TOOL_FILE)
                     .padding(vertical = tokens.geometry.toolDetailVertical),
             )
@@ -775,7 +808,7 @@ private fun SystemEventRow(
                 .background(if (row.isError) tokens.colors.danger else tokens.colors.warning),
         )
         Column(
-            verticalArrangement = Arrangement.spacedBy(tokens.geometry.bannerGap),
+            verticalArrangement = Arrangement.spacedBy(ChatMetrics.SYSTEM_EVENT_TEXT_GAP_PT.dp),
         ) {
             BasicText(
                 text = row.title,
@@ -801,7 +834,7 @@ private fun SystemEventRow(
 private fun AttachmentList(
     attachments: List<com.phonedsh.ui.state.ChatAttachment>,
     modifier: Modifier = Modifier,
-    onOpenFile: (String) -> Unit = {},
+    onOpenFile: ((String) -> Unit)? = null,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -816,8 +849,8 @@ private fun AttachmentList(
                     .fillMaxWidth()
                     .background(tokens.colors.selector, RoundedCornerShape(tokens.radius.card))
                     // iOS `NativeAttachmentList` disables the row when it has no path.
-                    .clickable(enabled = path != null, role = Role.Button) {
-                        if (path != null) onOpenFile(path)
+                    .clickable(enabled = path != null && onOpenFile != null, role = Role.Button) {
+                        if (path != null) onOpenFile?.invoke(path)
                     }
                     .padding(tokens.spacing.cardInset),
                 verticalAlignment = Alignment.CenterVertically,
@@ -843,33 +876,39 @@ private fun AttachmentList(
     }
 }
 
-/**
- * The row's copy action (iOS `NativeMessageActions`). Sharing, feedback and the
- * usage sheet need host services this page does not own, so the copy action is
- * the one the row can perform by itself.
- */
+/** iOS bubble context menu: copy, and share for user supplied text. */
 @Composable
-private fun MessageActions(
+@androidx.compose.foundation.ExperimentalFoundationApi
+private fun MessageContextMenu(
     text: String,
+    includeShare: Boolean,
     modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
 ) {
-    val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
+    var expanded by remember(text) { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
-    if (text.isEmpty()) return
-    Row(
-        modifier = modifier
-            .defaultMinSize(minHeight = tokens.geometry.composerControlSize)
-            .testTag(UiPageTags.CHAT_MESSAGE_COPY)
-            .clickable(role = Role.Button, onClick = { clipboard.setText(AnnotatedString(text)) })
-            .semantics { contentDescription = UiStrings.MESSAGE_COPY }
-            .padding(horizontal = tokens.spacing.copyGap),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BasicText(
-            text = COPY_GLYPH,
-            style = type.secondary.copy(color = tokens.colors.tertiary),
-        )
+    val context = LocalContext.current
+    Box(modifier = modifier) {
+        Box(modifier = Modifier.pointerInput(text) {
+            if (text.isNotEmpty()) detectTapGestures(onLongPress = { expanded = true })
+        }) { content() }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(if (includeShare) "复制" else "复制全文") },
+                onClick = { clipboard.setText(AnnotatedString(text)); expanded = false },
+            )
+            if (includeShare) DropdownMenuItem(
+                text = { Text("分享") },
+                onClick = {
+                    expanded = false
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, text)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "分享对话"))
+                },
+            )
+        }
     }
 }
 
@@ -879,9 +918,9 @@ private const val PROCESS_GROUP_TAG: String = "pdsh.chat.process-group"
 private const val TURN_PROCESS_TAG: String = "pdsh.chat.turn-process"
 private const val TURN_TAIL_TAG: String = "pdsh.chat.turn-tail"
 
-private val IOS_PROCESS_GAP: Dp = ChatMetrics.FLOW_GAP_PT.dp
-private val IOS_RESPONSE_GAP: Dp = ChatMetrics.RESPONSE_GAP_PT.dp
-private val IOS_TURN_CONTROL_GAP: Dp = ChatMetrics.TURN_GAP_PT.dp
+private val IOS_PROCESS_GAP: Dp = HomeMetrics.blockGap
+private val IOS_RESPONSE_GAP: Dp = HomeMetrics.paragraphGap
+private val IOS_TURN_CONTROL_GAP: Dp = HomeMetrics.blockGap
 
 private const val KIND_USER: String = "user"
 private const val KIND_ASSISTANT: String = "assistant"

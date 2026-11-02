@@ -2,14 +2,15 @@
 // SPDX-License-Identifier: MIT
 //
 // Each page is asserted on semantics (the visible copy, the stable tags and the
-// callbacks), never on a screenshot or a font measurement: Robolectric's font
-// metrics are not the device's, so a geometry assertion would be a fake oracle.
+// callbacks), with one exact fixed-height assertion for the source-owned standalone
+// session row floor. Text bounds remain platform-dependent under Robolectric.
 package com.phonedsh.ui.page
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -28,6 +29,7 @@ import androidx.compose.ui.test.swipeDown
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.agentcore.HarnessGoal
 import com.phonedsh.ui.SpecFixtures
+import com.phonedsh.ui.SessionsMetrics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.state.GoalBarState
@@ -77,6 +79,7 @@ class SessionPagesTest {
         compose.onNodeWithText("项目讨论").assertIsDisplayed()
         compose.onNodeWithText(UiStrings.MINUTES_AGO.format(1)).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.RUNNING).assertIsDisplayed()
+        compose.onAllNodesWithTag(UiPageTags.SESSION_ROW)[0].assertHeightIsAtLeast(SessionsMetrics.STANDALONE_SESSION_ROW_HEIGHT_PT.dp)
         compose.onAllNodesWithTag(UiPageTags.SESSION_ROW)[0].performClick()
         assertEquals("s1", selected)
     }

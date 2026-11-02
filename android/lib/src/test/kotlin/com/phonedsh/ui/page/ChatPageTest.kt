@@ -45,6 +45,13 @@ import com.phonedsh.ui.state.ChatPhase
 import com.phonedsh.ui.state.EngineLifecycleFacts
 import com.phonedsh.ui.state.EngineLifecycleStatus
 import com.phonedsh.ui.state.BannerState
+import com.phonedsh.ui.state.ManagedQueueItemState
+import com.phonedsh.ui.state.QueueAction
+import com.phonedsh.ui.state.QueueActionReceipt
+import com.phonedsh.ui.state.QueueItemId
+import com.phonedsh.ui.state.QueueItemStatus
+import com.phonedsh.ui.state.StateRequestId
+import com.phonedsh.ui.state.CommandOutcome
 import com.phonedsh.ui.state.ComposerCommand
 import com.phonedsh.ui.state.EffortOption
 import com.phonedsh.ui.state.EnterMode
@@ -59,6 +66,8 @@ import com.phonedsh.ui.state.TranscriptState
 import com.phonedsh.ui.state.TodoDockItem
 import com.phonedsh.ui.state.string
 import com.phonedsh.ui.theme.PdshTheme
+import com.phonedsh.ui.surface.composer.ComposerAvailability
+import com.phonedsh.ui.nav.PdshActionAvailability
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -77,9 +86,10 @@ class ChatPageTest {
     @Test
     fun `the page head shows the session title and the run status word`() {
         // ChatPage.swift `chatHeaderTitleRow` + NativeDeviceEntryIcon.
-        show(state(case = "chat-basic"), title = "会话甲")
+        show(state(case = "chat-basic"), title = "会话甲", folderSubtitle = "项目资料")
         compose.onNodeWithTag(UiPageTags.CHAT_HEADER_TITLE).assertIsDisplayed()
         compose.onNodeWithText("会话甲").assertIsDisplayed()
+        compose.onNodeWithText("项目资料").assertIsDisplayed()
         compose.onNodeWithTag("pdsh.chat.header.device").assertIsDisplayed()
         compose.onNodeWithText(UiStrings.RUN_STATUS_STARTED).assertDoesNotExist()
     }
@@ -201,6 +211,7 @@ class ChatPageTest {
         show(
             state(case = "turn-error-vs-complete"),
             onRetry = { retried += 1 },
+            timelineRetryAvailability = PdshActionAvailability.Available { retried += 1 },
             onDismissBanner = { dismissed = it },
         )
         compose.onNodeWithTag(UiTags.FAIL_LOUD_BANNER).assertIsDisplayed()
@@ -247,11 +258,11 @@ class ChatPageTest {
     }
 
     @Test
-    fun `approving calls back with the request id`() {
+    fun `permission decisions stay disabled without a request-bound receipt`() {
         var approved: String? = null
         show(state(case = "permission-flow"), onApprove = { approved = it.requestId })
-        compose.onNodeWithTag(UiTags.APPROVAL_PRIMARY).performClick()
-        assertEquals("perm-1", approved)
+        compose.onNodeWithTag(UiTags.APPROVAL_PRIMARY).assertIsNotEnabled()
+        assertEquals(null, approved)
     }
 
     @Test
@@ -295,6 +306,7 @@ class ChatPageTest {
                 answered = ask
                 answer = json
             },
+            composerAvailability = ComposerAvailability(answerQuestions = true),
         )
         compose.onNodeWithTag("pdsh.chat.question-takeover").assertIsDisplayed()
         compose.onNodeWithText("改用表格").performClick()
@@ -320,7 +332,7 @@ class ChatPageTest {
             ),
         )
         var answer: String? = null
-        show(base.copy(pending = PendingSlot(primary = pending)), onSubmitAnswer = { _, json -> answer = json })
+        show(base.copy(pending = PendingSlot(primary = pending)), onSubmitAnswer = { _, json -> answer = json }, composerAvailability = ComposerAvailability(answerQuestions = true))
         compose.onNodeWithText("选择目标").assertIsDisplayed()
         compose.onNodeWithText("目标 A").performClick()
         compose.onNodeWithText("下一题").performClick()
@@ -347,8 +359,9 @@ class ChatPageTest {
         var dismissed: String? = null
         show(
             base.copy(pending = PendingSlot(primary = pending)),
-            onSubmitAnswer = { _, json -> answer = json },
-            onDismissQuestion = { dismissed = it.requestId },
+            planApproveAvailability = PdshActionAvailability.Available { _, json -> answer = json },
+            planRequestChangesAvailability = PdshActionAvailability.Available { ask -> dismissed = ask.requestId },
+            composerAvailability = ComposerAvailability(answerQuestions = true, dismissQuestions = true, approvePlans = true, requestPlanChanges = true),
         )
         compose.onNodeWithTag("pdsh.chat.plan-review-takeover").assertIsDisplayed()
         compose.onNodeWithText("整理资料").assertIsDisplayed()
@@ -364,7 +377,7 @@ class ChatPageTest {
     fun `the no-engine empty state keeps the start action`() {
         // ChatPage.swift `emptyTimeline` case A.
         var started = 0
-        show(ChatScreenState.from(emptyList()), onStartEngine = { started += 1 })
+        show(ChatScreenState.from(emptyList()), onStartEngine = { started += 1 }, startEngineAvailability = PdshActionAvailability.Available { started += 1 })
         compose.onNodeWithTag(UiTags.CHAT_EMPTY).assertDoesNotExist()
         compose.onNodeWithTag(UiPageTags.CHAT_EMPTY_ENGINE).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.ENGINE_NOT_STARTED).assertIsDisplayed()
@@ -522,6 +535,7 @@ class ChatPageTest {
         show(
             state(case = "chat-basic", running = true),
             onStop = { stopped += 1 },
+            stopAvailability = PdshActionAvailability.Available { stopped += 1 },
         )
         compose.onNodeWithTag(UiTags.COMPOSER_SEND).assertDoesNotExist()
         compose.onNodeWithTag(UiTags.COMPOSER_STOP).assertIsDisplayed()
@@ -532,14 +546,64 @@ class ChatPageTest {
     @Test
     fun `a running turn with a draft keeps send and adds the small stop key`() {
         // ChatPage.swift `composer`: `if turnRunning, canSubmit { stopButton(24) }` + send.
-        show(state(case = "chat-basic", canSend = true, running = true, draft = "补充一句"))
+        show(
+            state(case = "chat-basic", canSend = true, running = true, draft = "补充一句"),
+            queueSubmissionAvailability = PdshActionAvailability.Available { _, _ -> },
+            stopAvailability = PdshActionAvailability.Available { _ -> },
+        )
         compose.onNodeWithTag(UiTags.COMPOSER_SEND).assertIsDisplayed()
         compose.onNodeWithTag(UiTags.COMPOSER_STOP).assertIsDisplayed()
     }
 
     @Test
-    fun `the queue strip lists the queued messages`() {
-        // ChatPage.swift `queuedStrip`: 排队中 N 条 + one line per message.
+    fun `running queue submission requires the typed queue route and sends a request id`() {
+        val running = state(case = "chat-basic", canSend = true, running = true, draft = "queue this")
+        var submittedText: String? = null
+        var requestID: StateRequestId? = null
+        show(
+            running,
+            queueSubmissionAvailability = PdshActionAvailability.Available { text, request ->
+                submittedText = text
+                requestID = request
+            },
+        )
+        compose.onNodeWithTag(UiTags.COMPOSER_SEND).assertIsEnabled().performClick()
+        assertEquals("queue this", submittedText)
+        assertTrue(requireNotNull(requestID).value.startsWith("ui.queue."))
+        compose.onNodeWithTag(UiTags.COMPOSER_STOP).assertDoesNotExist()
+    }
+
+    @Test
+    fun `running submission stays disabled when the typed queue route is unavailable`() {
+        show(state(case = "chat-basic", canSend = true, running = true, draft = "queue this"))
+        compose.onNodeWithTag(UiTags.COMPOSER_SEND).assertIsNotEnabled()
+        compose.onNodeWithTag(UiTags.COMPOSER_STOP).assertDoesNotExist()
+    }
+
+    @Test
+    fun `steering mode uses only the typed steer route`() {
+        val open = SpecFixtures.projectCase("chat-basic")
+            .filterNot { it.kind == UiStateKind.STATUS && it.props.string("reason") != null }
+        val steering = ChatScreenState.from(
+            open,
+            local = ChatLocalState(draft = "steer this"),
+            host = ChatHostFacts(engineStarted = true, canSteer = true, enterMode = EnterMode.STEER),
+        )
+        var steered: String? = null
+        var queued: String? = null
+        show(
+            steering,
+            steerSubmissionAvailability = PdshActionAvailability.Available { text, _ -> steered = text },
+            queueSubmissionAvailability = PdshActionAvailability.Available { text, _ -> queued = text },
+        )
+        compose.onNodeWithTag(UiTags.COMPOSER_SEND).assertIsEnabled().performClick()
+        assertEquals("steer this", steered)
+        assertEquals(null, queued)
+    }
+
+    @Test
+    fun `a single queue item renders without the multirow header`() {
+        // ChatPage.swift `queueDock`: one row has no header.
         val nodes = SpecFixtures.projectCase("chat-basic")
         val userId = nodes.first { it.nodeID.contains("user-message") }.nodeID
         val state = ChatScreenState.from(
@@ -549,7 +613,115 @@ class ChatPageTest {
         )
         show(state)
         compose.onNodeWithTag(UiTags.COMPOSER_QUEUE).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.QUEUED_COUNT.format(1)).assertIsDisplayed()
+        compose.onAllNodesWithText(state.composer.queued.single()).assertCountEquals(2)
+        compose.onNodeWithText(UiStrings.CHAT_QUEUE_HEADER_COUNT.format(1)).assertDoesNotExist()
+    }
+
+    @Test
+    fun `multiple durable queue rows fold by default and toggle open`() {
+        val rows = listOf(
+            ManagedQueueItemState(QueueItemId.Durable("queue-1"), "第一条排队消息", canEdit = true, canRemove = true, canSteer = true),
+            ManagedQueueItemState(QueueItemId.Durable("queue-2"), "第二条排队消息", canEdit = true, canRemove = true, canSteer = true),
+        )
+        show(state(case = "chat-basic").copy(queueItems = rows))
+        compose.onNodeWithText(UiStrings.CHAT_QUEUE_HEADER_COUNT.format(2)).assertIsDisplayed()
+        compose.onNodeWithText("第一条排队消息").assertDoesNotExist()
+        compose.onNodeWithText(UiStrings.CHAT_QUEUE_HEADER_COUNT.format(2)).performClick()
+        compose.onNodeWithText("第一条排队消息").assertIsDisplayed()
+        compose.onNodeWithText("第二条排队消息").assertIsDisplayed()
+    }
+
+    @Test
+    fun `durable queue edit dispatches the exact id and a fresh request without optimistic text`() {
+        var edited: ManagedQueueItemState? = null
+        var replacement: String? = null
+        var requestID: StateRequestId? = null
+        val item = ManagedQueueItemState(
+            id = QueueItemId.Durable("queue-edit-1"),
+            text = "original queued text",
+            canEdit = true,
+            canRemove = true,
+            canSteer = true,
+        )
+        show(
+            state(case = "chat-basic").copy(queueItems = listOf(item)),
+            queueEditAvailability = PdshActionAvailability.Available { row, text, request ->
+                edited = row
+                replacement = text
+                requestID = request
+            },
+        )
+        compose.onNodeWithContentDescription(UiStrings.CHAT_QUEUE_EDIT_TITLE).performClick()
+        compose.onNodeWithTag("pdsh.chat.queue-edit-dialog").assertIsDisplayed()
+        val field = compose.onNodeWithTag("pdsh.chat.queue-edit-field")
+        field.performTextClearance()
+        field.performTextInput("  revised queued text  ")
+        compose.onNodeWithTag("pdsh.chat.queue-edit-save").performClick()
+        assertEquals(item.id, edited?.id)
+        assertEquals("revised queued text", replacement)
+        assertTrue(requireNotNull(requestID).value.startsWith("ui.queue."))
+        compose.onNodeWithText("original queued text").assertIsDisplayed()
+    }
+
+    @Test
+    fun `durable queue removal dispatches the item and request id without optimistic removal`() {
+        var removed: ManagedQueueItemState? = null
+        var requestID: StateRequestId? = null
+        val item = ManagedQueueItemState(
+            id = QueueItemId.Durable("queue-remove-1"),
+            text = "remove only after readback",
+            canRemove = true,
+        )
+        show(
+            state(case = "chat-basic").copy(queueItems = listOf(item)),
+            queueRemoveAvailability = PdshActionAvailability.Available { row, request ->
+                removed = row
+                requestID = request
+            },
+        )
+        compose.onNodeWithContentDescription(UiStrings.CHAT_QUEUE_DELETE).performClick()
+        assertEquals(item.id, removed?.id)
+        assertTrue(requireNotNull(requestID).value.startsWith("ui.queue."))
+        compose.onNodeWithText(item.text).assertIsDisplayed()
+    }
+
+    @Test
+    fun `local queue fallback stays disabled and stale receipts remain visible`() {
+        val oldRequest = StateRequestId("queue-request-old")
+        val activeRequest = StateRequestId("queue-request-current")
+        val stale = ManagedQueueItemState(
+            id = QueueItemId.Durable("queue-stale"),
+            text = "stale receipt item",
+            canEdit = true,
+            canRemove = true,
+            canSteer = true,
+            actionRequestId = activeRequest,
+            receipt = QueueActionReceipt(oldRequest, QueueAction.REMOVE, CommandOutcome.FAILED, "old remove receipt"),
+        )
+        val localState = state(case = "chat-basic").copy(
+            composer = state(case = "chat-basic").composer.copy(queued = listOf("local pending item")),
+            queueItems = listOf(stale),
+        )
+        show(localState)
+        compose.onNodeWithText("stale receipt item").assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CHAT_QUEUE_ACTION_STALE).assertIsDisplayed()
+        compose.onNodeWithContentDescription("${UiStrings.CHAT_QUEUE_EDIT_TITLE}，${UiStrings.CHAT_QUEUE_ACTION_STALE}").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("${UiStrings.CHAT_QUEUE_EDIT_TITLE}，${UiStrings.CHAT_QUEUE_LOCAL_ACTION_UNAVAILABLE}").assertIsNotEnabled()
+    }
+
+    @Test
+    fun `sending queue items render in their own pending row`() {
+        val item = ManagedQueueItemState(
+            id = QueueItemId.Durable("queue-sending-1"),
+            text = "still dispatching this message",
+            state = QueueItemStatus.SENDING,
+            busy = true,
+        )
+        show(state(case = "chat-basic").copy(queueItems = listOf(item)))
+        compose.onNodeWithTag("pdsh.chat.queue-pending").assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CHAT_QUEUE_SENDING).assertIsDisplayed()
+        compose.onNodeWithText(item.text).assertIsDisplayed()
+        compose.onNodeWithTag(UiTags.COMPOSER_QUEUE).assertDoesNotExist()
     }
 
     @Test
@@ -623,17 +795,24 @@ class ChatPageTest {
         assertEquals("/grep ", draft)
         compose.onNodeWithTag(UiPageTags.COMPOSER_SLASH_MENU).assertDoesNotExist()
 
-        draft = null
+    }
+
+    @Test
+    @OptIn(ExperimentalTestApi::class)
+    fun `escape closes the slash menu without changing the draft`() {
+        var draft: String? = "/g"
         show(
             state(case = "chat-basic", draft = "/g", commands = listOf(ComposerCommand("goal", "目标"))),
             onDraftChange = { draft = it },
         )
-        compose.onNodeWithTag(UiTags.COMPOSER_FIELD).performKeyInput {
+        val field = compose.onNodeWithTag(UiTags.COMPOSER_FIELD)
+        field.performClick()
+        field.performKeyInput {
             keyDown(Key.Escape)
             keyUp(Key.Escape)
         }
         compose.onNodeWithTag(UiPageTags.COMPOSER_SLASH_MENU).assertDoesNotExist()
-        assertEquals(null, draft)
+        assertEquals("/g", draft)
     }
 
     @Test
@@ -728,7 +907,7 @@ class ChatPageTest {
     fun `the permissions menu groups a read failure under 暂不可用`() {
         // ChatPage.swift `accessModeMenu`: `Section("暂不可用") { Text(error) }`; the
         // retry stays the page banner's, not a menu row.
-        show(state(case = "chat-basic", accessModeError = "读不到权限"))
+        show(state(case = "chat-basic", accessModeError = "读不到权限"), composerAvailability = ComposerAvailability(selectAccessMode = true))
         compose.onNodeWithTag(UiPageTags.COMPOSER_ACCESS_MODE).performClick()
         compose.onNodeWithText(UiStrings.ACCESS_MODE_UNAVAILABLE).assertIsDisplayed()
         // The banner and the menu each carry the failure's own words.
@@ -747,6 +926,7 @@ class ChatPageTest {
                 efforts = listOf(EffortOption(id = "high", title = "高")),
                 currentEffort = "high",
             ),
+            composerAvailability = ComposerAvailability(selectModel = true),
         )
         compose.onNodeWithTag(UiPageTags.COMPOSER_MODEL_MENU).performClick()
         compose.onNodeWithText(UiStrings.MODEL_SECTION_EFFORT).assertIsDisplayed()
@@ -820,6 +1000,7 @@ class ChatPageTest {
     private fun show(
         state: ChatScreenState,
         title: String = "",
+        folderSubtitle: String? = null,
         onDraftChange: (String) -> Unit = {},
         onSend: () -> Unit = {},
         onStop: () -> Unit = {},
@@ -834,8 +1015,9 @@ class ChatPageTest {
         onOpenDeviceConnections: () -> Unit = {},
         onOpenSessionSettings: () -> Unit = {},
         onStartEngine: () -> Unit = {},
+        startEngineAvailability: PdshActionAvailability<() -> Unit> = PdshActionAvailability.Unavailable(com.phonedsh.ui.nav.PdshUnavailableReason.NOT_IMPLEMENTED),
         onRestartEngine: () -> Unit = {},
-        onConfigureProvider: () -> Unit = {},
+        onConfigureProvider: (() -> Unit)? = null,
         onLoadEarlier: () -> Unit = {},
         onSubmitAnswer: (PendingAnswer, String) -> Unit = { _, _ -> },
         onDismissQuestion: (PendingAnswer) -> Unit = {},
@@ -849,7 +1031,18 @@ class ChatPageTest {
         onGoalClear: (() -> Unit)? = null,
         onRetryAccessModes: () -> Unit = {},
         onReloadCommands: () -> Unit = {},
-        onOpenFile: (String) -> Unit = {},
+        onOpenFile: ((String) -> Unit)? = null,
+        onOpenResource: ((String) -> Unit)? = null,
+        planApproveAvailability: PdshActionAvailability<(PendingAnswer, String) -> Unit> = PdshActionAvailability.Unavailable(com.phonedsh.ui.nav.PdshUnavailableReason.NOT_IMPLEMENTED),
+        planRequestChangesAvailability: PdshActionAvailability<(PendingAnswer) -> Unit> = PdshActionAvailability.Unavailable(com.phonedsh.ui.nav.PdshUnavailableReason.NOT_IMPLEMENTED),
+        queueEditAvailability: PdshActionAvailability<(ManagedQueueItemState, String, StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(com.phonedsh.ui.nav.PdshUnavailableReason.NOT_IMPLEMENTED),
+        queueRemoveAvailability: PdshActionAvailability<(ManagedQueueItemState, StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(com.phonedsh.ui.nav.PdshUnavailableReason.NOT_IMPLEMENTED),
+        queueSteerAvailability: PdshActionAvailability<(ManagedQueueItemState, StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(com.phonedsh.ui.nav.PdshUnavailableReason.NOT_IMPLEMENTED),
+        queueSubmissionAvailability: PdshActionAvailability<(String, StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(com.phonedsh.ui.nav.PdshUnavailableReason.NOT_IMPLEMENTED),
+        steerSubmissionAvailability: PdshActionAvailability<(String, StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(com.phonedsh.ui.nav.PdshUnavailableReason.NOT_IMPLEMENTED),
+        stopAvailability: PdshActionAvailability<(StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(com.phonedsh.ui.nav.PdshUnavailableReason.NOT_IMPLEMENTED),
+        composerAvailability: ComposerAvailability = ComposerAvailability(),
+        timelineRetryAvailability: PdshActionAvailability<() -> Unit> = PdshActionAvailability.Unavailable(com.phonedsh.ui.nav.PdshUnavailableReason.NOT_IMPLEMENTED),
     ) {
         compose.setContent {
             PdshTheme {
@@ -865,6 +1058,7 @@ class ChatPageTest {
                     onRetry = onRetry,
                     onOpenSessions = {},
                     title = title,
+                    folderSubtitle = folderSubtitle,
                     onGoalPause = onGoalPause,
                     onGoalResume = onGoalResume,
                     onGoalClear = onGoalClear,
@@ -877,6 +1071,7 @@ class ChatPageTest {
                     onOpenDeviceConnections = onOpenDeviceConnections,
                     onOpenSessionSettings = onOpenSessionSettings,
                     onStartEngine = onStartEngine,
+                    startEngineAvailability = startEngineAvailability,
                     onRestartEngine = onRestartEngine,
                     onConfigureProvider = onConfigureProvider,
                     onLoadEarlier = onLoadEarlier,
@@ -889,6 +1084,17 @@ class ChatPageTest {
                     onRetryAccessModes = onRetryAccessModes,
                     onReloadCommands = onReloadCommands,
                     onOpenFile = onOpenFile,
+                    onOpenResource = onOpenResource,
+                    planApproveAvailability = planApproveAvailability,
+                    planRequestChangesAvailability = planRequestChangesAvailability,
+                    queueEditAvailability = queueEditAvailability,
+                    queueRemoveAvailability = queueRemoveAvailability,
+                    queueSteerAvailability = queueSteerAvailability,
+                    queueSubmissionAvailability = queueSubmissionAvailability,
+                    steerSubmissionAvailability = steerSubmissionAvailability,
+                    stopAvailability = stopAvailability,
+                    composerAvailability = composerAvailability,
+                    timelineRetryAvailability = timelineRetryAvailability,
                 )
             }
         }
@@ -959,6 +1165,7 @@ class ChatPageTest {
             mapOf(
                 "kind" to com.phonedsh.agentcore.JsonString("question"),
                 "requestId" to com.phonedsh.agentcore.JsonString(requestId),
+                "channelAvailable" to com.phonedsh.agentcore.JsonBool(true),
                 "multiple" to com.phonedsh.agentcore.JsonBool(false),
                 "options" to com.phonedsh.agentcore.JsonArray(
                     listOf(

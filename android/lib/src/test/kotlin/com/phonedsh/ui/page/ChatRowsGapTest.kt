@@ -26,27 +26,27 @@ class ChatRowsGapTest {
     private var actual: Dp? = null
 
     @Test
-    fun `ordinary and process rows use the six point iOS gap`() {
-        assertGap(previous = ChatRow.User("u", "hello"), current = ChatRow.Thinking("t", "thinking", false), expected = 6.dp)
-        assertGap(previous = ChatRow.Thinking("t", "thinking", false), current = ChatRow.ToolRun("tools", emptyList()), expected = 6.dp)
-        assertGap(previous = ChatRow.User("u", "hello"), current = ChatRow.QuestionReply("q", "reply"), expected = 6.dp)
+    fun `user messages use the paragraph gap and following process rows use the block gap`() {
+        assertGap(previous = ChatRow.User("u", "hello"), current = ChatRow.Thinking("t", "thinking", false), expected = 16.dp)
+        assertGap(previous = ChatRow.Thinking("t", "thinking", false), current = ChatRow.ToolRun("tools", emptyList()), expected = 20.dp)
+        assertGap(previous = ChatRow.User("u", "hello"), current = ChatRow.QuestionReply("q", "reply"), expected = 16.dp)
     }
 
     @Test
-    fun `assistant response adjacency uses the twelve point iOS gap`() {
-        assertGap(previous = ChatRow.User("u", "hello"), current = ChatRow.Assistant("a", "answer"), expected = 12.dp)
-        assertGap(previous = ChatRow.Assistant("a", "answer"), current = ChatRow.ToolRun("tools", emptyList()), expected = 12.dp)
+    fun `assistant response and other non-user blocks use the twenty point block gap`() {
+        assertGap(previous = ChatRow.User("u", "hello"), current = ChatRow.Assistant("a", "answer"), expected = 16.dp)
+        assertGap(previous = ChatRow.Assistant("a", "answer"), current = ChatRow.ToolRun("tools", emptyList()), expected = 20.dp)
     }
 
     @Test
-    fun `turn process control uses sixteen points and tail uses its six or twelve point branch`() {
+    fun `turn process and tail obey the user paragraph and block gap rules`() {
         val process = ChatRow.TurnProcess("turn-process/t1", "t1", ChatTurnState.COMPLETED)
         val tail = ChatRow.TurnTail("turn-tail/t1", "t1", "answer")
         assertGap(previous = ChatRow.User("u", "prompt"), current = process, expected = 16.dp)
-        assertGap(previous = process, current = ChatRow.Assistant("a", "answer"), expected = 16.dp)
-        assertGap(previous = process, current = tail, expected = 12.dp)
-        assertGap(previous = ChatRow.Assistant("a", "answer"), current = tail, expected = 12.dp)
-        assertGap(previous = ChatRow.User("u", "prompt"), current = tail, expected = 6.dp)
+        assertGap(previous = process, current = ChatRow.Assistant("a", "answer"), expected = 20.dp)
+        assertGap(previous = process, current = tail, expected = 20.dp)
+        assertGap(previous = ChatRow.Assistant("a", "answer"), current = tail, expected = 20.dp)
+        assertGap(previous = ChatRow.User("u", "prompt"), current = tail, expected = 16.dp)
     }
 
     @Test

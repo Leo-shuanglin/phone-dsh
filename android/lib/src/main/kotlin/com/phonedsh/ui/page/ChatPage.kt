@@ -1,5 +1,6 @@
 // Chat page: page head, failure banners, pending cards, transcript, composer dock.
 // SPDX-License-Identifier: MIT
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 //
 // Mirror: `examples/probe-app/PhoneDSHProbe/ChatPage.swift` (the page body, the
 // transcript chrome, the composer dock), `NativeShell.swift` (`NativeHeaderStyle`
@@ -66,6 +67,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -106,6 +108,9 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -129,6 +134,8 @@ import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.icon.PdshIcon
 import com.phonedsh.ui.icon.PdshIconView
+import com.phonedsh.ui.nav.PdshActionAvailability
+import com.phonedsh.ui.nav.PdshUnavailableReason
 import com.phonedsh.ui.projection.CanonicalJson
 import com.phonedsh.ui.state.AccessModeOption
 import com.phonedsh.ui.state.ChatEmpty
@@ -137,6 +144,10 @@ import com.phonedsh.ui.state.ChatRow
 import com.phonedsh.ui.state.ChatScreenState
 import com.phonedsh.ui.state.ComposerCommand
 import com.phonedsh.ui.state.GoalBarState
+import com.phonedsh.ui.state.ManagedQueueItemState
+import com.phonedsh.ui.state.QueueItemId
+import com.phonedsh.ui.state.QueueItemStatus
+import com.phonedsh.ui.state.StateRequestId
 import com.phonedsh.ui.state.PendingAnswer
 import com.phonedsh.ui.state.PendingQuestionItem
 import com.phonedsh.ui.state.PendingQuestionOption
@@ -146,7 +157,7 @@ import com.phonedsh.ui.state.ReferenceMenu
 import com.phonedsh.ui.state.RunStatus
 import com.phonedsh.ui.state.SlashMenu
 import com.phonedsh.ui.state.TodoDockItem
-import com.phonedsh.ui.surface.ApprovalCard
+import com.phonedsh.ui.state.reconcileQueueRows
 import com.phonedsh.ui.surface.Composer
 import com.phonedsh.ui.surface.ComposerMode
 import com.phonedsh.ui.surface.composer.ComposerToolbar
@@ -235,6 +246,8 @@ public fun ChatPage(
     onOpenSessions: () -> Unit,
     modifier: Modifier = Modifier,
     title: String = "",
+    /** Host-resolved session folder; null means the default folder. */
+    folderSubtitle: String? = null,
     onGoalPause: (() -> Unit)? = null,
     onGoalResume: (() -> Unit)? = null,
     onGoalClear: (() -> Unit)? = null,
@@ -250,8 +263,8 @@ public fun ChatPage(
     onOpenSessionSettings: () -> Unit = {},
     onStartEngine: () -> Unit = {},
     onRestartEngine: () -> Unit = {},
-    onConfigureProvider: () -> Unit = {},
-    onLoadEarlier: () -> Unit = {},
+    onConfigureProvider: (() -> Unit)? = null,
+    onLoadEarlier: (() -> Unit)? = null,
     onSubmitAnswer: (PendingAnswer, String) -> Unit = { _, _ -> },
     onDismissQuestion: (PendingAnswer) -> Unit = {},
     onRemoveAttachment: (Int) -> Unit = {},
@@ -265,7 +278,18 @@ public fun ChatPage(
     onDismissComposerNotice: () -> Unit = {},
     onRetryAccessModes: () -> Unit = {},
     onReloadCommands: () -> Unit = {},
-    onOpenFile: (String) -> Unit = {},
+    onOpenFile: ((String) -> Unit)? = null,
+    /** Opens a host-resolved resource URI exactly as received from markdown. */
+    onOpenResource: ((String) -> Unit)? = null,
+    /** A real host callback is required before the stopped-engine CTA is enabled. */
+    startEngineAvailability: PdshActionAvailability<() -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    /** Request-bound permission decision capabilities; absent receipts stay disabled. */
+    permissionApproveAvailability: PdshActionAvailability<(PendingAnswer) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    permissionDenyAvailability: PdshActionAvailability<(PendingAnswer) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    /** Request-bound approval of a question's explicit plan-review action. */
+    planApproveAvailability: PdshActionAvailability<(PendingAnswer, String) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    /** Request-bound request-changes action for plan review. */
+    planRequestChangesAvailability: PdshActionAvailability<(PendingAnswer) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
     jobs: List<ChatJobRow>? = null,
     schedules: List<ChatScheduleRow>? = null,
     onOpenJobs: (() -> Unit)? = null,
@@ -274,8 +298,21 @@ public fun ChatPage(
     composerAvailability: ComposerAvailability = ComposerAvailability(),
     /** Reads the most recent assistant reply aloud when the host supplies a route. */
     onSpeakRecentReply: (() -> Unit)? = null,
+    /** RETRY is available only when the host can retry the failed request itself. */
+    timelineRetryAvailability: PdshActionAvailability<() -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    /** Request-bound queue edits; durable ids and receipts remain host-owned. */
+    queueEditAvailability: PdshActionAvailability<(ManagedQueueItemState, String, StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    queueRemoveAvailability: PdshActionAvailability<(ManagedQueueItemState, StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    queueSteerAvailability: PdshActionAvailability<(ManagedQueueItemState, StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    /** Request-bound QUEUE action used when a running turn receives a queued prompt. */
+    queueSubmissionAvailability: PdshActionAvailability<(String, StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    /** Request-bound STEER action used when the active turn accepts follow-up text. */
+    steerSubmissionAvailability: PdshActionAvailability<(String, StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    /** Request-bound STOP action; unavailable stop controls are not clickable. */
+    stopAvailability: PdshActionAvailability<(StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
 ) {
     val tokens = LocalUiTokens.current
+    val boundTimelineRetry = (timelineRetryAvailability as? PdshActionAvailability.Available)?.callback
     // `colors.background` is tier: unmeasured (a dynamic system colour), so an
     // unspecified value leaves the platform surface in place instead of an
     // invented sRGB fill.
@@ -298,6 +335,8 @@ public fun ChatPage(
     // device a platform dialog would be fine. The content, the two verbs and the
     // trimming are the iOS alert's (`ChatPage.swift` `.alert("重命名会话")`).
     var renaming by remember { mutableStateOf(false) }
+    var queueEditItem by remember { mutableStateOf<ManagedQueueItemState?>(null) }
+    var queueEditDraft by remember { mutableStateOf("") }
     // iOS `ChatPage.swift:145-154 sessionTitle`: a real session name wins; a
     // conversation that already has a user turn reads 当前会话; only a fresh one
     // reads 新会话. The page used to fall back to the *product name* ("PDSH"), so
@@ -328,6 +367,7 @@ public fun ChatPage(
     ) {
         ChatHeader(
             title = headerTitle,
+            folderSubtitle = folderSubtitle ?: UiStrings.DRAWER_DEFAULT_FOLDER,
             onOpenSessions = onOpenSessions,
             onStartRename = { renaming = true },
             onOpenRunStatus = onOpenRunStatus,
@@ -348,7 +388,7 @@ public fun ChatPage(
             val retryable = state.banners.firstOrNull()?.retryable == true
             TopFailureBanner(
                 message = state.userFacingError,
-                onRetry = if (retryable) onRetry else null,
+                onRetry = if (retryable) boundTimelineRetry else null,
                 onRestart = if (state.lifecycle?.needsReset == true) onRestartEngine else null,
                 onDismiss = { state.banners.firstOrNull()?.let { onDismissBanner(it.id) } },
             )
@@ -376,40 +416,25 @@ public fun ChatPage(
         // unverified geometry: the approval card's own `cardAreaMaxHeightRatio`
         // borrowed by the page to clamp the region that holds it.
         val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-        // Where the cards sit depends on the transcript, exactly as in the baseline:
-        // with rows on screen the strip and the card are page chrome under the head
-        // (ios-chat-default.png), and with an empty transcript they hug the dock
-        // (ios-chat-permission.png: cards at y 225–677, i.e. just above the composer).
-        val cardsAtDock = state.rows.isEmpty() && !state.pending.isEmpty
-        if (!cardsAtDock) {
-            PendingCardsRegion(
-                slot = state.pending,
-                fold = state.pendingFold,
-                onExpand = onExpandPendingSlot,
-                onApprove = onApprove,
-                onDeny = onDeny,
-                maxHeight = screenHeight * tokens.geometry.cardAreaMaxHeightRatio,
-            )
-        }
+        PendingCardsRegion(
+            slot = state.pending,
+            fold = state.pendingFold,
+            onExpand = onExpandPendingSlot,
+            approveAvailability = permissionApproveAvailability,
+            denyAvailability = permissionDenyAvailability,
+            maxHeight = screenHeight * tokens.geometry.cardAreaMaxHeightRatio,
+        )
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             ChatTranscript(
                 state = state,
                 onToggleRow = onToggleRow,
                 onLoadEarlier = onLoadEarlier,
-                onStartEngine = onStartEngine,
+                startEngineAvailability = startEngineAvailability,
                 onConfigureProvider = onConfigureProvider,
                 onRetry = onRetry,
                 onOpenFile = onOpenFile,
-            )
-        }
-        if (cardsAtDock) {
-            PendingCardsRegion(
-                slot = state.pending,
-                fold = state.pendingFold,
-                onExpand = onExpandPendingSlot,
-                onApprove = onApprove,
-                onDeny = onDeny,
-                maxHeight = screenHeight * tokens.geometry.cardAreaMaxHeightRatio,
+                onOpenResource = onOpenResource,
+                retryAvailability = timelineRetryAvailability,
             )
         }
         Box(
@@ -423,7 +448,6 @@ public fun ChatPage(
                 state = state,
                 onDraftChange = onDraftChange,
                 onSend = onSend,
-                onStop = onStop,
                 onGoalPause = onGoalPause,
                 onGoalResume = onGoalResume,
                 onGoalClear = onGoalClear,
@@ -442,6 +466,18 @@ public fun ChatPage(
                 onReloadCommands = onReloadCommands,
                 availability = composerAvailability,
                 onSpeakRecentReply = onSpeakRecentReply,
+                planApproveAvailability = planApproveAvailability,
+                planRequestChangesAvailability = planRequestChangesAvailability,
+                queueEditAvailability = queueEditAvailability,
+                queueRemoveAvailability = queueRemoveAvailability,
+                queueSteerAvailability = queueSteerAvailability,
+                queueSubmissionAvailability = queueSubmissionAvailability,
+                steerSubmissionAvailability = steerSubmissionAvailability,
+                stopAvailability = stopAvailability,
+                onEditQueueItem = { item ->
+                    queueEditItem = item
+                    queueEditDraft = item.text
+                },
             )
         }
     }
@@ -454,6 +490,24 @@ public fun ChatPage(
                 renaming = false
                 onRenameSession(name)
             },
+        )
+    }
+    queueEditItem?.let { item ->
+        QueueEditOverlay(
+            item = item,
+            value = queueEditDraft,
+            onValueChange = { queueEditDraft = it },
+            onCancel = { queueEditItem = null },
+            onSave = {
+                val text = queueEditDraft.trim()
+                val callback = (queueEditAvailability as? PdshActionAvailability.Available)?.callback
+                if (text.isNotEmpty() && item.canEdit == true && !queueActionPending(item) && callback != null) {
+                    callback(item, text, nextQueueActionRequestId())
+                    queueEditItem = null
+                }
+            },
+            canSave = queueEditDraft.trim().isNotEmpty() && item.canEdit == true && !queueActionPending(item) &&
+                queueEditAvailability is PdshActionAvailability.Available,
         )
     }
 }
@@ -558,6 +612,7 @@ private fun RenameSessionOverlay(
 @Composable
 private fun ChatHeader(
     title: String,
+    folderSubtitle: String,
     onOpenSessions: () -> Unit,
     onStartRename: () -> Unit,
     onOpenRunStatus: () -> Unit,
@@ -575,141 +630,80 @@ private fun ChatHeader(
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     var menuOpen by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(50)
 
-    // iOS ChatPage centers the title with a 104pt reserve on each side. The
-    // control row is drawer 32x44, then device 36x44 + menu 44x44 with 4pt gap.
-    Column(modifier = Modifier.fillMaxWidth()) {
-    Box(
-        modifier = Modifier.fillMaxWidth().statusBarsPadding().height(UiMetrics.headerHeight),
+    Row(
+        modifier = Modifier.fillMaxWidth().statusBarsPadding()
+            .padding(top = HomeMetrics.navTop, start = HomeMetrics.chromeInset, end = HomeMetrics.chromeInset)
+            .height(HomeMetrics.navButton),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = tokens.geometry.pageOuterMarginH),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHAT_HEADER_GROUP_GAP_PT.dp),
-        ) {
-            HeaderAction(
-                description = UiStrings.HEADER_DRAWER,
-                onClick = onOpenSessions,
-                modifier = Modifier.size(width = ChatMetrics.CHAT_DRAWER_WIDTH_PT.dp, height = tokens.geometry.pageHeaderMinHeight)
-                    .testTag(UiPageTags.CHAT_HEADER_DRAWER),
-            )
-            Spacer(Modifier.weight(1f))
-            DeviceHeaderAction(
-                hasOnlineDevices = hasOnlineDevices,
-                onClick = onOpenDeviceConnections,
-                modifier = Modifier.testTag(CHAT_HEADER_DEVICE_TAG),
-            )
-        // The menu's rows are the baseline's (`ChatPage.swift:240-286`), in its
-        // order: 产物, 右侧边栏, 导出对话记录, 运行状态, 本会话设置. The three
-        // conditional rows are session-scoped destinations; `null` keeps them off
-        // the menu instead of drawing a row that cannot go anywhere.
-        val artifacts = onOpenArtifacts
-        val workbench = onOpenWorkbench
-        Box {
-            HeaderMenuAction(
-                glyph = MORE_GLYPH,
-                onClick = { menuOpen = true },
-                modifier = Modifier
-                    .size(width = ChatMetrics.CHAT_HEADER_MENU_WIDTH_PT.dp, height = tokens.geometry.pageHeaderMinHeight)
-                    .testTag(UiPageTags.CHAT_HEADER_MENU)
-                    // `ChatPage.swift:296`: the `⋯` carries an `.accessibilityLabel`
-                    // and draws a mark; the baseline's menu has no visible word. The
-                    // name stays a content description (a screen reader must still
-                    // announce the control) and is declared here, at the call site,
-                    // because it is not a visible action label.
-                    .semantics { contentDescription = UiStrings.HEADER_MORE },
-            )
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                // iOS `ChatPage.swift:247` / `:252`: the two session-activity rows
-                // exist only while their list has rows, and the label carries the
-                // count (`后台任务（2）`). A host that reported nothing renders no
-                // row at all — the sheets are then unreachable from this menu, and
-                // their own 读取不到 body is the honest answer if something else
-                // opens them. The count makes the label data, not a fixed name.
-                val jobRows = jobs
-                if (jobRows != null && jobRows.isNotEmpty() && onOpenJobs != null) {
-                    DropdownMenuItem(
-                        text = { Text("${UiStrings.CHAT_JOBS_TITLE}（${jobRows.size}）") },
-                        onClick = {
-                            menuOpen = false
-                            onOpenJobs()
-                        },
-                    )
-                }
-                val scheduleRows = schedules
-                if (scheduleRows != null && scheduleRows.isNotEmpty() && onOpenSchedules != null) {
-                    DropdownMenuItem(
-                        text = { Text("${UiStrings.CHAT_SCHEDULES_TITLE}（${scheduleRows.size}）") },
-                        onClick = {
-                            menuOpen = false
-                            onOpenSchedules()
-                        },
-                    )
-                }
-                if (artifacts != null) {
-                    DropdownMenuItem(
-                        text = { Text(UiStrings.HEADER_ARTIFACTS) },
-                        onClick = {
-                            menuOpen = false
-                            artifacts()
-                        },
-                    )
-                }
-                if (workbench != null) {
-                    DropdownMenuItem(
-                        text = { Text(UiStrings.HEADER_WORKBENCH) },
-                        onClick = {
-                            menuOpen = false
-                            workbench()
-                        },
-                    )
-                }
-                DropdownMenuItem(
-                    text = { Text(UiStrings.HEADER_EXPORT) },
-                    onClick = {
-                        menuOpen = false
-                        onExportTranscript()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text(UiStrings.HEADER_RUN_STATUS) },
-                    onClick = {
-                        menuOpen = false
-                        onOpenRunStatus()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text(UiStrings.HEADER_SESSION_SETTINGS) },
-                    onClick = {
-                        menuOpen = false
-                        onOpenSessionSettings()
-                    },
-                )
-            }
-        }
-        }
-        Box(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = ChatMetrics.CHAT_HEADER_TITLE_RESERVE_PT.dp)
-                .height(tokens.geometry.pageHeaderMinHeight).align(Alignment.Center)
-                .clickable(role = Role.Button) { if (title.isNotEmpty()) onStartRename() }
-                .semantics { contentDescription = title }
+        HeaderAction(
+            description = UiStrings.HEADER_DRAWER,
+            onClick = onOpenSessions,
+            modifier = Modifier.size(HomeMetrics.navButton).shadow(tokens.geometry.pageBarButtonElevation, CircleShape)
+                .clip(CircleShape).background(tokens.colors.surface)
+                .testTag(UiPageTags.CHAT_HEADER_DRAWER),
+        )
+        Column(
+            modifier = Modifier.weight(1f).padding(horizontal = HomeMetrics.chromeInset)
+                .clickable(enabled = title.isNotEmpty(), role = Role.Button) { onStartRename() }
+                .semantics { contentDescription = "$title, $folderSubtitle" }
                 .testTag(UiPageTags.CHAT_HEADER_TITLE),
-            contentAlignment = Alignment.Center,
+            verticalArrangement = Arrangement.Center,
         ) {
             BasicText(
                 text = title,
-                style = type.headline.copy(color = tokens.colors.primary),
+                style = type.navTitle.copy(color = tokens.colors.textPrimary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ChatMetrics.HOME_HEADER_FOLDER_GAP_PT.dp)) {
+                PdshIconView(icon = PdshIcon.FOLDER, size = ChatMetrics.HOME_HEADER_FOLDER_ICON_PT.dp, tint = tokens.colors.textSubtle, contentDescription = null)
+                BasicText(
+                    text = folderSubtitle,
+                    style = type.navSubtitle.copy(color = tokens.colors.textSubtle),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
-    }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(tokens.stroke.hairline)
-            .background(tokens.colors.border),
-    )
+        Row(
+            modifier = Modifier.size(width = HomeMetrics.navPillWidth, height = HomeMetrics.navButton)
+                .shadow(tokens.geometry.pageBarButtonElevation, shape).clip(shape).background(tokens.colors.surface),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(modifier = Modifier.weight(1f)) {
+                DeviceHeaderAction(
+                    hasOnlineDevices = hasOnlineDevices,
+                    onClick = onOpenDeviceConnections,
+                    modifier = Modifier.fillMaxSize().testTag(CHAT_HEADER_DEVICE_TAG),
+                )
+            }
+            Box(modifier = Modifier.weight(1f)) {
+                HeaderMenuAction(
+                    glyph = MORE_GLYPH,
+                    onClick = { menuOpen = true },
+                    modifier = Modifier.fillMaxSize().testTag(UiPageTags.CHAT_HEADER_MENU)
+                        .semantics { contentDescription = UiStrings.HEADER_MORE },
+                )
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    val jobRows = jobs
+                    if (jobRows != null && jobRows.isNotEmpty() && onOpenJobs != null) {
+                        DropdownMenuItem(text = { Text("${UiStrings.CHAT_JOBS_TITLE}（${jobRows.size}）") }, onClick = { menuOpen = false; onOpenJobs() })
+                    }
+                    val scheduleRows = schedules
+                    if (scheduleRows != null && scheduleRows.isNotEmpty() && onOpenSchedules != null) {
+                        DropdownMenuItem(text = { Text("${UiStrings.CHAT_SCHEDULES_TITLE}（${scheduleRows.size}）") }, onClick = { menuOpen = false; onOpenSchedules() })
+                    }
+                    onOpenArtifacts?.let { action -> DropdownMenuItem(text = { Text(UiStrings.HEADER_ARTIFACTS) }, onClick = { menuOpen = false; action() }) }
+                    onOpenWorkbench?.let { action -> DropdownMenuItem(text = { Text(UiStrings.HEADER_WORKBENCH) }, onClick = { menuOpen = false; action() }) }
+                    DropdownMenuItem(text = { Text(UiStrings.HEADER_EXPORT) }, onClick = { menuOpen = false; onExportTranscript() })
+                    DropdownMenuItem(text = { Text(UiStrings.HEADER_RUN_STATUS) }, onClick = { menuOpen = false; onOpenRunStatus() })
+                    DropdownMenuItem(text = { Text(UiStrings.HEADER_SESSION_SETTINGS) }, onClick = { menuOpen = false; onOpenSessionSettings() })
+                }
+            }
+        }
     }
 }
 
@@ -790,7 +784,12 @@ private fun DeviceHeaderAction(
             },
         contentAlignment = Alignment.Center,
     ) {
-        DevicePhoneGlyph()
+        PdshIconView(
+            icon = PdshIcon.DEVICE_RADIO,
+            size = ChatMetrics.CHAT_DEVICE_ICON_BOX_WIDTH_PT.dp,
+            tint = tokens.colors.textSecondary,
+            contentDescription = null,
+        )
         if (hasOnlineDevices == true) {
             Box(
                 modifier = Modifier.align(Alignment.TopEnd).padding(
@@ -916,21 +915,21 @@ private fun TopFailureBanner(
             .fillMaxWidth()
             .testTag(UiTags.FAIL_LOUD_BANNER)
             .padding(
-                horizontal = tokens.geometry.bannerInsetH,
-                vertical = tokens.geometry.bannerInsetV,
+                horizontal = ChatMetrics.FAILURE_BANNER_INSET_H_PT.dp,
+                vertical = ChatMetrics.FAILURE_BANNER_INSET_V_PT.dp,
             ),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(tokens.geometry.bannerGap),
+        horizontalArrangement = Arrangement.spacedBy(ChatMetrics.FAILURE_BANNER_GAP_PT.dp),
     ) {
         BasicText(
             text = message,
-            style = type.secondary.copy(color = tokens.colors.warning),
+            style = type.caption.copy(fontSize = ChatMetrics.FAILURE_TEXT_SIZE_PT.sp, color = tokens.colors.warning),
             modifier = Modifier.weight(1f),
         )
         if (onRetry != null) {
             BasicText(
                 text = UiStrings.RETRY,
-                style = type.secondary.copy(color = tokens.colors.accent),
+                style = type.caption.copy(fontSize = ChatMetrics.FAILURE_TEXT_SIZE_PT.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = tokens.colors.accent),
                 modifier = Modifier
                     .clickable(role = Role.Button, onClick = onRetry)
                     .testTag(UiTags.BANNER_RETRY)
@@ -940,7 +939,7 @@ private fun TopFailureBanner(
         if (onRestart != null) {
             BasicText(
                 text = UiStrings.ENGINE_RESTART,
-                style = type.secondary.copy(color = tokens.colors.accent),
+                style = type.caption.copy(fontSize = ChatMetrics.FAILURE_TEXT_SIZE_PT.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = tokens.colors.accent),
                 modifier = Modifier
                     .clickable(role = Role.Button, onClick = onRestart)
                     .testTag(CHAT_RESTART_ENGINE_TAG)
@@ -1017,8 +1016,8 @@ private fun PendingCardsRegion(
     slot: PendingSlot,
     fold: PendingFold,
     onExpand: () -> Unit,
-    onApprove: (PendingAnswer) -> Unit,
-    onDeny: (PendingAnswer) -> Unit,
+    approveAvailability: PdshActionAvailability<(PendingAnswer) -> Unit>,
+    denyAvailability: PdshActionAvailability<(PendingAnswer) -> Unit>,
     maxHeight: Dp,
 ) {
     // Questions own the composer seat (ChatPage.swift `questionTakeover`); only
@@ -1039,34 +1038,72 @@ private fun PendingCardsRegion(
                 modifier = Modifier.testTag(UiPageTags.CHAT_PENDING_FOLD),
             )
         } else {
-            // No region-level clamp: iOS lets the slot grow to the two cards' own
-            // heights (ios-chat-permission.png shows both whole, 452 pt) and each card
-            // scrolls inside `maxHeight` by itself. Clamping the region too cut the
-            // second card in half.
-            Column(modifier = Modifier.fillMaxWidth()) {
-                if (primary != null) {
-                    ApprovalCard(
-                        title = primary.title,
-                        subtitle = primary.subtitle,
-                        primaryLabel = UiStrings.ALLOW_ONCE,
-                        onPrimary = { onApprove(primary) },
-                        secondaryLabel = UiStrings.DENY,
-                        onSecondary = { onDeny(primary) },
-                        maxHeight = maxHeight,
-                    )
-                }
-                approvals.drop(1).forEach { ask ->
-                    ApprovalCard(
-                        title = ask.title,
-                        subtitle = ask.subtitle,
-                        primaryLabel = UiStrings.ALLOW_ONCE,
-                        onPrimary = { onApprove(ask) },
-                        secondaryLabel = UiStrings.DENY,
-                        onSecondary = { onDeny(ask) },
-                        maxHeight = maxHeight,
-                    )
+            // Swift `cardsRegion` clamps the whole scroll area to 40% of the
+            // viewport; each card keeps its own scrolling body within that region.
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .heightIn(max = maxHeight)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (primary != null) {
+                        PermissionRequestCard(primary, approveAvailability, denyAvailability, maxHeight)
+                    }
+                    approvals.drop(1).forEach { ask ->
+                        PermissionRequestCard(ask, approveAvailability, denyAvailability, maxHeight)
+                    }
                 }
             }
+        }
+    }
+}
+
+/** Permission decision card with the source's geometry and request-scoped status. */
+@Composable
+private fun PermissionRequestCard(
+    request: PendingAnswer,
+    approveAvailability: PdshActionAvailability<(PendingAnswer) -> Unit>,
+    denyAvailability: PdshActionAvailability<(PendingAnswer) -> Unit>,
+    maxHeight: Dp,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val busy = request.actionState?.status == com.phonedsh.ui.state.PendingAnswerActionStatus.PENDING || request.submitting == true
+    val approve = (approveAvailability as? PdshActionAvailability.Available)?.callback
+    val deny = (denyAvailability as? PdshActionAvailability.Available)?.callback
+    val receipt = request.actionState?.error ?: request.submissionError
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .padding(horizontal = ChatMetrics.PERMISSION_CARD_OUTER_MARGIN_H_PT.dp, vertical = ChatMetrics.PERMISSION_CARD_OUTER_MARGIN_V_PT.dp)
+            .testTag(UiTags.APPROVAL_CARD)
+            .background(tokens.colors.selector, RoundedCornerShape(ChatMetrics.PERMISSION_CARD_RADIUS_PT.dp))
+            .padding(ChatMetrics.PERMISSION_CARD_PADDING_PT.dp),
+        verticalArrangement = Arrangement.spacedBy(ChatMetrics.PERMISSION_CARD_SPACING_PT.dp),
+    ) {
+        Column(modifier = Modifier.heightIn(max = maxHeight).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(ChatMetrics.PERMISSION_CARD_SPACING_PT.dp)) {
+        BasicText(UiStrings.WAITING_AUTHORIZATION, style = type.pageTitle.copy(color = tokens.colors.primary), modifier = Modifier.semantics { heading() })
+            if (request.subtitle.isNotEmpty()) BasicText(request.subtitle, style = type.subheadline.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = tokens.colors.secondary))
+            if (busy) BasicText("正在处理…", style = type.caption.copy(color = tokens.colors.secondary))
+            if (receipt != null) BasicText(receipt, style = type.caption.copy(color = tokens.colors.danger), modifier = Modifier.testTag("pdsh.chat.pending-action-error"))
+        }
+        Box(
+            modifier = Modifier.fillMaxWidth().height(ChatMetrics.PERMISSION_PRIMARY_HEIGHT_PT.dp)
+                .background(if (approve != null && !busy) tokens.colors.accent else tokens.colors.selector, RoundedCornerShape(ChatMetrics.PERMISSION_PRIMARY_RADIUS_PT.dp))
+                .clickable(enabled = approve != null && !busy, role = Role.Button) { approve?.invoke(request) }
+                .testTag(UiTags.APPROVAL_PRIMARY)
+                .semantics { contentDescription = UiStrings.ALLOW_ONCE },
+            contentAlignment = Alignment.Center,
+        ) {
+            BasicText(UiStrings.ALLOW_ONCE, style = type.pageTitle.copy(color = if (approve != null && !busy) tokens.colors.onAccent else tokens.colors.tertiary))
+        }
+        Box(
+            modifier = Modifier.fillMaxWidth().height(ChatMetrics.PERMISSION_DENY_HEIGHT_PT.dp)
+                .clickable(enabled = deny != null && !busy, role = Role.Button) { deny?.invoke(request) }
+                .testTag(UiTags.APPROVAL_SECONDARY)
+                .semantics { contentDescription = UiStrings.DENY },
+            contentAlignment = Alignment.Center,
+        ) {
+            BasicText(UiStrings.DENY, style = type.subheadline.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Normal, color = if (deny != null && !busy) tokens.colors.secondary else tokens.colors.tertiary))
         }
     }
 }
@@ -1114,7 +1151,7 @@ private fun QuestionCard(
             Column(verticalArrangement = Arrangement.spacedBy(tokens.geometry.bannerGap)) {
                 BasicText(
                     text = UiStrings.QUESTION_CARD_TITLE,
-                    style = type.headline.copy(color = tokens.colors.primary),
+                    style = type.subheadline.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = tokens.colors.primary),
                     modifier = Modifier.semantics { heading() },
                 )
                 if (question.subtitle.isNotEmpty()) {
@@ -1144,10 +1181,10 @@ private fun QuestionCard(
                         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
                     ) {
                         Box(
-                            modifier = Modifier.size(20.dp).border(tokens.stroke.hairline, tokens.colors.borderLight, CircleShape),
+                            modifier = Modifier.size(ChatMetrics.QUESTION_RADIO_OUTLINE_PT.dp).border(tokens.stroke.hairline, tokens.colors.borderLight, CircleShape),
                             contentAlignment = Alignment.Center,
                         ) {
-                            if (selected) Box(Modifier.size(8.dp).background(tokens.colors.accent, CircleShape))
+                            if (selected) Box(Modifier.size(ChatMetrics.QUESTION_RADIO_DOT_PT.dp).background(tokens.colors.accent, CircleShape))
                         }
                         BasicText(
                             text = option,
@@ -1400,11 +1437,11 @@ private fun QuestionTakeover(
                 ) {
                     if (item.multiple) {
                         Box(
-                            modifier = Modifier.size(20.dp)
-                                .border(tokens.stroke.hairline, tokens.colors.borderLight, RoundedCornerShape(4.dp)),
+                            modifier = Modifier.size(ChatMetrics.QUESTION_CHECKBOX_FRAME_PT.dp)
+                                .border(tokens.stroke.hairline, tokens.colors.borderLight, RoundedCornerShape(ChatMetrics.QUESTION_CHECKBOX_RADIUS_PT.dp)),
                             contentAlignment = Alignment.Center,
                         ) {
-                            if (selected) PdshIconView(PdshIcon.CHECK, 14.dp, tokens.colors.accent, null)
+                            if (selected) PdshIconView(PdshIcon.CHECK, ChatMetrics.QUESTION_CHECKBOX_GLYPH_PT.dp, tokens.colors.accent, null)
                         }
                     } else {
                         Box(Modifier.size(ChatMetrics.QUESTION_OPTION_MARK_SIZE_PT.dp).background(tokens.colors.selector, CircleShape), contentAlignment = Alignment.Center) {
@@ -1435,7 +1472,7 @@ private fun QuestionTakeover(
                 horizontalArrangement = Arrangement.spacedBy(ChatMetrics.QUESTION_HEADER_STACK_GAP_PT.dp),
             ) {
                 if (item.options.isNotEmpty()) {
-                    PdshIconView(PdshIcon.PLUS, 16.dp, tokens.colors.secondary, null)
+                    PdshIconView(PdshIcon.PLUS, ChatMetrics.QUESTION_ANSWER_ADD_ICON_PT.dp, tokens.colors.secondary, null)
                 }
                 Box(Modifier.weight(1f)) {
                     BasicTextField(
@@ -1525,7 +1562,7 @@ private fun QuestionPagerButton(icon: PdshIcon, label: String, enabled: Boolean,
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        PdshIconView(icon, 16.dp, if (enabled) tokens.colors.secondary else tokens.colors.tertiary, null)
+        PdshIconView(icon, ChatMetrics.QUESTION_PAGER_ICON_PT.dp, if (enabled) tokens.colors.secondary else tokens.colors.tertiary, null)
     }
 }
 
@@ -1538,7 +1575,7 @@ private fun ComposerIconAction(icon: PdshIcon, label: String, enabled: Boolean, 
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        PdshIconView(icon, 16.dp, if (enabled) tokens.colors.secondary else tokens.colors.tertiary, null)
+        PdshIconView(icon, ChatMetrics.QUESTION_HEADER_ACTION_GLYPH_PT.dp, if (enabled) tokens.colors.secondary else tokens.colors.tertiary, null)
     }
 }
 
@@ -1625,7 +1662,7 @@ private fun PlanReviewTakeover(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(ChatMetrics.PLAN_REVIEW_BUTTON_GAP_PT.dp),
                 ) {
-                    PdshIconView(PdshIcon.EDIT, 14.dp, tokens.colors.secondary, null)
+                    PdshIconView(PdshIcon.EDIT, ChatMetrics.PLAN_REVIEW_CHANGE_GLYPH_PT.dp, tokens.colors.secondary, null)
                     BasicText("要求修改", style = type.secondary.copy(color = tokens.colors.primary))
                 }
                 Box(
@@ -1679,13 +1716,17 @@ private fun answerJson(
 private fun ChatTranscript(
     state: ChatScreenState,
     onToggleRow: (String) -> Unit,
-    onLoadEarlier: () -> Unit,
-    onStartEngine: () -> Unit,
-    onConfigureProvider: () -> Unit,
+    onLoadEarlier: (() -> Unit)?,
+    startEngineAvailability: PdshActionAvailability<() -> Unit>,
+    onConfigureProvider: (() -> Unit)?,
     onRetry: () -> Unit,
-    onOpenFile: (String) -> Unit,
+    onOpenFile: ((String) -> Unit)?,
+    onOpenResource: ((String) -> Unit)?,
+    retryAvailability: PdshActionAvailability<() -> Unit>,
 ) {
     val tokens = LocalUiTokens.current
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
     // True while the last row is on screen: the only condition that lets a new row
     // pull the viewport (iOS `nearBottom`).
@@ -1749,19 +1790,22 @@ private fun ChatTranscript(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier.fillMaxSize().pointerInput(focusManager, keyboard) {
+            detectTapGestures(onTap = {
+                focusManager.clearFocus()
+                keyboard?.hide()
+            })
+        },
+    ) {
         if (state.rows.isEmpty()) {
             Column(modifier = Modifier.fillMaxSize()) {
                 TranscriptChrome(state = state, onLoadEarlier = onLoadEarlier)
-                // A pending ask replaces the empty state: ios-chat-permission.png has
-                // two cards over a blank transcript, not the product mark.
-                if (state.pending.isEmpty) {
-                    EmptyTimeline(
-                        state = state,
-                        onStartEngine = onStartEngine,
-                        onConfigureProvider = onConfigureProvider,
-                    )
-                }
+                EmptyTimeline(
+                    state = state,
+                    startEngineAvailability = startEngineAvailability,
+                    onConfigureProvider = onConfigureProvider,
+                )
             }
         } else {
             LazyColumn(
@@ -1769,13 +1813,10 @@ private fun ChatTranscript(
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag(UiTags.CHAT_LIST),
-                // iOS: top 22, bottom 48 (room for the 28 pt "回到最新" pill).
-                // unverified geometry: the compact list-row floor borrowed as the
-                // 22 pt top inset and the primary-button height as the 48 pt tail
-                // inset; tokens.json has neither page token.
+                // HomeSpec: 20pt top rhythm and 48pt room for the floating latest pill.
                 contentPadding = PaddingValues(
-                    top = tokens.geometry.pageListRowMinHeight,
-                    bottom = tokens.geometry.primaryButtonHeight,
+                    top = HomeMetrics.blockGap,
+                    bottom = ChatMetrics.TRANSCRIPT_LATEST_CLEARANCE_PT.dp,
                 ),
                 // ios-chat-assistant.png / -failed.png / -queued.png: a short
                 // conversation sits at the *bottom* of the transcript, against the
@@ -1793,15 +1834,13 @@ private fun ChatTranscript(
                                 expandedRowIds = state.expandedRowIds,
                                 onToggleRow = onToggleRow,
                                 onOpenFile = onOpenFile,
-                            )
+                                onOpenResource = onOpenResource,
+                                            )
                             if (row.id == state.failedItemID && state.userFacingError != null) {
                                 FailureLine(
                                     reason = state.userFacingError,
-                                    retry = if (state.banners.firstOrNull()?.retryable == true) {
-                                        onRetry
-                                    } else {
-                                        null
-                                    },
+                                    retry = (retryAvailability as? PdshActionAvailability.Available)?.callback
+                                        ?.takeIf { state.banners.firstOrNull()?.retryable == true },
                                 )
                             }
                         }
@@ -1868,20 +1907,20 @@ private fun ChatTranscript(
 @Composable
 private fun TranscriptChrome(
     state: ChatScreenState,
-    onLoadEarlier: () -> Unit,
+    onLoadEarlier: (() -> Unit)?,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = HomeMetrics.contentInset)) {
         if (state.transcript.hasMore) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
                     .clickable(
-                        enabled = !state.transcript.loadingEarlier,
+                        enabled = !state.transcript.loadingEarlier && onLoadEarlier != null,
                         role = Role.Button,
-                        onClick = onLoadEarlier,
+                        onClick = { onLoadEarlier?.invoke() },
                     )
                     .testTag(UiPageTags.CHAT_LOAD_EARLIER),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1959,32 +1998,32 @@ private fun FailureLine(
         modifier = Modifier
             .fillMaxWidth()
             .testTag(UiPageTags.CHAT_FAILURE_LINE)
-            .padding(top = tokens.spacing.iconText),
+            .padding(top = ChatMetrics.FAILURE_LINE_TOP_PT.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText, Alignment.End),
+        horizontalArrangement = Arrangement.spacedBy(ChatMetrics.FAILURE_LINE_GAP_PT.dp, Alignment.End),
     ) {
         BasicText(
             text = UiStrings.SEND_FAILED_LINE,
-            style = type.secondary.copy(color = tokens.colors.danger),
+            style = type.caption.copy(fontSize = ChatMetrics.FAILURE_TEXT_SIZE_PT.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = tokens.colors.danger),
         )
         if (reason.isNotEmpty()) {
             BasicText(
                 text = UiStrings.DOT_SEPARATOR,
-                style = type.secondary.copy(color = tokens.colors.secondary),
+                style = type.caption.copy(fontSize = ChatMetrics.FAILURE_TEXT_SIZE_PT.sp, color = tokens.colors.secondary),
             )
             BasicText(
                 text = reason,
-                style = type.secondary.copy(color = tokens.colors.secondary),
+                style = type.caption.copy(fontSize = ChatMetrics.FAILURE_TEXT_SIZE_PT.sp, color = tokens.colors.secondary),
             )
         }
         if (retry != null) {
             BasicText(
                 text = UiStrings.DOT_SEPARATOR,
-                style = type.secondary.copy(color = tokens.colors.secondary),
+                style = type.caption.copy(fontSize = ChatMetrics.FAILURE_TEXT_SIZE_PT.sp, color = tokens.colors.secondary),
             )
             BasicText(
                 text = UiStrings.RETRY,
-                style = type.secondary.copy(color = tokens.colors.accent),
+                style = type.caption.copy(fontSize = ChatMetrics.FAILURE_TEXT_SIZE_PT.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = tokens.colors.accent),
                 modifier = Modifier
                     .clickable(role = Role.Button, onClick = retry)
                     .padding(tokens.spacing.iconText),
@@ -1997,8 +2036,8 @@ private fun FailureLine(
 @Composable
 private fun EmptyTimeline(
     state: ChatScreenState,
-    onStartEngine: () -> Unit,
-    onConfigureProvider: () -> Unit,
+    startEngineAvailability: PdshActionAvailability<() -> Unit>,
+    onConfigureProvider: (() -> Unit)?,
 ) {
     val tokens = LocalUiTokens.current
     when (state.empty) {
@@ -2015,7 +2054,7 @@ private fun EmptyTimeline(
         ) {
             EngineNotStartedState(
                 busy = state.starting,
-                onStartEngine = onStartEngine,
+                startEngineAvailability = startEngineAvailability,
                 modifier = Modifier.padding(bottom = tokens.geometry.primaryButtonHeight),
             )
         }
@@ -2041,11 +2080,12 @@ private fun EmptyTimeline(
 @Composable
 private fun EngineNotStartedState(
     busy: Boolean,
-    onStartEngine: () -> Unit,
+    startEngineAvailability: PdshActionAvailability<() -> Unit>,
     modifier: Modifier = Modifier,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
+    val startEngine = (startEngineAvailability as? PdshActionAvailability.Available)?.callback
     Column(
         // iOS pins the column to the official 338 pt
         // (com.phonedsh.ui.UiMetrics.CONTENT_COLUMN_WIDTH_PT) on the baseline
@@ -2058,7 +2098,7 @@ private fun EngineNotStartedState(
             // x 32–370 — the shared 338 pt content column (`UiMetrics`), not the
             // transcript's 16 pt page margin. Read from the metric owner, not
             // re-typed.
-            .padding(horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp)
+            .padding(horizontal = HomeMetrics.contentInset)
             .testTag(UiPageTags.CHAT_EMPTY_ENGINE),
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
     ) {
@@ -2078,7 +2118,7 @@ private fun EngineNotStartedState(
                 // iOS `Self.accent` = ChatPage's own #2F5BFF (`ChatPage.swift:1058`,
                 // applied at `:1343`), not the theme accent.
                 .background(tokens.colors.pageAccent, RoundedCornerShape(tokens.radius.card))
-                .clickable(enabled = !busy, role = Role.Button, onClick = onStartEngine)
+                .clickable(enabled = !busy && startEngine != null, role = Role.Button) { startEngine?.invoke() }
                 .testTag(UiPageTags.CHAT_START_ENGINE),
             contentAlignment = Alignment.Center,
         ) {
@@ -2101,7 +2141,7 @@ private fun EngineNotStartedState(
 /** B: the engine is up, only the model service is missing. */
 @Composable
 private fun ProviderSetupState(
-    onConfigureProvider: () -> Unit,
+    onConfigureProvider: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val tokens = LocalUiTokens.current
@@ -2109,7 +2149,7 @@ private fun ProviderSetupState(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = tokens.geometry.pageOuterMarginH)
+            .padding(horizontal = HomeMetrics.contentInset)
             .testTag(UiPageTags.CHAT_EMPTY_PROVIDER),
         verticalArrangement = Arrangement.spacedBy(tokens.geometry.bannerGap),
     ) {
@@ -2129,7 +2169,7 @@ private fun ProviderSetupState(
                 // iOS `Self.accent` = ChatPage's own #2F5BFF (`ChatPage.swift:1058`,
                 // applied at `:1343`), not the theme accent.
                 .background(tokens.colors.pageAccent, RoundedCornerShape(tokens.radius.card))
-                .clickable(role = Role.Button, onClick = onConfigureProvider)
+                .clickable(enabled = onConfigureProvider != null, role = Role.Button) { onConfigureProvider?.invoke() }
                 .testTag(UiPageTags.CHAT_PROVIDER_SETUP),
             contentAlignment = Alignment.Center,
         ) {
@@ -2185,7 +2225,6 @@ private fun ComposerDock(
     state: ChatScreenState,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
-    onStop: () -> Unit,
     onGoalPause: (() -> Unit)?,
     onGoalResume: (() -> Unit)?,
     onGoalClear: (() -> Unit)?,
@@ -2204,10 +2243,43 @@ private fun ComposerDock(
     onReloadCommands: () -> Unit,
     availability: ComposerAvailability,
     onSpeakRecentReply: (() -> Unit)?,
+    planApproveAvailability: PdshActionAvailability<(PendingAnswer, String) -> Unit>,
+    planRequestChangesAvailability: PdshActionAvailability<(PendingAnswer) -> Unit>,
+    queueEditAvailability: PdshActionAvailability<(ManagedQueueItemState, String, StateRequestId) -> Unit>,
+    queueRemoveAvailability: PdshActionAvailability<(ManagedQueueItemState, StateRequestId) -> Unit>,
+    queueSteerAvailability: PdshActionAvailability<(ManagedQueueItemState, StateRequestId) -> Unit>,
+    queueSubmissionAvailability: PdshActionAvailability<(String, StateRequestId) -> Unit>,
+    steerSubmissionAvailability: PdshActionAvailability<(String, StateRequestId) -> Unit>,
+    stopAvailability: PdshActionAvailability<(StateRequestId) -> Unit>,
+    onEditQueueItem: (ManagedQueueItemState) -> Unit,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     val composer = state.composer
+    val queueSubmission = (queueSubmissionAvailability as? PdshActionAvailability.Available)?.callback
+    val steerSubmission = (steerSubmissionAvailability as? PdshActionAvailability.Available)?.callback
+    val stopRequest = (stopAvailability as? PdshActionAvailability.Available)?.callback
+    val runningSubmissionAvailable = if (composer.steering) steerSubmission != null else queueSubmission != null
+    val canSubmit = composer.canSubmit && (!composer.running || runningSubmissionAvailable)
+    val showRunningStop = composer.running && stopRequest != null
+    val composerMode = if (composer.running && stopRequest == null) ComposerMode.SEND else composer.mode
+    val sendLabel = if (composer.running && !runningSubmissionAvailable && stopRequest == null) UiStrings.UNAVAILABLE else composer.sendLabel
+
+    fun submitComposer() {
+        if (!composer.running) {
+            onSend()
+            return
+        }
+        val requestID = nextQueueActionRequestId()
+        val text = composer.draft.trim()
+        if (composer.steering) steerSubmission?.invoke(text, requestID)
+        else queueSubmission?.invoke(text, requestID)
+    }
+    val queueRows = remember(state.queueItems, composer.queued) {
+        buildChatQueueRows(state.queueItems, composer.queued)
+    }
+    val pendingQueueRows = state.queueItems.orEmpty().filter { it.state == QueueItemStatus.SENDING }
+    var queueExpanded by remember(queueRows.map { it.id }) { mutableStateOf(queueRows.size < 2) }
     val pendingQuestion = (listOfNotNull(state.pending.primary) + state.pending.folded)
         .firstOrNull { it.kind == QUESTION }
     // iOS keeps the truncation notice in the same slot as the attachment error.
@@ -2297,8 +2369,18 @@ private fun ComposerDock(
                     onOpenDetail = onOpenGoalDetail,
                 )
             }
-            if (composer.queued.isNotEmpty()) {
-                QueuedStrip(messages = composer.queued)
+            if (pendingQueueRows.isNotEmpty()) PendingQueueSubmissionRows(pendingQueueRows)
+            if (queueRows.isNotEmpty()) {
+                QueueDock(
+                    rows = queueRows,
+                    running = composer.running,
+                    expanded = queueExpanded,
+                    onToggleExpanded = { queueExpanded = !queueExpanded },
+                    editAvailability = queueEditAvailability,
+                    removeAvailability = queueRemoveAvailability,
+                    steerAvailability = queueSteerAvailability,
+                    onEdit = onEditQueueItem,
+                )
             }
             if (composer.attachments.isNotEmpty()) {
                 AttachmentStrip(
@@ -2348,10 +2430,14 @@ private fun ComposerDock(
                 PlanReviewTakeover(
                     question = pendingQuestion,
                     item = plan,
-                    onApprove = { json -> onSubmitAnswer(pendingQuestion, json) },
-                    onRequestChanges = { onDismissQuestion(pendingQuestion) },
-                    canApprove = availability.approvePlans,
-                    canRequestChanges = availability.requestPlanChanges,
+                    onApprove = { json ->
+                        (planApproveAvailability as? PdshActionAvailability.Available)?.callback?.invoke(pendingQuestion, json)
+                    },
+                    onRequestChanges = {
+                        (planRequestChangesAvailability as? PdshActionAvailability.Available)?.callback?.invoke(pendingQuestion)
+                    },
+                    canApprove = planApproveAvailability is PdshActionAvailability.Available && pendingQuestion.channelAvailable == true,
+                    canRequestChanges = planRequestChangesAvailability is PdshActionAvailability.Available,
                 )
             } else {
                 QuestionTakeover(
@@ -2379,15 +2465,15 @@ private fun ComposerDock(
                 text = composer.draft,
                 onTextChange = onDraftChange,
                 placeholder = composer.placeholder,
-                mode = composer.mode,
+                mode = composerMode,
                 enabled = composer.enabled,
-                canSubmit = composer.canSubmit,
-                running = composer.running,
-                onSend = onSend,
-                onStop = onStop,
+                canSubmit = canSubmit,
+                running = showRunningStop,
+                onSend = ::submitComposer,
+                onStop = { stopRequest?.invoke(nextQueueActionRequestId()) },
                 stat = state.stats,
                 contextPercent = state.contextPercent,
-                sendLabel = composer.sendLabel,
+                sendLabel = sendLabel,
                 onTruncated = { truncated = true },
                 onMenuKey = ::handleSlashKey,
                 onMenuSubmit = {
@@ -2490,7 +2576,7 @@ private fun GoalBarView(
                 .testTag(UiPageTags.GOAL_CLEAR)
                 .padding(tokens.spacing.iconText),
         ) {
-            PdshIconView(PdshIcon.CLOSE, 16.dp, tokens.colors.secondary, null)
+            PdshIconView(PdshIcon.CLOSE, ChatMetrics.GOAL_CLEAR_GLYPH_PT.dp, tokens.colors.secondary, null)
         }
     }
 }
@@ -2536,7 +2622,7 @@ private fun TodoDock(items: List<TodoDockItem>, modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
         ) {
-            PdshIconView(PdshIcon.LIST, 20.dp, tokens.colors.secondary, null)
+            PdshIconView(PdshIcon.LIST, ChatMetrics.TODO_DOCK_GLYPH_PT.dp, tokens.colors.secondary, null)
             BasicText("任务", style = type.secondary.copy(fontSize = ChatMetrics.TODO_TEXT_SIZE_PT.sp, color = tokens.colors.primary))
             BasicText(
                 progress,
@@ -2547,7 +2633,7 @@ private fun TodoDock(items: List<TodoDockItem>, modifier: Modifier = Modifier) {
             )
             PdshIconView(
                 icon = if (collapsed) PdshIcon.CHEVRON_DOWN else PdshIcon.CHEVRON_UP,
-                size = 16.dp,
+                size = ChatMetrics.TODO_DOCK_CHEVRON_PT.dp,
                 tint = tokens.colors.tertiary,
                 contentDescription = null,
             )
@@ -2589,36 +2675,348 @@ private fun goalBarPhaseLabel(phase: String): String = when (phase) {
     else -> UiStrings.GOAL_PHASE_COMPLETE
 }
 
-/** The queued strip: "排队中 N 条" and one 28 pt line per queued message. */
+/** The source QueueDock combines host durable rows with display-only local drafts. */
+private fun buildChatQueueRows(
+    managedRows: List<ManagedQueueItemState>?,
+    composerQueued: List<String>,
+): List<ManagedQueueItemState> {
+    val managed = managedRows.orEmpty()
+    val durable = managed.filter { it.id is QueueItemId.Durable && it.state != QueueItemStatus.SENDING }
+    val local = managed.filter { it.id is QueueItemId.Local && it.state != QueueItemStatus.SENDING }.toMutableList()
+    val fallback = composerQueued.toMutableList()
+    local.forEach { row ->
+        val key = queueTextKey(row.text)
+        val index = fallback.indexOfFirst { queueTextKey(it) == key }
+        if (index >= 0) fallback.removeAt(index)
+    }
+    local += fallback.mapIndexed { index, text ->
+        ManagedQueueItemState(
+            id = QueueItemId.Local("composer-$index"),
+            text = text,
+            state = QueueItemStatus.QUEUED,
+        )
+    }
+    return reconcileQueueRows(durable, local)
+}
+
+private fun queueTextKey(text: String): String =
+    text.trim().split(Regex("\\s+")).filter(String::isNotEmpty).joinToString(" ")
+
+private fun queueItemKey(id: QueueItemId): String = when (id) {
+    is QueueItemId.Durable -> "durable:${id.value}"
+    is QueueItemId.Local -> "local:${id.value}"
+}
+
+/** Independent pending submissions stay visible above the composer while the host dispatches them. */
 @Composable
-private fun QueuedStrip(messages: List<String>) {
+private fun PendingQueueSubmissionRows(rows: List<ManagedQueueItemState>) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag(UiTags.COMPOSER_QUEUE),
-        verticalArrangement = Arrangement.spacedBy(tokens.geometry.toolDetailVertical),
+        modifier = Modifier.fillMaxWidth().testTag("pdsh.chat.queue-pending"),
+        verticalArrangement = Arrangement.spacedBy(ChatMetrics.CHAT_QUEUE_PENDING_STACK_GAP_PT.dp),
     ) {
-        BasicText(
-            text = UiStrings.QUEUED_COUNT.format(messages.size),
-            style = type.caption.copy(color = tokens.colors.secondary),
-        )
-        messages.forEach { message ->
+        rows.forEach { row ->
+            val key = queueItemKey(row.id)
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .defaultMinSize(minHeight = tokens.geometry.composerControlSize)
-                    .background(tokens.colors.code, RoundedCornerShape(tokens.radius.codeBlock))
-                    .padding(horizontal = tokens.spacing.badgeInsetH),
+                modifier = Modifier.fillMaxWidth()
+                    .padding(horizontal = ChatMetrics.CHAT_QUEUE_PENDING_INSET_H_PT.dp)
+                    .height(ChatMetrics.CHAT_QUEUE_PENDING_HEIGHT_PT.dp)
+                    .background(tokens.colors.surface, RoundedCornerShape(ChatMetrics.QUEUE_ROW_RADIUS_PT.dp))
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "${UiStrings.CHAT_QUEUE_SENDING}：${row.text.lineSequence().firstOrNull().orEmpty()}"
+                    }
+                    .testTag("pdsh.chat.queue-pending.$key")
+                    .padding(horizontal = tokens.spacing.iconText),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHAT_QUEUE_PENDING_CONTENT_GAP_PT.dp),
             ) {
+                CircularProgressIndicator(
+                    color = tokens.colors.tertiary,
+                    strokeWidth = tokens.stroke.hairline,
+                    modifier = Modifier.size(ChatMetrics.CHAT_QUEUE_PENDING_SPINNER_PT.dp),
+                )
                 BasicText(
-                    text = message,
-                    style = type.secondary.copy(color = tokens.colors.secondary),
+                    text = UiStrings.CHAT_QUEUE_SENDING,
+                    style = type.secondary.copy(fontSize = ChatMetrics.CHAT_QUEUE_PENDING_TEXT_PT.sp, color = tokens.colors.secondary),
+                )
+                BasicText(
+                    text = row.text.lineSequence().firstOrNull().orEmpty(),
+                    style = type.secondary.copy(fontSize = ChatMetrics.CHAT_QUEUE_PENDING_TEXT_PT.sp, color = tokens.colors.tertiary),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+            }
+        }
+    }
+}
+
+private fun queueActionPending(item: ManagedQueueItemState): Boolean =
+    item.busy == true || item.actionRequestId != null && item.receipt?.requestId != item.actionRequestId
+
+private fun queueActionStatus(item: ManagedQueueItemState): String? {
+    if (item.busy == true) return UiStrings.CHAT_QUEUE_ACTION_BUSY
+    val actionID = item.actionRequestId
+    val receipt = item.receipt
+    if (actionID != null && receipt?.requestId != actionID) {
+        return if (receipt == null) UiStrings.CHAT_QUEUE_ACTION_PENDING else UiStrings.CHAT_QUEUE_ACTION_STALE
+    }
+    return when (receipt?.outcome) {
+        com.phonedsh.ui.state.CommandOutcome.FAILED -> receipt.message ?: UiStrings.CHAT_QUEUE_ACTION_FAILED
+        com.phonedsh.ui.state.CommandOutcome.SUCCEEDED -> receipt.message
+        null -> null
+    }
+}
+
+/** The source QueueDock: one row has no header, multiple rows fold by default. */
+@Composable
+private fun QueueDock(
+    rows: List<ManagedQueueItemState>,
+    running: Boolean,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    editAvailability: PdshActionAvailability<(ManagedQueueItemState, String, StateRequestId) -> Unit>,
+    removeAvailability: PdshActionAvailability<(ManagedQueueItemState, StateRequestId) -> Unit>,
+    steerAvailability: PdshActionAvailability<(ManagedQueueItemState, StateRequestId) -> Unit>,
+    onEdit: (ManagedQueueItemState) -> Unit,
+) {
+    if (rows.isEmpty()) return
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val edit = (editAvailability as? PdshActionAvailability.Available)?.callback
+    val remove = (removeAvailability as? PdshActionAvailability.Available)?.callback
+    val steer = (steerAvailability as? PdshActionAvailability.Available)?.callback
+    val busy = rows.any(::queueActionPending)
+    val showRows = rows.size == 1 || expanded || busy
+    val shape = RoundedCornerShape(tokens.radius.card)
+    Column(
+        modifier = Modifier.fillMaxWidth().testTag(UiTags.COMPOSER_QUEUE)
+            .clip(shape).background(tokens.colors.surface)
+            .border(tokens.stroke.hairline, tokens.colors.border, shape)
+            .padding(vertical = ChatMetrics.CHAT_QUEUE_CARD_INSET_V_PT.dp),
+        verticalArrangement = Arrangement.spacedBy(ChatMetrics.CHAT_QUEUE_STACK_GAP_PT.dp),
+    ) {
+        if (rows.size > 1) {
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .height(ChatMetrics.CHAT_QUEUE_HEADER_HEIGHT_PT.dp)
+                    .clickable(enabled = !busy, role = Role.Button, onClick = onToggleExpanded)
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = UiStrings.CHAT_QUEUE_HEADER_COUNT.format(rows.size)
+                        stateDescription = if (showRows) UiStrings.EXPANDED else UiStrings.COLLAPSED
+                    }
+                    .padding(horizontal = ChatMetrics.CHAT_QUEUE_ROW_INSET_H_PT.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHAT_QUEUE_HEADER_GAP_PT.dp),
+            ) {
+                PdshIconView(PdshIcon.LIST, ChatMetrics.CHAT_QUEUE_HEADER_ICON_PT.dp, tokens.colors.secondary, null)
+                BasicText(
+                    text = UiStrings.CHAT_QUEUE_HEADER_COUNT.format(rows.size),
+                    style = type.secondary.copy(
+                        fontSize = ChatMetrics.CHAT_QUEUE_HEADER_FONT_PT.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                        color = tokens.colors.secondary,
+                    ),
+                )
+                Spacer(Modifier.weight(1f))
+                PdshIconView(
+                    if (showRows) PdshIcon.CHEVRON_DOWN else PdshIcon.CHEVRON_UP,
+                    ChatMetrics.CHAT_QUEUE_HEADER_CHEVRON_PT.dp,
+                    tokens.colors.secondary,
+                    null,
+                )
+            }
+        }
+        if (showRows) {
+            rows.forEachIndexed { index, item ->
+                QueueDockRow(
+                    item = item,
+                    showsLeadingGlyph = rows.size == 1,
+                    running = running,
+                    edit = edit,
+                    remove = remove,
+                    steer = steer,
+                    onEdit = onEdit,
+                )
+                if (index < rows.lastIndex) {
+                    Box(
+                        Modifier.fillMaxWidth()
+                            .padding(start = if (rows.size == 1) ChatMetrics.CHAT_QUEUE_DIVIDER_INSET_PT.dp else ChatMetrics.CHAT_QUEUE_ROW_INSET_H_PT.dp)
+                            .height(tokens.stroke.hairline).background(tokens.colors.border),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueDockRow(
+    item: ManagedQueueItemState,
+    showsLeadingGlyph: Boolean,
+    running: Boolean,
+    edit: ((ManagedQueueItemState, String, StateRequestId) -> Unit)?,
+    remove: ((ManagedQueueItemState, StateRequestId) -> Unit)?,
+    steer: ((ManagedQueueItemState, StateRequestId) -> Unit)?,
+    onEdit: (ManagedQueueItemState) -> Unit,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val durable = item.id is QueueItemId.Durable
+    val pending = queueActionPending(item)
+    val receiptText = queueActionStatus(item)
+    val key = queueItemKey(item.id)
+    val localReason = UiStrings.CHAT_QUEUE_LOCAL_ACTION_UNAVAILABLE
+    val editReason = when {
+        !durable -> localReason
+        pending -> receiptText ?: UiStrings.CHAT_QUEUE_ACTION_PENDING
+        item.text.isBlank() -> UiStrings.CHAT_QUEUE_EDIT_NOT_TEXT
+        item.canEdit != true -> UiStrings.UNAVAILABLE
+        edit == null -> UiStrings.UNAVAILABLE
+        else -> null
+    }
+    val removeReason = when {
+        !durable -> localReason
+        pending -> receiptText ?: UiStrings.CHAT_QUEUE_ACTION_PENDING
+        item.canRemove != true -> UiStrings.UNAVAILABLE
+        remove == null -> UiStrings.UNAVAILABLE
+        else -> null
+    }
+    val steerReason = when {
+        !durable -> localReason
+        pending -> receiptText ?: UiStrings.CHAT_QUEUE_ACTION_PENDING
+        !running -> UiStrings.CHAT_QUEUE_STEER_UNAVAILABLE
+        item.canSteer != true -> UiStrings.UNAVAILABLE
+        steer == null -> UiStrings.UNAVAILABLE
+        else -> null
+    }
+    Column(
+        modifier = Modifier.fillMaxWidth().testTag("${UiTags.COMPOSER_QUEUE}.row.$key"),
+        verticalArrangement = Arrangement.spacedBy(ChatMetrics.CHAT_QUEUE_STACK_GAP_PT.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .padding(horizontal = ChatMetrics.CHAT_QUEUE_ROW_INSET_H_PT.dp)
+                .defaultMinSize(minHeight = ChatMetrics.CHAT_QUEUE_ROW_MIN_HEIGHT_PT.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(ChatMetrics.CHAT_QUEUE_ROW_GAP_PT.dp),
+        ) {
+            if (showsLeadingGlyph) {
+                PdshIconView(PdshIcon.LIST, ChatMetrics.CHAT_QUEUE_ROW_GLYPH_PT.dp, tokens.colors.tertiary, null)
+            }
+            BasicText(
+                text = item.text.lineSequence().firstOrNull().orEmpty(),
+                style = type.caption.copy(fontSize = ChatMetrics.CHAT_QUEUE_ROW_FONT_PT.sp, color = tokens.colors.secondary),
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (item.state == QueueItemStatus.SENDING) {
+                BasicText(UiStrings.CHAT_QUEUE_SENDING, style = type.caption.copy(color = tokens.colors.tertiary))
+                QueueActionIcon(PdshIcon.PENCIL, UiStrings.CHAT_QUEUE_EDIT_TITLE, UiStrings.CHAT_QUEUE_ACTION_BUSY, false)
+                QueueActionIcon(PdshIcon.TRASH, UiStrings.CHAT_QUEUE_DELETE, UiStrings.CHAT_QUEUE_ACTION_BUSY, false)
+                QueueActionIcon(PdshIcon.SEND, UiStrings.CHAT_QUEUE_STEER_SEND, UiStrings.CHAT_QUEUE_ACTION_BUSY, false)
+            } else {
+                QueueActionIcon(PdshIcon.PENCIL, UiStrings.CHAT_QUEUE_EDIT_TITLE, editReason, editReason == null) {
+                    onEdit(item)
+                }
+                QueueActionIcon(PdshIcon.TRASH, UiStrings.CHAT_QUEUE_DELETE, removeReason, removeReason == null) {
+                    remove?.invoke(item, nextQueueActionRequestId())
+                }
+                QueueActionIcon(PdshIcon.SEND, UiStrings.CHAT_QUEUE_STEER_SEND, steerReason, steerReason == null) {
+                    steer?.invoke(item, nextQueueActionRequestId())
+                }
+            }
+        }
+        receiptText?.let { status ->
+            BasicText(
+                text = status,
+                style = type.caption.copy(color = if (item.receipt?.outcome == com.phonedsh.ui.state.CommandOutcome.FAILED) tokens.colors.danger else tokens.colors.tertiary),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = ChatMetrics.CHAT_QUEUE_ROW_INSET_H_PT.dp)
+                    .testTag("${UiTags.COMPOSER_QUEUE}.receipt.$key"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun QueueActionIcon(
+    icon: PdshIcon,
+    label: String,
+    unavailableReason: String?,
+    enabled: Boolean,
+    onClick: (() -> Unit)? = null,
+) {
+    val tokens = LocalUiTokens.current
+    Box(
+        modifier = Modifier.size(width = ChatMetrics.CHAT_QUEUE_ACTION_TARGET_WIDTH_PT.dp, height = ChatMetrics.CHAT_QUEUE_ACTION_TARGET_HEIGHT_PT.dp)
+            .clickable(enabled = enabled && onClick != null, role = Role.Button) { onClick?.invoke() }
+            .semantics { contentDescription = if (unavailableReason == null) label else "$label，$unavailableReason" },
+        contentAlignment = Alignment.Center,
+    ) {
+        PdshIconView(
+            icon,
+            ChatMetrics.CHAT_QUEUE_ACTION_GLYPH_PT.dp,
+            if (enabled) tokens.colors.secondary else tokens.colors.tertiary,
+            contentDescription = null,
+            modifier = Modifier.size(ChatMetrics.CHAT_QUEUE_ACTION_ICON_BOX_PT.dp),
+        )
+    }
+}
+
+private fun nextQueueActionRequestId(): StateRequestId =
+    StateRequestId("ui.queue.${java.util.UUID.randomUUID()}")
+
+@Composable
+private fun QueueEditOverlay(
+    item: ManagedQueueItemState,
+    value: String,
+    onValueChange: (String) -> Unit,
+    canSave: Boolean,
+    onCancel: () -> Unit,
+    onSave: () -> Unit,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Box(
+        modifier = Modifier.fillMaxSize().background(tokens.colors.primary.copy(alpha = 0.32f))
+            .testTag("pdsh.chat.queue-edit-dialog"),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = HomeMetrics.chromeInset)
+                .clip(RoundedCornerShape(tokens.radius.card)).background(tokens.colors.surface)
+                .padding(tokens.spacing.cardInset),
+            verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+        ) {
+            BasicText(UiStrings.CHAT_QUEUE_EDIT_TITLE, style = type.headline.copy(color = tokens.colors.primary))
+            BasicText(item.text, style = type.caption.copy(color = tokens.colors.tertiary), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                textStyle = type.secondary.copy(color = tokens.colors.primary),
+                cursorBrush = SolidColor(tokens.colors.accent),
+                modifier = Modifier.fillMaxWidth().testTag("pdsh.chat.queue-edit-field"),
+                decorationBox = { inner ->
+                    Box(
+                        Modifier.fillMaxWidth().background(tokens.colors.input, RoundedCornerShape(tokens.radius.card))
+                            .padding(tokens.spacing.cardInset),
+                    ) {
+                        if (value.isEmpty()) BasicText(UiStrings.CHAT_QUEUE_EDIT_CONTENT, style = type.secondary.copy(color = tokens.colors.tertiary))
+                        inner()
+                    }
+                },
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                BasicText(UiStrings.CANCEL, style = type.secondary.copy(color = tokens.colors.secondary),
+                    modifier = Modifier.clickable(role = Role.Button, onClick = onCancel).testTag("pdsh.chat.queue-edit-cancel").padding(tokens.spacing.iconText))
+                BasicText(UiStrings.SAVE, style = type.secondary.copy(color = if (canSave) tokens.colors.accent else tokens.colors.tertiary),
+                    modifier = Modifier.clickable(enabled = canSave, role = Role.Button, onClick = onSave).testTag("pdsh.chat.queue-edit-save").padding(tokens.spacing.iconText))
             }
         }
     }
@@ -2646,7 +3044,7 @@ private fun AttachmentStrip(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
             ) {
-                PdshIconView(PdshIcon.DOCUMENT, 16.dp, tokens.colors.secondary, null)
+                PdshIconView(PdshIcon.DOCUMENT, ChatMetrics.ATTACHMENT_DOCUMENT_GLYPH_PT.dp, tokens.colors.secondary, null)
                 BasicText(
                     text = attachment.name,
                     style = type.caption.copy(color = tokens.colors.primary),
@@ -2660,7 +3058,7 @@ private fun AttachmentStrip(
                             contentDescription = UiStrings.COMPOSER_REMOVE_IMAGE.format(attachment.name)
                         }
                         .padding(tokens.spacing.iconText),
-                ) { PdshIconView(PdshIcon.CLOSE, 14.dp, tokens.colors.secondary, null) }
+                ) { PdshIconView(PdshIcon.CLOSE, ChatMetrics.ATTACHMENT_REMOVE_GLYPH_PT.dp, tokens.colors.secondary, null) }
             }
         }
     }
@@ -2894,7 +3292,7 @@ private fun ComposerControls(
         Box {
             Box(
                 modifier = Modifier
-                    .size(width = 40.dp, height = 44.dp)
+                    .size(width = ChatMetrics.COMPOSER_CONTROL_MIN_WIDTH_PT.dp, height = ChatMetrics.COMPOSER_CONTROL_ROW_HEIGHT_PT.dp)
                     .clickable(enabled = composer.enabled, role = Role.Button) { addOpen = true }
                     .semantics { contentDescription = UiStrings.COMPOSER_ADD_MENU }
                     .testTag(UiPageTags.COMPOSER_ADD),
@@ -2953,17 +3351,17 @@ private fun AccessModeMenuButton(
     Box {
         Row(
             modifier = Modifier
-                .defaultMinSize(minWidth = 40.dp)
-                .height(44.dp)
+                .defaultMinSize(minWidth = ChatMetrics.COMPOSER_CONTROL_MIN_WIDTH_PT.dp)
+                .height(ChatMetrics.COMPOSER_CONTROL_ROW_HEIGHT_PT.dp)
                 .clickable(enabled = menu.enabled && available, role = Role.Button) { open = true }
                 .semantics { contentDescription = UiStrings.ACCESS_MODE_LABEL.format(menu.label) }
                 .testTag(UiPageTags.COMPOSER_ACCESS_MODE),
             verticalAlignment = Alignment.CenterVertically,
             // Native ChatPage.swift composerControls uses a 2pt shield/chevron gap.
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            horizontalArrangement = Arrangement.spacedBy(ChatMetrics.ACCESS_MODE_ICON_GAP_PT.dp),
         ) {
-            PdshIconView(PdshIcon.LOCK_SHIELD, 20.dp, tokens.colors.iconMuted, null)
-            PdshIconView(PdshIcon.CHEVRON_DOWN, 10.dp, tokens.colors.iconMuted, null)
+            PdshIconView(PdshIcon.LOCK_SHIELD, ChatMetrics.ACCESS_MODE_SHIELD_GLYPH_PT.dp, tokens.colors.iconMuted, null)
+            PdshIconView(PdshIcon.CHEVRON_DOWN, ChatMetrics.ACCESS_MODE_CHEVRON_GLYPH_PT.dp, tokens.colors.iconMuted, null)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             val error = menu.error
@@ -3063,7 +3461,7 @@ private fun ModelMenuButton(
     Box {
         Row(
             modifier = Modifier
-                .height(44.dp)
+                .height(ChatMetrics.COMPOSER_CONTROL_ROW_HEIGHT_PT.dp)
                 .fillMaxWidth()
                 .defaultMinSize(minHeight = tokens.geometry.composerControlSize)
                 .clickable(enabled = menu.enabled && available, role = Role.Button) { open = true }
@@ -3071,7 +3469,7 @@ private fun ModelMenuButton(
                 .testTag(UiPageTags.COMPOSER_MODEL_MENU),
             verticalAlignment = Alignment.CenterVertically,
             // HomeSpec.swift modelNameBlock uses six points between name and effort.
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(ChatMetrics.MODEL_EFFORT_GAP_PT.dp),
         ) {
             BasicText(
                 text = menu.label,
@@ -3087,7 +3485,7 @@ private fun ModelMenuButton(
                     maxLines = 1,
                 )
             }
-            PdshIconView(PdshIcon.CHEVRON_DOWN, 12.dp, tokens.colors.textSecondary, null)
+            PdshIconView(PdshIcon.CHEVRON_DOWN, ChatMetrics.MODEL_MENU_CHEVRON_GLYPH_PT.dp, tokens.colors.textSecondary, null)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             if (menu.unavailable) {
@@ -3195,7 +3593,7 @@ private fun ComposerMenuOption(
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
         if (selected) {
-            PdshIconView(PdshIcon.CHECK, 16.dp, tokens.colors.accent, null)
+            PdshIconView(PdshIcon.CHECK, ChatMetrics.COMPOSER_MENU_CHECK_GLYPH_PT.dp, tokens.colors.accent, null)
         }
         BasicText(
             text = title,
@@ -3215,14 +3613,21 @@ internal object ChatPageTokens {
         UiTokenNames.COLORS_CTA_OVERRIDE,
         UiTokenNames.COLORS_PAGE_ACCENT,
         UiTokenNames.COLORS_DANGER,
+        UiTokenNames.COLORS_ICON_MUTED,
         UiTokenNames.COLORS_INPUT,
         UiTokenNames.COLORS_ON_ACCENT,
         UiTokenNames.COLORS_PAGE,
         UiTokenNames.COLORS_PRIMARY,
+        UiTokenNames.COLORS_PRIMARY_BUTTON,
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_SELECTOR,
+        UiTokenNames.COLORS_SURFACE,
         UiTokenNames.COLORS_SUCCESS,
         UiTokenNames.COLORS_TERTIARY,
+        UiTokenNames.COLORS_TEXT_PLACEHOLDER,
+        UiTokenNames.COLORS_TEXT_PRIMARY,
+        UiTokenNames.COLORS_TEXT_SECONDARY,
+        UiTokenNames.COLORS_TEXT_SUBTLE,
         UiTokenNames.COLORS_WARNING,
         UiTokenNames.GEOMETRY_BANNER_GAP,
         UiTokenNames.GEOMETRY_BANNER_INSET_H,
@@ -3236,9 +3641,10 @@ internal object ChatPageTokens {
         UiTokenNames.GEOMETRY_COMPOSER_OUTER_MARGIN_TOP,
         UiTokenNames.GEOMETRY_DISCLOSURE_ROW_HEIGHT,
         UiTokenNames.GEOMETRY_PAGE_HEADER_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_PAGE_LIST_ROW_MIN_HEIGHT,
+        UiTokenNames.GEOMETRY_NAV_BUTTON,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
+        UiTokenNames.GEOMETRY_PAGE_BAR_BUTTON_ELEVATION,
         UiTokenNames.GEOMETRY_PRIMARY_BUTTON_HEIGHT,
         UiTokenNames.GEOMETRY_STATUS_DOT_DIAMETER,
         UiTokenNames.GEOMETRY_TOOL_DETAIL_VERTICAL,
@@ -3257,6 +3663,9 @@ internal object ChatPageTokens {
         UiTokenNames.TYPOGRAPHY_CAPTION,
         UiTokenNames.TYPOGRAPHY_CODE,
         UiTokenNames.TYPOGRAPHY_HEADLINE,
+        UiTokenNames.TYPOGRAPHY_NAV_SUBTITLE,
+        UiTokenNames.TYPOGRAPHY_NAV_TITLE,
+        UiTokenNames.TYPOGRAPHY_PAGE_TITLE,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
         UiTokenNames.TYPOGRAPHY_SUBHEADLINE,
     )

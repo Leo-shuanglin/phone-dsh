@@ -49,8 +49,11 @@ public object SessionsMetrics {
 
     // ------------------------------------------------------------------- rows
 
-    /** PR22 session row height. Source: `HomeDrawer.swift:342` (`.frame(height: 44)`). Confidence: exact. */
+    /** HomeDrawer session row height. Source: `HomeDrawer.swift:342` (`.frame(height: 44)`). Confidence: exact. */
     public const val SESSION_ROW_HEIGHT_PT: Int = 44
+
+    /** Standalone SessionsPage row minimum height. Source: `SessionsPage.swift:589`. Confidence: exact. */
+    public const val STANDALONE_SESSION_ROW_HEIGHT_PT: Int = 56
 
     /** Folder ("group") header height. Source: `HomeDrawer.swift:325` (`.frame(height: 40)`). Confidence: exact. */
     public const val WORKSPACE_ROW_HEIGHT_PT: Int = 40
@@ -58,19 +61,40 @@ public object SessionsMetrics {
     /** Action row height (新会话 / 定时任务 / retry). Source: `HomeDrawer.swift:166`. Confidence: exact. */
     public const val ACTION_ROW_HEIGHT_PT: Int = 44
 
-    /** Session row inner horizontal padding. Source: `HomeDrawer.swift:340` (`padding(.trailing, 12)`). Confidence: exact. */
-    public const val SESSION_ROW_INNER_INSET_PT: Int = 12
+    /** Standalone session row content inset. Source: `SessionsPage.swift:588` (`.padding(.horizontal, 8)`). Confidence: exact. */
+    public const val SESSION_ROW_INNER_INSET_PT: Int = 8
 
-    /** Session glyph box is not drawn in PR22's drawer (text-start row); kept for the sessions list. Source: legacy measurement. Confidence: inferred. */
+    /** Standalone session glyph box. Source: `SessionsPage.swift:559` (`.frame(width: 17, height: 17)`). Confidence: exact. */
     public const val SESSION_GLYPH_BOX_PT: Int = 17
 
-    /** Session row glyph-to-text gap. Source: `HomeDrawer.swift:335` (`HStack(spacing: 8)`). Confidence: exact. */
-    public const val SESSION_GLYPH_GAP_PT: Int = 8
+    /** Standalone session bubble glyph size. Source: `SessionsPage.swift:557`. Confidence: exact. */
+    public const val SESSION_GLYPH_SIZE_PT: Int = 15
 
-    /** Session title-to-time gap. Source: `HomeDrawer.swift:335`; the two are on one row, so 0. Confidence: exact. */
-    public const val SESSION_TEXT_GAP_PT: Int = 0
+    /** Standalone session row glyph-to-title gap. Source: `SessionsPage.swift:555`. Confidence: exact. */
+    public const val SESSION_GLYPH_GAP_PT: Int = 10
 
-    /** Running dot diameter. Source: `HomeDrawer.swift:157` (`.frame(width: 6, height: 6)`). Confidence: exact. */
+    /** Standalone session title-to-metadata gap. Source: `SessionsPage.swift:560`. Confidence: exact. */
+    public const val SESSION_TEXT_GAP_PT: Int = 3
+
+    /** Standalone session metadata font size. Source: `SessionsPage.swift:577`. Confidence: exact. */
+    public const val SESSION_METADATA_SIZE_PT: Int = 13
+
+    /** Gaps within the relative-time/status row. Source: `SessionsPage.swift:562`. Confidence: exact. */
+    public const val SESSION_METADATA_GAP_PT: Int = 5
+
+    /** Gap between the running dot and status label. Source: `SessionsPage.swift:568`. Confidence: exact. */
+    public const val SESSION_STATUS_DOT_GAP_PT: Int = 4
+
+    /** Current-session checkmark font size. Source: `SessionsPage.swift:584`. Confidence: exact. */
+    public const val SESSION_SELECTED_CHECK_SIZE_PT: Int = 20
+
+    /** Current-session checkmark spacer. Source: `SessionsPage.swift:581`. Confidence: exact. */
+    public const val SESSION_SELECTED_CHECK_GAP_PT: Int = 4
+
+    /** Press feedback corner radius. Source: `SessionsPage.swift:553`. Confidence: exact. */
+    public const val SESSION_ROW_PRESS_RADIUS_PT: Int = 12
+
+    /** Standalone session running dot diameter. Source: `SessionsPage.swift:571`. Confidence: exact. */
     public const val SESSION_RUNNING_DOT_PT: Int = 6
 
     /** Folder chevron slot. Source: `HomeDrawer.swift:308` (`.frame(width: 12)`). Confidence: exact. */
@@ -196,6 +220,7 @@ public object SessionsMetrics {
 
     /** [SESSION_ROW_HEIGHT_PT] as a Compose length. */
     public val sessionRowHeight: Dp get() = SESSION_ROW_HEIGHT_PT.dp
+    public val standaloneSessionRowHeight: Dp get() = STANDALONE_SESSION_ROW_HEIGHT_PT.dp
 
     /** [WORKSPACE_ROW_HEIGHT_PT] as a Compose length. */
     public val workspaceRowHeight: Dp get() = WORKSPACE_ROW_HEIGHT_PT.dp

@@ -50,21 +50,20 @@ import com.phonedsh.ui.theme.generated.UiTokenNames
  */
 internal object SessionPageChromeTokens {
     val refs: List<String> = listOf(
-        UiTokenNames.COLORS_SECONDARY,
-        UiTokenNames.COLORS_TERTIARY,
-        UiTokenNames.COLORS_ACCENT,
-        UiTokenNames.COLORS_DANGER,
-        UiTokenNames.COLORS_WARNING,
-        UiTokenNames.COLORS_BORDER,
+        UiTokenNames.COLORS_BORDER_LIST,
+        UiTokenNames.COLORS_PAGE_DANGER,
+        UiTokenNames.COLORS_PAGE_WARNING,
+        UiTokenNames.COLORS_TEXT_PRIMARY,
+        UiTokenNames.COLORS_TEXT_SECONDARY,
+        UiTokenNames.COLORS_TEXT_TERTIARY,
         UiTokenNames.TYPOGRAPHY_SECONDARY,
-        UiTokenNames.TYPOGRAPHY_CAPTION,
         UiTokenNames.SPACING_ICON_TEXT,
         UiTokenNames.STROKE_HAIRLINE,
         UiTokenNames.GEOMETRY_BANNER_INSET_H,
         UiTokenNames.GEOMETRY_BANNER_INSET_V,
         UiTokenNames.GEOMETRY_BANNER_GAP,
         UiTokenNames.GEOMETRY_CARD_OUTER_MARGIN_V,
-        UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
+        UiTokenNames.GEOMETRY_CHROME_INSET,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
     )
 }
