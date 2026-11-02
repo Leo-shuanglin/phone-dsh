@@ -25,14 +25,9 @@
 // (`pdsh.face.web`), because the demo acceptance taps 跑一轮 on the native face
 // after the worker is ready.
 //
-// L62 moved the launch face off the probe. [PdshRoute.Home] now renders the
-// product home (`HostHomeScreen`: the session list, the drawer entry and the
-// model-service onboarding). L72 took the probe *out of the drawer*: on iOS the
-// drawer is the session list plus 定时任务 / 设置 (`NativeShell.swift:288`–`:307`),
-// so a diagnostic console has no row there. `ProbeScreen` — the D3 console —
-// renders at the home address only for a launch that asks for it
-// (`--ez pdsh.face.probe true`), which is the developer entry the device scripts
-// already pass. The product drawer is exactly the baseline's.
+// Product launches land on ChatPage. The PR22 session drawer overlays that
+// conversation and reads App-owned chat records; the diagnostic probe remains an
+// explicit launch face (`--ez pdsh.face.probe true`).
 package com.phonedsh.probe
 
 import com.phonedsh.dsh.localexec.UbuntuApproval
@@ -65,6 +60,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
@@ -85,13 +81,18 @@ import com.phonedsh.engine.KernelVerdict
 import com.phonedsh.platform.EngineHostState
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.nav.PdshBackLevel
-import com.phonedsh.ui.nav.PdshDrawer
-import com.phonedsh.ui.nav.PdshDrawerEntry
-import com.phonedsh.ui.nav.PdshDrawerIcon
 import com.phonedsh.ui.nav.PdshHostAction
 import com.phonedsh.ui.nav.SettingsWrite
 import com.phonedsh.ui.nav.PdshNavFacts
 import com.phonedsh.ui.nav.PdshNavHost
+import com.phonedsh.ui.nav.HomeDrawer
+import com.phonedsh.ui.nav.HomeDrawerFacts
+import com.phonedsh.ui.nav.HomeDrawerFolder
+import com.phonedsh.ui.nav.HomeDrawerSession
+import com.phonedsh.ui.nav.HomeDrawerEngineState
+import com.phonedsh.ui.nav.HomeDrawerArchiveResult
+import com.phonedsh.ui.nav.HomeDrawerArchiveRequest
+import com.phonedsh.ui.nav.rememberHomeDrawerUiState
 import com.phonedsh.ui.nav.PdshNavState
 import com.phonedsh.ui.nav.PdshRoute
 import com.phonedsh.ui.page.FactState
@@ -100,8 +101,52 @@ import com.phonedsh.ui.page.ProviderDraft
 import com.phonedsh.ui.page.ProviderKeyStatus
 import com.phonedsh.ui.page.SettingsScreenState
 import com.phonedsh.ui.page.WorkbenchSection
+import com.phonedsh.ui.page.ShellRun
 import com.phonedsh.ui.theme.PdshTheme
 import com.phonedsh.ui.theme.PdshThemeValues
+import com.phonedsh.ui.theme.UiTypePreferences
+import com.phonedsh.ui.state.StateRequestId
+import java.util.UUID
+
+/** The installed app opens the real conversation; the diagnostic face is opt-in. */
+internal fun initialHostNavState(probeFaceOnLaunch: Boolean): PdshNavState =
+    PdshNavState(listOf(if (probeFaceOnLaunch) PdshRoute.Home else PdshRoute.Chat))
+
+private fun ShellRun.withExecEvent(event: com.phonedsh.dsh.exec.ExecEvent): ShellRun = when (event) {
+    is com.phonedsh.dsh.exec.ExecEvent.Start -> copy(runningExecId = event.execId)
+    is com.phonedsh.dsh.exec.ExecEvent.Output -> copy(
+        output = output + String(java.util.Base64.getDecoder().decode(event.data), Charsets.UTF_8),
+    )
+    is com.phonedsh.dsh.exec.ExecEvent.Error -> copy(error = event.message, runningExecId = null)
+    is com.phonedsh.dsh.exec.ExecEvent.Exit -> copy(
+        output = output + buildString {
+            append("\n[结束：")
+            append(event.code?.toString() ?: "未知")
+            event.signal?.let { append(", signal ").append(it) }
+            if (event.status == com.phonedsh.dsh.exec.ExecEvent.ExitStatus.TIMED_OUT) append("，超时")
+            if (event.status == com.phonedsh.dsh.exec.ExecEvent.ExitStatus.CANCELLED) append("，已取消")
+            append("]")
+        },
+        runningExecId = null,
+    )
+    is com.phonedsh.dsh.exec.ExecEvent.Quiescent -> this
+}
+
+private fun resolvePreferenceFont(id: String?): androidx.compose.ui.text.font.FontFamily? = when (id?.lowercase()) {
+    null, "", "system", "default" -> null
+    "sans-serif", "sansserif" -> androidx.compose.ui.text.font.FontFamily.SansSerif
+    "serif" -> androidx.compose.ui.text.font.FontFamily.Serif
+    "monospace", "monospaced" -> androidx.compose.ui.text.font.FontFamily.Monospace
+    "cursive" -> androidx.compose.ui.text.font.FontFamily.Cursive
+    else -> null
+}
+
+/** Verified Android native client artifacts (Maven POM evidence, 2026-11-03). */
+private val ANDROID_NATIVE_LICENSE_FACTS = listOf(
+    com.phonedsh.ui.nav.PdshLicenseFact("kotlin-stdlib", "Kotlin standard library 2.1.0", "Apache-2.0"),
+    com.phonedsh.ui.nav.PdshLicenseFact("androidx-core-ktx", "AndroidX Core KTX 1.15.0", "Apache-2.0"),
+    com.phonedsh.ui.nav.PdshLicenseFact("androidx-compose-ui", "Jetpack Compose UI 1.7.6", "Apache-2.0"),
+)
 
 /**
  * The app's one screen: the navigation shell around every routed page.
@@ -142,13 +187,16 @@ internal fun HostShell(
     recoveryNotice: RecoveryNotice?,
     backgroundRevision: Int,
     permissionRevision: Int,
+    filesImportReceipt: Pair<String, com.phonedsh.ui.page.FilesImportReceipt>?,
+    onSpeakText: ((String) -> Unit)?,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onRunTurn: () -> Unit,
-    onPhonePermissionRequest: (PhoneCapability) -> Unit = {},
-    onPhonePermissionSettings: (PhoneCapability) -> Unit = {},
-    onPickFiles: () -> Unit = {},
-    onPickImages: () -> Unit = {},
+    onPhonePermissionRequest: (PhoneCapability) -> Unit,
+    onPhonePermissionSettings: (PhoneCapability) -> Unit,
+    onPickFiles: () -> Unit,
+    onPickImages: () -> Unit,
+    onPickWorkspaceFile: (String) -> Unit,
 ) {
     // The facts are one host walk per lifecycle/HELLO/turn change: a page never
     // asks the host for anything itself. `backgroundRevision` is the one key that
@@ -161,10 +209,13 @@ internal fun HostShell(
     // The user preferences, collected so the theme and the facts follow a write.
     // The store is the view model's; this shell never reads the file itself.
     val preferences by engine.preferenceState.collectAsState()
+    val context = LocalContext.current
     val systemDark = isSystemInDarkTheme()
     // L69: the chat page's one state. Collected here so a Worker event rebuilds the
     // page on the next frame; the view model is its only writer.
     val chatUi by engine.chat.collectAsState()
+    val sessionSnapshot by engine.sessions.collectAsState()
+    val chatScreenState = engine.chatSurfaceState()
     LaunchedEffect(Unit) { engine.startNativeSurface() }
     LaunchedEffect(state is EngineHostState.Running, chatUi.chatId) {
         if (state is EngineHostState.Running) engine.prepareChatSession()
@@ -174,13 +225,40 @@ internal fun HostShell(
     // thread, never here.
     val artifactFacts by engine.artifactFacts.collectAsState()
     val automationFacts by engine.automation.collectAsState()
+    var drawerRecords by remember { mutableStateOf<List<ChatRecord>?>(null) }
+    var drawerFolders by remember { mutableStateOf<List<ChatWorkspaceGroup>?>(null) }
+    LaunchedEffect(settingsRevision, chatUi.chatId, chatUi.updatedAtMs, sessionSnapshot.sessions) {
+        val loaded = withContext(Dispatchers.IO) {
+            runCatching {
+                val groups = engine.chatStore.loadWorkspaceGroups()
+                if (groups.isEmpty()) {
+                    val receipt = engine.chatStore.ensureDefaultWorkspaceGroup(
+                        StateRequestId("default-folder:${UUID.randomUUID()}"),
+                    )
+                    check(receipt.outcome is ChatWriteOutcome.Persisted)
+                }
+                engine.chatStore.loadAll() to engine.chatStore.loadWorkspaceGroups()
+            }.getOrNull()
+        }
+        if (loaded != null) {
+            drawerRecords = loaded.first
+            drawerFolders = loaded.second
+        }
+    }
     var providerConnectionTest by remember {
         mutableStateOf<com.phonedsh.ui.page.ProviderConnectionTestFact?>(null)
     }
     var providerSave by remember {
         mutableStateOf<com.phonedsh.ui.page.ProviderSaveFact?>(null)
     }
+    var providerModels by remember {
+        mutableStateOf<com.phonedsh.ui.nav.PdshProviderOperationFact?>(null)
+    }
+    var activeProviderTestRequest by remember { mutableStateOf<String?>(null) }
+    var activeProviderSaveRequest by remember { mutableStateOf<String?>(null) }
     val providerProbeScope = rememberCoroutineScope()
+    var nav by remember { mutableStateOf(initialHostNavState(engine.probeFaceOnLaunch())) }
+    var shellRun by remember { mutableStateOf(ShellRun()) }
     LaunchedEffect(state is EngineHostState.Running, chatUi.workerSessionId) {
         if (state is EngineHostState.Running) engine.refreshAutomation()
     }
@@ -194,16 +272,368 @@ internal fun HostShell(
         preferences,
         automationFacts,
         chatUi.workerSessionId,
+        chatUi.error,
+        chatUi.lastSubmission,
+        chatUi.lastAttachments,
+        chatUi.lastPromptRequestId,
+        chatUi.pendingNodes,
+        chatScreenState.pending,
+        chatScreenState.rows,
+        chatScreenState.queueItems,
+        onSpeakText,
+        shellRun,
         providerConnectionTest,
         providerSave,
+        providerModels,
+        nav,
     ) {
         val measured = engine.navFacts(state, handshake, turn)
+        val shellFacts = engine.shellSnapshot(shellRun)
+        val actions = mutableMapOf<com.phonedsh.ui.nav.PdshActionKey,
+            com.phonedsh.ui.nav.PdshActionAvailability<(com.phonedsh.ui.nav.PdshUiHostCommand) -> Unit>>()
+        fun available(
+            key: com.phonedsh.ui.nav.PdshActionKey,
+            handler: (com.phonedsh.ui.nav.PdshUiHostCommand) -> Unit,
+        ) {
+            actions[key] = com.phonedsh.ui.nav.PdshActionAvailability.Available(handler)
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.FILE_IMPORT) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.FileImport) onPickFiles()
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.IMAGE_IMPORT) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.ImageImport) onPickImages()
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.SAF_IMPORT) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.SafImport) onPickWorkspaceFile(request.requestId.value)
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.SELECT_MODEL) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.SelectModel) engine.selectChatModel(request.model, request.effort)
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.SELECT_PERMISSION_MODE) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.SelectPermissionMode) engine.selectChatAccessMode(request.modeId)
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.ANSWER_QUESTION) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.AnswerQuestion && request.sessionId == chatUi.chatId) {
+                engine.answerChatQuestion(request.pending, request.answer)
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.DISCARD_QUESTION) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.DiscardQuestion && request.sessionId == chatUi.chatId) {
+                engine.dismissChatQuestion(request.pending)
+            }
+        }
+        if (!shellFacts.commands.isNullOrEmpty() && state is EngineHostState.Running &&
+            hostState == com.phonedsh.controller.HostState.RUNNING
+        ) available(com.phonedsh.ui.nav.PdshActionKey.EXECUTE_COMMAND) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.ExecuteCommand) {
+                val execRequest = engine.shellExecRequest(
+                    request.command,
+                    request.workingDirectory,
+                    request.arguments,
+                    request.requestId,
+                )
+                if (execRequest == null) {
+                    shellRun = shellRun.copy(error = "命令请求未通过本机能力校验。")
+                } else if (shellRun.runningExecId == null) {
+                    shellRun = ShellRun(runningExecId = execRequest.execId)
+                    providerProbeScope.launch {
+                        try {
+                            engine.runShellRequest(execRequest).collect { event ->
+                                if (shellRun.runningExecId == execRequest.execId) {
+                                    shellRun = shellRun.withExecEvent(event)
+                                }
+                            }
+                            if (shellRun.runningExecId == execRequest.execId) {
+                                shellRun = shellRun.copy(
+                                    error = "执行流结束时没有收到终止事件。",
+                                    runningExecId = null,
+                                )
+                            }
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            if (shellRun.runningExecId == execRequest.execId) {
+                                shellRun = shellRun.copy(
+                                    error = failure.message?.substringBefore('\n')?.take(180) ?: "执行失败。",
+                                    runningExecId = null,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (shellRun.runningExecId != null) {
+            available(com.phonedsh.ui.nav.PdshActionKey.SHELL_CANCEL) { request ->
+                if (request is com.phonedsh.ui.nav.PdshUiHostCommand.ShellCancel &&
+                    request.execId == shellRun.runningExecId
+                ) engine.cancelShellRequest(request.execId)
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.RUNTIME_RESTART) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.RuntimeRestart) engine.restartChatEngine()
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.RUNTIME_STOP) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.RuntimeStop) onStop()
+        }
+        if (chatUi.running && !chatUi.workerSessionId.isNullOrBlank()) {
+            available(com.phonedsh.ui.nav.PdshActionKey.STOP) { request ->
+                if (request is com.phonedsh.ui.nav.PdshUiHostCommand.Stop &&
+                    request.sessionId == chatUi.workerSessionId && chatUi.chatId.isNotBlank()
+                ) engine.stopChat()
+            }
+            if (preferences.busyEnterMode == BusyEnterMode.QUEUE) {
+                available(com.phonedsh.ui.nav.PdshActionKey.QUEUE) { request ->
+                    if (request is com.phonedsh.ui.nav.PdshUiHostCommand.Queue && request.sessionId == chatUi.workerSessionId) {
+                        engine.submitWhileRunning(
+                            request.sessionId,
+                            request.requestId,
+                            request.text,
+                            com.phonedsh.ui.state.EnterMode.QUEUE,
+                        )
+                    }
+                }
+            }
+            if (preferences.busyEnterMode == BusyEnterMode.STEER) {
+                available(com.phonedsh.ui.nav.PdshActionKey.STEER) { request ->
+                    if (request is com.phonedsh.ui.nav.PdshUiHostCommand.Steer && request.sessionId == chatUi.workerSessionId) {
+                        engine.submitWhileRunning(
+                            request.sessionId,
+                            request.requestId,
+                            request.text,
+                            com.phonedsh.ui.state.EnterMode.STEER,
+                        )
+                    }
+                }
+            }
+        }
+        if (state is EngineHostState.Running && !chatUi.running && chatUi.error != null &&
+            !chatUi.lastPromptRequestId.isNullOrBlank() &&
+            (chatUi.lastSubmission.isNotBlank() || chatUi.lastAttachments.isNotEmpty())
+        ) {
+            available(com.phonedsh.ui.nav.PdshActionKey.RETRY) { request ->
+                if (request is com.phonedsh.ui.nav.PdshUiHostCommand.Retry && request.sessionId == chatUi.chatId) {
+                    engine.retryFailedChat(request.sessionId, request.requestId)
+                }
+            }
+        }
+        val durableQueueItems = chatScreenState.queueItems.orEmpty().filter { it.id is com.phonedsh.ui.state.QueueItemId.Durable }
+        if (chatUi.workerSessionId != null && durableQueueItems.isNotEmpty()) {
+            if (durableQueueItems.any { it.canEdit == true }) {
+                available(com.phonedsh.ui.nav.PdshActionKey.QUEUE_EDIT) { request ->
+                    if (request is com.phonedsh.ui.nav.PdshUiHostCommand.EditQueueItem && request.sessionId == chatUi.workerSessionId) {
+                        val item = durableQueueItems.firstOrNull {
+                            (it.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == request.itemId
+                        }
+                        if (item != null) engine.updateChatQueueItem(item, com.phonedsh.ui.state.QueueAction.EDIT, request.requestId, request.text)
+                    }
+                }
+            }
+            if (durableQueueItems.any { it.canRemove == true }) {
+                available(com.phonedsh.ui.nav.PdshActionKey.QUEUE_REMOVE) { request ->
+                    if (request is com.phonedsh.ui.nav.PdshUiHostCommand.RemoveQueueItem && request.sessionId == chatUi.workerSessionId) {
+                        val item = durableQueueItems.firstOrNull {
+                            (it.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == request.itemId
+                        }
+                        if (item != null) engine.updateChatQueueItem(item, com.phonedsh.ui.state.QueueAction.REMOVE, request.requestId)
+                    }
+                }
+            }
+            if (durableQueueItems.any { it.canSteer == true }) {
+                available(com.phonedsh.ui.nav.PdshActionKey.QUEUE_STEER) { request ->
+                    if (request is com.phonedsh.ui.nav.PdshUiHostCommand.SteerQueueItem && request.sessionId == chatUi.workerSessionId) {
+                        val item = durableQueueItems.firstOrNull {
+                            (it.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == request.itemId
+                        }
+                        if (item != null) engine.updateChatQueueItem(item, com.phonedsh.ui.state.QueueAction.STEER, request.requestId)
+                    }
+                }
+            }
+        }
+        val visiblePending = listOfNotNull(chatScreenState.pending.primary) + chatScreenState.pending.folded
+        val latestAssistantReply = chatScreenState.rows.asReversed().firstNotNullOfOrNull { row ->
+            (row as? com.phonedsh.ui.state.ChatRow.Assistant)
+                ?.takeIf { !it.streaming && it.text.isNotBlank() }
+                ?.text
+        }
+        val visiblePlan = visiblePending.firstOrNull { pending ->
+            pending.channelAvailable == true && pending.questionItems.singleOrNull()?.let { item ->
+                item.intentKind == "plan-review" && !item.detail.isNullOrBlank() && !item.approveWireLabel.isNullOrBlank()
+            } == true
+        }
+        if (visiblePlan != null) {
+            available(com.phonedsh.ui.nav.PdshActionKey.APPROVE_PLAN) { request ->
+                if (request is com.phonedsh.ui.nav.PdshUiHostCommand.ApprovePlan &&
+                    request.sessionId == chatUi.chatId && request.planRequestId == visiblePlan.typedRequestId &&
+                    request.answer.isNotBlank()
+                ) engine.answerChatQuestion(visiblePlan, request.answer)
+            }
+            available(com.phonedsh.ui.nav.PdshActionKey.REJECT_PLAN) { request ->
+                if (request is com.phonedsh.ui.nav.PdshUiHostCommand.RejectPlan &&
+                    request.sessionId == chatUi.chatId && request.planRequestId == visiblePlan.typedRequestId
+                ) engine.dismissChatQuestion(visiblePlan)
+            }
+        }
+        val latestAssistantReply = chatScreenState.rows.asReversed().firstNotNullOfOrNull { row ->
+            (row as? com.phonedsh.ui.state.ChatRow.Assistant)
+                ?.takeIf { !it.streaming && it.text.isNotBlank() }
+                ?.text
+        }
+        if (onSpeakText != null && latestAssistantReply != null && chatUi.chatId.isNotBlank()) {
+            available(com.phonedsh.ui.nav.PdshActionKey.SPEAK_RECENT_REPLY) { request ->
+                if (request is com.phonedsh.ui.nav.PdshUiHostCommand.SpeakRecentReply &&
+                    request.sessionId == chatUi.chatId && request.text == latestAssistantReply
+                ) onSpeakText.invoke(request.text)
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.SESSION_RENAME) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.SessionRename) providerProbeScope.launch {
+                val receipt = withContext(Dispatchers.IO) { applyHostSessionCommand(engine.chatStore, request) }
+                if (receipt?.requestId == request.requestId && receipt.sessionId == request.sessionId &&
+                    receipt.outcome == com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED
+                ) {
+                    engine.refreshSessions()
+                    settingsRevision++
+                }
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.SESSION_ARCHIVE) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.SessionArchive) providerProbeScope.launch {
+                val receipt = withContext(Dispatchers.IO) { applyHostSessionCommand(engine.chatStore, request) }
+                if (receipt?.requestId == request.requestId && receipt.sessionId == request.sessionId &&
+                    receipt.outcome == com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED
+                ) {
+                    engine.refreshSessions()
+                    settingsRevision++
+                }
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.SESSION_RESTORE) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.SessionRestore) providerProbeScope.launch {
+                val receipt = withContext(Dispatchers.IO) { applyHostSessionCommand(engine.chatStore, request) }
+                if (receipt?.requestId == request.requestId && receipt.sessionId == request.sessionId &&
+                    receipt.outcome == com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED
+                ) {
+                    engine.refreshSessions()
+                    settingsRevision++
+                }
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.WORKSPACE_FOLDER_CREATE) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.WorkspaceFolderCreate) providerProbeScope.launch {
+                val receipt = withContext(Dispatchers.IO) { applyHostWorkspaceCommand(engine.chatStore, request) }
+                if (receipt?.requestId == request.requestId && receipt.outcome == com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED) {
+                    settingsRevision++
+                }
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.WORKSPACE_FOLDER_RENAME) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.WorkspaceFolderRename) providerProbeScope.launch {
+                val receipt = withContext(Dispatchers.IO) { applyHostWorkspaceCommand(engine.chatStore, request) }
+                if (receipt?.requestId == request.requestId && receipt.outcome == com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED) {
+                    settingsRevision++
+                }
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.WORKSPACE_FOLDER_DELETE) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.WorkspaceFolderDelete) providerProbeScope.launch {
+                val receipt = withContext(Dispatchers.IO) { applyHostWorkspaceCommand(engine.chatStore, request) }
+                if (receipt?.requestId == request.requestId && receipt.outcome == com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED) {
+                    settingsRevision++
+                }
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.OPEN_SETTINGS) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.OpenSettings) nav = nav.push(PdshRoute.Settings)
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.OPEN_SCHEDULES) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.OpenSchedules) nav = nav.push(PdshRoute.Automation)
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.PROVIDER_GET_MODELS) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.ProviderGetModels) {
+                val draft = request.draft
+                val requestId = request.requestId.value
+                providerModels = com.phonedsh.ui.nav.PdshProviderOperationFact(
+                    operation = com.phonedsh.ui.nav.PdshProviderOperation.GET_MODELS,
+                    requestId = request.requestId,
+                    profileId = draft.id.takeIf(String::isNotBlank),
+                )
+                providerProbeScope.launch {
+                    val result = getProviderModels(draft, requestId)
+                    val current = providerModels
+                    if (current?.requestId?.value != result.requestId ||
+                        current.profileId != result.profileId
+                    ) return@launch
+                    providerModels = current.copy(models = result.models, message = result.message)
+                }
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.PROVIDER_TEST) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.ProviderTest) {
+                val draft = request.draft
+                val requestId = request.requestId.value
+                activeProviderTestRequest = requestId
+                providerConnectionTest = com.phonedsh.ui.page.ProviderConnectionTestFact(
+                    profileId = draft.id, isNew = draft.isNew, isTesting = true,
+                )
+                providerProbeScope.launch {
+                    val result = testProviderConnectionBound(draft, requestId)
+                    if (activeProviderTestRequest != result.requestId || result.profileId != draft.id.takeIf(String::isNotBlank)) {
+                        return@launch
+                    }
+                    providerConnectionTest = com.phonedsh.ui.page.ProviderConnectionTestFact(
+                        profileId = draft.id,
+                        isNew = draft.isNew,
+                        isTesting = false,
+                        succeeded = result.result is ProviderConnectionTestResult.Success,
+                        message = result.result.message,
+                    )
+                }
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.PROVIDER_SAVE) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.ProviderSave) {
+                val draft = request.draft
+                val requestId = request.requestId.value
+                activeProviderSaveRequest = requestId
+                providerSave = com.phonedsh.ui.page.ProviderSaveFact(
+                    requestId = requestId, profileId = draft.id, isNew = draft.isNew, isSaving = true,
+                )
+                providerProbeScope.launch {
+                    val result = saveProviderDraft(draft, requestId)
+                    if (activeProviderSaveRequest != result.requestId || result.profileId != draft.id.takeIf(String::isNotBlank)) {
+                        return@launch
+                    }
+                    if (result.recordWritten) settingsRevision++
+                    providerSave = com.phonedsh.ui.page.ProviderSaveFact(
+                        requestId = result.requestId,
+                        profileId = result.profileId ?: draft.id,
+                        isNew = draft.isNew,
+                        isSaving = false,
+                        succeeded = result.succeeded,
+                        message = result.message,
+                    )
+                }
+            }
+        }
+        available(com.phonedsh.ui.nav.PdshActionKey.NEW_SESSION) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.NewSession) providerProbeScope.launch {
+                val receipt = engine.newChatSessionConfirmed(request.requestId)
+                if (receipt.confirms(request.requestId, receipt.sessionId, null)) {
+                    nav = PdshNavState(listOf(PdshRoute.Chat))
+                }
+            }
+        }
         measured.copy(
+            actionAvailability = com.phonedsh.ui.nav.PdshActionAvailabilities(actions),
+            licenses = ANDROID_NATIVE_LICENSE_FACTS,
             automation = automationFacts.copy(currentSessionID = chatUi.workerSessionId),
             modelProvider = measured.modelProvider.copy(
                 connectionTest = providerConnectionTest,
                 providerSave = providerSave,
             ),
+            shell = shellFacts,
+            providerOperations = listOfNotNull(providerModels),
         )
     }
     // The one fact in that snapshot that is not an engine reading: whether the
@@ -211,7 +641,6 @@ internal fun HostShell(
     // measured by the back callback (one gesture moves it), so it is applied here
     // rather than inside the remembered walk.
     val shownFacts = PredictiveBack.measured(facts)
-    var nav by remember { mutableStateOf(PdshNavState()) }
     LaunchedEffect(chatUi.commandExecution?.id) {
         if (chatUi.commandExecution != null) nav = nav.push(PdshRoute.CommandResult)
     }
@@ -252,7 +681,17 @@ internal fun HostShell(
     // 外观 is a real preference here: the stored choice picks the token table for
     // every surface above the page (the probe face draws its own theme and is
     // handed the same resolved answer below). `system` follows the platform.
-    PdshTheme(darkTheme = preferences.darkTheme(systemDark)) {
+    PdshTheme(
+        darkTheme = preferences.darkTheme(systemDark),
+        typePreferences = UiTypePreferences(
+            textSizePt = preferences.textFontSize.toFloat(),
+            codeSizePt = preferences.codeFontSize.toFloat(),
+            terminalSizePt = preferences.terminalFontSize.toFloat(),
+            textFontFamily = resolvePreferenceFont(preferences.textFontFamily),
+            codeFontFamily = resolvePreferenceFont(preferences.codeFontFamily),
+            terminalFontFamily = resolvePreferenceFont(preferences.terminalFontFamily),
+        ),
+    ) {
         val tokens = PdshThemeValues.tokens
         // §1 says the Web surface is 引擎就绪时的默认面. This host makes that
         // opt-in (`pdsh.face.web`) instead of unconditional: the demo acceptance
@@ -279,7 +718,10 @@ internal fun HostShell(
         PdshBackHandler(enabled = drawerOpen || probeOpen || backLevel.available || nav.canGoBack) {
             when {
                 drawerOpen -> drawerOpen = false
-                probeOpen -> probeOpen = false
+                probeOpen -> {
+                    probeOpen = false
+                    nav = PdshNavState(listOf(PdshRoute.Chat))
+                }
                 backLevel.consume() -> Unit
                 else -> nav = nav.pop()
             }
@@ -316,7 +758,7 @@ internal fun HostShell(
                             // 原生恢复 returns to the *product* home, never back
                             // into the diagnostic face the person left open.
                             probeOpen = false
-                            nav = nav.popToHome()
+                            nav = PdshNavState(listOf(PdshRoute.Chat))
                         },
                         onHostAction = { action ->
                             // L72: one action is a navigation edge, not a handoff —
@@ -335,15 +777,21 @@ internal fun HostShell(
                             } else if (action is PdshHostAction.TestProvider) {
                                 if (providerConnectionTest?.isTesting != true) {
                                     val draft = action.draft
+                                    val requestId = UUID.randomUUID().toString()
+                                    activeProviderTestRequest = requestId
                                     providerConnectionTest = com.phonedsh.ui.page.ProviderConnectionTestFact(
                                         profileId = draft.id, isNew = draft.isNew, isTesting = true,
                                         succeeded = null, message = null,
                                     )
                                     providerProbeScope.launch {
-                                        val result = testProviderConnection(draft)
+                                        val result = testProviderConnectionBound(draft, requestId)
+                                        if (activeProviderTestRequest != result.requestId ||
+                                            result.profileId != draft.id.takeIf { it.isNotBlank() }
+                                        ) return@launch
                                         providerConnectionTest = com.phonedsh.ui.page.ProviderConnectionTestFact(
                                             profileId = draft.id, isNew = draft.isNew, isTesting = false,
-                                            succeeded = result is ProviderConnectionTestResult.Success, message = result.message,
+                                            succeeded = result.result is ProviderConnectionTestResult.Success,
+                                            message = result.result.message,
                                         )
                                     }
                                 }
@@ -351,6 +799,7 @@ internal fun HostShell(
                                 if (providerSave?.isSaving != true) {
                                     val draft = action.draft
                                     val requestId = action.requestId
+                                    activeProviderSaveRequest = requestId
                                     providerSave = com.phonedsh.ui.page.ProviderSaveFact(
                                         requestId = requestId,
                                         profileId = draft.id,
@@ -358,11 +807,14 @@ internal fun HostShell(
                                         isSaving = true,
                                     )
                                     providerProbeScope.launch {
-                                        val result = saveProvider(draft)
+                                        val result = saveProviderDraft(draft, requestId)
+                                        if (activeProviderSaveRequest != result.requestId ||
+                                            result.profileId != draft.id.takeIf { it.isNotBlank() }
+                                        ) return@launch
                                         if (result.recordWritten) settingsRevision++
                                         providerSave = com.phonedsh.ui.page.ProviderSaveFact(
-                                            requestId = requestId,
-                                            profileId = draft.id,
+                                            requestId = result.requestId,
+                                            profileId = result.profileId ?: draft.id,
                                             isNew = draft.isNew,
                                             isSaving = false,
                                             succeeded = result.succeeded,
@@ -388,44 +840,70 @@ internal fun HostShell(
                         // session's permission tier from a preset), so it keeps the
                         // honest refusal instead of storing a value no path reads.
                         onSettingsWrite = { write ->
-                            val applied = when (write) {
-                                is SettingsWrite.BackgroundKeepAlive -> {
-                                    engine.setBackgroundKeepAlive(write.value)
-                                    true
-                                }
-
-                                is SettingsWrite.BusyEnter -> {
-                                    engine.setBusyEnterMode(write.mode)
-                                    true
-                                }
-
-                                is SettingsWrite.DefaultPermissionTier -> false
+                            val change = when (write) {
+                                is SettingsWrite.BackgroundKeepAlive -> ConfirmedPreferenceChange.BackgroundKeepAlive(write.value)
+                                is SettingsWrite.BusyEnter -> ConfirmedPreferenceChange.BusyEnterMode(write.mode)
+                                is SettingsWrite.DefaultPermissionTier -> null
                             }
-                            if (applied) {
-                                Log.i(TAG_NAV, "PREF_WRITE ${write.wire}")
-                                settingsRevision++
-                            } else {
+                            if (change == null) {
                                 notice = "本宿主没有保存「${settingsWriteLabel(write)}」的命令，本次没有保存"
+                            } else {
+                                providerProbeScope.launch {
+                                    val receipt = engine.writePreferenceConfirmed(
+                                        StateRequestId(UUID.randomUUID().toString()), change,
+                                    )
+                                    if (receipt.outcome is PreferenceWriteOutcome.Persisted) {
+                                        Log.i(TAG_NAV, "PREF_WRITE ${write.wire}")
+                                        settingsRevision++
+                                    } else notice = "保存「${settingsWriteLabel(write)}」失败，本次未确认"
+                                }
                             }
                         },
                         // The four generic pickers (语言 / 外观 / 工作步骤展示 / 收起时机 /
                         // 性能与用量) and the 显示代码工作视图 switch: the row id and the
                         // option id are the store's own vocabulary.
                         onPreferenceWrite = { choice ->
-                            if (engine.applyPreference(choice.rowId, choice.optionId)) {
-                                Log.i(
-                                    TAG_NAV,
-                                    "PREF_WRITE ${choice.rowId}=${choice.optionId}",
-                                )
-                                settingsRevision++
-                            } else {
+                            val change = engine.confirmedPreferenceChange(choice.rowId, choice.optionId)
+                            if (change == null) {
                                 notice = "本宿主没有保存「${preferenceRowLabel(choice.rowId)}」的命令，本次没有保存"
+                            } else providerProbeScope.launch {
+                                val receipt = engine.writePreferenceConfirmed(
+                                    StateRequestId(UUID.randomUUID().toString()), change,
+                                )
+                                if (receipt.outcome is PreferenceWriteOutcome.Persisted) {
+                                    Log.i(TAG_NAV, "PREF_WRITE ${choice.rowId}=${choice.optionId}")
+                                    settingsRevision++
+                                } else notice = "保存「${preferenceRowLabel(choice.rowId)}」失败，本次未确认"
+                            }
+                        },
+                        onSelectFontFamily = { rowId, family ->
+                            val role = when (rowId) {
+                                SettingsScreenState.TEXT_FONT_SIZE_ROW_ID -> FontRole.TEXT
+                                SettingsScreenState.CODE_FONT_SIZE_ROW_ID -> FontRole.CODE
+                                SettingsScreenState.TERMINAL_FONT_SIZE_ROW_ID -> FontRole.TERMINAL
+                                else -> null
+                            }
+                            if (role == null) {
+                                notice = "本宿主无法保存这个字体角色，本次没有保存"
+                            } else providerProbeScope.launch {
+                                val receipt = engine.writePreferenceConfirmed(
+                                    StateRequestId(UUID.randomUUID().toString()),
+                                    ConfirmedPreferenceChange.FontFamily(role, family),
+                                )
+                                if (receipt.outcome is PreferenceWriteOutcome.Persisted) settingsRevision++
+                                else notice = "字体偏好保存失败，本次未确认"
                             }
                         },
                         onToggleDeveloperTools = { value ->
-                            engine.setDeveloperTools(value)
-                            Log.i(TAG_NAV, "PREF_WRITE ${SettingsScreenState.DEVELOPER_TOOLS_ROW_ID}=$value")
-                            settingsRevision++
+                            providerProbeScope.launch {
+                                val receipt = engine.writePreferenceConfirmed(
+                                    StateRequestId(UUID.randomUUID().toString()), ConfirmedPreferenceChange.DeveloperTools(value),
+                                )
+                                if (receipt.outcome is PreferenceWriteOutcome.Persisted) {
+                                    Log.i(TAG_NAV, "PREF_WRITE ${SettingsScreenState.DEVELOPER_TOOLS_ROW_ID}=$value")
+                                    settingsRevision++
+                                } else notice = "保存显示代码工作视图失败，本次未确认"
+                            }
                         },
                         // The preference pages' own capability. This host owns a
                         // preference store, so the chat-appearance page's pickers and
@@ -438,6 +916,10 @@ internal fun HostShell(
                         // is an Activity-scoped contract.
                         onPhonePermissionRequest = onPhonePermissionRequest,
                         onPhonePermissionSettings = onPhonePermissionSettings,
+                        onOpenDrawer = { drawerOpen = true },
+                        onFilesImportRequest = onPickWorkspaceFile,
+                        filesImportReceipt = filesImportReceipt,
+                        onSpeakText = onSpeakText,
                         // L62: the home face is the product home — the session list
                         // (option (a): the list is rendered *in* the home slot, so
                         // `popToHome()` and the launch face are the same screen). The
@@ -502,8 +984,20 @@ internal fun HostShell(
                         // L69: the chat page's host half. `chatSurfaceState()` folds the
                         // Worker's projected events into the page's state; the seven
                         // callbacks are the App's own commands, not handoffs.
-                        chat = engine.chatSurfaceState(),
+                        chat = chatScreenState,
                         chatTitle = chatUi.title,
+                        chatFolderSubtitle = drawerRecords?.firstOrNull { it.id == chatUi.chatId }?.let { record ->
+                            workspaceGroupTitle(record, drawerFolders.orEmpty())
+                        },
+                        timelineRetryAvailability = com.phonedsh.ui.nav.PdshActionAvailability.Unavailable(
+                            com.phonedsh.ui.nav.PdshUnavailableReason.NOT_IMPLEMENTED,
+                        ),
+                        permissionApproveAvailability = com.phonedsh.ui.nav.PdshActionAvailability.Available { pending ->
+                            engine.answerChatPermission(pending, true)
+                        },
+                        permissionDenyAvailability = com.phonedsh.ui.nav.PdshActionAvailability.Available { pending ->
+                            engine.answerChatPermission(pending, false)
+                        },
                         chatSubpages = com.phonedsh.ui.page.ChatSubpageFacts(
                             commandExecution = chatUi.commandExecution,
                             schedules = automationFacts.snapshot?.schedules?.map { schedule ->
@@ -559,47 +1053,108 @@ internal fun HostShell(
                 )
             }
             if (drawerOpen) {
-                PdshDrawer(
-                    // L72: the drawer is the iOS `SessionsDrawer` — the session list
-                    // as its body, then the two furniture rows. It carries no app
-                    // map: every row that used to be here has an entry of its own on
-                    // iOS (see the lane's report), and the pages this host cannot
-                    // reach that way are in 设置 → 开发者工具, never in the drawer.
-                    entries = emptyList(),
-                    footerEntries = DRAWER_FOOTER_ENTRIES,
-                    body = {
-                        // The drawer's body is the same list the 会话 route renders
-                        // (`NativeShell.swift:288`), with no back arrow: the drawer
-                        // is the root of that read, not a page pushed on top of it.
-                        HostSessionsScreen(
-                            engine = engine,
-                            state = state,
-                            turn = turn,
-                            onBack = null,
-                            onHostNotice = { notice = it },
-                            // Picking a conversation closes the drawer and lands on
-                            // it — the baseline's 选中会话即关闭抽屉
-                            // (`NativeShell.swift:288`–`:291`); on iOS the chat page
-                            // is the face behind the drawer.
-                            onOpenChat = {
-                                drawerOpen = false
-                                notice = null
-                                nav = nav.push(PdshRoute.Chat)
-                            },
-                            modifier = Modifier.fillMaxSize(),
+                val groupedIds = drawerFolders.orEmpty().map { it.id }.toSet()
+                val drawerFacts = HomeDrawerFacts(
+                    folders = drawerFolders?.map { folder ->
+                        HomeDrawerFolder(
+                            id = folder.id,
+                            title = folder.name,
+                            isDefault = folder.id == ChatSessionStore.DEFAULT_WORKSPACE_GROUP_ID,
+                            sessions = drawerRecords.orEmpty().filter { !it.archived && it.workspaceGroupId == folder.id }
+                                .sortedByDescending { it.updatedAtMs }
+                                .map { HomeDrawerSession(it.id, it.title.ifBlank { UiStrings.SESSION_TITLE_NEW }, running = it.id == chatUi.chatId && chatUi.running) },
                         )
                     },
-                    onSelect = { route ->
-                        // A line from a routed page is not about the next one.
+                    unassignedSessions = drawerRecords?.filter {
+                        !it.archived && (it.workspaceGroupId == null || it.workspaceGroupId !in groupedIds)
+                    }?.sortedByDescending { it.updatedAtMs }
+                        ?.map { HomeDrawerSession(it.id, it.title.ifBlank { UiStrings.SESSION_TITLE_NEW }, running = it.id == chatUi.chatId && chatUi.running) },
+                    activeSessionId = chatUi.chatId.takeIf(String::isNotBlank),
+                    scheduleCount = automationFacts.snapshot?.schedules?.size,
+                    engine = when {
+                        state is EngineHostState.Running -> HomeDrawerEngineState.READY
+                        state == EngineHostState.Starting -> HomeDrawerEngineState.STARTING
+                        state == EngineHostState.Stopped -> if (providerConfigured) HomeDrawerEngineState.STOPPED else HomeDrawerEngineState.CONFIGURATION_REQUIRED
+                        else -> HomeDrawerEngineState.UNKNOWN
+                    },
+                )
+                val legacyCollapsed = remember(preferences.collapsedWorkspaceFolders) {
+                    if (preferences.collapsedWorkspaceFolders == null) {
+                        runCatching {
+                            context.getSharedPreferences("phone-dsh-home-drawer", android.content.Context.MODE_PRIVATE)
+                                .getStringSet(com.phonedsh.ui.nav.HomeDrawerState.COLLAPSED_FOLDERS_KEY, null)?.toSet()
+                        }.getOrNull()
+                    } else null
+                }
+                LaunchedEffect(preferences.collapsedWorkspaceFolders, legacyCollapsed) {
+                    if (preferences.collapsedWorkspaceFolders == null && !legacyCollapsed.isNullOrEmpty()) {
+                        engine.writePreferenceConfirmed(
+                            StateRequestId(UUID.randomUUID().toString()),
+                            ConfirmedPreferenceChange.CollapsedWorkspaceFolders(legacyCollapsed),
+                        )
+                    }
+                }
+                val drawerUiState = rememberHomeDrawerUiState(
+                    collapsedFolderIds = preferences.collapsedWorkspaceFolders ?: legacyCollapsed.orEmpty(),
+                    onCollapsedFolderIdsChanged = { ids ->
+                        val receipt = engine.writePreferenceConfirmed(
+                            StateRequestId(UUID.randomUUID().toString()),
+                            ConfirmedPreferenceChange.CollapsedWorkspaceFolders(ids),
+                        )
+                        receipt.outcome is PreferenceWriteOutcome.Persisted
+                    },
+                )
+                HomeDrawer(
+                    facts = drawerFacts,
+                    isOpen = true,
+                    state = drawerUiState,
+                    onClose = { drawerOpen = false },
+                    onCreateSession = {
+                        val requestId = StateRequestId(UUID.randomUUID().toString())
+                        val receipt = engine.newChatSessionConfirmed(requestId)
+                        val created = receipt.confirms(requestId, receipt.sessionId, null)
+                        if (created) {
+                            notice = null
+                            nav = PdshNavState(listOf(PdshRoute.Chat))
+                            settingsRevision++
+                        }
+                        created
+                    },
+                    onOpenSession = { id ->
+                        engine.openChatSession(id)
                         notice = null
                         drawerOpen = false
-                        // 定时任务 / 设置 are pages of §1: the probe is not behind
-                        // them, so the next 返回 lands on the product home rather
-                        // than on a diagnostic console.
-                        probeOpen = false
-                        nav = nav.push(route)
+                        nav = PdshNavState(listOf(PdshRoute.Chat))
                     },
-                    onDismiss = { drawerOpen = false },
+                    onArchiveSession = { request: HomeDrawerArchiveRequest ->
+                        val receipt = withContext(Dispatchers.IO) {
+                            applyHostSessionCommand(
+                                engine.chatStore,
+                                com.phonedsh.ui.nav.PdshUiHostCommand.SessionArchive(
+                                    request.sessionId,
+                                    StateRequestId(request.requestId),
+                                ),
+                            )
+                        }
+                        val result = if (receipt?.requestId?.value == request.requestId &&
+                            receipt.sessionId == request.sessionId && receipt.outcome == com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED
+                        ) {
+                            engine.refreshSessions()
+                            settingsRevision++
+                            HomeDrawerArchiveResult.Archived(request.requestId, request.sessionId)
+                        } else HomeDrawerArchiveResult.Failed(request.requestId, request.sessionId, "归档未确认，原会话仍保留")
+                        result
+                    },
+                    onOpenSchedules = {
+                        drawerOpen = false
+                        probeOpen = false
+                        nav = PdshNavState(listOf(PdshRoute.Chat, PdshRoute.Automation))
+                    },
+                    onOpenSettings = {
+                        drawerOpen = false
+                        probeOpen = false
+                        nav = PdshNavState(listOf(PdshRoute.Chat, PdshRoute.Settings))
+                    },
                 )
             }
         }
@@ -1085,33 +1640,6 @@ private fun EngineUnavailableNotice(title: String, reason: String?, detail: Stri
         }
     }
 }
-
-/**
- * The two rows the iOS drawer pins below its session list.
- *
- * That is the whole drawer (`NativeShell.swift:288`–`:307`: `SessionsPage`, a
- * divider, 定时任务, 设置). It carried eight more rows until L72 — 对话, 会话,
- * 工作文件夹, 文件, 命令, 设备连接, DSH 页面, 引擎探针 — and every one of them was
- * a second entrance for a page the baseline reaches somewhere else:
- *
- *   * 对话 / 会话 — the baseline's chat face and this drawer's own body;
- *   * 文件 / 命令 — the chat page's ⋯ → 右侧边栏 → 工作面板 (its 文件 / 命令
- *     segment), which this host's chat page does not draw yet;
- *   * 设备连接 — the chat page head's device icon, likewise not drawn yet;
- *   * 工作文件夹 — no product entry at all on iOS (only `-uiPreview workspace`);
- *     it lives in 设置 → 开发者工具 on this host;
- *   * DSH 页面 — deleted from iOS (PR 495da9b5); this host's own Web face, reached
- *     with `--ez pdsh.face.web true`;
- *   * 引擎探针 — this host's diagnostic console, reached with
- *     `--ez pdsh.face.probe true`.
- *
- * The drawer is not an app map on either platform: it is the session list plus
- * these two rows (`NativeShell.swift:296`).
- */
-private val DRAWER_FOOTER_ENTRIES: List<PdshDrawerEntry> = listOf(
-    PdshDrawerEntry(UiStrings.AUTOMATION_TITLE, PdshDrawerIcon.CLOCK, PdshRoute.Automation),
-    PdshDrawerEntry(UiStrings.SETTINGS, PdshDrawerIcon.SETTINGS, PdshRoute.Settings),
-)
 
 /** The host's navigation log tag; only stable action labels are written to it. */
 private const val TAG_NAV: String = "PDSHNav"

@@ -13,6 +13,7 @@ import android.view.View
 import android.webkit.WebView
 import androidx.lifecycle.AndroidViewModel
 import com.phonedsh.agentcore.JsonObject
+import com.phonedsh.agentcore.JsonArray
 import com.phonedsh.agentcore.JsonString
 import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.agentcore.toJsonString
@@ -20,15 +21,19 @@ import com.phonedsh.controller.Admission
 import com.phonedsh.controller.ControllerBudgets
 import com.phonedsh.controller.ControllerStateMachine
 import com.phonedsh.dsh.exec.FileRequestLedger
+import com.phonedsh.dsh.exec.ExecEvent
+import com.phonedsh.dsh.exec.ExecRequest
+import com.phonedsh.dsh.exec.ExecTier
+import com.phonedsh.dsh.exec.StdinSpec
 import com.phonedsh.dsh.host.DefaultPhoneDshHost
 import com.phonedsh.dsh.host.HostApiException
 import com.phonedsh.dsh.host.HostBudgetTier
 import com.phonedsh.dsh.host.HostExec
+import com.phonedsh.dsh.host.ShellAcceleratorTool
 import com.phonedsh.dsh.host.HostLog
 import com.phonedsh.dsh.host.HostStateStore
 import com.phonedsh.dsh.host.ModelRoute
 import com.phonedsh.dsh.host.ModelRouteFact
-import com.phonedsh.dsh.host.PhoneDshHost
 import com.phonedsh.dsh.host.asHostWal
 import com.phonedsh.domain.DomainStore
 import com.phonedsh.domain.DomainStoreCore
@@ -87,6 +92,10 @@ import com.phonedsh.platform.android.AndroidClock
 import com.phonedsh.platform.android.AndroidDurability
 import com.phonedsh.platform.android.AndroidLifecycleSignals
 import com.phonedsh.shell.AcceleratorMount
+import com.phonedsh.shell.AcceleratorLimits
+import com.phonedsh.ui.page.ShellLimits
+import com.phonedsh.ui.page.ShellRun
+import com.phonedsh.ui.page.ShellSnapshot
 import com.phonedsh.ui.nav.PdshNavFacts
 import com.phonedsh.ui.page.BusyEnterMode
 import com.phonedsh.ui.page.FactState
@@ -96,6 +105,7 @@ import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -532,6 +542,20 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         clock = clock,
     )
 
+    /** The one registered read-only accelerator bridge shared by Worker and shell-page runs. */
+    private val execBridge = HostExec.defaultTools(
+        clock = clock,
+        controller = controller,
+        wal = hostWal,
+        logger = LogcatHostLog,
+        ledger = execLedger,
+        shellMounts = listOf(
+            AcceleratorMount(AcceleratorMount.WORKSPACE, walPaths.materializedWorkspace.toString()),
+            AcceleratorMount(AcceleratorMount.HOME, walPaths.materializedHome.toString()),
+        ),
+        seal = ubuntuSeal,
+    )
+
     /**
      * The local DomainStore (`PRD.md:169`), constructed here and nowhere else.
      *
@@ -585,7 +609,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     /** The resolved preferences; a write publishes a new value. */
     internal val preferenceState: StateFlow<Preferences> = preferenceStore.state
 
-    private val host: PhoneDshHost = DefaultPhoneDshHost(
+    private val host: DefaultPhoneDshHost = DefaultPhoneDshHost(
         engine = engine,
         controller = controller,
         clock = clock,
@@ -615,29 +639,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         // `host.start()`, before admission opens, so a dispatched EXEC_REQ always
         // finds them. With no workspace the list would be empty and :shell would
         // advertise no accelerator at all.
-        exec = HostExec.defaultTools(
-            clock = clock,
-            controller = controller,
-            wal = hostWal,
-            logger = LogcatHostLog,
-            ledger = execLedger,
-            shellMounts = listOf(
-                AcceleratorMount(
-                    AcceleratorMount.WORKSPACE,
-                    walPaths.materializedWorkspace.toString(),
-                ),
-                AcceleratorMount(
-                    AcceleratorMount.HOME,
-                    walPaths.materializedHome.toString(),
-                ),
-            ),
-            // Design §3 layers 3 and 4: the real `chmod 000` window and its
-            // FileObserver tripwire. Injected here because `:dsh` must not link
-            // `:platform-android`; `HostExec`'s own default is the fail-closed
-            // `UbuntuSeal.unwired`, so this line is what makes the Agent's
-            // `ubuntu run` actually seal anything.
-            seal = ubuntuSeal,
-        ),
+        exec = execBridge,
         logger = LogcatHostLog,
         // The one upstream session; no longer a null placeholder.
         gateway = gateway,
@@ -814,6 +816,14 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     internal fun applyPreference(rowId: String, optionId: String): Boolean =
         preferenceStore.apply(rowId, optionId)
 
+    internal suspend fun writePreferenceConfirmed(
+        requestId: com.phonedsh.ui.state.StateRequestId,
+        change: ConfirmedPreferenceChange,
+    ): PreferenceWriteReceipt = preferenceStore.writeConfirmed(requestId, change)
+
+    internal fun confirmedPreferenceChange(rowId: String, optionId: String): ConfirmedPreferenceChange? =
+        preferenceStore.confirmedChange(rowId, optionId)
+
     /** 显示代码工作视图. */
     internal fun setDeveloperTools(value: Boolean) {
         preferenceStore.setDeveloperTools(value)
@@ -905,12 +915,13 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
      * cold start. This store keeps the rendered node sequence (see
      * `ChatSessionStore`); neither is the authority for the events — the journal is.
      */
-    private val chatStore = ChatSessionStore(domainStore)
+    internal val chatStore = ChatSessionStore(domainStore)
 
     private val mutableChat = MutableStateFlow(ChatUiState())
 
     /** The chat screen's host state; the App's one writer is this view model. */
     internal val chat: StateFlow<ChatUiState> = mutableChat.asStateFlow()
+    internal val currentChatId: String get() = mutableChat.value.chatId
 
     /**
      * The Worker session ids a chat record has claimed.
@@ -928,6 +939,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     /** The turn's runner, kept so 停止 can reach the Worker's cancel endpoint. */
     @Volatile
     private var chatRunner: ChatTurnRunner? = null
+    private var activeRetryRequestId: String? = null
 
     /** A monotonic counter for node ordinals; never reset, so ids stay unique. */
     private var chatOrdinal: Int = 0
@@ -1329,6 +1341,11 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         engineStarted = state.value is EngineHostState.Running && host.state.value != com.phonedsh.controller.HostState.FAILED,
         providerNeedsKey = modelRoute.route == ModelRoute.NONE,
         canSend = state.value is EngineHostState.Running && host.state.value != com.phonedsh.controller.HostState.FAILED,
+        canSteer = state.value is EngineHostState.Running && mutableChat.value.workerSessionId != null,
+        enterMode = when (preferenceStore.snapshot().busyEnterMode) {
+            BusyEnterMode.QUEUE -> com.phonedsh.ui.state.EnterMode.QUEUE
+            BusyEnterMode.STEER -> com.phonedsh.ui.state.EnterMode.STEER
+        },
         lifecycle = nativeEngineLifecycle(),
     )
 
@@ -1339,6 +1356,49 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     internal fun chatWorkspaceSnapshot(): Pair<Boolean, String?> =
         Files.isDirectory(walPaths.materializedWorkspace) to "/dsh/workspace"
+
+    /** Shell capabilities and limits come from this boot's real ExecBridge and accelerators. */
+    internal fun shellSnapshot(run: ShellRun = ShellRun()): ShellSnapshot {
+        val commands = host.readOnlyAcceleratorNames()
+        val mounts = listOf(walPaths.materializedWorkspace, walPaths.materializedHome).count(Files::isDirectory)
+        return ShellSnapshot(
+            commands = commands,
+            environment = if (commands.isEmpty()) "pdsh-shell unavailable" else "pdsh-shell via DSH exec/1",
+            mounts = mounts,
+            limits = ShellLimits(
+                timeoutMilliseconds = AcceleratorLimits.DEFAULT_TIMEOUT_MS,
+                maxOutputBytes = ShellAcceleratorTool.MAX_OUTPUT_BYTES,
+                maxFiles = AcceleratorLimits.DEFAULT_MAX_FILES.toInt(),
+                maxFileBytes = AcceleratorLimits.DEFAULT_MAX_FILE_BYTES,
+            ),
+            run = run,
+        )
+    }
+
+    /** Creates one source-shaped interactive EXEC_REQ through the registered read-only bridge. */
+    internal fun shellExecRequest(
+        command: String,
+        workingDirectory: String,
+        arguments: String,
+        requestId: com.phonedsh.ui.state.StateRequestId,
+    ): ExecRequest? = ShellExecRequestFactory.create(
+        command = command,
+        workingDirectory = workingDirectory,
+        arguments = arguments,
+        requestId = requestId,
+        availableCommands = host.readOnlyAcceleratorNames(),
+        mountedRoots = buildList {
+            if (Files.isDirectory(walPaths.materializedWorkspace)) add("/dsh/workspace")
+            if (Files.isDirectory(walPaths.materializedHome)) add("/dsh/home")
+        },
+        requiresMseq = host.appliedWorkspaceMseq(),
+        deadline = clock.nowMillis() + AcceleratorLimits.DEFAULT_TIMEOUT_MS,
+    )
+
+    internal fun runShellRequest(request: ExecRequest): Flow<ExecEvent> = host.runReadOnlyAccelerator(request)
+
+    internal fun cancelShellRequest(execId: String) = host.cancelReadOnlyAccelerator(execId)
+
 
     internal fun chatImeChanged(visible: Boolean) {
         mutableChat.update { it.copy(imeVisible = visible) }
@@ -1532,7 +1592,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 val projections = client.call("session/projections", JsonObject(mapOf(
                     "request" to JsonObject(mapOf("sessionId" to JsonString(worker))),
                 )), timeoutMillis = 5_000)
-                val measured = sessionSnapshotOf(projections, modes, commands, models)
+                val measured = sessionSnapshotOf(projections, modes, commands, models, sessionId = worker)
                 mutableChat.update { live ->
                     if (live.chatId != current.chatId || live.workerSessionId != worker) live else live.copy(
                         sessionSnapshot = if (full) measured else live.sessionSnapshot.copy(
@@ -1553,6 +1613,123 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 if (snapshotFullRefreshQueued.getAndSet(false)) refreshChatSession(full = true)
             }
         }
+    }
+
+    /** Mutate one durable DSH queue item, then read the projection back before publishing success. */
+    internal fun updateChatQueueItem(
+        item: com.phonedsh.ui.state.ManagedQueueItemState,
+        action: com.phonedsh.ui.state.QueueAction,
+        requestId: com.phonedsh.ui.state.StateRequestId,
+        replacement: String? = null,
+    ): Boolean {
+        val current = mutableChat.value
+        val worker = current.workerSessionId ?: return false
+        val itemId = (item.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value ?: return false
+        if (action == com.phonedsh.ui.state.QueueAction.QUEUE) return false
+        if (current.chatId.isBlank() || item.actionRequestId != null && item.busy == true) return false
+        if (item.canEdit != true && action == com.phonedsh.ui.state.QueueAction.EDIT) return false
+        if (item.canRemove != true && action == com.phonedsh.ui.state.QueueAction.REMOVE) return false
+        if (item.canSteer != true && action == com.phonedsh.ui.state.QueueAction.STEER) return false
+        if (action == com.phonedsh.ui.state.QueueAction.EDIT && replacement.isNullOrBlank()) return false
+        val appChatId = current.chatId
+        val activeItems = current.sessionSnapshot.queueItems ?: return false
+        if (activeItems.none { (it.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == itemId }) return false
+
+        mutableChat.update { live ->
+            if (live.chatId != appChatId || live.workerSessionId != worker) live else live.copy(
+                sessionSnapshot = live.sessionSnapshot.copy(
+                    queueItems = activeItems.map { row ->
+                        if ((row.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == itemId) {
+                            row.copy(busy = true, actionRequestId = requestId, receipt = null)
+                        } else row
+                    },
+                ),
+            )
+        }
+        turnScope.launch(Dispatchers.IO) {
+            val outcome = try {
+                Result.success(run {
+                val client = DshTurnClient(host.channel, ::logTurn)
+                val actionValue = when (action) {
+                    com.phonedsh.ui.state.QueueAction.QUEUE -> error("new queue submissions use session/prompt")
+                    com.phonedsh.ui.state.QueueAction.EDIT -> JsonObject(linkedMapOf(
+                        "kind" to JsonString("edit"),
+                        "content" to JsonArray(listOf(JsonObject(mapOf(
+                            "type" to JsonString("text"),
+                            "text" to JsonString(requireNotNull(replacement)),
+                        )))),
+                    ))
+                    com.phonedsh.ui.state.QueueAction.REMOVE -> JsonObject(mapOf("kind" to JsonString("remove")))
+                    com.phonedsh.ui.state.QueueAction.STEER -> JsonObject(mapOf("kind" to JsonString("steer")))
+                }
+                client.call("session/updateQueue", JsonObject(mapOf("request" to JsonObject(mapOf(
+                    "sessionId" to JsonString(worker),
+                    "itemId" to JsonString(itemId),
+                    "action" to actionValue,
+                )))))
+                val projections = client.call("session/projections", JsonObject(mapOf(
+                    "request" to JsonObject(mapOf("sessionId" to JsonString(worker))),
+                )))
+                val rows = sessionSnapshotOf(projections, null, null, null, sessionId = worker).queueItems
+                    ?: error("inbox projection unavailable")
+                val updated = rows.firstOrNull { (it.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == itemId }
+                val confirmed = when (action) {
+                    com.phonedsh.ui.state.QueueAction.QUEUE -> false
+                    com.phonedsh.ui.state.QueueAction.EDIT -> updated?.text == replacement
+                    com.phonedsh.ui.state.QueueAction.REMOVE -> updated == null
+                    com.phonedsh.ui.state.QueueAction.STEER -> updated == null || updated.lane != item.lane
+                }
+                check(confirmed) { "queue action was not reflected by the refreshed inbox" }
+                rows
+                })
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Result.failure(failure)
+            }
+            mutableChat.update { live ->
+                if (live.chatId != appChatId || live.workerSessionId != worker) return@update live
+                val rows = outcome.getOrNull()
+                if (rows != null) {
+                    val successReceipt = com.phonedsh.ui.state.QueueActionReceipt(
+                        requestId = requestId,
+                        action = action,
+                        outcome = com.phonedsh.ui.state.CommandOutcome.SUCCEEDED,
+                        sessionId = worker,
+                        itemId = itemId,
+                    )
+                    live.copy(sessionSnapshot = live.sessionSnapshot.copy(
+                        queueItems = when (action) {
+                            com.phonedsh.ui.state.QueueAction.QUEUE -> rows
+                            com.phonedsh.ui.state.QueueAction.REMOVE -> rows
+                            else -> rows.map { row ->
+                                if ((row.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == itemId) {
+                                    row.copy(busy = false, actionRequestId = requestId, receipt = successReceipt)
+                                } else row
+                            }
+                        },
+                    ))
+                } else {
+                    val failure = outcome.exceptionOrNull()
+                    val failureReceipt = com.phonedsh.ui.state.QueueActionReceipt(
+                        requestId = requestId,
+                        action = action,
+                        outcome = com.phonedsh.ui.state.CommandOutcome.FAILED,
+                        message = failure?.message?.substringBefore('\n')?.take(180) ?: "队列操作未确认",
+                        sessionId = worker,
+                        itemId = itemId,
+                    )
+                    live.copy(sessionSnapshot = live.sessionSnapshot.copy(
+                        queueItems = activeItems.map { row ->
+                            if ((row.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == itemId) {
+                                row.copy(busy = false, actionRequestId = requestId, receipt = failureReceipt)
+                            } else row
+                        },
+                    ))
+                }
+            }
+        }
+        return true
     }
 
     internal fun runChatCommand(line: String, showResult: Boolean = true) {
@@ -1634,6 +1811,45 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         prepareChatSession()
         LogcatHostLog.info("chat: new session $id")
         return id
+    }
+
+    /** Create a conversation only after its durable record has been read back. */
+    internal suspend fun newChatSessionConfirmed(requestId: com.phonedsh.ui.state.StateRequestId):
+        com.phonedsh.ui.nav.PdshActionReceipt {
+        val at = clock.nowMillis()
+        val id = "chat-$at-${++chatOrdinal}"
+        val record = ChatRecord(id, "", at, emptyList(), emptyList())
+        val revision = withContext(Dispatchers.IO) {
+            runCatching {
+                val groupReceipt = chatStore.ensureDefaultWorkspaceGroup(
+                    com.phonedsh.ui.state.StateRequestId("default-folder:$id"),
+                )
+                check(groupReceipt.outcome is ChatWriteOutcome.Persisted)
+                chatStore.save(record)
+                chatStore.load(id)?.takeIf { it.copy(revision = 0L) == record }?.revision
+            }.getOrNull()
+        }
+        if (revision == null) return com.phonedsh.ui.nav.PdshActionReceipt(
+            requestId, id, null, com.phonedsh.ui.nav.PdshActionOutcome.FAILED,
+        )
+        val receipt = com.phonedsh.ui.nav.PdshActionReceipt(
+            requestId = requestId,
+            sessionId = id,
+            revision = com.phonedsh.ui.state.StateRevision(revision),
+            outcome = com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED,
+        )
+        sessionArtifacts.clear()
+        mutableSessions.update { snapshot ->
+            snapshot.copy(
+                waiting = false,
+                currentSessionID = id,
+                sessions = mergeSessions(emptyList(), snapshot.sessions + HostSessionRecord(id, at, workspaceID = "/dsh/workspace")),
+            )
+        }
+        mutableChat.value = ChatUiState(chatId = id, updatedAtMs = at)
+        prepareChatSession()
+        LogcatHostLog.info("chat: new session confirmed $id")
+        return receipt
     }
 
     /**
@@ -1737,7 +1953,14 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
      * next boot's overlay is packed from. A copy beside the stores would be a second
      * workspace nothing reads.
      */
-    internal fun importIntoWorkspace(uri: Uri, image: Boolean) {
+    internal fun importIntoWorkspace(
+        uri: Uri,
+        image: Boolean,
+        attachToChat: Boolean = true,
+        expectedChatId: String? = null,
+        onCompleted: ((Boolean) -> Unit)? = null,
+    ) {
+        val targetChatId = if (attachToChat) expectedChatId ?: mutableChat.value.chatId else null
         turnScope.launch {
             val outcome = withContext(Dispatchers.IO) {
                 runCatching {
@@ -1746,20 +1969,23 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             }
             outcome.fold(
                 onSuccess = { imported ->
-                    mutableChat.update { current ->
-                        current.copy(
-                            attachments = current.attachments + imported.attachment,
-                            notice = "已写入工作区：${imported.attachment.name}（${imported.bytes} 字节）",
-                            attachmentError = null,
-                            // No restart happens here (see the note above `workspaceFileName`),
-                            // and a stored id would only be a guess; the next send opens a
-                            // fresh Worker session.
-                        )
+                    if (attachToChat) {
+                        mutableChat.update { current ->
+                            if (current.chatId != targetChatId) current else current.copy(
+                                    attachments = current.attachments + imported.attachment,
+                                    notice = "已写入工作区：${imported.attachment.name}（${imported.bytes} 字节）",
+                                    attachmentError = null,
+                                    // No restart happens here (see the note above `workspaceFileName`),
+                                    // and a stored id would only be a guess; the next send opens a
+                                    // fresh Worker session.
+                                )
+                        }
                     }
                     LogcatHostLog.info(
                         "CHAT_IMPORT path=${imported.attachment.path} bytes=${imported.bytes} " +
                             "image=$image",
                     )
+                    onCompleted?.invoke(true)
                 },
                 onFailure = { failure ->
                     val reason = when (failure) {
@@ -1767,8 +1993,11 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                         is Exception -> reasonOf(failure)
                         else -> failure.javaClass.simpleName
                     }
-                    mutableChat.update { it.copy(attachmentError = "导入失败：$reason") }
+                    if (attachToChat) mutableChat.update { current ->
+                        if (current.chatId != targetChatId) current else current.copy(attachmentError = "导入失败：$reason")
+                    }
                     LogcatHostLog.warn("CHAT_IMPORT_FAILED reason=$reason")
+                    onCompleted?.invoke(false)
                 },
             )
         }
@@ -1886,10 +2115,153 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
      */
     internal fun sendChat() {
         val current = mutableChat.value
+        if (current.running) {
+            val mode = when (preferenceStore.snapshot().busyEnterMode) {
+                BusyEnterMode.QUEUE -> com.phonedsh.ui.state.EnterMode.QUEUE
+                BusyEnterMode.STEER -> com.phonedsh.ui.state.EnterMode.STEER
+            }
+            submitWhileRunning(
+                current.workerSessionId.orEmpty(),
+                com.phonedsh.ui.state.StateRequestId("ui.prompt." + java.util.UUID.randomUUID().toString()),
+                current.draft,
+                mode,
+            )
+            return
+        }
+        submitChat(retryOriginalSubmission = false, retryRequestId = null)
+    }
+
+    /** Queue or steer a new user submission to the exact live Worker session. */
+    internal fun submitWhileRunning(
+        workerSessionId: String,
+        requestId: com.phonedsh.ui.state.StateRequestId,
+        text: String,
+        mode: com.phonedsh.ui.state.EnterMode,
+    ): Boolean {
+        val current = mutableChat.value
+        val trimmed = text.trim()
+        if (workerSessionId.isBlank() || current.workerSessionId != workerSessionId || !current.running ||
+            trimmed.isEmpty() || (mode == com.phonedsh.ui.state.EnterMode.STEER && current.attachments.isNotEmpty())
+        ) return false
+        val existing = current.localQueueItems.firstOrNull { local ->
+            local.text == trimmed && local.receipt?.outcome == com.phonedsh.ui.state.CommandOutcome.FAILED
+        }
+        val promptRequestId = existing?.promptRequestId
+            ?: com.phonedsh.ui.state.StateRequestId("pdsh-prompt-" + java.util.UUID.randomUUID().toString())
+        val localId = existing?.id ?: com.phonedsh.ui.state.QueueItemId.Local(promptRequestId.value)
+        val queueAction = if (mode == com.phonedsh.ui.state.EnterMode.STEER)
+            com.phonedsh.ui.state.QueueAction.STEER else com.phonedsh.ui.state.QueueAction.QUEUE
+        val localItem = com.phonedsh.ui.state.ManagedQueueItemState(
+            id = localId,
+            text = trimmed,
+            sessionId = workerSessionId,
+            lane = if (mode == com.phonedsh.ui.state.EnterMode.STEER) "steered" else "next-turn",
+            state = if (mode == com.phonedsh.ui.state.EnterMode.STEER)
+                com.phonedsh.ui.state.QueueItemStatus.STEERED else com.phonedsh.ui.state.QueueItemStatus.SENDING,
+            canEdit = false,
+            canRemove = false,
+            canSteer = false,
+            busy = true,
+            actionRequestId = requestId,
+            promptRequestId = promptRequestId,
+        )
+        val attachments = current.attachments
+        val prompt = composeChatPrompt(trimmed, attachments)
+        mutableChat.update { live ->
+            if (live.chatId != current.chatId || live.workerSessionId != workerSessionId || !live.running) live else {
+                live.copy(localQueueItems = live.localQueueItems.filterNot { it.id == localId } + localItem)
+            }
+        }
+        turnScope.launch(Dispatchers.IO) {
+            try {
+                DshTurnClient(host.channel, ::logTurn).prompt(
+                    sessionId = workerSessionId,
+                    text = prompt,
+                    requestId = promptRequestId.value,
+                    mode = if (mode == com.phonedsh.ui.state.EnterMode.STEER) "steer" else "queue",
+                )
+                mutableChat.update { live ->
+                    if (live.chatId != current.chatId || live.workerSessionId != workerSessionId) live else {
+                        val rows = live.localQueueItems.map { item ->
+                            if (item.id == localId && item.actionRequestId == requestId) item.copy(
+                                busy = false,
+                                state = if (mode == com.phonedsh.ui.state.EnterMode.STEER)
+                                    com.phonedsh.ui.state.QueueItemStatus.STEERED else com.phonedsh.ui.state.QueueItemStatus.QUEUED,
+                                receipt = com.phonedsh.ui.state.QueueActionReceipt(
+                                    requestId = requestId,
+                                    action = queueAction,
+                                    outcome = com.phonedsh.ui.state.CommandOutcome.SUCCEEDED,
+                                    message = "请求已由 DSH 接受",
+                                    sessionId = workerSessionId,
+                                    itemId = localId.value,
+                                ),
+                            ) else item
+                        }
+                        live.copy(
+                            draft = if (live.draft.trim() == trimmed) "" else live.draft,
+                            attachments = if (live.attachments == attachments) emptyList() else live.attachments,
+                            lastSubmission = trimmed,
+                            lastAttachments = attachments,
+                            localQueueItems = rows,
+                        )
+                    }
+                }
+                refreshChatSession()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                mutableChat.update { live ->
+                    if (live.chatId != current.chatId || live.workerSessionId != workerSessionId) live else live.copy(
+                        localQueueItems = live.localQueueItems.map { item ->
+                            if (item.id == localId && item.actionRequestId == requestId) item.copy(
+                                busy = false,
+                                receipt = com.phonedsh.ui.state.QueueActionReceipt(
+                                    requestId = requestId,
+                                    action = queueAction,
+                                    outcome = com.phonedsh.ui.state.CommandOutcome.FAILED,
+                                    message = failure.message?.substringBefore('\n')?.take(180) ?: "请求结果未确认",
+                                    sessionId = workerSessionId,
+                                    itemId = localId.value,
+                                ),
+                            ) else item
+                        },
+                    )
+                }
+            }
+        }
+        return true
+    }
+
+    /** Retry the original failed input in its existing session without adding a second user row. */
+    internal fun retryFailedChat(sessionId: String, requestId: com.phonedsh.ui.state.StateRequestId): Boolean {
+        val current = mutableChat.value
+        if (sessionId.isBlank() || current.chatId != sessionId || current.running || current.error == null ||
+            (current.lastSubmission.isBlank() && current.lastAttachments.isEmpty()) ||
+            current.lastPromptRequestId.isNullOrBlank() ||
+            state.value !is EngineHostState.Running || turnRunning.get() || activeRetryRequestId != null
+        ) return false
+        activeRetryRequestId = requestId.value
+        mutableChat.update {
+            if (it.chatId != sessionId) it else it.copy(
+                draft = it.lastSubmission,
+                attachments = it.lastAttachments,
+            )
+        }
+        submitChat(retryOriginalSubmission = true, retryRequestId = requestId.value)
+        return true
+    }
+
+    private fun submitChat(retryOriginalSubmission: Boolean, retryRequestId: String?) {
+        val current = mutableChat.value
         if (current.running) return
         val typed = current.draft.trim()
         val attachments = current.attachments
         if (typed.isEmpty() && attachments.isEmpty()) return
+        val promptRequestId = if (retryOriginalSubmission) {
+            current.lastPromptRequestId ?: return
+        } else {
+            "pdsh-prompt-${java.util.UUID.randomUUID()}"
+        }
         val commandName = typed.removePrefix("/").substringBefore(' ')
         if (typed.startsWith('/') && attachments.isEmpty() &&
             current.sessionSnapshot.commands.any { it.name == commandName }) {
@@ -1906,7 +2278,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                             engine.state.first { it is EngineHostState.Running }
                         }
                         sendStartupInFlight.set(false)
-                        if (mutableChat.value.draft == current.draft) sendChat()
+                        if (mutableChat.value.draft == current.draft) submitChat(retryOriginalSubmission, retryRequestId)
                         else mutableChat.update { it.copy(notice = "引擎已就绪，点发送继续。") }
                     } catch (cancelled: CancellationException) { throw cancelled
                     } catch (failure: Exception) {
@@ -1949,10 +2321,11 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         mutableChat.update {
             it.copy(
                 chatId = chatId,
-                nodes = it.nodes + userNode,
+                nodes = if (retryOriginalSubmission) it.nodes else it.nodes + userNode,
                 draft = "",
-                lastSubmission = current.draft,
-                lastAttachments = attachments,
+                lastSubmission = if (retryOriginalSubmission) current.lastSubmission else current.draft,
+                lastAttachments = if (retryOriginalSubmission) current.lastAttachments else attachments,
+                lastPromptRequestId = promptRequestId,
                 attachments = emptyList(),
                 running = true,
                 streaming = "",
@@ -1993,6 +2366,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     // the model keeps the earlier turns instead of starting blind.
                     workerSessionId = mutableChat.value.takeIf { it.chatId == chatId }?.workerSessionId,
                     prompt = prompt,
+                    promptRequestId = promptRequestId,
                     onSession = { workerSessionId -> claimWorkerSession(chatId, workerSessionId) },
                     onEvent = { event -> onChatEvent(chatId, event) },
                     onDelta = { text ->
@@ -2019,6 +2393,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 failChatTurn(chatId, reasonOf(failure))
             } finally {
                 chatRunner = null
+                if (activeRetryRequestId == retryRequestId) activeRetryRequestId = null
                 chatSnapshotJob?.cancel()
                 chatResponders.clear()
                 answeringRequests.clear()

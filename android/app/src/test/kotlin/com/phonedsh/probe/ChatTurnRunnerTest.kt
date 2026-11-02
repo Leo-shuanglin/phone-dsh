@@ -50,6 +50,46 @@ import kotlinx.coroutines.withTimeout
 
 class ChatTurnRunnerTest {
     @Test
+    fun retryReusesTheOriginalPromptIdempotencyIdentity() = runBlocking<Unit> {
+        val peer = ScriptedRunnerPeer(this)
+        val host = testHost()
+        peer.attach(host)
+        peer.connect()
+        peer.turnEndDelayMillis = 1
+        val runner = ChatTurnRunner(
+            channel = host,
+            client = DshTurnClient(host),
+            firstEventTimeoutMillis = 500,
+            nextReadTimeoutMillis = 20,
+        )
+        runner.run(
+            workerSessionId = "session-existing",
+            prompt = "the failed original prompt",
+            promptRequestId = "stable-original-prompt-id",
+            onSession = {},
+            onEvent = {},
+            onDelta = {},
+        )
+        assertEquals(listOf("stable-original-prompt-id"), peer.promptRequestIds)
+    }
+
+    @Test
+    fun busySteerUsesTheWorkerSteerModeAndItsCallerRequestId() = runBlocking<Unit> {
+        val peer = ScriptedRunnerPeer(this)
+        val host = testHost()
+        peer.attach(host)
+        peer.connect()
+        DshTurnClient(host).prompt(
+            sessionId = "worker-running",
+            text = "steer this turn",
+            requestId = "ui.steer.action-1",
+            mode = "steer",
+        )
+        assertEquals(listOf("ui.steer.action-1"), peer.promptRequestIds)
+        assertEquals(listOf("steer"), peer.promptModes)
+    }
+
+    @Test
     fun followReaderReassemblesSplitUtf8AndContinuesAfterQuietWindow() = runBlocking<Unit> {
         val chunks = Channel<ByteArray>(Channel.UNLIMITED)
         val reader = FollowFrameReader(chunks)
@@ -225,6 +265,8 @@ class ChatTurnRunnerTest {
         lateinit var host: HostChannel
         var sendTurnStartedOnPrompt: Boolean = true
         var turnEndDelayMillis: Long? = null
+        val promptRequestIds = mutableListOf<String>()
+        val promptModes = mutableListOf<String>()
         var lastFailure: Throwable? = null
         private var workerSeq = 2L
         private var followRequestId: Int? = null
@@ -278,6 +320,10 @@ class ChatTurnRunnerTest {
                     )
                 }
                 path == "/api/session/prompt" -> {
+                    val request = (((JsonValue.parse(String(body, Charsets.UTF_8)) as JsonObject)["payload"] as JsonObject)
+                        ["args"] as JsonObject)["request"] as JsonObject
+                    promptRequestIds += (request["requestId"] as JsonString).value
+                    promptModes += (request["mode"] as JsonString).value
                     if (sendTurnStartedOnPrompt) {
                         sendFollowLine(
                             """{"type":"item","streamId":"follow","value":{"type":"event","event":{"seq":1,"type":"turn/start","data":{"turn":1}}}}""",

@@ -503,6 +503,27 @@ internal class PreferenceStore(private val file: PreferenceFile) {
         else -> false
     }
 
+    /** Resolve the same UI choice into a confirmed-write request; unknown ids stay unavailable. */
+    fun confirmedChange(rowId: String, optionId: String): ConfirmedPreferenceChange? = when (rowId) {
+        SettingsScreenState.LANGUAGE_ROW_ID -> SettingsLanguage.entries.firstOrNull { it.id == optionId }
+            ?.let(ConfirmedPreferenceChange::Language)
+        SettingsScreenState.APPEARANCE_ROW_ID -> SettingsAppearance.entries.firstOrNull { it.id == optionId }
+            ?.let(ConfirmedPreferenceChange::Appearance)
+        SettingsScreenState.TRANSCRIPT_VIEW_ROW_ID -> TranscriptViewMode.entries.firstOrNull { it.id == optionId }
+            ?.let(ConfirmedPreferenceChange::TranscriptView)
+        SettingsScreenState.COLLAPSE_TIMING_ROW_ID -> CollapseTiming.entries.firstOrNull { it.id == optionId }
+            ?.let(ConfirmedPreferenceChange::CollapseTiming)
+        SettingsScreenState.PERFORMANCE_ROW_ID -> PerformanceUsage.entries.firstOrNull { it.id == optionId }
+            ?.let(ConfirmedPreferenceChange::PerformanceUsage)
+        SettingsScreenState.BUSY_ENTER_ROW_ID -> BusyEnterMode.entries.firstOrNull { it.id == optionId }
+            ?.let(ConfirmedPreferenceChange::BusyEnterMode)
+        SettingsScreenState.TEXT_FONT_SIZE_ROW_ID -> optionId.toIntOrNull()?.let { ConfirmedPreferenceChange.FontSize(FontRole.TEXT, it) }
+        SettingsScreenState.CODE_FONT_SIZE_ROW_ID -> optionId.toIntOrNull()?.let { ConfirmedPreferenceChange.FontSize(FontRole.CODE, it) }
+        SettingsScreenState.TERMINAL_FONT_SIZE_ROW_ID -> optionId.toIntOrNull()?.let { ConfirmedPreferenceChange.FontSize(FontRole.TERMINAL, it) }
+        SettingsScreenState.DEVELOPER_TOOLS_ROW_ID -> optionId.toBooleanStrictOrNull()?.let(ConfirmedPreferenceChange::DeveloperTools)
+        else -> null
+    }
+
     private fun applyFontSize(role: FontRole, optionId: String): Boolean {
         val size = optionId.trim().toIntOrNull() ?: return false
         setFontSize(role, size)

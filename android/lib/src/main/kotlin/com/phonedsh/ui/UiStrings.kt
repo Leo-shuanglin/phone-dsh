@@ -10,6 +10,16 @@ package com.phonedsh.ui
 
 /** The copy the UI owns. Tests reference these constants, never a literal. */
 public object UiStrings {
+    /** Resolves only copy that has an iOS NativeText English pair. */
+    public fun settingsNativeText(languageId: String?, chinese: String, english: String): String {
+        val useEnglish = when (languageId) {
+            "en" -> true
+            "zh" -> false
+            else -> java.util.Locale.getDefault().language.equals("en", ignoreCase = true)
+        }
+        return if (useEnglish) english else chinese
+    }
+
     // Chat page
     public const val WAITING_ENGINE: String = "等待引擎连接…"
     public const val WAITING_ENGINE_HINT: String = "引擎就绪后这里显示对话"

@@ -51,19 +51,21 @@ import com.phonedsh.ui.theme.LocalUiTokens
 @Composable
 public fun FontSizeSettingsPage(
     preferences: SettingsPreferences,
+    languageId: String? = null,
     onSelectPreference: ((SettingsPreferenceChoice) -> Unit)?,
     onSelectFontFamily: ((rowId: String, family: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
     embedded: Boolean = true,
     onBack: () -> Unit = {},
 ) {
+    fun native(chinese: String, english: String): String = UiStrings.settingsNativeText(languageId, chinese, english)
     val content: @Composable () -> Unit = {
         val values = listOf(
-            FontSizeRole("会话内容", SettingsScreenState.TEXT_FONT_SIZE_ROW_ID, preferences.fontSizeConversation,
+            FontSizeRole(native("会话内容", "Conversation"), SettingsScreenState.TEXT_FONT_SIZE_ROW_ID, preferences.fontSizeConversation,
                 preferences.fontFamilyConversation, 10..22),
-            FontSizeRole("代码", SettingsScreenState.CODE_FONT_SIZE_ROW_ID, preferences.fontSizeCode,
+            FontSizeRole(native("代码", "Code"), SettingsScreenState.CODE_FONT_SIZE_ROW_ID, preferences.fontSizeCode,
                 preferences.fontFamilyCode, 10..16),
-            FontSizeRole("终端", SettingsScreenState.TERMINAL_FONT_SIZE_ROW_ID, preferences.fontSizeTerminal,
+            FontSizeRole(native("终端", UiStrings.FONT_SIZE_TERMINAL_EN), SettingsScreenState.TERMINAL_FONT_SIZE_ROW_ID, preferences.fontSizeTerminal,
                 preferences.fontFamilyTerminal, 10..20),
         )
         LazyColumn(
@@ -78,7 +80,7 @@ public fun FontSizeSettingsPage(
                         SettingsGroupCard {
                             if (role.size == null) {
                                 com.phonedsh.ui.surface.SettingsGroupedRow(
-                                    title = "字号",
+                                    title = native("字号", UiStrings.SETTINGS_ROW_FONT_SIZE_EN),
                                     value = UiStrings.UNAVAILABLE,
                                     enabled = false,
                                     modifier = Modifier.testTag(role.rowId),
@@ -86,6 +88,7 @@ public fun FontSizeSettingsPage(
                             } else {
                                 FontSizeStepper(
                                     role = role,
+                                    languageId = languageId,
                                     enabled = onSelectPreference != null,
                                     onChange = { next -> onSelectPreference?.invoke(SettingsPreferenceChoice(role.rowId, next.toString())) },
                                 )
@@ -94,6 +97,7 @@ public fun FontSizeSettingsPage(
                                 rowId = role.rowId,
                                 value = role.fontFamily,
                                 onChange = onSelectFontFamily?.let { writer -> { family -> writer(role.rowId, family) } },
+                                languageId = languageId,
                             )
                         }
                     }
@@ -102,7 +106,7 @@ public fun FontSizeSettingsPage(
         }
     }
     if (embedded) content() else {
-        SettingsSubPageFrame(title = "字号", onBack = onBack, modifier = modifier, grouped = true) { content() }
+        SettingsSubPageFrame(title = native("字号", UiStrings.SETTINGS_ROW_FONT_SIZE_EN), onBack = onBack, modifier = modifier, grouped = true) { content() }
     }
 }
 
@@ -115,7 +119,7 @@ private data class FontSizeRole(
 )
 
 @Composable
-private fun FontSizeStepper(role: FontSizeRole, enabled: Boolean, onChange: (Int) -> Unit) {
+private fun FontSizeStepper(role: FontSizeRole, languageId: String?, enabled: Boolean, onChange: (Int) -> Unit) {
     val size = requireNotNull(role.size)
     val tokens = LocalUiTokens.current
     Column {
@@ -127,7 +131,7 @@ private fun FontSizeStepper(role: FontSizeRole, enabled: Boolean, onChange: (Int
                 .testTag(role.rowId),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SettingsRowLabel(text = "字号", modifier = Modifier.weight(1f))
+            SettingsRowLabel(text = UiStrings.settingsNativeText(languageId, "字号", UiStrings.SETTINGS_ROW_FONT_SIZE_EN), modifier = Modifier.weight(1f))
             BasicText(text = "$size pt", style = settingsLabelStyle().copy(color = tokens.colors.textSecondary))
             StepperControl(
                 enabled = enabled,
@@ -256,7 +260,7 @@ private fun StepperGlyph(
 }
 
 @Composable
-private fun FontFamilyField(rowId: String, value: String?, onChange: ((String) -> Unit)?) {
+private fun FontFamilyField(rowId: String, value: String?, onChange: ((String) -> Unit)?, languageId: String?) {
     val tokens = LocalUiTokens.current
     val editable = value != null && onChange != null
     var draft by remember(value) { mutableStateOf(value.orEmpty()) }
@@ -281,7 +285,7 @@ private fun FontFamilyField(rowId: String, value: String?, onChange: ((String) -
                 Box {
                     if (draft.isEmpty()) {
                         BasicText(
-                            text = FONT_FAMILY_PLACEHOLDER,
+                            text = UiStrings.settingsNativeText(languageId, FONT_FAMILY_PLACEHOLDER, UiStrings.FONT_SIZE_FAMILY_PLACEHOLDER_EN),
                             style = settingsLabelStyle().copy(color = tokens.colors.textTertiary),
                         )
                     }

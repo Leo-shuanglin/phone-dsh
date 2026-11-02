@@ -31,6 +31,7 @@ import com.phonedsh.ui.theme.LocalUiTokens
 @Composable
 public fun ConversationSettingsPage(
     preferences: SettingsPreferences,
+    languageId: String? = null,
     busyEnterMode: BusyEnterMode?,
     onSelectPreference: ((SettingsPreferenceChoice) -> Unit)?,
     onSelectBusyEnterMode: ((BusyEnterMode) -> Unit)?,
@@ -39,6 +40,7 @@ public fun ConversationSettingsPage(
     embedded: Boolean = true,
     onBack: () -> Unit = {},
 ) {
+    fun native(chinese: String, english: String): String = UiStrings.settingsNativeText(languageId, chinese, english)
     val screen: @Composable () -> Unit = {
         LazyColumn(
             modifier = Modifier.fillMaxSize().testTag(CONVERSATION_SETTINGS_LIST_TAG),
@@ -47,52 +49,58 @@ public fun ConversationSettingsPage(
         ) {
             item(key = "work-steps") {
                 Column {
-                    com.phonedsh.ui.surface.SettingsSectionLabel("工作步骤")
+                    com.phonedsh.ui.surface.SettingsSectionLabel(native("工作步骤", UiStrings.WORK_DETAILS_STEPS_EN))
                     SettingsGroupCard {
                         ChoiceRow(
-                            title = "显示方式",
+                            title = native(UiStrings.WORK_DETAILS_SHOW, UiStrings.WORK_DETAILS_SHOW_EN),
                             tag = SettingsScreenState.TRANSCRIPT_VIEW_ROW_ID,
-                            current = preferences.transcriptView?.label,
-                            options = TranscriptViewMode.entries.map { SettingsMenuOption(it.id, it.label) },
+                            current = preferences.transcriptView?.id?.let { transcriptLabel(it, languageId) },
+                            options = TranscriptViewMode.entries.map { SettingsMenuOption(it.id, transcriptLabel(it.id, languageId)) },
                             enabled = onSelectPreference != null,
                             onSelect = { id -> onSelectPreference?.invoke(SettingsPreferenceChoice(SettingsScreenState.TRANSCRIPT_VIEW_ROW_ID, id)) },
                         )
                         ChoiceRow(
-                            title = "收起时机",
+                            title = native(UiStrings.WORK_DETAILS_COLLAPSE, UiStrings.WORK_DETAILS_COLLAPSE_EN),
                             tag = SettingsScreenState.COLLAPSE_TIMING_ROW_ID,
-                            current = preferences.collapseTiming?.label,
-                            options = CollapseTiming.entries.map { SettingsMenuOption(it.id, it.label) },
+                            current = preferences.collapseTiming?.id?.let { collapseLabel(it, languageId) },
+                            options = CollapseTiming.entries.map { SettingsMenuOption(it.id, collapseLabel(it.id, languageId)) },
                             enabled = onSelectPreference != null,
                             onSelect = { id -> onSelectPreference?.invoke(SettingsPreferenceChoice(SettingsScreenState.COLLAPSE_TIMING_ROW_ID, id)) },
                         )
-                        DeveloperToolsRow(preferences.developerTools, onToggleDeveloperTools)
+                        DeveloperToolsRow(preferences.developerTools, onToggleDeveloperTools, languageId)
                     }
                 }
             }
             item(key = "sending-usage") {
                 Column {
-                    com.phonedsh.ui.surface.SettingsSectionLabel("发送与用量")
+                    com.phonedsh.ui.surface.SettingsSectionLabel(native(UiStrings.WORK_DETAILS_SENDING, UiStrings.WORK_DETAILS_SENDING_EN))
                     SettingsGroupCard {
                         ChoiceRow(
-                            title = "任务进行中发送",
+                            title = native(UiStrings.WORK_DETAILS_BUSY, UiStrings.WORK_DETAILS_BUSY_EN),
                             tag = SettingsScreenState.BUSY_ENTER_ROW_ID,
-                            current = busyEnterMode?.let(::busyEnterLabel),
-                            options = listOf(SettingsMenuOption("queue", "排队发送"), SettingsMenuOption("steer", "引导当前任务")),
+                            current = busyEnterMode?.let { busyEnterLabel(it, languageId) },
+                            options = listOf(
+                                SettingsMenuOption("queue", native(UiStrings.WORK_DETAILS_QUEUE, UiStrings.WORK_DETAILS_QUEUE_EN)),
+                                SettingsMenuOption("steer", native(UiStrings.WORK_DETAILS_STEER, UiStrings.WORK_DETAILS_STEER_EN)),
+                            ),
                             enabled = onSelectBusyEnterMode != null,
                             onSelect = { id -> BusyEnterMode.entries.firstOrNull { it.id == id }?.let { onSelectBusyEnterMode?.invoke(it) } },
                         )
                         ChoiceRow(
-                            title = "性能与用量",
+                            title = native(UiStrings.WORK_DETAILS_PERF, UiStrings.WORK_DETAILS_PERF_EN),
                             tag = SettingsScreenState.PERFORMANCE_ROW_ID,
-                            current = preferences.performanceUsage?.label,
-                            options = PerformanceUsage.entries.map { SettingsMenuOption(it.id, it.label) },
+                            current = preferences.performanceUsage?.id?.let { performanceLabel(it, languageId) },
+                            options = PerformanceUsage.entries.map { SettingsMenuOption(it.id, performanceLabel(it.id, languageId)) },
                             enabled = onSelectPreference != null,
                             onSelect = { id -> onSelectPreference?.invoke(SettingsPreferenceChoice(SettingsScreenState.PERFORMANCE_ROW_ID, id)) },
                             dividerBelow = false,
                         )
                     }
                     SettingsFootnoteRow(
-                        text = "排队发送会等当前任务结束再处理；引导会把新消息交给正在进行的任务。",
+                        text = native(
+                            UiStrings.WORK_DETAILS_QUEUE_FOOTER,
+                            UiStrings.WORK_DETAILS_QUEUE_FOOTER_EN,
+                        ),
                         modifier = Modifier.testTag(CONVERSATION_SETTINGS_NOTE_TAG),
                     )
                 }
@@ -100,7 +108,7 @@ public fun ConversationSettingsPage(
         }
     }
     if (embedded) screen() else {
-        SettingsSubPageFrame(title = UiStrings.SETTINGS_ROW_WORK_DETAILS, onBack = onBack, modifier = modifier, grouped = true) { screen() }
+        SettingsSubPageFrame(title = native(UiStrings.SETTINGS_ROW_WORK_DETAILS, UiStrings.SETTINGS_ROW_WORK_DETAILS_EN), onBack = onBack, modifier = modifier, grouped = true) { screen() }
     }
 }
 
@@ -140,12 +148,13 @@ private fun ChoiceRow(
 }
 
 @Composable
-private fun DeveloperToolsRow(value: FactState, onToggle: ((Boolean) -> Unit)?) {
+private fun DeveloperToolsRow(value: FactState, onToggle: ((Boolean) -> Unit)?, languageId: String?) {
+    val label = UiStrings.settingsNativeText(languageId, UiStrings.WORK_DETAILS_CODE_VIEW, UiStrings.WORK_DETAILS_CODE_VIEW_EN)
     val known = value != FactState.UNKNOWN && onToggle != null
     val checked = value == FactState.YES
     if (!known) {
         SettingsGroupedRow(
-            title = "显示代码工作视图",
+            title = label,
             value = when (value) {
                 FactState.YES -> UiStrings.SETTINGS_BACKGROUND_ON
                 FactState.NO -> UiStrings.SETTINGS_BACKGROUND_OFF
@@ -165,14 +174,34 @@ private fun DeveloperToolsRow(value: FactState, onToggle: ((Boolean) -> Unit)?) 
         stateValue = if (checked) UiStrings.SETTINGS_BACKGROUND_ON else UiStrings.SETTINGS_BACKGROUND_OFF,
         modifier = Modifier.testTag(SettingsScreenState.DEVELOPER_TOOLS_ROW_ID),
     ) {
-        SettingsRowLabel(text = "显示代码工作视图", modifier = Modifier.weight(1f))
+        SettingsRowLabel(text = label, modifier = Modifier.weight(1f))
         SettingsSwitch(checked = checked, enabled = true)
     }
 }
 
-private fun busyEnterLabel(mode: BusyEnterMode): String = when (mode) {
-    BusyEnterMode.QUEUE -> UiStrings.BUSY_ENTER_QUEUE
-    BusyEnterMode.STEER -> UiStrings.BUSY_ENTER_STEER
+private fun busyEnterLabel(mode: BusyEnterMode, languageId: String?): String = when (mode) {
+    BusyEnterMode.QUEUE -> UiStrings.settingsNativeText(languageId, UiStrings.WORK_DETAILS_QUEUE, UiStrings.WORK_DETAILS_QUEUE_EN)
+    BusyEnterMode.STEER -> UiStrings.settingsNativeText(languageId, UiStrings.WORK_DETAILS_STEER, UiStrings.WORK_DETAILS_STEER_EN)
+}
+
+private fun transcriptLabel(id: String, languageId: String?): String = when (id) {
+    TranscriptViewMode.COMPACT.id -> UiStrings.settingsNativeText(languageId, UiStrings.WORK_DETAILS_COMPACT, UiStrings.WORK_DETAILS_COMPACT_EN)
+    TranscriptViewMode.STANDARD.id -> UiStrings.settingsNativeText(languageId, "标准", "Standard")
+    TranscriptViewMode.DETAILED.id -> UiStrings.settingsNativeText(languageId, "详细", "Detailed")
+    TranscriptViewMode.VERBOSE.id -> UiStrings.settingsNativeText(languageId, UiStrings.WORK_DETAILS_VERBOSE, UiStrings.WORK_DETAILS_VERBOSE_EN)
+    else -> id
+}
+
+private fun collapseLabel(id: String, languageId: String?): String = when (id) {
+    CollapseTiming.COMPLETION.id -> UiStrings.settingsNativeText(languageId, UiStrings.WORK_DETAILS_COLLAPSE_DONE, UiStrings.WORK_DETAILS_COLLAPSE_DONE_EN)
+    CollapseTiming.NEXT_INPUT.id -> UiStrings.settingsNativeText(languageId, UiStrings.WORK_DETAILS_COLLAPSE_NEXT, UiStrings.WORK_DETAILS_COLLAPSE_NEXT_EN)
+    else -> id
+}
+
+private fun performanceLabel(id: String, languageId: String?): String = when (id) {
+    PerformanceUsage.COMPACT.id -> UiStrings.settingsNativeText(languageId, UiStrings.WORK_DETAILS_COMPACT, UiStrings.WORK_DETAILS_COMPACT_EN)
+    PerformanceUsage.DETAILED.id -> UiStrings.settingsNativeText(languageId, UiStrings.WORK_DETAILS_VERBOSE, "Detailed")
+    else -> id
 }
 
 internal const val CONVERSATION_SETTINGS_LIST_TAG: String = "pdsh.settings.conversation.list"

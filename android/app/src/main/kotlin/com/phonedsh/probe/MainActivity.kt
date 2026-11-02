@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -31,6 +32,7 @@ import com.phonedsh.dsh.localexec.UbuntuApprovalGate
 import com.phonedsh.dsh.localexec.UbuntuApprovalPrompt
 import com.phonedsh.dsh.localexec.UbuntuApprovalRequest
 import com.phonedsh.ui.page.PhoneCapability
+import com.phonedsh.ui.page.FilesImportReceipt
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +49,10 @@ class MainActivity : ComponentActivity() {
      * `StateFlow` so the write can come from the host-tool coroutine.
      */
     private val pendingUbuntuApproval = MutableStateFlow<PendingUbuntuApproval?>(null)
+    private val filesImportReceipt = MutableStateFlow<Pair<String, FilesImportReceipt>?>(null)
+    private var pendingWorkspaceImportRequestId: String? = null
+    private var pendingChatFileSessionId: String? = null
+    private var pendingChatImageSessionId: String? = null
 
     /**
      * Bumped when the notification answer changes what the background facts may
@@ -64,6 +70,8 @@ class MainActivity : ComponentActivity() {
      * show an answer it did not observe.
      */
     private var permissionRevision by mutableIntStateOf(0)
+    private var speechReady by mutableStateOf(false)
+    private var textToSpeech: TextToSpeech? = null
 
     /** True while a 跑一轮 tap waits for the POST_NOTIFICATIONS answer. */
     private var turnAfterPermission = false
@@ -131,11 +139,13 @@ class MainActivity : ComponentActivity() {
     private val openChatFile = registerForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
+        val chatId = pendingChatFileSessionId
+        pendingChatFileSessionId = null
         if (uri == null) {
             Log.i(TAG, "CHAT_PICK_CANCELLED kind=file")
         } else {
             Log.i(TAG, "CHAT_PICK kind=file uri_type=${contentResolver.getType(uri) ?: "-"}")
-            engine.importIntoWorkspace(uri, image = false)
+            if (chatId != null) engine.importIntoWorkspace(uri, image = false, expectedChatId = chatId)
         }
     }
 
@@ -143,11 +153,30 @@ class MainActivity : ComponentActivity() {
     private val openChatImage = registerForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
+        val chatId = pendingChatImageSessionId
+        pendingChatImageSessionId = null
         if (uri == null) {
             Log.i(TAG, "CHAT_PICK_CANCELLED kind=image")
         } else {
             Log.i(TAG, "CHAT_PICK kind=image uri_type=${contentResolver.getType(uri) ?: "-"}")
-            engine.importIntoWorkspace(uri, image = true)
+            if (chatId != null) engine.importIntoWorkspace(uri, image = true, expectedChatId = chatId)
+        }
+    }
+
+    /** Picker owned by 工作文件夹; its receipt stays with FilesPage. */
+    private val openWorkspaceFile = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        val requestId = pendingWorkspaceImportRequestId ?: return@registerForActivityResult
+        pendingWorkspaceImportRequestId = null
+        if (uri == null) {
+            Log.i(TAG, "FILES_PICK_CANCELLED")
+            filesImportReceipt.value = requestId to FilesImportReceipt.CANCELLED
+        } else {
+            Log.i(TAG, "FILES_PICK uri_type=${contentResolver.getType(uri) ?: "-"}")
+            engine.importIntoWorkspace(uri, image = false, attachToChat = false) { imported ->
+                filesImportReceipt.value = requestId to if (imported) FilesImportReceipt.IMPORTED else FilesImportReceipt.FAILED
+            }
         }
     }
 
@@ -166,6 +195,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        textToSpeech = TextToSpeech(this) { status ->
+            speechReady = status == TextToSpeech.SUCCESS
+        }
         // The key store must exist before the launch config, because the config
         // asks it for the key's *state* while building the Worker env, and before
         // the view model constructs the gateway that asks it for the credential.
@@ -219,6 +251,7 @@ class MainActivity : ComponentActivity() {
             val channel by engine.channel.collectAsState()
             val turn by engine.turn.collectAsState()
             val recoveryNotice by ProbeRecovery.notice.collectAsState()
+            val workspaceImport by filesImportReceipt.collectAsState()
             val ubuntuApproval by pendingUbuntuApproval.asStateFlow().collectAsState()
             HostShell(
                 engine = engine,
@@ -230,6 +263,10 @@ class MainActivity : ComponentActivity() {
                 recoveryNotice = recoveryNotice,
                 backgroundRevision = backgroundRevision,
                 permissionRevision = permissionRevision,
+                filesImportReceipt = workspaceImport,
+                onSpeakText = if (speechReady) { text ->
+                    textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "pdsh-${System.nanoTime()}")
+                } else null,
                 onStart = engine::start,
                 // Stopping the local engine ends every DSH session it hosts, so
                 // the session-scoped `ubuntu` approval must go with it. Starting
@@ -244,8 +281,19 @@ class MainActivity : ComponentActivity() {
                 onPhonePermissionSettings = ::openPhonePermissionSettings,
                 // L69: the chat composer's two pickers. Their bytes go into the
                 // workspace (WAL mutation), not into a private copy beside the stores.
-                onPickFiles = { openChatFile.launch(arrayOf("*/*")) },
-                onPickImages = { openChatImage.launch(arrayOf("image/*")) },
+                onPickFiles = {
+                    pendingChatFileSessionId = engine.currentChatId
+                    openChatFile.launch(arrayOf("*/*"))
+                },
+                onPickImages = {
+                    pendingChatImageSessionId = engine.currentChatId
+                    openChatImage.launch(arrayOf("image/*"))
+                },
+                onPickWorkspaceFile = { requestId ->
+                    pendingWorkspaceImportRequestId = requestId
+                    filesImportReceipt.value = null
+                    openWorkspaceFile.launch(arrayOf("*/*"))
+                },
             )
             UbuntuApprovalDialog(
                 pending = ubuntuApproval,
@@ -261,6 +309,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
+        textToSpeech = null
+        speechReady = false
         super.onDestroy()
         // A configuration change is the same session on a new Activity; anything
         // else destroys the surface that could answer a pending confirmation.

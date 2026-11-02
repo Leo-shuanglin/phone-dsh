@@ -108,6 +108,8 @@ import com.phonedsh.ui.page.ShellUiEvent
 import com.phonedsh.ui.page.TaskScreenFacts
 import com.phonedsh.ui.page.TaskScreenLocalState
 import com.phonedsh.ui.page.TaskScreenPage
+import com.phonedsh.ui.state.StateRequestId
+import java.util.UUID
 import com.phonedsh.ui.page.TaskScreenScreenState
 import com.phonedsh.ui.page.TaskScreenUiEvent
 import com.phonedsh.ui.page.ToolsScreenState
@@ -226,6 +228,7 @@ internal fun DeveloperToolsSurface(
     onBack: () -> Unit,
     backLevel: PdshBackLevel? = null,
     onAction: (PdshHostAction) -> Unit = {},
+    actionAvailability: PdshActionAvailabilities = PdshActionAvailabilities(),
 ) {
     val context = LocalContext.current
     var open by remember { mutableStateOf<DevTool?>(null) }
@@ -399,16 +402,13 @@ internal fun DeveloperToolsSurface(
                 )
             }
 
-            // 命令: the read-only accelerator shell. Its run gesture is the host
-            // action it always was (`PdshHostAction.RunShellCommand`), so the page is
-            // fully live here — no read is duplicated, nothing is faked. 取消 has no
-            // host channel: it is only drawn while a run is in flight, and this host
-            // never starts one (the run verb is the honest handoff above), so the
-            // callback exists for the state the page defines, not for a channel that
-            // does not.
+            // 命令: the read-only accelerator shell uses the same typed ExecBridge
+            // actions as the standalone tools route.
             DevTool.COMMAND -> {
                 var local by remember { mutableStateOf(ShellLocalState()) }
                 val state = ToolsScreenState.from(facts.shell, local)
+                val runCapability = actionAvailability.forAction(PdshActionKey.EXECUTE_COMMAND)
+                val cancelCapability = actionAvailability.forAction(PdshActionKey.SHELL_CANCEL)
                 PDSHShellPage(
                     state = state,
                     onSelectCommand = { name ->
@@ -420,16 +420,34 @@ internal fun DeveloperToolsSurface(
                     onArgumentsChange = { value ->
                         local = local.apply(ShellUiEvent.SetArguments(value))
                     },
-                    onRun = {
-                        onAction(
-                            PdshHostAction.RunShellCommand(
-                                command = state.selectedCommand,
-                                workingDirectory = state.workingDirectory,
-                                arguments = state.arguments,
-                            ),
-                        )
+                    onRun = when (runCapability) {
+                        is PdshActionAvailability.Unavailable -> null
+                        is PdshActionAvailability.Available -> {
+                            {
+                                runCapability.callback(
+                                    PdshUiHostCommand.ExecuteCommand(
+                                        command = state.selectedCommand,
+                                        workingDirectory = state.workingDirectory,
+                                        arguments = state.arguments,
+                                        requestId = StateRequestId("ui.exec." + UUID.randomUUID().toString()),
+                                    ),
+                                )
+                            }
+                        }
                     },
-                    onCancel = { answer = SHELL_CANCEL_READ_ONLY },
+                    onCancel = when (cancelCapability) {
+                        is PdshActionAvailability.Unavailable -> null
+                        is PdshActionAvailability.Available -> facts.shell.run.runningExecId?.let { execId ->
+                            {
+                                cancelCapability.callback(
+                                    PdshUiHostCommand.ShellCancel(
+                                        execId,
+                                        StateRequestId("ui.exec.cancel." + UUID.randomUUID().toString()),
+                                    ),
+                                )
+                            }
+                        }
+                    },
                     onBack = { open = null; answer = null },
                 )
             }

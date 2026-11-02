@@ -19,6 +19,8 @@ internal data class ChatSessionSnapshot(
     val currentModel: String? = null,
     val currentProvider: String? = null,
     val currentEffort: String? = null,
+    /** Durable DSH inbox rows; null means the projection has not reported inbox. */
+    val queueItems: List<ManagedQueueItemState>? = null,
 )
 
 internal data class ChatModelRoute(val provider: String, val model: String,
@@ -29,6 +31,7 @@ internal fun sessionSnapshotOf(
     catalog: JsonValue?,
     commandCatalog: JsonValue?,
     modelCatalog: JsonValue? = null,
+    sessionId: String? = null,
 ): ChatSessionSnapshot {
     val values = (projections as? JsonObject)?.get("values") as? JsonObject
     val goal = ((values?.get("goal") as? JsonObject)?.get("goal") as? JsonObject)
@@ -55,6 +58,32 @@ internal fun sessionSnapshotOf(
                 val effortId = effort.string("id") ?: return@mapNotNull null
                 EffortOption(effortId, effortTitle(effortId, effort.string("name") ?: effortId))
             }, reasoning?.string("defaultEffort"))
+        }
+    }
+    val inbox = values?.get("inbox") as? JsonObject
+    val queueItems = inbox?.let { queue ->
+        listOf("next-turn", "next-step").flatMap { lane ->
+            (queue[lane] as? JsonArray)?.values.orEmpty().mapNotNull { raw ->
+                val item = raw as? JsonObject ?: return@mapNotNull null
+                val id = item.string("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+                val content = (item["content"] as? JsonArray)?.values.orEmpty()
+                val parts = content.mapNotNull { part ->
+                    val value = part as? JsonObject ?: return@mapNotNull null
+                    if (value.string("type") != "text") return@mapNotNull null
+                    value.string("text")
+                }
+                val text = parts.joinToString("\n")
+                ManagedQueueItemState(
+                    id = QueueItemId.Durable(id),
+                    text = text,
+                    sessionId = sessionId,
+                    lane = lane,
+                    state = QueueItemStatus.QUEUED,
+                    canEdit = text.isNotBlank() && parts.size == content.size,
+                    canRemove = true,
+                    canSteer = false,
+                )
+            }
         }
     }
     val commands = when (commandCatalog) {
@@ -88,6 +117,7 @@ internal fun sessionSnapshotOf(
         currentModel = selected?.string("model"),
         currentProvider = selected?.string("provider"),
         currentEffort = selected?.string("reasoningEffort"),
+        queueItems = queueItems,
     )
 }
 

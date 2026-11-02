@@ -134,6 +134,8 @@ import com.phonedsh.ui.page.SettingsDocumentFacts
 import com.phonedsh.ui.page.SettingsDocumentScreenState
 import com.phonedsh.ui.state.ChatLocalState
 import com.phonedsh.ui.state.ChatScreenState
+import com.phonedsh.ui.state.PendingAnswer
+import com.phonedsh.ui.state.StateRequestId
 import com.phonedsh.ui.theme.LocalUiTokens
 
 // Appended by the L24 lane: the chat family's three 内嵌子页 (`ChatPage.swift:3504`,
@@ -143,6 +145,7 @@ import com.phonedsh.ui.page.ChatCommandResultState
 import com.phonedsh.ui.page.ChatJobsSheetState
 import com.phonedsh.ui.page.ChatSchedulesSheetState
 import com.phonedsh.ui.page.ChatSubpageFacts
+import com.phonedsh.ui.surface.composer.ComposerAvailability
 import com.phonedsh.ui.page.CommandExecutionResultPage
 import com.phonedsh.ui.page.NativeJobListSheet
 import com.phonedsh.ui.page.NativeScheduleListSheet
@@ -184,6 +187,7 @@ import kotlinx.coroutines.launch
 import com.phonedsh.ui.page.AutomationScheduleDraft
 import com.phonedsh.ui.page.SessionArtifactPreview
 import java.time.ZoneId
+import java.util.UUID
 
 // Appended by the L29 lane: the one preview face (`PdshRoute.Preview`). The surface
 // lives in its own package so it can carry the resolver, the pager and the file
@@ -356,6 +360,7 @@ public fun PdshNavHost(
     sessions: (@Composable () -> Unit)? = null,
     onSettingsWrite: (SettingsWrite) -> Unit = {},
     onPreferenceWrite: (SettingsPreferenceChoice) -> Unit = {},
+    onSelectFontFamily: ((rowId: String, family: String) -> Unit)? = null,
     onToggleDeveloperTools: (Boolean) -> Unit = {},
     preferencesWritable: FactState = FactState.UNKNOWN,
     chatSubpages: ChatSubpageFacts = ChatSubpageFacts(),
@@ -370,12 +375,21 @@ public fun PdshNavHost(
     // cannot prompt still renders the page — as a read-only surface.
     onPhonePermissionRequest: (PhoneCapability) -> Unit = {},
     onPhonePermissionSettings: (PhoneCapability) -> Unit = {},
+    /** Open the host-owned home drawer over the current conversation. */
+    onOpenDrawer: (() -> Unit)? = null,
     // L69: the chat page's host half. `chat` is the fully folded screen state the
     // composition root built from the Worker's events (`ChatScreenState.from`), so
     // this file stays a route table and never learns the event vocabulary. `null`
     // keeps the library's honest empty conversation for a host that has no chat.
     chat: ChatScreenState? = null,
     chatTitle: String? = null,
+    chatFolderSubtitle: String? = null,
+    timelineRetryAvailability: PdshActionAvailability<() -> Unit> =
+        PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    permissionApproveAvailability: PdshActionAvailability<(PendingAnswer) -> Unit> =
+        PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    permissionDenyAvailability: PdshActionAvailability<(PendingAnswer) -> Unit> =
+        PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
     onChatDraftChange: (String) -> Unit = {},
     onChatSend: () -> Unit = {},
     onChatStop: () -> Unit = {},
@@ -389,6 +403,12 @@ public fun PdshNavHost(
     deviceConnectionSource: DeviceConnectionSource? = null,
     /** Host-supplied fixed session monitors keyed by device id; no demo is implicit. */
     deviceSessionSources: Map<String, DeviceSessionSource> = emptyMap(),
+    /** Activity-owned SAF picker for the workspace listing. */
+    onFilesImportRequest: ((String) -> Unit)? = null,
+    /** Request result from that picker; null means no result was reported. */
+    filesImportReceipt: Pair<String, com.phonedsh.ui.page.FilesImportReceipt>? = null,
+    /** Device-owned native TTS callback, unavailable when no engine is ready. */
+    onSpeakText: ((String) -> Unit)? = null,
 ) {
     val route = nav.current
     if (route == PdshRoute.Home) {
@@ -401,10 +421,17 @@ public fun PdshNavHost(
             PdshRoute.Sessions ->
                 if (sessions != null) sessions() else SessionsRoute(facts, onBack)
             PdshRoute.Chat -> ChatRoute(
+                actionAvailability = facts.actionAvailability,
                 subpages = chatSubpages,
                 onNavigate = onNavigate,
+                onOpenDrawer = onOpenDrawer,
+                onSpeakText = onSpeakText,
                 state = chat,
                 title = chatTitle,
+                folderSubtitle = chatFolderSubtitle,
+                timelineRetryAvailability = timelineRetryAvailability,
+                permissionApproveAvailability = permissionApproveAvailability,
+                permissionDenyAvailability = permissionDenyAvailability,
                 onDraftChange = onChatDraftChange,
                 onSend = onChatSend,
                 onStop = onChatStop,
@@ -416,7 +443,9 @@ public fun PdshNavHost(
                 actions = chatActions,
             )
             PdshRoute.WorkspaceFolders -> WorkspaceFoldersRoute(facts, onBack, onHostAction, onNavigate)
-            is PdshRoute.Files -> FilesRoute(onBack, onNavigate, workspaceRoot, backLevel)
+            is PdshRoute.Files -> FilesRoute(
+                onBack, onNavigate, workspaceRoot, backLevel, onFilesImportRequest, filesImportReceipt,
+            )
             is PdshRoute.Preview -> PreviewRoute(route, onBack, workspaceRoot)
             PdshRoute.Automation -> AutomationRoute(facts, onBack, onHostAction, backLevel)
             PdshRoute.Configuration -> ConfigurationRoute(facts, onBack, onNavigate)
@@ -427,6 +456,7 @@ public fun PdshNavHost(
                 onHostAction = onHostAction,
                 onSettingsWrite = onSettingsWrite,
                 onPreferenceWrite = onPreferenceWrite,
+                onSelectFontFamily = onSelectFontFamily,
                 onToggleDeveloperTools = onToggleDeveloperTools,
                 backLevel = backLevel,
                 onPhonePermissionRequest = onPhonePermissionRequest,
@@ -438,7 +468,7 @@ public fun PdshNavHost(
             is PdshRoute.McpEditor -> McpEditorRoute(route, facts, onBack, onHostAction)
             PdshRoute.Runtime -> RuntimeRoute(facts, onBack, onHostAction, backLevel)
             PdshRoute.Egress -> EgressRoute(facts, onBack)
-            PdshRoute.Tools -> ToolsRoute(facts, onBack, onHostAction)
+            PdshRoute.Tools -> ToolsRoute(facts, onBack)
             PdshRoute.Export -> ExportRoute(onBack)
             is PdshRoute.Workbench ->
                 WorkbenchRoute(route, facts, onBack, onHostAction, onNavigate, backLevel)
@@ -548,10 +578,17 @@ private fun RouteSurface(presentation: PdshPresentation, content: @Composable ()
  */
 @Composable
 private fun ChatRoute(
+    actionAvailability: PdshActionAvailabilities,
     subpages: ChatSubpageFacts,
     onNavigate: (PdshRoute) -> Unit,
+    onOpenDrawer: (() -> Unit)?,
+    onSpeakText: ((String) -> Unit)?,
     state: ChatScreenState?,
     title: String?,
+    folderSubtitle: String?,
+    timelineRetryAvailability: PdshActionAvailability<() -> Unit>,
+    permissionApproveAvailability: PdshActionAvailability<(PendingAnswer) -> Unit>,
+    permissionDenyAvailability: PdshActionAvailability<(PendingAnswer) -> Unit>,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -562,6 +599,134 @@ private fun ChatRoute(
     onDismissNotice: () -> Unit,
     actions: ChatInteractionActions,
 ) {
+    fun available(action: PdshActionKey): Boolean =
+        actionAvailability.forAction(action) is PdshActionAvailability.Available
+    val sessionId = state?.sessionID?.takeIf(String::isNotBlank)
+    val workerSessionId = state?.workerSessionID?.takeIf(String::isNotBlank)
+    val latestAssistantReply = state?.rows?.asReversed()?.firstNotNullOfOrNull { row ->
+        (row as? com.phonedsh.ui.state.ChatRow.Assistant)
+            ?.takeIf { !it.streaming && it.text.isNotBlank() }
+            ?.text
+    }
+    val speakRecentReply: (() -> Unit)? = when (
+        val capability = actionAvailability.forAction(PdshActionKey.SPEAK_RECENT_REPLY)
+    ) {
+        is PdshActionAvailability.Unavailable -> null
+        is PdshActionAvailability.Available -> if (sessionId == null || latestAssistantReply == null || onSpeakText == null) {
+            null
+        } else {
+            {
+                capability.callback(
+                    PdshUiHostCommand.SpeakRecentReply(
+                        sessionId,
+                        StateRequestId(UUID.randomUUID().toString()),
+                        latestAssistantReply,
+                    ),
+                )
+            }
+        }
+    }
+    val retryFromTable: PdshActionAvailability<() -> Unit> = when (val retry = actionAvailability.forAction(PdshActionKey.RETRY)) {
+        is PdshActionAvailability.Unavailable -> retry
+        is PdshActionAvailability.Available -> if (sessionId == null) {
+            PdshActionAvailability.Unavailable(PdshUnavailableReason.REQUIRED_FACT_UNKNOWN)
+        } else PdshActionAvailability.Available {
+            retry.callback(
+                PdshUiHostCommand.Retry(sessionId, StateRequestId(UUID.randomUUID().toString())),
+            )
+        }
+    }
+    val planApproveFromTable: PdshActionAvailability<(PendingAnswer, String) -> Unit> =
+        when (val action = actionAvailability.forAction(PdshActionKey.APPROVE_PLAN)) {
+            is PdshActionAvailability.Unavailable -> action
+            is PdshActionAvailability.Available -> if (sessionId == null) {
+                PdshActionAvailability.Unavailable(PdshUnavailableReason.REQUIRED_FACT_UNKNOWN)
+            } else PdshActionAvailability.Available { pending, answer ->
+                action.callback(
+                    PdshUiHostCommand.ApprovePlan(
+                        sessionId,
+                        pending.typedRequestId,
+                        StateRequestId(UUID.randomUUID().toString()),
+                        answer,
+                    ),
+                )
+            }
+        }
+    val planChangesFromTable: PdshActionAvailability<(PendingAnswer) -> Unit> =
+        when (val action = actionAvailability.forAction(PdshActionKey.REJECT_PLAN)) {
+            is PdshActionAvailability.Unavailable -> action
+            is PdshActionAvailability.Available -> if (sessionId == null) {
+                PdshActionAvailability.Unavailable(PdshUnavailableReason.REQUIRED_FACT_UNKNOWN)
+            } else PdshActionAvailability.Available { pending ->
+                action.callback(
+                    PdshUiHostCommand.RejectPlan(
+                        sessionId,
+                        pending.typedRequestId,
+                        StateRequestId(UUID.randomUUID().toString()),
+                    ),
+                )
+            }
+        }
+    val queueSubmissionFromTable: PdshActionAvailability<(String, StateRequestId) -> Unit> =
+        when (val action = actionAvailability.forAction(PdshActionKey.QUEUE)) {
+            is PdshActionAvailability.Unavailable -> action
+            is PdshActionAvailability.Available -> if (workerSessionId == null) {
+                PdshActionAvailability.Unavailable(PdshUnavailableReason.REQUIRED_FACT_UNKNOWN)
+            } else PdshActionAvailability.Available { text, requestId ->
+                action.callback(PdshUiHostCommand.Queue(workerSessionId, requestId, text))
+            }
+        }
+    val steerSubmissionFromTable: PdshActionAvailability<(String, StateRequestId) -> Unit> =
+        when (val action = actionAvailability.forAction(PdshActionKey.STEER)) {
+            is PdshActionAvailability.Unavailable -> action
+            is PdshActionAvailability.Available -> if (workerSessionId == null) {
+                PdshActionAvailability.Unavailable(PdshUnavailableReason.REQUIRED_FACT_UNKNOWN)
+            } else PdshActionAvailability.Available { text, requestId ->
+                action.callback(PdshUiHostCommand.Steer(workerSessionId, requestId, text))
+            }
+        }
+    val stopFromTable: PdshActionAvailability<(StateRequestId) -> Unit> =
+        when (val action = actionAvailability.forAction(PdshActionKey.STOP)) {
+            is PdshActionAvailability.Unavailable -> action
+            is PdshActionAvailability.Available -> if (workerSessionId == null) {
+                PdshActionAvailability.Unavailable(PdshUnavailableReason.REQUIRED_FACT_UNKNOWN)
+            } else PdshActionAvailability.Available { requestId ->
+                action.callback(PdshUiHostCommand.Stop(workerSessionId, requestId))
+            }
+        }
+    val queueEditFromTable: PdshActionAvailability<(com.phonedsh.ui.state.ManagedQueueItemState, String, StateRequestId) -> Unit> =
+        when (val action = actionAvailability.forAction(PdshActionKey.QUEUE_EDIT)) {
+            is PdshActionAvailability.Unavailable -> action
+            is PdshActionAvailability.Available -> PdshActionAvailability.Available { item, text, requestId ->
+                val itemId = (item.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value
+                val workerSessionId = item.sessionId
+                if (itemId != null && workerSessionId != null && item.canEdit == true) {
+                    action.callback(PdshUiHostCommand.EditQueueItem(workerSessionId, itemId, requestId, text))
+                }
+            }
+        }
+    val queueRemoveFromTable: PdshActionAvailability<(com.phonedsh.ui.state.ManagedQueueItemState, StateRequestId) -> Unit> =
+        when (val action = actionAvailability.forAction(PdshActionKey.QUEUE_REMOVE)) {
+            is PdshActionAvailability.Unavailable -> action
+            is PdshActionAvailability.Available -> PdshActionAvailability.Available { item, requestId ->
+                val itemId = (item.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value
+                val workerSessionId = item.sessionId
+                if (itemId != null && workerSessionId != null && item.canRemove == true) {
+                    action.callback(PdshUiHostCommand.RemoveQueueItem(workerSessionId, itemId, requestId))
+                }
+            }
+        }
+    val queueSteerFromTable: PdshActionAvailability<(com.phonedsh.ui.state.ManagedQueueItemState, StateRequestId) -> Unit> =
+        when (val action = actionAvailability.forAction(PdshActionKey.QUEUE_STEER)) {
+            is PdshActionAvailability.Unavailable -> action
+            is PdshActionAvailability.Available -> PdshActionAvailability.Available { item, requestId ->
+                val itemId = (item.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value
+                val workerSessionId = item.sessionId
+                if (itemId != null && workerSessionId != null && item.canSteer == true) {
+                    action.callback(PdshUiHostCommand.SteerQueueItem(workerSessionId, itemId, requestId))
+                }
+            }
+        }
     ChatPage(
         state = state ?: ChatScreenState.from(nodes = emptyList(), local = ChatLocalState()),
         onDraftChange = onDraftChange,
@@ -590,8 +755,9 @@ private fun ChatRoute(
         // both are the App's own sentence about what just happened.
         onDismissBanner = { _: String -> onDismissNotice() },
         onRetry = onSend,
-        onOpenSessions = { onNavigate(PdshRoute.Sessions) },
+        onOpenSessions = { if (onOpenDrawer != null) onOpenDrawer() else onNavigate(PdshRoute.Sessions) },
         title = title ?: UiStrings.SESSION_TITLE_NEW,
+        folderSubtitle = folderSubtitle,
         // The page-head menu's 后台任务（N）/定时任务（N） rows exist only while the
         // host reported rows (`ChatPage.swift:247`/`:252`); with no read they are
         // absent instead of opening a sheet that can only say 读取不到.
@@ -624,6 +790,31 @@ private fun ChatRoute(
         onRemoveAttachment = onRemoveAttachment,
         onDismissComposerNotice = onDismissNotice,
         onOpenFile = { path -> onNavigate(PdshRoute.Preview(path)) },
+        onOpenResource = { resource -> onNavigate(PdshRoute.Preview(resource)) },
+        timelineRetryAvailability = retryFromTable,
+        permissionApproveAvailability = permissionApproveAvailability,
+        permissionDenyAvailability = permissionDenyAvailability,
+        planApproveAvailability = planApproveFromTable,
+        planRequestChangesAvailability = planChangesFromTable,
+        queueEditAvailability = queueEditFromTable,
+        queueRemoveAvailability = queueRemoveFromTable,
+        queueSteerAvailability = queueSteerFromTable,
+        queueSubmissionAvailability = queueSubmissionFromTable,
+        steerSubmissionAvailability = steerSubmissionFromTable,
+        stopAvailability = stopFromTable,
+        startEngineAvailability = actions.startEngineAvailability,
+        onSpeakRecentReply = speakRecentReply,
+        composerAvailability = ComposerAvailability(
+            addImages = available(PdshActionKey.IMAGE_IMPORT),
+            addFiles = available(PdshActionKey.FILE_IMPORT),
+            speakRecentReply = speakRecentReply != null,
+            selectAccessMode = available(PdshActionKey.SELECT_PERMISSION_MODE),
+            selectModel = available(PdshActionKey.SELECT_MODEL),
+            answerQuestions = available(PdshActionKey.ANSWER_QUESTION),
+            dismissQuestions = available(PdshActionKey.DISCARD_QUESTION),
+            approvePlans = available(PdshActionKey.APPROVE_PLAN),
+            requestPlanChanges = available(PdshActionKey.REJECT_PLAN),
+        ),
     )
 }
 
@@ -846,16 +1037,17 @@ private fun ConfigurationRoute(
  * `PDSHShellPage.swift`; `ToolsScreenState` stays the reducer the JVM tests drive.
  *
  * @param facts the host snapshot; only `shell` is read here.
- * @param onHostAction the 运行 handoff.
+ * Uses the host's measured action table; unavailable run/cancel actions stay disabled.
  */
 @Composable
 private fun ToolsRoute(
     facts: PdshNavFacts,
     onBack: () -> Unit,
-    onHostAction: (PdshHostAction) -> Unit,
 ) {
     var local by remember { mutableStateOf(ShellLocalState()) }
     val state = ToolsScreenState.from(facts.shell, local)
+    val runAvailability = facts.actionAvailability.forAction(PdshActionKey.EXECUTE_COMMAND)
+    val cancelAvailability = facts.actionAvailability.forAction(PdshActionKey.SHELL_CANCEL)
     PDSHShellPage(
         state = state,
         onSelectCommand = { name -> local = local.apply(ShellUiEvent.SelectCommand(name)) },
@@ -863,21 +1055,34 @@ private fun ToolsRoute(
             local = local.apply(ShellUiEvent.SetWorkingDirectory(value))
         },
         onArgumentsChange = { value -> local = local.apply(ShellUiEvent.SetArguments(value)) },
-        onRun = {
-            onHostAction(
-                PdshHostAction.RunShellCommand(
-                    command = state.selectedCommand,
-                    workingDirectory = state.workingDirectory,
-                    arguments = state.arguments,
-                ),
-            )
+        onRun = when (runAvailability) {
+            is PdshActionAvailability.Unavailable -> null
+            is PdshActionAvailability.Available -> {
+                {
+                    runAvailability.callback(
+                        PdshUiHostCommand.ExecuteCommand(
+                            command = state.selectedCommand,
+                            workingDirectory = state.workingDirectory,
+                            arguments = state.arguments,
+                            requestId = StateRequestId("ui.exec." + UUID.randomUUID().toString()),
+                        ),
+                    )
+                }
+            }
         },
-        // 取消 exists only while a run is in flight (`state.running`), and this host
-        // has no exec channel: the run verb above is a handoff whose answer names
-        // that fact, so no run can ever be in flight and this control cannot be
-        // drawn. It is wired to nothing rather than to a fabricated cancel command;
-        // a host that really runs commands owns `phone/shellCancel` and fills this.
-        onCancel = {},
+        onCancel = when (cancelAvailability) {
+            is PdshActionAvailability.Unavailable -> null
+            is PdshActionAvailability.Available -> facts.shell.run.runningExecId?.let { execId ->
+                {
+                    cancelAvailability.callback(
+                        PdshUiHostCommand.ShellCancel(
+                            execId,
+                            StateRequestId("ui.exec.cancel." + UUID.randomUUID().toString()),
+                        ),
+                    )
+                }
+            }
+        },
         onBack = onBack,
     )
 }
@@ -909,8 +1114,11 @@ private fun FilesRoute(
     onNavigate: (PdshRoute) -> Unit,
     workspaceRoot: File?,
     backLevel: PdshBackLevel?,
+    onImportRequest: ((String) -> Unit)?,
+    importReceipt: Pair<String, com.phonedsh.ui.page.FilesImportReceipt>?,
 ) {
     var local by remember { mutableStateOf(FilesLocalState()) }
+    var importRequestId by remember { mutableStateOf<String?>(null) }
     // §5's "one gesture pops one level" applies inside the listing too: in a folder
     // that level is the folder. Without this the gesture closed the whole listing
     // and left the person at the folder page — one level higher than they were.
@@ -920,14 +1128,22 @@ private fun FilesRoute(
     val source = rememberPreviewSource(workspaceRoot)
     // `null` until the read answers: the page's waiting state, not an empty list.
     var listing by remember(source) { mutableStateOf<List<WorkspaceFile>?>(null) }
-    LaunchedEffect(source) { listing = source.files() }
+    val matchingImportReceipt = importReceipt?.takeIf { it.first == importRequestId }?.second
+    LaunchedEffect(source, matchingImportReceipt) { listing = source.files() }
     FilesPage(
-        state = FilesScreenState.from(FilesSource(files = listing), local),
+        state = FilesScreenState.from(FilesSource(files = listing), local, matchingImportReceipt),
         onOpenFolder = { folder -> local = local.apply(FilesUiEvent.OpenFolder(folder)) },
         onOpenFile = { file -> onNavigate(PdshRoute.Preview(file.relativePath)) },
         onQueryChange = { query -> local = local.apply(FilesUiEvent.SetQuery(query)) },
         onNavigateUp = { local = local.apply(FilesUiEvent.NavigateUp) },
         onBack = onBack,
+        onImportRequest = if (onImportRequest == null) null else {
+            {
+                val requestId = java.util.UUID.randomUUID().toString()
+                importRequestId = requestId
+                onImportRequest(requestId)
+            }
+        },
     )
 }
 
@@ -999,6 +1215,7 @@ private fun SettingsRoute(
     onHostAction: (PdshHostAction) -> Unit,
     onSettingsWrite: (SettingsWrite) -> Unit,
     onPreferenceWrite: (SettingsPreferenceChoice) -> Unit,
+    onSelectFontFamily: ((rowId: String, family: String) -> Unit)?,
     onToggleDeveloperTools: (Boolean) -> Unit,
     backLevel: PdshBackLevel?,
     // 手机权限 is a *tab* of this sheet as well as a route (§1 names both entry
@@ -1036,16 +1253,23 @@ private fun SettingsRoute(
             onBack = { surface = SettingsSurface.NONE },
             backLevel = backLevel,
             onAction = onHostAction,
+            actionAvailability = facts.actionAvailability,
         )
     } else if (permissionDefaults) {
         PermissionDefaultsPage(
-            state = PermissionDefaultsState.from(settings.defaultPermissionTier),
-            onSelect = { tier -> onSettingsWrite(SettingsWrite.DefaultPermissionTier(tier)) },
+            state = PermissionDefaultsState.from(settings.defaultPermissionTier, settings.preferences.language?.id),
+            onSelect = null,
             onBack = { permissionDefaults = false },
         )
     } else {
         SettingsPage(
             state = SettingsScreenState.from(settings),
+            licenseEntries = facts.licenses?.map { license ->
+                com.phonedsh.ui.page.AndroidLicenseNotice(
+                    name = license.name ?: license.id,
+                    license = license.source ?: UiStrings.UNAVAILABLE,
+                )
+            },
             onRestartEngine = { onHostAction(PdshHostAction.RestartRuntime) },
             onNavigate = { destination ->
                 when (destination) {
@@ -1060,6 +1284,7 @@ private fun SettingsRoute(
             },
             onSelectBusyEnterMode = { mode -> onSettingsWrite(SettingsWrite.BusyEnter(mode)) },
             onSelectPreference = onPreferenceWrite,
+            onSelectFontFamily = onSelectFontFamily,
             onToggleDeveloperTools = onToggleDeveloperTools,
             onBack = onBack,
             tab = tab,

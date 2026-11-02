@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: MIT
 package com.phonedsh.ui.nav
 
-import android.content.Context
-
 /** Host reported session row. A missing title/time stays visibly unknown. */
 public data class HomeDrawerSession(
     public val id: String,
@@ -81,21 +79,9 @@ public sealed interface HomeDrawerArchiveResult {
 public typealias HomeDrawerArchiveAction = suspend (HomeDrawerArchiveRequest) -> HomeDrawerArchiveResult
 
 /**
- * Local prototype storage for collapsed folders, using the iOS preference key.
- * This currently uses a separate Android SharedPreferences file and is not
- * connected to the app's canonical PreferenceStore; host integration must
- * reconcile that store before adoption. No silent data migration is performed.
+ * Stable preference key shared with the app's canonical PreferenceStore.
+ * The UI module owns no separate persistence; the host supplies and confirms it.
  */
 public object HomeDrawerState {
     public const val COLLAPSED_FOLDERS_KEY: String = "phone-dsh.sidebar.collapsed-workspaces"
-    private const val PREFS = "phone-dsh-home-drawer"
-
-    public fun readCollapsedFolderIds(context: Context): Set<String> =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getStringSet(COLLAPSED_FOLDERS_KEY, emptySet())?.toSet().orEmpty()
-
-    public fun writeCollapsedFolderIds(context: Context, ids: Set<String>) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putStringSet(COLLAPSED_FOLDERS_KEY, ids.toSet()).apply()
-    }
 }

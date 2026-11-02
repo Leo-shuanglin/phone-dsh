@@ -22,7 +22,7 @@ import com.phonedsh.ui.surface.SettingsSubPageFrame
 public data class AndroidLicenseNotice(
     public val name: String,
     public val license: String,
-    public val notice: String,
+    public val notice: String? = null,
 )
 
 /** Shows only the host-provided license catalog; this module has no generated legal-notice asset. */
@@ -67,11 +67,13 @@ public fun LicensesPage(
                                     value = entry.license,
                                     dividerBelow = true,
                                 )
-                                com.phonedsh.ui.surface.SettingsBodyRow(
-                                    text = entry.notice,
-                                    dividerBelow = false,
-                                    modifier = Modifier.testTag("$LICENSES_NOTICE_PREFIX$index"),
-                                )
+                                entry.notice?.takeIf(String::isNotBlank)?.let { notice ->
+                                    com.phonedsh.ui.surface.SettingsBodyRow(
+                                        text = notice,
+                                        dividerBelow = false,
+                                        modifier = Modifier.testTag("$LICENSES_NOTICE_PREFIX$index"),
+                                    )
+                                }
                             }
                         }
                     }

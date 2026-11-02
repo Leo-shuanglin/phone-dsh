@@ -698,6 +698,8 @@ public data class ChatHostFacts(
     public val files: List<String> = emptyList(),
     /** Session titles for the `@` menu. */
     public val sessionTitles: List<String> = emptyList(),
+    /** Worker session id for request-bound queue/steer/stop commands; null before one exists. */
+    public val workerSessionID: String? = null,
     /** The permissions menu is mid-write (iOS `isSelectingAccessMode`). */
     public val selectingAccessMode: Boolean = false,
     /** The estimated context-window share; `null` hides the ring. */
@@ -933,12 +935,17 @@ public data class ContextLostReceipt(
 public data class ManagedQueueItemState(
     public val id: QueueItemId,
     public val text: String,
+    /** Worker session that owns the durable inbox item; null for local-only rows. */
+    public val sessionId: String? = null,
+    public val lane: String? = null,
     public val state: QueueItemStatus? = null,
     public val canEdit: Boolean? = null,
     public val canRemove: Boolean? = null,
     public val canSteer: Boolean? = null,
     public val busy: Boolean? = null,
     public val actionRequestId: StateRequestId? = null,
+    /** Stable backend prompt identity for a locally pending queue/steer submission. */
+    public val promptRequestId: StateRequestId? = null,
     public val receipt: QueueActionReceipt? = null,
 )
 
@@ -947,9 +954,11 @@ public data class QueueActionReceipt(
     public val action: QueueAction,
     public val outcome: CommandOutcome,
     public val message: String? = null,
+    public val sessionId: String? = null,
+    public val itemId: String? = null,
 )
 
-public enum class QueueAction { EDIT, REMOVE, STEER }
+public enum class QueueAction { QUEUE, EDIT, REMOVE, STEER }
 
 public sealed interface QueueItemId {
     public data class Durable(public val value: String) : QueueItemId
@@ -977,6 +986,8 @@ public fun reconcileQueueRows(
 /** The complete screen state of the chat page. */
 public data class ChatScreenState(
     public val sessionID: String,
+    /** Worker session id for management RPCs; absent before the first Worker session exists. */
+    public val workerSessionID: String? = null,
     public val phase: ChatPhase,
     public val rows: List<ChatRow>,
     public val pending: PendingSlot,
@@ -1406,6 +1417,7 @@ public data class ChatScreenState(
             }
             return ChatScreenState(
                 sessionID = sessionID,
+                workerSessionID = host.workerSessionID,
                 phase = phase,
                 rows = timeline,
                 pending = slot,

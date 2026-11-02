@@ -286,13 +286,15 @@ class DshTurnClient(
         sessionId: String,
         text: String,
         requestId: String = newPromptRequestId(),
+        mode: String = "queue",
         timeoutMillis: Long = CALL_TIMEOUT_MILLIS,
     ) {
+        require(mode == "queue" || mode == "steer") { "session/prompt mode must be queue or steer" }
         val request = JsonObject(
             linkedMapOf(
                 "requestId" to JsonString(requestId),
                 "sessionId" to JsonString(sessionId),
-                "mode" to JsonString("queue"),
+                "mode" to JsonString(mode),
                 "content" to JsonArray(
                     listOf(
                         JsonObject(

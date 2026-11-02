@@ -31,7 +31,7 @@ class SettingsPageTest {
     @get:Rule val compose = createComposeRule()
 
     private fun show(
-        facts: SettingsFacts = SettingsFacts(),
+        facts: SettingsFacts = SettingsFacts(preferences = SettingsPreferences(language = SettingsLanguage.ZH)),
         onNavigate: (SettingsDestination) -> Unit = {},
         onSelectPreference: ((SettingsPreferenceChoice) -> Unit)? = null,
         onRestartEngine: (() -> Unit)? = null,
@@ -99,6 +99,19 @@ class SettingsPageTest {
         compose.onNodeWithText("通用").assertDoesNotExist()
         scrollTo("手机权限")
         compose.onNodeWithText("手机权限").assertIsDisplayed()
+    }
+
+    @Test
+    fun `saved English language selects the matching NativeText Settings copy`() {
+        show(facts = SettingsFacts(
+            preferences = SettingsPreferences(language = SettingsLanguage.EN),
+        ))
+        scrollTo(UiStrings.SETTINGS_SECTION_MODELS_AGENTS_EN)
+        compose.onNodeWithText(UiStrings.SETTINGS_SECTION_MODELS_AGENTS_EN).assertIsDisplayed()
+        scrollTo(UiStrings.SETTINGS_ROW_WORK_DETAILS_EN)
+        compose.onNodeWithText(UiStrings.SETTINGS_ROW_WORK_DETAILS_EN).assertIsDisplayed()
+        scrollTo(UiStrings.SETTINGS_ROW_ARCHIVED_SESSIONS_EN)
+        compose.onNodeWithText(UiStrings.SETTINGS_ROW_ARCHIVED_SESSIONS_EN).assertIsDisplayed()
     }
 
     @Test

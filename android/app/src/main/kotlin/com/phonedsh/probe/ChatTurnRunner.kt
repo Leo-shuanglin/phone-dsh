@@ -146,6 +146,8 @@ internal class ChatTurnRunner(
         onInteractiveRequest: ((PendingRemoteRequest, suspend (JsonValue) -> Unit) -> Unit)? = null,
         onInteractiveCancel: ((String) -> Unit)? = null,
         onReasoningDelta: (String) -> Unit = {},
+        /** Stable idempotency identity reused by a retry of this original prompt. */
+        promptRequestId: String? = null,
     ): ChatTurnOutcome {
         val requested = workerSessionId
         if (requested != null) {
@@ -158,6 +160,7 @@ internal class ChatTurnRunner(
                 return oneTurn(
                     requested,
                     prompt,
+                    promptRequestId,
                     onSession,
                     { event -> sawEvent = true; onEvent(event) },
                     onDelta,
@@ -181,7 +184,7 @@ internal class ChatTurnRunner(
         val created = client.createSessionWhenReady(cwd = WORKSPACE)
         log("chat turn: new worker session=$created (previous=${requested ?: "none"})")
         return oneTurn(
-            created, prompt, onSession, onEvent, onDelta,
+            created, prompt, promptRequestId, onSession, onEvent, onDelta,
             onInteractiveRequest, onInteractiveCancel, onReasoningDelta,
         )
             .copy(contextReset = requested != null)
@@ -214,6 +217,7 @@ internal class ChatTurnRunner(
     private suspend fun oneTurn(
         sessionId: String,
         prompt: String,
+        promptRequestId: String?,
         onSession: (String) -> Unit,
         onEvent: (HostEvent) -> Unit,
         onDelta: (String) -> Unit,
@@ -239,7 +243,8 @@ internal class ChatTurnRunner(
             // The prompt goes out only after the stream is open: the Worker
             // publishes the turn's first frames as soon as it accepts it, and a
             // prompt sent first can outrun the subscription.
-            client.prompt(sessionId, prompt)
+            if (promptRequestId == null) client.prompt(sessionId, prompt)
+            else client.prompt(sessionId, prompt, requestId = promptRequestId)
             log("chat turn: session/prompt queued session=$sessionId")
             while (true) {
                 // Before the first durable event, keep the existing bounded

@@ -102,8 +102,8 @@ internal fun PDSHShellPage(
     onSelectCommand: (String) -> Unit,
     onWorkingDirectoryChange: (String) -> Unit,
     onArgumentsChange: (String) -> Unit,
-    onRun: () -> Unit,
-    onCancel: () -> Unit,
+    onRun: (() -> Unit)?,
+    onCancel: (() -> Unit)?,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onRunArgv: ((argv: List<String>, workingDirectory: String) -> Unit)? = null,
@@ -173,10 +173,10 @@ internal fun PDSHShellPage(
                     onArgumentsChange = onArgumentsChange,
                     onRun = {
                         if (argv != null && onRunArgv != null) onRunArgv(argv, state.workingDirectory)
-                        else if (argv != null) onRun()
+                        else if (argv != null) onRun?.invoke()
                     },
                     onCancel = onCancel,
-                    canSubmitArgv = argv != null,
+                    canSubmitArgv = argv != null && onRun != null,
                 )
                 ShellOutputSection(state = state)
                 ShellLimitsSection(state = state)
@@ -496,7 +496,7 @@ private fun ShellRunSection(
     onWorkingDirectoryChange: (String) -> Unit,
     onArgumentsChange: (String) -> Unit,
     onRun: () -> Unit,
-    onCancel: () -> Unit,
+    onCancel: (() -> Unit)?,
     canSubmitArgv: Boolean,
 ) {
     val tokens = LocalUiTokens.current
@@ -590,7 +590,7 @@ private fun ShellRunSection(
                 tag = UiPageTags.SHELL_RUN,
                 onClick = onRun,
             )
-            if (state.running) {
+            if (state.running && onCancel != null) {
                 ShellAction(
                     label = UiStrings.SHELL_CANCEL,
                     enabled = true,

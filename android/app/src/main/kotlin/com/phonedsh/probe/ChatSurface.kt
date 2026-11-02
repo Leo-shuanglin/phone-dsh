@@ -105,6 +105,10 @@ internal data class ChatUiState(
     val pendingNodes: List<UiStateNode> = emptyList(),
     val lastSubmission: String = "",
     val lastAttachments: List<ChatAttachment> = emptyList(),
+    /** Stable `/api/session/prompt` identity for the original submission being retried. */
+    val lastPromptRequestId: String? = null,
+    /** New requests accepted locally but not yet matched to the durable inbox projection. */
+    val localQueueItems: List<com.phonedsh.ui.state.ManagedQueueItemState> = emptyList(),
     val imeVisible: Boolean = false,
     val pendingExpanded: Boolean = false,
     val expandedRowIds: Set<String> = emptySet(),
@@ -127,6 +131,8 @@ internal fun chatScreenState(
     engineStarted: Boolean,
     providerNeedsKey: Boolean,
     canSend: Boolean,
+    canSteer: Boolean = false,
+    enterMode: com.phonedsh.ui.state.EnterMode = com.phonedsh.ui.state.EnterMode.QUEUE,
     lifecycle: com.phonedsh.ui.state.EngineLifecycleFacts? = null,
 ): ChatScreenState {
     val chatId = ui.chatId.ifEmpty { PENDING_CHAT_ID }
@@ -153,7 +159,12 @@ internal fun chatScreenState(
         if (nodes.none { it.nodeID == turn.nodeID }) nodes += turn
     }
     if (ui.error != null && !ui.bannerDismissed) {
-        nodes += bannerNode(chatId, ui.error)
+        nodes += bannerNode(
+            chatId,
+            ui.error,
+            retryable = !ui.lastPromptRequestId.isNullOrBlank() &&
+                (ui.lastSubmission.isNotBlank() || ui.lastAttachments.isNotEmpty()),
+        )
     }
     val local = ChatLocalState(
         draft = ui.draft,
@@ -167,16 +178,18 @@ internal fun chatScreenState(
     )
     val host = ChatHostFacts(
         engineStarted = engineStarted,
-        // A running turn cannot take a second message: this host has no queue lane,
-        // and pretending it did would make the send key throw the draft away.
-        canSend = canSend && !ui.running,
+        // Queue and steer are host-owned session/prompt modes. The typed action
+        // table controls which one the page can submit while the turn is live.
+        canSend = canSend,
+        canSteer = canSteer,
+        enterMode = enterMode,
         providerNeedsKey = providerNeedsKey,
-        canSteer = false,
         lifecycle = lifecycle,
         todoItems = ui.sessionSnapshot.todos,
         accessModes = ui.sessionSnapshot.accessModes,
         currentAccessMode = ui.sessionSnapshot.currentAccessMode,
         commands = ui.sessionSnapshot.commands,
+        workerSessionID = ui.workerSessionId,
         accessModeError = ui.sessionSnapshot.accessError,
         commandsError = ui.sessionSnapshot.commandsError,
         models = ui.sessionSnapshot.modelRoutes.map { it.model }.distinct(),
@@ -186,6 +199,9 @@ internal fun chatScreenState(
         effortTitle = ui.sessionSnapshot.currentEffort?.let { effortTitle(it) },
         defaultEffortTitle = ui.sessionSnapshot.modelRoutes.firstOrNull { it.model == ui.sessionSnapshot.currentModel }
             ?.defaultEffort?.let { "默认强度 · ${effortTitle(it)}" } ?: com.phonedsh.ui.UiStrings.MODEL_DEFAULT_EFFORT,
+        queueItems = ui.sessionSnapshot.queueItems?.map { item -> item.copy(canSteer = ui.running) }
+            ?.let { durable -> com.phonedsh.ui.state.reconcileQueueRows(durable, ui.localQueueItems) }
+            ?: ui.localQueueItems.takeIf { it.isNotEmpty() },
     )
     val base = ChatScreenState.from(nodes = nodes, local = local, host = host, goal = ui.sessionSnapshot.goal)
     val rows = if (ui.running && ui.streaming.isNotEmpty()) {
@@ -254,7 +270,7 @@ internal fun turnNode(chatId: String, turnId: String): UiStateNode = UiStateNode
 )
 
 /** The transient fail-loud banner of a send failure; never persisted. */
-private fun bannerNode(chatId: String, message: String): UiStateNode = UiStateNode(
+private fun bannerNode(chatId: String, message: String, retryable: Boolean): UiStateNode = UiStateNode(
     kind = UiStateKind.FAIL_LOUD_BANNER,
     nodeID = bannerId(chatId),
     parentID = "session/$chatId",
@@ -266,7 +282,7 @@ private fun bannerNode(chatId: String, message: String): UiStateNode = UiStateNo
     props = JsonObject(
         linkedMapOf(
             "reason" to JsonString("error"),
-            "retryable" to JsonBool(false),
+            "retryable" to JsonBool(retryable),
             "dismissible" to JsonBool(true),
         ),
     ),

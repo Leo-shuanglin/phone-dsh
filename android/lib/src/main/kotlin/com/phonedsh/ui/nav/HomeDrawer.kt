@@ -28,7 +28,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -54,16 +53,24 @@ import java.util.UUID
 public class HomeDrawerUiState internal constructor(
     public val scrollState: ScrollState,
     collapsed: Set<String>,
+    private val onCollapsedFoldersChanged: suspend (Set<String>) -> Boolean,
 ) {
     internal var collapsedFolderIds by mutableStateOf(collapsed)
+    internal suspend fun setCollapsedFolderIds(value: Set<String>) {
+        val copy = value.toSet()
+        if (copy == collapsedFolderIds) return
+        if (onCollapsedFoldersChanged(copy)) collapsedFolderIds = copy
+    }
 }
 
 @Composable
-public fun rememberHomeDrawerUiState(): HomeDrawerUiState {
-    val context = LocalContext.current
+public fun rememberHomeDrawerUiState(
+    collapsedFolderIds: Set<String> = emptySet(),
+    onCollapsedFolderIdsChanged: suspend (Set<String>) -> Boolean = { true },
+): HomeDrawerUiState {
     val scroll = rememberScrollState()
-    val collapsed = remember(context) { HomeDrawerState.readCollapsedFolderIds(context) }
-    return remember(scroll) { HomeDrawerUiState(scroll, collapsed) }
+    val latestChange by rememberUpdatedState(onCollapsedFolderIdsChanged)
+    return remember(scroll) { HomeDrawerUiState(scroll, collapsedFolderIds, { ids -> latestChange(ids) }) }
 }
 
 /**
@@ -76,7 +83,7 @@ public fun HomeDrawer(
     onClose: () -> Unit,
     isOpen: Boolean = true,
     onNavigate: ((PdshRoute) -> Unit)? = null,
-    onCreateSession: (() -> Unit)? = null,
+    onCreateSession: (suspend () -> Boolean)? = null,
     onOpenSchedules: (() -> Unit)? = null,
     onCreateFolder: ((String) -> Unit)? = null,
     onRenameFolder: ((String, String) -> Unit)? = null,
@@ -90,7 +97,6 @@ public fun HomeDrawer(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    val context = LocalContext.current
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
     var draft by rememberSaveable { mutableStateOf("") }
     var targetId by rememberSaveable { mutableStateOf("") }
@@ -185,7 +191,12 @@ public fun HomeDrawer(
                         enabled = onCreateSession != null && facts.newSessionBlockedReason == null,
                         unavailable = onCreateSession == null,
                         modifier = Modifier.focusRequester(initialFocus).testTag(HomeDrawerTags.NEW_SESSION),
-                    ) { onCreateSession?.invoke() }
+                    ) {
+                        val create = onCreateSession ?: return@EntryRow
+                        coroutineScope.launch {
+                            if (isOpen && !dismissedLocally && create()) dismissDrawer()
+                        }
+                    }
                     Spacer(Modifier.height(2.dp))
                     EntryRow("定时任务", PdshIcon.CLOCK,
                         detail = facts.scheduleCount?.takeIf { it > 0 }?.toString() ?: "",
@@ -216,10 +227,10 @@ public fun HomeDrawer(
                     } else if (folders.isEmpty() && facts.unassignedSessions.isNullOrEmpty()) {
                         Text("还没有文件夹。点右上角的 + 新建一个，会话和文件都能放进去。", Modifier.padding(horizontal = HomeMetrics.CONTENT_INSET_PT.dp, vertical = 8.dp), style = type.secondary.copy(color = tokens.colors.textSubtle))
                     }
-                    val defaultFolder = folders?.firstOrNull { it.isDefault || it.title.equals("workspace", true) || it.title == "日常" }
+                    val defaultFolder = folders?.firstOrNull { it.isDefault }
                     val loose = facts.unassignedSessions
                     if (folders == null && loose != null && loose.isNotEmpty()) {
-                        FolderGroup("__unknown_folder__", "未分配文件夹", loose, state, context,
+                        FolderGroup("__unknown_folder__", "未分配文件夹", loose, state,
                             onOpenSession, onRenameSession, onArchiveSession, pendingArchiveIds,
                             archiveFailureById, ::archiveSession, onRenameFolder = null, onDeleteFolder = null,
                             emptyMessage = "还没有会话",
@@ -228,7 +239,7 @@ public fun HomeDrawer(
                             activeSessionId = facts.activeSessionId)
                     }
                     if (folders != null && defaultFolder == null && loose != null && loose.isNotEmpty()) {
-                        FolderGroup("__unassigned__", "日常", loose, state, context,
+                        FolderGroup("__unassigned__", "未分配", loose, state,
                             onOpenSession, onRenameSession, onArchiveSession, pendingArchiveIds,
                             archiveFailureById, ::archiveSession, onRenameFolder = null, onDeleteFolder = null,
                             emptyMessage = "还没有会话",
@@ -237,10 +248,13 @@ public fun HomeDrawer(
                             activeSessionId = facts.activeSessionId)
                     }
                     folders.orEmpty().forEach { folder ->
+                        // The iOS drawer renders unassigned rows inside a known
+                        // default folder, but ownership remains unassigned in the
+                        // host store and is not rewritten by this presentation.
                         val sessions = if (folder === defaultFolder || folder.id == defaultFolder?.id) {
                             folder.sessions + (loose ?: emptyList())
                         } else folder.sessions
-                        FolderGroup(folder.id, folder.title.ifBlank { "文件夹" }, sessions, state, context,
+                        FolderGroup(folder.id, folder.title.ifBlank { "文件夹" }, sessions, state,
                             onOpenSession, onRenameSession, onArchiveSession, pendingArchiveIds,
                             archiveFailureById, ::archiveSession, onRenameFolder, onDeleteFolder,
                             emptyMessage = "还没有会话",
@@ -347,7 +361,7 @@ private fun EntryRow(label: String, icon: PdshIcon, detail: String, enabled: Boo
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun FolderGroup(id: String, title: String, sessions: List<HomeDrawerSession>, state: HomeDrawerUiState,
-                       context: android.content.Context, onOpen: ((String) -> Unit)?, onRenameSession: ((String, String) -> Unit)?,
+                       onOpen: ((String) -> Unit)?, onRenameSession: ((String, String) -> Unit)?,
                        onArchive: HomeDrawerArchiveAction?, pendingArchiveIds: Set<String>,
                        archiveFailureById: Map<String, String>, onArchiveRequest: (String) -> Unit,
                        onRenameFolder: ((String, String) -> Unit)?, onDeleteFolder: ((String) -> Unit)?, emptyMessage: String,
@@ -356,11 +370,16 @@ private fun FolderGroup(id: String, title: String, sessions: List<HomeDrawerSess
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     val expanded = id !in state.collapsedFolderIds
+    val scope = rememberCoroutineScope()
+    var changingFold by remember(id) { mutableStateOf(false) }
     var folderMenu by remember(id) { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().height(SessionsMetrics.WORKSPACE_ROW_HEIGHT_PT.dp)
         .combinedClickable(onClick = {
-            state.collapsedFolderIds = if (expanded) state.collapsedFolderIds + id else state.collapsedFolderIds - id
-            HomeDrawerState.writeCollapsedFolderIds(context, state.collapsedFolderIds)
+            if (!changingFold) scope.launch {
+                changingFold = true
+                state.setCollapsedFolderIds(if (expanded) state.collapsedFolderIds + id else state.collapsedFolderIds - id)
+                changingFold = false
+            }
         }, onLongClick = { folderMenu = true })
         .semantics { contentDescription = "$title，${sessions.size} 个会话"; stateDescription = if (expanded) "已展开" else "已收起" }
         .testTag(HomeDrawerTags.FOLDER_PREFIX + id).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {

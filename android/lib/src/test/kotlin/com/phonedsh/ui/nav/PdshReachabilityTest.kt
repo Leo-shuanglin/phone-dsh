@@ -10,13 +10,18 @@
 package com.phonedsh.ui.nav
 
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.runtime.mutableStateOf
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.page.UiPageTags
+import com.phonedsh.ui.page.UiTags
 import com.phonedsh.ui.page.AutomationFacts
 import com.phonedsh.ui.page.AutomationSnapshot
 import com.phonedsh.ui.theme.PdshTheme
@@ -37,6 +42,7 @@ class PdshReachabilityTest {
     private fun mount(
         nav: PdshNavState,
         onNavigate: (PdshRoute) -> Unit = {},
+        onOpenDrawer: (() -> Unit)? = null,
         onHostAction: (PdshHostAction) -> Unit = {},
         automation: AutomationFacts = AutomationFacts(),
         sessions: (@androidx.compose.runtime.Composable () -> Unit)? = null,
@@ -53,6 +59,7 @@ class PdshReachabilityTest {
                     home = { BasicText(text = "home") },
                     webSurface = {},
                     sessions = sessions,
+                    onOpenDrawer = onOpenDrawer,
                 )
             }
         }
@@ -78,14 +85,52 @@ class PdshReachabilityTest {
     }
 
     @Test
-    fun `the chat head's session control pushes the sessions route`() {
+    fun `the chat head opens the host drawer without navigating away`() {
         var pushed: PdshRoute? = null
+        var opened = false
         mount(
-            nav = PdshNavState(listOf(PdshRoute.Home, PdshRoute.Chat)),
+            nav = PdshNavState(listOf(PdshRoute.Chat)),
             onNavigate = { pushed = it },
+            onOpenDrawer = { opened = true },
         )
         compose.onNodeWithTag(UiPageTags.CHAT_HEADER_DRAWER).performClick()
-        compose.runOnIdle { assertEquals(PdshRoute.Sessions, pushed) }
+        compose.runOnIdle {
+            assertEquals(true, opened)
+            assertEquals(null, pushed)
+        }
+    }
+
+    @Test
+    fun `product root composes ChatPage with HomeDrawer over it`() {
+        compose.setContent {
+            PdshTheme(darkTheme = false) {
+                val drawerOpen = androidx.compose.runtime.remember { mutableStateOf(false) }
+                Box(Modifier.fillMaxSize()) {
+                    PdshNavHost(
+                        nav = PdshNavState(listOf(PdshRoute.Chat)),
+                        facts = PdshNavFacts(),
+                        onNavigate = {},
+                        onBack = {},
+                        onHome = {},
+                        onHostAction = {},
+                        home = { BasicText("sessions root must not be mounted") },
+                        webSurface = {},
+                        onOpenDrawer = { drawerOpen.value = true },
+                    )
+                    if (drawerOpen.value) {
+                        HomeDrawer(
+                            facts = HomeDrawerFacts(),
+                            onClose = { drawerOpen.value = false },
+                        )
+                    }
+                }
+            }
+        }
+        compose.onNodeWithTag(UiTags.CHAT_ROOT).assertIsDisplayed()
+        compose.onNodeWithText("sessions root must not be mounted").assertDoesNotExist()
+        compose.onNodeWithTag(UiPageTags.CHAT_HEADER_DRAWER).performClick()
+        compose.onNodeWithTag(HomeDrawerTags.PANEL).assertIsDisplayed()
+        compose.onNodeWithTag(UiTags.CHAT_ROOT).assertExists()
     }
 
     @Test

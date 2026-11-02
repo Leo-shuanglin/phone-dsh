@@ -35,16 +35,16 @@ public sealed interface PdshActionAvailability<out Callback> {
 /** Names every action surface whose availability is reported by the host. */
 public enum class PdshActionKey {
     NEW_SESSION, OPEN_SCHEDULES, OPEN_SETTINGS, SELECT_MODEL, SELECT_PERMISSION_MODE,
-    SEND, QUEUE, STEER, STOP, RETRY, ANSWER_QUESTION, DISCARD_QUESTION,
+    SEND, QUEUE, QUEUE_EDIT, QUEUE_REMOVE, QUEUE_STEER, STEER, STOP, RETRY, ANSWER_QUESTION, DISCARD_QUESTION,
     APPROVE_PLAN, REJECT_PLAN, GOAL_PAUSE, GOAL_RESUME, GOAL_CLEAR, EXECUTE_COMMAND,
     PROVIDER_EDITOR, PROVIDER_GET_MODELS, PROVIDER_TEST, PROVIDER_SAVE, PROVIDER_DELETE,
     SCHEDULE_CATALOG, SCHEDULE_CREATE, SCHEDULE_UPDATE, SCHEDULE_DELETE, SCHEDULE_HISTORY,
     WORKSPACE_FOLDER_CREATE, WORKSPACE_FOLDER_RENAME, WORKSPACE_FOLDER_DELETE,
     SESSION_RENAME, SESSION_ARCHIVE, SESSION_RESTORE, SESSION_DELETE, SEARCH,
     ARCHIVED_SESSIONS, ARTIFACT_OPEN, ARTIFACT_SHARE, FILE_IMPORT, SAF_IMPORT,
-    DEVICE_CONNECT, DEVICE_SESSION, EXPORT_TRANSCRIPT, RUNTIME_RESTART,
+    DEVICE_CONNECT, DEVICE_SESSION, EXPORT_TRANSCRIPT, IMAGE_IMPORT, RUNTIME_RESTART,
     RUNTIME_STOP, ENGINE_RESET, LOCALE_READ, LOCALE_WRITE, FONT_SIZE_READ,
-    FONT_SIZE_WRITE, FONT_FAMILY_READ, FONT_FAMILY_WRITE, LICENSE_CATALOG,
+    FONT_SIZE_WRITE, FONT_FAMILY_READ, FONT_FAMILY_WRITE, LICENSE_CATALOG, SPEAK_RECENT_REPLY, SHELL_CANCEL,
 }
 
 /** One typed request family; every mutating request carries the caller's request id. */
@@ -90,11 +90,15 @@ public sealed interface PdshUiHostCommand {
     }
     /** Edit a durable queue item by host id. */
     public data class EditQueueItem(public val sessionId: String, public val itemId: String, public val requestId: StateRequestId, public val text: String) : PdshUiHostCommand {
-        override val actionKey = PdshActionKey.QUEUE
+        override val actionKey = PdshActionKey.QUEUE_EDIT
     }
     /** Remove a durable queue item by host id. */
     public data class RemoveQueueItem(public val sessionId: String, public val itemId: String, public val requestId: StateRequestId) : PdshUiHostCommand {
-        override val actionKey = PdshActionKey.QUEUE
+        override val actionKey = PdshActionKey.QUEUE_REMOVE
+    }
+    /** Steer one durable queue item, preserving its host identity. */
+    public data class SteerQueueItem(public val sessionId: String, public val itemId: String, public val requestId: StateRequestId) : PdshUiHostCommand {
+        override val actionKey = PdshActionKey.QUEUE_STEER
     }
     /** Cancel the named queued or in-flight request. */
     public data class CancelRequest(public val sessionId: String, public val requestId: StateRequestId) : PdshUiHostCommand {
@@ -109,7 +113,13 @@ public sealed interface PdshUiHostCommand {
         override val actionKey = PdshActionKey.DISCARD_QUESTION
     }
     /** Approve the exact pending plan. */
-    public data class ApprovePlan(public val sessionId: String, public val planRequestId: StateRequestId, public val requestId: StateRequestId) : PdshUiHostCommand {
+    public data class ApprovePlan(
+        public val sessionId: String,
+        public val planRequestId: StateRequestId,
+        public val requestId: StateRequestId,
+        /** Existing source wire JSON built from the exact pending plan question. */
+        public val answer: String,
+    ) : PdshUiHostCommand {
         override val actionKey = PdshActionKey.APPROVE_PLAN
     }
     /** Reject the exact pending plan. */
@@ -129,6 +139,10 @@ public sealed interface PdshUiHostCommand {
     /** Run one command with argv-like fields supplied by the shell surface. */
     public data class ExecuteCommand(public val command: String, public val workingDirectory: String, public val arguments: String, public val requestId: StateRequestId) : PdshUiHostCommand {
         override val actionKey = PdshActionKey.EXECUTE_COMMAND
+    }
+    /** Cancel one exact read-only accelerator execution by its execution id. */
+    public data class ShellCancel(public val execId: String, public val requestId: StateRequestId) : PdshUiHostCommand {
+        override val actionKey = PdshActionKey.SHELL_CANCEL
     }
     /** Open a provider editor for an existing profile or a new profile. */
     public data class OpenProviderEditor(public val profileId: String?) : PdshUiHostCommand {
@@ -218,6 +232,10 @@ public sealed interface PdshUiHostCommand {
     public data class FileImport(public val requestId: StateRequestId) : PdshUiHostCommand {
         override val actionKey = PdshActionKey.FILE_IMPORT
     }
+    /** Start image-only SAF import for the conversation composer. */
+    public data class ImageImport(public val requestId: StateRequestId) : PdshUiHostCommand {
+        override val actionKey = PdshActionKey.IMAGE_IMPORT
+    }
     /** Start Android SAF file import. */
     public data class SafImport(public val requestId: StateRequestId) : PdshUiHostCommand {
         override val actionKey = PdshActionKey.SAF_IMPORT
@@ -237,6 +255,14 @@ public sealed interface PdshUiHostCommand {
     /** Export a transcript for the named session. */
     public data class ExportTranscript(public val sessionId: String, public val requestId: StateRequestId) : PdshUiHostCommand {
         override val actionKey = PdshActionKey.EXPORT_TRANSCRIPT
+    }
+    /** Speak one host-provided assistant reply through the device's actual TTS engine. */
+    public data class SpeakRecentReply(
+        public val sessionId: String,
+        public val requestId: StateRequestId,
+        public val text: String,
+    ) : PdshUiHostCommand {
+        override val actionKey = PdshActionKey.SPEAK_RECENT_REPLY
     }
     /** Restart the runtime. */
     public data class RuntimeRestart(public val requestId: StateRequestId) : PdshUiHostCommand {

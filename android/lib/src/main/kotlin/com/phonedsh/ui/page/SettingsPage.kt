@@ -970,7 +970,12 @@ public data class PermissionDefaultsState(
 ) {
     public companion object {
         /** Projects the host's current preset into the three option rows. */
-        public fun from(selected: PermissionTier?): PermissionDefaultsState = PermissionDefaultsState(
+        public fun from(selected: PermissionTier?, languageId: String? = null): PermissionDefaultsState = PermissionDefaultsState(
+            note = UiStrings.settingsNativeText(
+                languageId,
+                UiStrings.PERMISSION_DEFAULTS_NOTE,
+                UiStrings.PERMISSION_DEFAULTS_SCOPE_EN,
+            ),
             options = listOf(
                 PermissionTier.VIEW_ONLY,
                 PermissionTier.WORKSPACE_WRITE,
@@ -978,7 +983,11 @@ public data class PermissionDefaultsState(
             ).map { tier ->
                 PermissionOptionView(
                     tier = tier,
-                    title = SettingsScreenState.tierTitle(tier),
+                    title = UiStrings.settingsNativeText(languageId, SettingsScreenState.tierTitle(tier), when (tier) {
+                        PermissionTier.VIEW_ONLY -> "Read only"
+                        PermissionTier.WORKSPACE_WRITE -> "Workspace write"
+                        PermissionTier.FULL_ACCESS -> "Full access"
+                    }),
                     selected = tier == selected,
                 )
             },
@@ -1039,8 +1048,19 @@ public fun SettingsPage(
     val tokens = LocalUiTokens.current
     val preferences = state.preferences
     val lifecycle = state.engineLifecycle
-    val language = preferences.language?.label ?: UiStrings.SETTINGS_PERMISSION_UNSET
-    val appearance = preferences.appearance?.label ?: UiStrings.SETTINGS_PERMISSION_UNSET
+    val languageId = preferences.language?.id
+    val language = when (languageId) {
+        "zh" -> UiStrings.SETTINGS_LANGUAGE_ZH
+        "en" -> UiStrings.SETTINGS_LANGUAGE_EN
+        "system" -> UiStrings.settingsNativeText(languageId, "跟随系统", "System")
+        else -> UiStrings.settingsNativeText(languageId, UiStrings.SETTINGS_PERMISSION_UNSET, "Not set")
+    }
+    val appearance = when (preferences.appearance?.id) {
+        "system" -> UiStrings.settingsNativeText(languageId, "跟随系统", "System")
+        "light" -> UiStrings.settingsNativeText(languageId, "浅色", "Light")
+        "dark" -> UiStrings.settingsNativeText(languageId, "深色", "Dark")
+        else -> UiStrings.settingsNativeText(languageId, UiStrings.SETTINGS_PERMISSION_UNSET, "Not set")
+    }
     val fontSize = preferences.fontSizeConversation?.let { "$it pt" } ?: UiStrings.UNKNOWN
     val providerValue = when {
         state.providerSetupRequired == true -> "需要设置"
@@ -1058,14 +1078,16 @@ public fun SettingsPage(
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
     ) {
         SettingsNavBar(
-            title = if (page == SettingsIndexPage.ROOT) UiStrings.SETTINGS else page.title,
+            title = if (page == SettingsIndexPage.ROOT) UiStrings.settingsNativeText(
+                state.preferences.language?.id, UiStrings.SETTINGS, UiStrings.SETTINGS_EN,
+            ) else page.title(state.preferences.language?.id),
             leading = if (page == SettingsIndexPage.ROOT) null else {
                 {
                     com.phonedsh.ui.icon.PdshIconView(
                         icon = com.phonedsh.ui.icon.PdshIcon.CHEVRON_LEFT,
                         size = com.phonedsh.ui.HomeMetrics.composerIcon,
                         tint = tokens.colors.textPrimary,
-                        contentDescription = UiStrings.BACK,
+                        contentDescription = UiStrings.settingsNativeText(state.preferences.language?.id, UiStrings.BACK, "Back"),
                         modifier = Modifier
                             .clickable(role = Role.Button) { page = SettingsIndexPage.ROOT }
                             .testTag("pdsh.settings.index.back")
@@ -1075,7 +1097,7 @@ public fun SettingsPage(
             },
             trailing = {
                 SettingsBarAction(
-                    label = UiStrings.SETTINGS_DONE,
+                label = UiStrings.settingsNativeText(state.preferences.language?.id, UiStrings.SETTINGS_DONE, UiStrings.SETTINGS_DONE_EN),
                     onClick = onBack,
                     modifier = Modifier.testTag(UiPageTags.SETTINGS_DONE),
                 )
@@ -1112,18 +1134,20 @@ public fun SettingsPage(
             )
             SettingsIndexPage.FONT_SIZE -> FontSizeSettingsPage(
                 preferences = preferences,
+                languageId = preferences.language?.id,
                 onSelectPreference = onSelectPreference,
                 onSelectFontFamily = onSelectFontFamily,
             )
             SettingsIndexPage.CONVERSATION -> ConversationSettingsPage(
                 preferences = preferences,
+                languageId = preferences.language?.id,
                 busyEnterMode = state.busyEnterMode,
                 onSelectPreference = onSelectPreference,
                 onSelectBusyEnterMode = onSelectBusyEnterMode,
                 onToggleDeveloperTools = onToggleDeveloperTools,
             )
             SettingsIndexPage.PERMISSION_DEFAULTS -> PermissionDefaultsPage(
-                state = PermissionDefaultsState.from(state.defaultPermissionTier),
+                state = PermissionDefaultsState.from(state.defaultPermissionTier, state.preferences.language?.id),
                 onSelect = onSelectDefaultPermission,
                 onBack = { page = SettingsIndexPage.ROOT },
                 embedded = true,
@@ -1133,12 +1157,14 @@ public fun SettingsPage(
     }
 }
 
-private enum class SettingsIndexPage(val title: String) {
-    ROOT(UiStrings.SETTINGS),
-    FONT_SIZE("字号"),
-    CONVERSATION(UiStrings.SETTINGS_ROW_WORK_DETAILS),
-    PERMISSION_DEFAULTS(UiStrings.PERMISSION_DEFAULTS_TITLE),
-    LICENSES(UiStrings.ABOUT_LICENSES),
+private enum class SettingsIndexPage(val titleZh: String, val titleEn: String) {
+    ROOT(UiStrings.SETTINGS, UiStrings.SETTINGS_EN),
+    FONT_SIZE("字号", UiStrings.SETTINGS_ROW_FONT_SIZE_EN),
+    CONVERSATION(UiStrings.SETTINGS_ROW_WORK_DETAILS, UiStrings.SETTINGS_ROW_WORK_DETAILS_EN),
+    PERMISSION_DEFAULTS(UiStrings.PERMISSION_DEFAULTS_TITLE, UiStrings.PERMISSION_DEFAULTS_TITLE_EN),
+    LICENSES(UiStrings.ABOUT_LICENSES, "Open-source licenses");
+
+    fun title(languageId: String?): String = UiStrings.settingsNativeText(languageId, titleZh, titleEn)
 }
 
 @Composable
@@ -1163,54 +1189,62 @@ private fun SettingsIndexList(
     onSelectDefaultPermission: ((PermissionTier) -> Unit)?,
     onToggleBackgroundKeepAlive: (Boolean) -> Unit,
 ) {
+    val languageId = state.preferences.language?.id
+    fun native(chinese: String, english: String): String = UiStrings.settingsNativeText(languageId, chinese, english)
+    fun tierTitle(tier: PermissionTier?): String = when (tier) {
+        PermissionTier.VIEW_ONLY -> native(UiStrings.PERMISSION_TIER_VIEW_ONLY, "Read only")
+        PermissionTier.WORKSPACE_WRITE -> native(UiStrings.PERMISSION_TIER_WORKSPACE_WRITE, "Workspace write")
+        PermissionTier.FULL_ACCESS -> native(UiStrings.PERMISSION_TIER_FULL_ACCESS, "Full access")
+        null -> native(UiStrings.SETTINGS_PERMISSION_UNSET, "Not set")
+    }
     val sections = listOf(
-        SettingsIndexSection("modelsAgents", UiStrings.SETTINGS_SECTION_MODELS_AGENTS, listOf(
-            SettingsIndexEntry("modelProvider", "模型服务", com.phonedsh.ui.icon.PdshIcon.CPU, providerValue, callback = { onNavigate(SettingsDestination.MODEL_PROVIDER) }),
-            SettingsIndexEntry("agentPresets", "Agent 预设", com.phonedsh.ui.icon.PdshIcon.PEOPLE,
+        SettingsIndexSection("modelsAgents", native(UiStrings.SETTINGS_SECTION_MODELS_AGENTS, UiStrings.SETTINGS_SECTION_MODELS_AGENTS_EN), listOf(
+            SettingsIndexEntry("modelProvider", native("模型服务", UiStrings.MODEL_PROVIDER_TITLE_EN), com.phonedsh.ui.icon.PdshIcon.CPU, providerValue, callback = { onNavigate(SettingsDestination.MODEL_PROVIDER) }),
+            SettingsIndexEntry("agentPresets", native("Agent 预设", "Agent presets"), com.phonedsh.ui.icon.PdshIcon.PEOPLE,
                 value = if (onOpenAgentPresets == null) UiStrings.UNAVAILABLE else null,
                 enabled = onOpenAgentPresets != null, callback = onOpenAgentPresets),
-            SettingsIndexEntry("pluginsTools", "插件与工具", com.phonedsh.ui.icon.PdshIcon.PUZZLE,
+            SettingsIndexEntry("pluginsTools", native("插件与工具", "Plugins and tools"), com.phonedsh.ui.icon.PdshIcon.PUZZLE,
                 value = if (onOpenPluginsTools == null) UiStrings.UNAVAILABLE else null,
                 enabled = onOpenPluginsTools != null, callback = onOpenPluginsTools),
         )),
-        SettingsIndexSection("permissionsPrivacy", UiStrings.SETTINGS_SECTION_PERMISSIONS_PRIVACY, listOf(
-            SettingsIndexEntry("permissionDefaults", "新会话默认权限", com.phonedsh.ui.icon.PdshIcon.LOCK_SHIELD,
-                state.defaultPermissionTier?.let { SettingsScreenState.tierTitle(it) } ?: UiStrings.SETTINGS_PERMISSION_UNSET, callback = { onNavigate(SettingsDestination.PERMISSION_DEFAULTS) }),
-            SettingsIndexEntry("phonePermissions", "手机权限", com.phonedsh.ui.icon.PdshIcon.HAND, permissionSummary,
+        SettingsIndexSection("permissionsPrivacy", native(UiStrings.SETTINGS_SECTION_PERMISSIONS_PRIVACY, UiStrings.SETTINGS_SECTION_PERMISSIONS_PRIVACY_EN), listOf(
+            SettingsIndexEntry("permissionDefaults", native("新会话默认权限", UiStrings.PERMISSION_DEFAULTS_TITLE_EN), com.phonedsh.ui.icon.PdshIcon.LOCK_SHIELD,
+                tierTitle(state.defaultPermissionTier), callback = { onNavigate(SettingsDestination.PERMISSION_DEFAULTS) }),
+            SettingsIndexEntry("phonePermissions", native("手机权限", UiStrings.PHONE_PERMISSIONS_TITLE_EN), com.phonedsh.ui.icon.PdshIcon.HAND, permissionSummary,
                 enabled = onOpenPhonePermissions != null, callback = onOpenPhonePermissions),
-            SettingsIndexEntry("network", "网络访问", com.phonedsh.ui.icon.PdshIcon.NETWORK, callback = { onNavigate(SettingsDestination.EGRESS) }),
+            SettingsIndexEntry("network", native("网络访问", UiStrings.SETTINGS_ROW_NETWORK_EN), com.phonedsh.ui.icon.PdshIcon.NETWORK, callback = { onNavigate(SettingsDestination.EGRESS) }),
         )),
-        SettingsIndexSection("conversation", UiStrings.SETTINGS_SECTION_CONVERSATION, listOf(
-            SettingsIndexEntry.menu("appearance", "外观", com.phonedsh.ui.icon.PdshIcon.GEAR, appearance,
-                listOf(SettingsMenuOption("system", "跟随系统"), SettingsMenuOption("light", "浅色"), SettingsMenuOption("dark", "深色")),
+        SettingsIndexSection("conversation", native(UiStrings.SETTINGS_SECTION_CONVERSATION, UiStrings.SETTINGS_SECTION_CONVERSATION_EN), listOf(
+            SettingsIndexEntry.menu("appearance", native("外观", UiStrings.SETTINGS_ROW_APPEARANCE_EN), com.phonedsh.ui.icon.PdshIcon.GEAR, appearance,
+                listOf(SettingsMenuOption("system", native("跟随系统", "System")), SettingsMenuOption("light", native("浅色", "Light")), SettingsMenuOption("dark", native("深色", "Dark"))),
                 SettingsScreenState.APPEARANCE_ROW_ID, state.preferences.appearance?.id, onSelectPreference),
-            SettingsIndexEntry.menu("language", UiStrings.SETTINGS_ROW_LANGUAGE, com.phonedsh.ui.icon.PdshIcon.GLOBE, language,
-                listOf(SettingsMenuOption("system", "跟随系统"), SettingsMenuOption("zh", UiStrings.SETTINGS_LANGUAGE_ZH), SettingsMenuOption("en", UiStrings.SETTINGS_LANGUAGE_EN)),
+            SettingsIndexEntry.menu("language", native(UiStrings.SETTINGS_ROW_LANGUAGE, UiStrings.SETTINGS_ROW_LANGUAGE_EN), com.phonedsh.ui.icon.PdshIcon.GLOBE, language,
+                listOf(SettingsMenuOption("system", native("跟随系统", "System")), SettingsMenuOption("zh", UiStrings.SETTINGS_LANGUAGE_ZH), SettingsMenuOption("en", UiStrings.SETTINGS_LANGUAGE_EN)),
                 SettingsScreenState.LANGUAGE_ROW_ID, state.preferences.language?.id, onSelectPreference),
-            SettingsIndexEntry("fontSize", "字号", com.phonedsh.ui.icon.PdshIcon.TEXT_SIZE, fontSize, callback = { onOpenLocalPage(SettingsIndexPage.FONT_SIZE) }),
-            SettingsIndexEntry("workDetails", UiStrings.SETTINGS_ROW_WORK_DETAILS, com.phonedsh.ui.icon.PdshIcon.LIST, callback = { onOpenLocalPage(SettingsIndexPage.CONVERSATION) }),
-            SettingsIndexEntry("shortcuts", "快捷键", com.phonedsh.ui.icon.PdshIcon.COMMAND, callback = { onNavigate(SettingsDestination.SHORTCUTS) }),
+            SettingsIndexEntry("fontSize", native("字号", UiStrings.SETTINGS_ROW_FONT_SIZE_EN), com.phonedsh.ui.icon.PdshIcon.TEXT_SIZE, fontSize, callback = { onOpenLocalPage(SettingsIndexPage.FONT_SIZE) }),
+            SettingsIndexEntry("workDetails", native(UiStrings.SETTINGS_ROW_WORK_DETAILS, UiStrings.SETTINGS_ROW_WORK_DETAILS_EN), com.phonedsh.ui.icon.PdshIcon.LIST, callback = { onOpenLocalPage(SettingsIndexPage.CONVERSATION) }),
+            SettingsIndexEntry("shortcuts", native("快捷键", UiStrings.SETTINGS_ROW_SHORTCUTS_EN), com.phonedsh.ui.icon.PdshIcon.COMMAND, callback = { onNavigate(SettingsDestination.SHORTCUTS) }),
         )),
-        SettingsIndexSection("sessionsFiles", UiStrings.SETTINGS_SECTION_SESSIONS_FILES, listOf(
-            SettingsIndexEntry("folders", "文件夹", com.phonedsh.ui.icon.PdshIcon.FOLDER, folderValue,
+        SettingsIndexSection("sessionsFiles", native(UiStrings.SETTINGS_SECTION_SESSIONS_FILES, UiStrings.SETTINGS_SECTION_SESSIONS_FILES_EN), listOf(
+            SettingsIndexEntry("folders", native("文件夹", "Folders"), com.phonedsh.ui.icon.PdshIcon.FOLDER, folderValue,
                 enabled = onOpenFolders != null, callback = onOpenFolders),
-            SettingsIndexEntry("archivedSessions", UiStrings.SETTINGS_ROW_ARCHIVED_SESSIONS, com.phonedsh.ui.icon.PdshIcon.ARCHIVE, archivedValue,
+            SettingsIndexEntry("archivedSessions", native(UiStrings.SETTINGS_ROW_ARCHIVED_SESSIONS, UiStrings.SETTINGS_ROW_ARCHIVED_SESSIONS_EN), com.phonedsh.ui.icon.PdshIcon.ARCHIVE, archivedValue,
                 enabled = onOpenArchivedSessions != null, callback = onOpenArchivedSessions),
         )),
-        SettingsIndexSection("engine", "引擎", buildList {
-            add(SettingsIndexEntry("engineStatus", "引擎状态", com.phonedsh.ui.icon.PdshIcon.BOLT,
+        SettingsIndexSection("engine", native("引擎", UiStrings.SETTINGS_ROW_ENGINE_EN), buildList {
+            add(SettingsIndexEntry("engineStatus", native("引擎状态", UiStrings.SETTINGS_ROW_ENGINE_EN), com.phonedsh.ui.icon.PdshIcon.BOLT,
                 state.engineLifecycle?.statusLabel ?: state.engineLifecycle?.status?.settingsLabel() ?: UiStrings.UNKNOWN))
             if (state.engineLifecycle?.needsReset == true) {
-                add(SettingsIndexEntry("engineRestart", "重新启动引擎", com.phonedsh.ui.icon.PdshIcon.REFRESH,
+                add(SettingsIndexEntry("engineRestart", native("重新启动引擎", UiStrings.SETTINGS_ROW_RESTART_EN), com.phonedsh.ui.icon.PdshIcon.REFRESH,
                     value = if (onRestartEngine == null) UiStrings.UNAVAILABLE else null,
                     enabled = onRestartEngine != null, callback = onRestartEngine))
             }
-            add(SettingsIndexEntry("runtimeDetails", "运行状态", com.phonedsh.ui.icon.PdshIcon.WAVEFORM, callback = { onNavigate(SettingsDestination.RUNTIME_DETAILS) }))
-        }, footer = if (state.engineLifecycle?.needsReset == true) UiStrings.SETTINGS_ENGINE_RESET_FOOTER else null),
-        SettingsIndexSection("about", "关于", listOf(
-            SettingsIndexEntry("about", "关于 Phone DSH", com.phonedsh.ui.icon.PdshIcon.INFO, callback = { onNavigate(SettingsDestination.ABOUT) }),
-            SettingsIndexEntry("version", "版本", com.phonedsh.ui.icon.PdshIcon.NUMBER, state.versionName ?: UiStrings.UNKNOWN),
-            SettingsIndexEntry("licenses", UiStrings.ABOUT_LICENSES, com.phonedsh.ui.icon.PdshIcon.DOCUMENT, callback = { onOpenLocalPage(SettingsIndexPage.LICENSES) }),
+            add(SettingsIndexEntry("runtimeDetails", native("运行状态", UiStrings.SETTINGS_ROW_RUNTIME_EN), com.phonedsh.ui.icon.PdshIcon.WAVEFORM, callback = { onNavigate(SettingsDestination.RUNTIME_DETAILS) }))
+        }, footer = if (state.engineLifecycle?.needsReset == true) native(UiStrings.SETTINGS_ENGINE_RESET_FOOTER, UiStrings.SETTINGS_ENGINE_RESET_FOOTER_EN) else null),
+        SettingsIndexSection("about", native("关于", "About"), listOf(
+            SettingsIndexEntry("about", native("关于 Phone DSH", "About Phone DSH"), com.phonedsh.ui.icon.PdshIcon.INFO, callback = { onNavigate(SettingsDestination.ABOUT) }),
+            SettingsIndexEntry("version", native("版本", "Version"), com.phonedsh.ui.icon.PdshIcon.NUMBER, state.versionName ?: UiStrings.UNKNOWN),
+            SettingsIndexEntry("licenses", native(UiStrings.ABOUT_LICENSES, "Open-source licenses"), com.phonedsh.ui.icon.PdshIcon.DOCUMENT, callback = { onOpenLocalPage(SettingsIndexPage.LICENSES) }),
         )),
         androidSettingsSection(
             state = state,

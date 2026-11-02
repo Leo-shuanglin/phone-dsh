@@ -41,7 +41,9 @@ public data class UiTypePreferences(
     public val textSizePt: Float? = null,
     public val codeSizePt: Float? = null,
     public val terminalSizePt: Float? = null,
-    public val fontFamily: FontFamily? = null,
+    public val textFontFamily: FontFamily? = null,
+    public val codeFontFamily: FontFamily? = null,
+    public val terminalFontFamily: FontFamily? = null,
 )
 
 /** The parity typography roles plus the appended PR22 HomeSpec roles. */
@@ -144,21 +146,21 @@ public data class UiType(
  */
 public fun UiType.applyPreferences(preferences: UiTypePreferences): UiType {
     if (preferences.textSizePt == null && preferences.codeSizePt == null &&
-        preferences.terminalSizePt == null && preferences.fontFamily == null
+        preferences.terminalSizePt == null && preferences.textFontFamily == null &&
+        preferences.codeFontFamily == null && preferences.terminalFontFamily == null
     ) return this
-    val family = preferences.fontFamily
-    fun TextStyle.withSize(sizePt: Float?): TextStyle {
+    fun TextStyle.withSize(sizePt: Float?, family: FontFamily?, minimumLineHeightPt: Float? = null): TextStyle {
         if (sizePt == null) return if (family == null) this else copy(fontFamily = family)
         val base = fontSize.value
         val ratio = if (fontSize.isSp && base > 0f) lineHeight.value / base else 0f
         return copy(
             fontSize = sizePt.sp,
-            lineHeight = if (ratio > 0f) max(sizePt, sizePt * ratio).sp else lineHeight,
+            lineHeight = if (ratio > 0f) max(minimumLineHeightPt ?: sizePt, sizePt * ratio).sp else lineHeight,
             fontFamily = family ?: fontFamily,
         )
     }
-    val textBody = body.withSize(preferences.textSizePt)
-    val codeRole = code.withSize(preferences.codeSizePt)
+    val textBody = body.withSize(preferences.textSizePt, preferences.textFontFamily, minimumLineHeightPt = 24f)
+    val codeRole = code.withSize(preferences.codeSizePt, preferences.codeFontFamily)
     return copy(
         body = textBody,
         homeBody = textBody,
@@ -170,7 +172,7 @@ public fun UiType.applyPreferences(preferences: UiTypePreferences): UiType {
         jsonBody = codeRole,
         // Code toolbar labels/actions are fixed component roles, not the code
         // preference: NativeChatTheme.codeFont() only feeds code blocks.
-        terminal = terminal.withSize(preferences.terminalSizePt),
+        terminal = terminal.withSize(preferences.terminalSizePt, preferences.terminalFontFamily),
     )
 }
 

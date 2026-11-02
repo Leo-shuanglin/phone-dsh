@@ -102,6 +102,25 @@ class ChatSessionSnapshotTest {
         assertEquals("上一段上下文已丢失", restored.nodes.single().text)
     }
 
+    @Test fun `queue projection preserves durable item ids lane and edit capability`() {
+        val snapshot = sessionSnapshotOf(
+            projections = json("""{"values":{"inbox":{
+                "next-turn":[{"id":"q-next","content":[{"type":"text","text":"queued"}]}],
+                "next-step":[{"id":"q-step","content":[{"type":"text","text":"steered"}]}]
+            }}}"""),
+            catalog = null,
+            commandCatalog = null,
+            sessionId = "worker-session",
+        )
+        val rows = snapshot.queueItems!!
+        assertEquals(2, rows.size)
+        assertEquals(QueueItemId.Durable("q-next"), rows[0].id)
+        assertEquals("worker-session", rows[0].sessionId)
+        assertEquals("next-turn", rows[0].lane)
+        assertEquals(true, rows[0].canEdit)
+        assertEquals("next-step", rows[1].lane)
+    }
+
     @Test fun `legacy chat row keeps unknown envelope fields and reports missing queue as unknown`() {
         val rawStore = domainStore()
         rawStore.put(ChatSessionStore.DOMAIN, "chat/legacy", """{

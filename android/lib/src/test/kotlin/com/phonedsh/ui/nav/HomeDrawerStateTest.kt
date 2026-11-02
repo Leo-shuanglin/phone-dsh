@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
@@ -46,6 +47,27 @@ class HomeDrawerStateTest {
         compose.runOnIdle { assertEquals(true, closed) }
     }
 
+    @Test fun newSessionKeepsDrawerOpenUntilHostConfirmsCreation() {
+        var confirmed = false
+        var calls = 0
+        compose.setContent {
+            PdshTheme(darkTheme = false) {
+                HomeDrawer(
+                    facts = HomeDrawerFacts(),
+                    onClose = { confirmed = true },
+                    onCreateSession = { calls++; false },
+                )
+            }
+        }
+        compose.onNodeWithTag(HomeDrawerTags.NEW_SESSION).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag(HomeDrawerTags.PANEL).assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(1, calls)
+            assertEquals(false, confirmed)
+        }
+    }
+
     @Test fun dialogBackDismissesDrawer() {
         var closed = false
         compose.setContent {
@@ -75,6 +97,25 @@ class HomeDrawerStateTest {
         compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").assertDoesNotExist()
         compose.onNodeWithTag(HomeDrawerTags.FOLDER_PREFIX + "daily").performClick()
         compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "s1").assertExists()
+    }
+
+    @Test fun title日常DoesNotTurnACustomFolderIntoTheDefaultOrAbsorbLooseSessions() {
+        val facts = HomeDrawerFacts(
+            folders = listOf(
+                HomeDrawerFolder("custom-daily", "日常", emptyList(), isDefault = false),
+            ),
+            unassignedSessions = listOf(HomeDrawerSession("loose", "未分配会话")),
+        )
+        compose.setContent {
+            PdshTheme(darkTheme = false) {
+                HomeDrawer(facts, onClose = {}, onOpenSession = {})
+            }
+        }
+        compose.onNodeWithTag(HomeDrawerTags.FOLDER_PREFIX + "custom-daily")
+            .assertContentDescriptionEquals("日常，0 个会话")
+        compose.onNodeWithTag(HomeDrawerTags.FOLDER_PREFIX + "__unassigned__")
+            .assertContentDescriptionEquals("未分配，1 个会话")
+        compose.onNodeWithTag(HomeDrawerTags.SESSION_PREFIX + "loose").assertIsDisplayed()
     }
 
     @Test fun sessionLongPressOffersRealRenameAndArchiveCallbacks() {

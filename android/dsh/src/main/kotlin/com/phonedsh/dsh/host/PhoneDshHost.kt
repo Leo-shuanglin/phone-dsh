@@ -79,6 +79,10 @@ import com.phonedsh.controller.ScenePhase
 import com.phonedsh.controller.SignalOutcome
 import com.phonedsh.dsh.exec.ExecBridge
 import com.phonedsh.dsh.exec.ExecCapability
+import com.phonedsh.dsh.exec.ExecControl
+import com.phonedsh.dsh.exec.ExecControlOutcome
+import com.phonedsh.dsh.exec.ExecEvent
+import com.phonedsh.dsh.exec.ExecRequest
 import com.phonedsh.dsh.journal.JournalException
 import com.phonedsh.dsh.journal.JournalSink
 import com.phonedsh.dsh.journal.JournalStore
@@ -105,9 +109,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -358,6 +364,34 @@ class DefaultPhoneDshHost(
         wal = WalUplink.down("recovery has not run; start() not called"),
         exec = execCapability,
     )
+
+    /** The host's actually registered read-only shell accelerators, excluding the phone tool. */
+    fun readOnlyAcceleratorNames(): List<String> =
+        exec?.capability?.names?.filterNot { it == "phone" }.orEmpty()
+
+    /**
+     * Runs through the same validated `exec/1` bridge used for Worker EXEC_REQ.
+     * This host UI seam cannot create a process or bypass the bridge's admission,
+     * idempotency ledger, mounted roots, deadline, or output limits.
+     */
+    fun runReadOnlyAccelerator(request: ExecRequest): Flow<ExecEvent> {
+        val bridge = exec ?: return flow {
+            emit(ExecEvent.Error(
+                execId = request.execId,
+                seq = ExecEvent.SEQUENCE_START,
+                code = "unsupported",
+                message = "read-only execution is not available on this host",
+            ))
+        }
+        return bridge.onRequest(request)
+    }
+
+    /** Cancels one UI-owned execution through the same live ExecBridge control path. */
+    fun cancelReadOnlyAccelerator(execId: String): ExecControlOutcome? =
+        exec?.onControl(ExecControl.Cancel(execId))
+
+    /** The ordered WAL watermark required by an interactive shell-page request. */
+    fun appliedWorkspaceMseq(): Long = wal?.appliedMseq() ?: 0L
 
     /**
      * The HELLO value, with the WAL numbers read from the live allocator.
