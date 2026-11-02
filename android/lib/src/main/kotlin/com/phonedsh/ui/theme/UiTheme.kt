@@ -19,11 +19,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
+import com.phonedsh.ui.theme.generated.HomeSpecData
 import com.phonedsh.ui.theme.generated.TokenType
 import com.phonedsh.ui.theme.generated.UiTokenData
 
-/** The sixteen typography tokens as ready-to-use text styles. */
+/** The parity typography roles plus the appended PR22 HomeSpec roles. */
 @Immutable
 public data class UiType(
     public val body: TextStyle,
@@ -67,6 +69,34 @@ public data class UiType(
      * (measured ink 19.7 against Android's 17). Appended, never inserted.
      */
     public val emptyStateTitle: TextStyle,
+    // ---- PR22 HomeSpec type roles (430x932pt) ----------------------------
+    // Appended after the parity roles so no earlier position shifts. Sizes and
+    // line boxes come from `HomeSpec.swift`; the two weights the Swift file
+    // writes as `.semibold`/`.medium` and the CSS weights come from
+    // `docs/design/ios-home-design-spec-no-overview.html`, both through the
+    // generated `HomeSpecData.types` table.
+    /** Nav title: 17.5 / 600 / 22. */
+    public val navTitle: TextStyle,
+    /** Nav subtitle (folder name): 14.5 / 400 / 20. */
+    public val navSubtitle: TextStyle,
+    /**
+     * PR22 home body: 16 / 24.
+     *
+     * `body` above stays the parity 17 pt role because the existing bubble
+     * surface test and the unported page layer compile against it; the PR22 home
+     * page reads this role. Appended, so no earlier position shifts.
+     */
+    public val homeBody: TextStyle,
+    /** Process row: 15 / 400 / 24. */
+    public val processBody: TextStyle,
+    /** Step-list row: 14 / 400 / 22. */
+    public val listItem: TextStyle,
+    /** Primary pill label: 16 / 600. */
+    public val buttonLabel: TextStyle,
+    /** Tag: 12 / 500. */
+    public val tagLabel: TextStyle,
+    /** Tab bar label: 10.5 / 500 / 14. */
+    public val tabLabel: TextStyle,
 ) {
     public companion object {
         /** Builds the styles from `typography.styles`; `sp` carries the system font scale. */
@@ -87,6 +117,14 @@ public data class UiType(
             rowLabel = UiTokenData.typeRowLabel.style(),
             controlBody = UiTokenData.typeControlBody.style(),
             emptyStateTitle = UiTokenData.typeEmptyStateTitle.style(),
+            navTitle = HomeSpecData.types.getValue("typography.navTitle").style(),
+            navSubtitle = HomeSpecData.types.getValue("typography.navSubtitle").style(),
+            homeBody = HomeSpecData.types.getValue("typography.body").style(),
+            processBody = HomeSpecData.types.getValue("typography.processBody").style(),
+            listItem = HomeSpecData.types.getValue("typography.listItem").style(),
+            buttonLabel = HomeSpecData.types.getValue("typography.buttonLabel").style(),
+            tagLabel = HomeSpecData.types.getValue("typography.tagLabel").style(),
+            tabLabel = HomeSpecData.types.getValue("typography.tabLabel").style(),
         )
     }
 }
@@ -96,6 +134,9 @@ internal fun TokenType.style(): TextStyle = TextStyle(
     fontSize = baseSize.sp,
     fontWeight = FontWeight(weight),
     fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
+    // HomeSpec's 16/24, 14/22, 17.5/22 roles carry an explicit line box; the
+    // older parity roles leave it Unspecified so the platform leading applies.
+    lineHeight = lineHeight?.sp ?: TextUnit.Unspecified,
 )
 
 /** The resolved tokens of the current theme mode. */

@@ -11,12 +11,13 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.phonedsh.ui.theme.generated.HomeSpecData
 import com.phonedsh.ui.theme.generated.TokenColor
 import com.phonedsh.ui.theme.generated.TokenDp
 import com.phonedsh.ui.theme.generated.TokenGeometry
 import com.phonedsh.ui.theme.generated.UiTokenData
 
-/** The twenty-two colour tokens, resolved for one mode. */
+/** The parity colour tokens plus the appended PR22 HomeSpec palette, resolved for one mode. */
 @Immutable
 public data class UiColors(
     public val primary: Color,
@@ -112,6 +113,32 @@ public data class UiColors(
      * turned every separator row into "different". Appended, never inserted.
      */
     public val separator: Color,
+    // ---- PR22 HomeSpec palette (430x932pt) --------------------------------
+    // Appended: every earlier field keeps its position and meaning. The three
+    // fields that already existed under a HomeSpec name (`page`, `userBubble`,
+    // `success`) keep the name and take the PR22 value; the rest are new names.
+    /** `HomeSpec.surface`: nav buttons, composer, step-list card, table body. */
+    public val surface: Color,
+    /** `HomeSpec.primaryButton`: the black pill / send-stop fill (#191919 light). */
+    public val primaryButton: Color,
+    /** `HomeSpec.primaryButtonInk`: the pill's label / send glyph. */
+    public val primaryButtonInk: Color,
+    /** `HomeSpec.textPrimary`: titles, body, bubble and table content. */
+    public val textPrimary: Color,
+    /** `HomeSpec.textSecondary`: process rows, table toolbar, action icons. */
+    public val textSecondary: Color,
+    /** `HomeSpec.textTertiary`: every step-list row. */
+    public val textTertiary: Color,
+    /** `HomeSpec.textSubtle`: nav subtitle; card placeholder is #7F7E83. */
+    public val textSubtle: Color,
+    /** `HomeSpec.textPlaceholder`: timestamp and row values. */
+    public val textPlaceholder: Color,
+    /** `HomeSpec.inputPlaceholder`: composer placeholder (#8B8B8B light). */
+    public val inputPlaceholder: Color,
+    /** `HomeSpec.iconMuted`: composer voice and plus glyphs. */
+    public val iconMuted: Color,
+    /** `HomeSpec.borderList`: 1pt step-list card border (#E2E2E2 light). */
+    public val borderList: Color,
 ) {
     /** True when the spec could not measure `colors.background` (it never could: a dynamic system colour). */
     public val backgroundUnmeasured: Boolean get() = background == Color.Unspecified
@@ -262,6 +289,24 @@ public data class UiGeometry(
     public val pageBarButtonElevation: Dp,
 )
 
+/**
+ * PR22 HomeSpec shadow helpers.
+ *
+ * `opacity` is black's alpha; `radius` is the SwiftUI blur radius and `y` the
+ * offset, both in dp. Compose's `shadow()` takes an elevation, not this triple,
+ * so a consumer maps it at the drawing site (the theme never pretends the two
+ * primitives are identical).
+ */
+@Immutable
+public data class UiShadow(
+    public val floatingOpacity: Float,
+    public val floatingRadius: Dp,
+    public val floatingY: Dp,
+    public val composerOpacity: Float,
+    public val composerRadius: Dp,
+    public val composerY: Dp,
+)
+
 /** The complete resolved token set for one theme mode. */
 @Immutable
 public data class UiTokens(
@@ -272,6 +317,12 @@ public data class UiTokens(
     public val stroke: UiStroke,
     public val motion: UiMotion,
     public val geometry: UiGeometry,
+    /**
+     * PR22 HomeSpec shadow helpers, appended. Android elevation is a different
+     * primitive; a consumer maps these (black opacity, SwiftUI radius, y) to its
+     * own `shadow()`/elevation at the drawing site and says so.
+     */
+    public val shadow: UiShadow,
 ) {
     public companion object {
         /** Resolves every token for [dark] straight from the generated spec model. */
@@ -291,7 +342,8 @@ public data class UiTokens(
                 border = UiTokenData.colorBorder.color(dark),
                 borderLight = UiTokenData.colorBorderLight.color(dark),
                 accent = UiTokenData.colorAccent.color(dark),
-                success = UiTokenData.colorSuccess.color(dark),
+                // PR22 re-bases success on HomeSpec (#3DC979 light) from #22C55E.
+                success = homeColor(dark, HomeSpecData.SUCCESS_LIGHT, HomeSpecData.SUCCESS_DARK),
                 danger = UiTokenData.colorDanger.color(dark),
                 warning = UiTokenData.colorWarning.color(dark),
                 onAccent = UiTokenData.colorOnAccent.color(dark),
@@ -300,14 +352,28 @@ public data class UiTokens(
                 switchOn = UiTokenData.colorSwitchOn.color(dark),
                 systemLabel = UiTokenData.colorSystemLabel.color(dark),
                 systemSecondary = UiTokenData.colorSystemSecondary.color(dark),
-                page = UiTokenData.colorPage.color(dark),
+                // PR22 page is HomeSpec.page (#F7F7F7 / #101012), not the old white/black.
+                page = homeColor(dark, HomeSpecData.PAGE_LIGHT, HomeSpecData.PAGE_DARK),
                 taskScreen = UiTokenData.colorTaskScreen.color(dark),
                 groupedBackground = UiTokenData.colorGroupedBackground.color(dark),
                 segmentTrack = UiTokenData.colorSegmentTrack.color(dark),
                 settingsFootnoteInk = UiTokenData.colorSettingsFootnoteInk.color(dark),
                 separator = UiTokenData.colorSeparator.color(dark),
-                userBubble = UiTokenData.colorUserBubble.color(dark),
+                // PR22 user bubble is the neutral HomeSpec grey (#E8E8E8 / #2C2C2E),
+                // not the older blue-tinted parity bubble.
+                userBubble = homeColor(dark, HomeSpecData.USER_BUBBLE_LIGHT, HomeSpecData.USER_BUBBLE_DARK),
                 approvalCard = UiTokenData.colorApprovalCard.color(dark),
+                surface = homeColor(dark, HomeSpecData.SURFACE_LIGHT, HomeSpecData.SURFACE_DARK),
+                primaryButton = homeColor(dark, HomeSpecData.PRIMARY_BUTTON_LIGHT, HomeSpecData.PRIMARY_BUTTON_DARK),
+                primaryButtonInk = homeColor(dark, HomeSpecData.PRIMARY_BUTTON_INK_LIGHT, HomeSpecData.PRIMARY_BUTTON_INK_DARK),
+                textPrimary = homeColor(dark, HomeSpecData.TEXT_PRIMARY_LIGHT, HomeSpecData.TEXT_PRIMARY_DARK),
+                textSecondary = homeColor(dark, HomeSpecData.TEXT_SECONDARY_LIGHT, HomeSpecData.TEXT_SECONDARY_DARK),
+                textTertiary = homeColor(dark, HomeSpecData.TEXT_TERTIARY_LIGHT, HomeSpecData.TEXT_TERTIARY_DARK),
+                textSubtle = homeColor(dark, HomeSpecData.TEXT_SUBTLE_LIGHT, HomeSpecData.TEXT_SUBTLE_DARK),
+                textPlaceholder = homeColor(dark, HomeSpecData.TEXT_PLACEHOLDER_LIGHT, HomeSpecData.TEXT_PLACEHOLDER_DARK),
+                inputPlaceholder = homeColor(dark, HomeSpecData.INPUT_PLACEHOLDER_LIGHT, HomeSpecData.INPUT_PLACEHOLDER_DARK),
+                iconMuted = homeColor(dark, HomeSpecData.ICON_MUTED_LIGHT, HomeSpecData.ICON_MUTED_DARK),
+                borderList = homeColor(dark, HomeSpecData.BORDER_LIST_LIGHT, HomeSpecData.BORDER_LIST_DARK),
             ),
             spacing = UiSpacing(
                 iconText = UiTokenData.spacingIconText.dp(),
@@ -393,6 +459,14 @@ public data class UiTokens(
                 pageBarButtonInsetH = UiTokenData.geometryPageBarButtonInsetH.dp(),
                 pageBarButtonElevation = UiTokenData.geometryPageBarButtonElevation.dp(),
             ),
+            shadow = UiShadow(
+                floatingOpacity = HomeSpecData.Shadow.FLOATING_OPACITY,
+                floatingRadius = HomeSpecData.Shadow.FLOATING_RADIUS.dp,
+                floatingY = HomeSpecData.Shadow.FLOATING_Y.dp,
+                composerOpacity = HomeSpecData.Shadow.COMPOSER_OPACITY,
+                composerRadius = HomeSpecData.Shadow.COMPOSER_RADIUS.dp,
+                composerY = HomeSpecData.Shadow.COMPOSER_Y.dp,
+            ),
         )
     }
 }
@@ -421,3 +495,7 @@ public const val PT: String = "pt"
 
 /** The one unit-free geometry unit the page layer uses. */
 public const val RATIO: String = "screenRatio"
+
+/** PR22 HomeSpec colours are Long ARGB constants (0xFFRRGGBB). */
+private fun homeColor(dark: Boolean, light: Long, darkValue: Long): Color =
+    Color(if (dark) darkValue else light)

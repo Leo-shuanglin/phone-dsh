@@ -1,32 +1,21 @@
-// The Settings family's iOS-measured list chrome (current 5-tab page).
+// The Settings family's PR22 grouped-list chrome.
 // SPDX-License-Identifier: MIT
 //
-// **Read this before using the old Settings numbers.** The Settings page was
-// rewritten in commit f39acd0a (2026-11-01 15:29): `SettingsPage.swift` is now
-// 255 lines with a 5-tab `Picker(.segmented)` and `List` (default inset-grouped
-// style), not the 615-line flat-list page that `spec/ui/v1/pages/settings.json`
-// and `docs/receipts/ios-baseline-screens/ios-settings*.png` describe. The old
-// flat-list chrome — 44 pt rows, a 0.33 pt hairline at x=16, a 15 pt value, a
-// 20 pt chevron slot starting at a 350 pt value edge, one group header at
-// x=32.7 with a 24 pt top inset — is **not** in this file. It belongs to a
-// layout the current source no longer renders; encoding it here would make a
-// stale baseline look authoritative.
+// PR22 replaced the five-tab settings sheet with one grouped list in the
+// phone's own settings shape (`SettingsPage.swift`). The page is
+// `.homeGroupedList()`: inset-grouped white rows on the HomeSpec page,
+// `defaultMinListRowHeight = 48`, 16 pt body labels, 15 pt placeholder values,
+// 24 pt glyph in a 24 pt box with a 12 pt gap, and one `SettingsRowLabel`
+// minimum of 32 pt. `HomeAppearance` draws the flat inline nav bar (44 pt,
+// 17 pt semibold ink, no hairline).
 //
-// Current authority:
-//   * `SettingsPage.swift:64-72` — the segmented picker (`.padding(.horizontal,
-//     16)`, `.padding(.vertical, 10)`), inside the navigation stack.
-//   * `SettingsPage.swift:99-167` — `List { Section { ... } }` with default
-//     inset-grouped chrome; row heights, separators, cards and the switch are
-//     drawn by SwiftUI, so they are measured, not source literals.
-//   * `docs/receipts/ios-session-audit/screens/current/settings-chat.png`
-//     (1206 x 2622 px @3) — the only current pixel evidence for this page.
+// The `SEGMENTED_*` constants below are kept only because the still-unported
+// five-tab `SettingsPage.kt` compiles against them; they describe a layout PR22
+// no longer renders and must not be used by a new page. The grouped-list
+// constants at the end are the PR22 values.
 //
-// Calibration used by every measurement below: the screen's safe-area top is
-// 62 pt. Proof inside the same PNG: the navigation title's ink box is
-// y=231..275 px (centre 253 px), and a 44 pt bar starting at 62 pt has its
-// centre at 62 + 22 = 84 pt = 252 px. The 62 pt top is itself pinned by the chat
-// header: `ChatMetrics.HEADER_HEIGHT_PT` is 50 and `sample-chat.png` draws its
-// header hairline at y=335 px = 111.7 pt, i.e. 62 + 50.
+// Pixel evidence for the system-drawn group cards still comes from the 402 pt
+// captures and is kept as `measured`; the source-stated minimums are `exact`.
 //
 // Confidence: see the vocabulary in `ChatMetrics.kt`.
 
@@ -49,10 +38,10 @@ public object SettingsMetrics {
     /** Inline navigation bar height. Source: system `.navigationBarTitleDisplayMode(.inline)` at `SettingsPage.swift:169` + `tokens.json` `geometry.pageHeaderMinHeight: 44`; PNG check: title ink centre at y=253 px with a 62 pt safe top → 44 pt bar. Confidence: measured (render), exact (token). */
     public const val NAV_BAR_HEIGHT_PT: Int = 44
 
-    /** Inline title size. Reference only (Android text comes from `LocalUiType`). Source: iOS inline title role; PNG check: CJK ink box 44 px = 14.7 pt → 17 pt font. Confidence: measured. */
+    /** Inline title size. Source: `HomeAppearance.apply()` (`systemFont(ofSize: 17, weight: .semibold)`). Confidence: exact. */
     public const val NAV_TITLE_REF_PT: Int = 17
 
-    /** Inline title weight (semibold). Source: UINavigationBar's inline-title role, not written in the page. Confidence: inferred. */
+    /** Inline title weight. Source: `HomeAppearance.apply()` (`.semibold`). Confidence: exact. */
     public const val NAV_TITLE_WEIGHT_REF: Int = 600
 
     // ------------------------------------------------------- segmented picker
@@ -178,8 +167,8 @@ public object SettingsMetrics {
      */
     public const val ROW_HEIGHT_PT: Float = 52.33f
 
-    /** Nominal row minimum from the token table. Source: `spec/ui/v1/tokens.json` `geometry.pageRowMinHeight` (44). Confidence: exact. */
-    public const val ROW_MIN_HEIGHT_PT: Int = 44
+    /** PR22 grouped-list default row minimum. Source: `HomeSpec.homeGroupedList()` (`.environment(\.defaultMinListRowHeight, 48)`). Confidence: exact. */
+    public const val ROW_MIN_HEIGHT_PT: Int = 48
 
     /** Row vertical padding implied by [ROW_HEIGHT_PT]: (52.33 - 20.33 line box) / 2. Not written in source. Source: arithmetic on [ROW_HEIGHT_PT] and the 17 pt line box. Confidence: inferred. */
     public const val ROW_VERTICAL_PADDING_PT: Float = 16f
@@ -226,17 +215,40 @@ public object SettingsMetrics {
 
     // -------------------------------------------------------------------- type
 
-    /** Row label size, measured: CJK ink box 45 px = 15 pt → 17 pt font. Reference only. Source: `settings-chat.png` label ink box. Confidence: measured. */
-    public const val ROW_LABEL_REF_PT: Int = 17
+    /** Row label size. Source: `SettingsRowLabel` (`.font(.system(size: HomeSpec.bodySize))` = 16). Reference only. Confidence: exact. */
+    public const val ROW_LABEL_REF_PT: Int = 16
 
-    /** Row value size, measured: "未设置" ink box 45 px → 17 pt (the old flat list used 15). Reference only. Source: `settings-chat.png` value ink box. Confidence: measured. */
-    public const val ROW_VALUE_REF_PT: Int = 17
+    /** Row value size. Source: `SettingsRowLabel` value (`.font(.system(size: 15))`). Reference only. Confidence: exact. */
+    public const val ROW_VALUE_REF_PT: Int = 15
 
     /** Footnote size: source `.font(.footnote)` at `SettingsPage.swift:105,127`; PNG check ink 35 px = 11.7 pt → 13 pt. Reference only. Source: `SettingsPage.swift:105,127` + `settings-chat.png`. Confidence: exact (role), measured (size). */
     public const val FOOTNOTE_REF_PT: Int = 13
 
     /** Caption size on the permissions subpage (`.font(.caption)`). Source: `PhonePermissionsPage.swift:116`; reference only. Confidence: exact. */
     public const val CAPTION_REF_PT: Int = 12
+
+    // ------------------------------------------------ PR22 grouped-list values
+
+    /** Row glyph box. Source: `SettingsRowLabel` (`.frame(width: 24, height: 24)`). Confidence: exact. */
+    public const val ROW_GLYPH_BOX_PT: Int = 24
+
+    /** Row glyph size. Source: `SettingsRowLabel` (`.font(.system(size: 17))`). Confidence: exact. */
+    public const val ROW_GLYPH_REF_PT: Int = 17
+
+    /** Glyph-to-label gap. Source: `SettingsRowLabel` (`HStack(spacing: 12)`). Confidence: exact. */
+    public const val ROW_GLYPH_GAP_PT: Int = 12
+
+    /** `SettingsRowLabel` minimum height. Source: `.frame(minHeight: 32)`. Confidence: exact. */
+    public const val ROW_LABEL_MIN_HEIGHT_PT: Int = 32
+
+    /** Value leading reserve. Source: `SettingsRowLabel` (`Spacer(minLength: 8)`). Confidence: exact. */
+    public const val ROW_VALUE_LEADING_PT: Int = 8
+
+    /** Settings page grouped-list row text size. Source: `HomeSpec.homeGroupedList()` (`.font(.system(size: HomeSpec.bodySize))`). Confidence: exact. */
+    public const val GROUPED_LIST_BODY_REF_PT: Int = 16
+
+    /** Settings page grouped-list minimum row height. Source: same helper (`defaultMinListRowHeight 48`). Confidence: exact. */
+    public const val GROUPED_LIST_MIN_ROW_HEIGHT_PT: Int = 48
 
     // ------------------------------------------------------------ dp accessors
 

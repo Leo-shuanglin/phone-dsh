@@ -1,20 +1,13 @@
-// The Sessions family's iOS-measured geometry (drawer + session list).
+// The Sessions family's PR22 geometry (full-screen HomeDrawer).
 // SPDX-License-Identifier: MIT
 //
-// Authority: `examples/probe-app/PhoneDSHProbe/SessionsPage.swift` and
-// `NativeShell.swift` first; PNG measurements from
-// `docs/receipts/ios-session-audit/screens/current/darkfinal-sessions*.png`
-// (1206 x 2622 px @3, so `pt = px / 3`) second.
-//
-// The screenshot set was captured ~2.5 h before commit f39acd0a touched
-// `SessionsPage.swift`; that commit only replaced colour literals with
-// `NativePagePalette` (no geometry moved), so the row/separator/CTA numbers
-// still describe the current file. Two things in those PNGs are **not** current:
-// the "会话" large title (the page declares no `navigationTitle` today) and, in
-// the real drawer, the search field (the drawer hides the navigation bar —
-// `NativeShell.swift:291` `.toolbar(.hidden, for: .navigationBar)`), so the
-// shipped drawer shows no search field. [SEARCH_HEIGHT_PT] is measured from the
-// standalone presentation, which is the only presentation that renders it.
+// PR22 replaces the 320 pt drawer with the full-screen `HomeDrawer.swift`
+// surface: a #F7F7F7 page, 44 pt global entries, a 40 pt folder header, 44 pt
+// session rows, 12 pt row corners and a bottom settings bar. Authority is
+// `HomeDrawer.swift` first; the system search field / empty-state CTA constants
+// kept below are legacy measurements for the presentation HomeDrawer no longer
+// renders, and their KDoc says so. The old `SessionsPage.swift` numbers are
+// retained only where a still-compiling page reads the same constant.
 //
 // Confidence: see the vocabulary in `ChatMetrics.kt`.
 
@@ -33,64 +26,64 @@ import androidx.compose.ui.unit.dp
 public object SessionsMetrics {
     // ------------------------------------------------------------------ drawer
 
-    /** Drawer column width on a 402 pt phone. Source: `NativeShell.swift:97` (`drawerWidth: CGFloat = 320`), repeated in the preview shell at `:850`. Confidence: exact. */
-    public const val DRAWER_WIDTH_PT: Int = 320
+    /** PR22 drawer is a full-screen home surface, not a 320 pt column. Source: `HomeDrawer.swift` (no width frame; `.background(HomeSpec.page)`). Confidence: exact. */
+    public const val DRAWER_WIDTH_PT: Int = 430
 
-    /** Drawer content width: 320 - 16 leading - 16 trailing. Source: `SessionsPage.swift:594` ("面板内左 16 右 16:320 宽的面板,线正好 288"), and the separator's hard-coded width at `:157`/`:596`. Confidence: exact. */
-    public const val DRAWER_CONTENT_WIDTH_PT: Int = 288
+    /** Drawer reading width: the 430 pt screen minus 2 x 20 (`HomeSpec.contentInset`). Source: `HomeDrawer.swift:198,253`. Confidence: inferred. */
+    public const val DRAWER_CONTENT_WIDTH_PT: Int = 390
 
-    /** Row inset inside the drawer, both sides. Source: `SessionsPage.swift:162,195,281,460,590`. Confidence: exact. */
-    public const val ROW_INSET_PT: Int = 16
+    /** Outer row-card inset inside the drawer. Source: `HomeDrawer.swift:140,278` (`.padding(.horizontal, 8)`). Confidence: exact. */
+    public const val ROW_INSET_PT: Int = 8
 
-    /** Bottom furniture row (定时任务 / 设置) height. Source: `NativeShell.swift:432` (`.frame(height: 48)`). Confidence: exact. */
-    public const val DRAWER_ROW_HEIGHT_PT: Int = 48
+    /** Global entry row (新会话 / 定时任务) height. Source: `HomeDrawer.swift:166` (`.frame(height: 44)`). Confidence: exact. */
+    public const val DRAWER_ROW_HEIGHT_PT: Int = 44
 
-    /** Bottom furniture row icon slot. Source: `NativeShell.swift:422` (`.frame(width: 22)`). Confidence: exact. */
-    public const val DRAWER_ROW_ICON_SLOT_PT: Int = 22
+    /** Entry-row icon slot. Source: `HomeDrawer.swift:150` (`.frame(width: 24, height: 24)`). Confidence: exact. */
+    public const val DRAWER_ROW_ICON_SLOT_PT: Int = 24
 
-    /** Bottom furniture row icon/title gap. Source: `NativeShell.swift:421` (`HStack(spacing: 10)`). Confidence: exact. */
-    public const val DRAWER_ROW_SPACING_PT: Int = 10
+    /** Entry-row icon/title gap. Source: `HomeDrawer.swift:148` (`HStack(spacing: 12)`). Confidence: exact. */
+    public const val DRAWER_ROW_SPACING_PT: Int = 12
 
-    /** Bottom furniture chevron size. Source: `NativeShell.swift:427` (`.font(.system(size: 12, weight: .semibold))`). Confidence: exact. */
-    public const val DRAWER_ROW_CHEVRON_REF_PT: Int = 12
+    /** Group-header chevron size. Source: `HomeDrawer.swift:307` (`.font(.system(size: 11, weight: .semibold))`). Confidence: exact. */
+    public const val DRAWER_ROW_CHEVRON_REF_PT: Int = 11
 
     // ------------------------------------------------------------------- rows
 
-    /** Session row minimum height (two text lines plus the 17 pt glyph). Source: `SessionsPage.swift:580` (`.frame(minHeight: 56)`). PNG check: separators at y=1346, 1514, 1682 px in `darkfinal-sessions-many-light.png` → 168 px pitch = 56.0 pt. Confidence: exact (source), measured (render). */
-    public const val SESSION_ROW_HEIGHT_PT: Int = 56
+    /** PR22 session row height. Source: `HomeDrawer.swift:342` (`.frame(height: 44)`). Confidence: exact. */
+    public const val SESSION_ROW_HEIGHT_PT: Int = 44
 
-    /** Workspace ("group") row height. Source: `SessionsPage.swift:439` (`.frame(height: 44)`). Confidence: exact. */
-    public const val WORKSPACE_ROW_HEIGHT_PT: Int = 44
+    /** Folder ("group") header height. Source: `HomeDrawer.swift:325` (`.frame(height: 40)`). Confidence: exact. */
+    public const val WORKSPACE_ROW_HEIGHT_PT: Int = 40
 
-    /** Action row height (新建会话 / 添加工作文件夹 / retry). Source: `SessionsPage.swift:164,194,277`. Confidence: exact. */
+    /** Action row height (新会话 / 定时任务 / retry). Source: `HomeDrawer.swift:166`. Confidence: exact. */
     public const val ACTION_ROW_HEIGHT_PT: Int = 44
 
-    /** Session row inner horizontal padding (inside the 16 pt row inset). Source: `SessionsPage.swift:579`. Confidence: exact. */
-    public const val SESSION_ROW_INNER_INSET_PT: Int = 8
+    /** Session row inner horizontal padding. Source: `HomeDrawer.swift:340` (`padding(.trailing, 12)`). Confidence: exact. */
+    public const val SESSION_ROW_INNER_INSET_PT: Int = 12
 
-    /** Session row glyph box. Source: `SessionsPage.swift:550` (`.frame(width: 17, height: 17)`). Confidence: exact. */
+    /** Session glyph box is not drawn in PR22's drawer (text-start row); kept for the sessions list. Source: legacy measurement. Confidence: inferred. */
     public const val SESSION_GLYPH_BOX_PT: Int = 17
 
-    /** Session row glyph-to-text gap. Source: `SessionsPage.swift:546` (`HStack(spacing: 10)`). Confidence: exact. */
-    public const val SESSION_GLYPH_GAP_PT: Int = 10
+    /** Session row glyph-to-text gap. Source: `HomeDrawer.swift:335` (`HStack(spacing: 8)`). Confidence: exact. */
+    public const val SESSION_GLYPH_GAP_PT: Int = 8
 
-    /** Session title-to-time gap. Source: `SessionsPage.swift:551` (`VStack(spacing: 3)`). Confidence: exact. */
-    public const val SESSION_TEXT_GAP_PT: Int = 3
+    /** Session title-to-time gap. Source: `HomeDrawer.swift:335`; the two are on one row, so 0. Confidence: exact. */
+    public const val SESSION_TEXT_GAP_PT: Int = 0
 
-    /** Running dot diameter. Source: `SessionsPage.swift:562` (`.frame(width: 6, height: 6)`). Confidence: exact. */
+    /** Running dot diameter. Source: `HomeDrawer.swift:157` (`.frame(width: 6, height: 6)`). Confidence: exact. */
     public const val SESSION_RUNNING_DOT_PT: Int = 6
 
-    /** Workspace chevron slot. Source: `SessionsPage.swift:425` (`.frame(width: 12, alignment: .leading)`). Confidence: exact. */
+    /** Folder chevron slot. Source: `HomeDrawer.swift:308` (`.frame(width: 12)`). Confidence: exact. */
     public const val WORKSPACE_CHEVRON_SLOT_PT: Int = 12
 
-    /** Workspace title leading gap after the chevron. Source: `SessionsPage.swift:430`. Confidence: exact. */
-    public const val WORKSPACE_TITLE_GAP_PT: Int = 7
+    /** Folder title gap after the chevron. Source: `HomeDrawer.swift:305` (`HStack(spacing: 8)`). Confidence: exact. */
+    public const val WORKSPACE_TITLE_GAP_PT: Int = 8
 
-    /** Workspace count label leading gap. Source: `SessionsPage.swift:435`. Confidence: exact. */
-    public const val WORKSPACE_COUNT_GAP_PT: Int = 6
+    /** Folder count gap. Source: `HomeDrawer.swift:305` (same 8 pt stack). Confidence: exact. */
+    public const val WORKSPACE_COUNT_GAP_PT: Int = 8
 
-    /** Workspace overflow ("...") hit box. Source: `SessionsPage.swift:455` (`.frame(width: 32, height: 44)`). Confidence: exact. */
-    public const val WORKSPACE_MENU_WIDTH_PT: Int = 32
+    /** Folder "+" hit box. Source: `HomeDrawer.swift:213` (`.frame(width: 36, height: 36)`). Confidence: exact. */
+    public const val WORKSPACE_MENU_WIDTH_PT: Int = 36
 
     // -------------------------------------------------------------- separators
 
@@ -152,14 +145,31 @@ public object SessionsMetrics {
 
     // -------------------------------------------------------------------- toast
 
-    /** Archived toast height. Source: `SessionsPage.swift:332` (`.frame(height: 28)`). Confidence: exact. */
-    public const val TOAST_HEIGHT_PT: Int = 28
+    /** Archived toast height. Source: `HomeDrawer.swift:61` (`.frame(height: 30)`). Confidence: exact. */
+    public const val TOAST_HEIGHT_PT: Int = 30
 
-    /** Archived toast corner radius. Source: `SessionsPage.swift:334` (`RoundedRectangle(cornerRadius: 12)`). Confidence: exact. */
-    public const val TOAST_RADIUS_PT: Int = 12
+    /** Archived toast is a capsule. Source: `HomeDrawer.swift:62` (`Capsule()`). Confidence: exact. */
+    public const val TOAST_RADIUS_PT: Int = TOAST_HEIGHT_PT / 2
 
-    /** Archived toast top offset. Source: `SessionsPage.swift:335` (`.padding(.top, 92)`). Confidence: exact. */
-    public const val TOAST_TOP_OFFSET_PT: Int = 92
+    /** Archived toast top offset: safe area + navTop + 8. Source: `HomeDrawer.swift:65` (`.padding(.top, topInset + 8)`); the safe area is platform-owned. Confidence: exact. */
+    public const val TOAST_TOP_OFFSET_PT: Int = 8
+
+    // ---------------------------------------------------- PR22 home drawer extras
+
+    /** White entry card corner radius. Source: `HomeDrawer.swift:499` (`HomeDrawerRowStyle(radius: 12)`). Confidence: exact. */
+    public const val DRAWER_CARD_RADIUS_PT: Int = 12
+
+    /** Entry/folder row icon size. Source: `HomeDrawer.swift:150,312` (18 pt system glyph in a 24/20 box). Confidence: exact. */
+    public const val DRAWER_ROW_GLYPH_REF_PT: Int = 18
+
+    /** Folder header icon slot. Source: `HomeDrawer.swift:313` (`.frame(width: 20)`). Confidence: exact. */
+    public const val DRAWER_FOLDER_ICON_SLOT_PT: Int = 20
+
+    /** Settings bar row control. Source: `HomeDrawer.swift:382-384` (`.frame(width: 36, height: 36)`). Confidence: exact. */
+    public const val DRAWER_SETTINGS_CONTROL_PT: Int = 36
+
+    /** Settings bar engine dot. Source: `HomeDrawer.swift:391` (`.frame(width: 7, height: 7)`). Confidence: exact. */
+    public const val DRAWER_ENGINE_DOT_PT: Int = 7
 
     // ------------------------------------------------------------ dp accessors
 
