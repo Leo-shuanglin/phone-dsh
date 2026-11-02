@@ -494,10 +494,6 @@ final class ChatModel {
     /// 这次引擎起来的时间点,「运行状态」第一行要报「已运行多久」;停掉就清空。
     private(set) var startedAt: Date?
     private(set) var files: [WorkspaceFile] = []
-    /// Coalescing handle for ``refreshFiles()``: a burst of tool results
-    /// must share one workspace scan instead of one scan each.
-    private var filesRefreshTask: Task<Void, Never>?
-    private var filesRefreshGeneration: UInt64 = 0
     private(set) var previewPath: String?
     private(set) var previewText: String?
 

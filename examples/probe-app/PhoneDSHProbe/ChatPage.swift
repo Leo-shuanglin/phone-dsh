@@ -3236,11 +3236,12 @@ private struct NativeComposerTextView: UIViewRepresentable {
             // send releases focus in the same turn that queued this block, and
             // the queued becomeFirstResponder used to run afterwards, see a view
             // that is no longer first responder, and bring the keyboard back.
-            DispatchQueue.main.async { [weak uiView, weak coordinator] in
-                guard let uiView, !uiView.isFirstResponder,
-                      coordinator?.parent.isFocused == true else { return }
-                uiView.becomeFirstResponder()
-            }
+            ComposerFocusRequest.schedule(
+                isCurrent: { [weak uiView, weak coordinator] in
+                    guard let uiView, uiView.window != nil else { return false }
+                    return !uiView.isFirstResponder && coordinator?.parent.isFocused == true
+                },
+                focus: { [weak uiView] in uiView?.becomeFirstResponder() })
         } else if !isFocused, uiView.isFirstResponder {
             uiView.resignFirstResponder()
         }
