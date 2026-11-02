@@ -1381,3 +1381,101 @@ LaunchState: COLD   TotalTime: 879
 **处置：`:app` 是主交付（用户要的是能装的 App），AAR 降为次交付并如实登记缺口。**
 AAR 断言已进 `phone-android-release` stage，且**放在所有 skip 之前**——
 否则干净主机上整段 SKIP，AAR 可以一直构建不出来而门禁只报 SKIP。
+
+---
+
+## 二十三、全面对齐：五路并行，三条各自推翻了一条「已知事实」
+
+### UI：从「采集了」到「可数的差距」
+
+`docs/receipts/ui-parity-sheet/DIFFS.md` —— **510 行、27 节，每节 `控件 / iOS / Android / Δ`**。
+
+修了 5 处，**26 个状态里 18 个现在 0 diff px**。其中一处：
+
+> `SECTION_GAP_PT` 的注释引用「914/1030、116 px」，**那些数字在 `ios-settings.png` 里根本不存在**
+> （实际是 4 条灰带各 105 px）。改成 35f 后四张卡顶与 iOS **Δ ≤ 0.1 pt**。
+
+补了 10 个 token，**每个都能指到 iOS 的一行**：`typography.body` 14→**17**（`ChatPage.swift:4010`）、
+`controlBody` 14（新）、`emptyStateTitle` 20/600（新）、`switchOn` #34C759（新）、
+`systemLabel` #000000（新）、`systemSecondary` #8A8A8E（新）、`pageAccent` #2F5BFF（新）、
+`ctaOverride`→#3964FE、`success` #27865A→**#22C55E**、`warning` #B45309→**#DD8629**。
+
+**后两个是「token 的值与它自己引用的行不符」**——不是要求里的事，是查出来的。
+
+**跨平台逐像素：24 状态均值 19.36% → 19.72%（改善 6 / 变差 7 / 不变 11）。**
+
+> **这条不能单独当验收。** 字号改对后墨高行距都对上了，但文字占的行数变化会把下方内容整体推移，
+> `chat-long(+4.38)` / `chat-failed(+3.29)` 反而变大，而它们恰是这轮最接近 iOS 的两项。
+
+### 三条被推翻的「事实」
+
+**① `ctaOverride` 的裁决是错的。** 我裁「统一用 #3964FE」。实测：**只有 permission 是 #3964FE，
+draft/workspace/sessions 是 #2F5BFF**——而且 L64 自己的表也写的 #2F5BFF。照原裁决删掉会让 5 个页面变坏。
+最终：审批卡归 accent(#3964FE)，另外五处用新 `pageAccent`(#2F5BFF)。
+
+**② L64 判错的抽屉宽度。** L64 说「iOS 抽屉 402 vs Android 320」。查实：
+iOS 生产抽屉**就是 320**（`NativeShell.swift:97`），五个 sessions 预览套了 320 的 `DrawerPreview`，
+**只有 `sessions-default` 没套壳才渲染成 402**。
+→ **建议 iOS 侧套壳，不是改 Android。改 Android 会让 5 个状态变坏。**
+
+**③ `chat` 67 vs 29 是门禁报数错。** 67 是全部动作；真正比对的是 `labelled`=36，
+normalize 去重正好 29 键 ↔ Android 29 label，**divergence 0 是真的**。
+摘要行把两个不同口径的数并排印，读起来像少了 38 个。
+
+### 持久化：DomainStore 捞回来接上（L65）
+
+删掉的 commit 自己写对了补救办法：「先命名第一个真实消费者，再按那个功能重写」。
+**捞回来后 10 个生产文件一行未改即编译通过**——设计是对的，错的是执行顺序。
+
+**只回退了两个文件**：`AndroidDeviceCapabilities.kt` / `DeviceManifestException.kt` 在 PR13 后被改过，
+原样覆盖会**回退本轮电话权限接线的成果**。
+
+接线在 `:app` 组合根，理由：`:domain` 声明 `ConnectionFactory` 并同时提供 SQLite 与内存实现，
+**选哪个只能是组合根的事**；`:dsh` 是库，依赖 `:domain` 等于替所有链接它的 app 选了后端。
+
+**设备证据**：真回合 → `am force-stop`（pid 为空）→ 冷启动新进程 →
+`restored session=… kinds=12 commands=1`。设备上 `.db` 是真 SQLite。
+
+`SessionArchiveDeviceTest` 拆成 writePhase/readPhase，**各自拒绝在对方的文件状态下运行**——
+必须两次 `am instrument` 夹一条 `force-stop`，一次跑完整类会失败而不是悄悄通过。
+
+**`IngressQueue` 删了**（435 行 + 13 条用例）：iOS 无对应物，`spec/host/v1/README.md:250` 自己标 *Not fixed here*。
+
+### AAR：从「编译面成立」到「能过 R8」（L66）
+
+L63 报的 **44 个缺失类**，根因是「没有发布坐标」不是 AAR 的 bug。
+8 个构件发到 `android/build/repo`（`com.phonedsh:*:0.1.0`），consumer 只写一行
+`implementation("com.phonedsh:lib:0.1.0")`，**`assembleRelease` 过 R8**——从 `rm -rf build/repo` 起验的。
+
+**它改掉了自己上一版的错误结论**：`api`→`implementation` **修不了**那 7 个权限
+（manifest 合并看 runtime classpath）；真正的修法是**把 `:dsh` 从 `:lib` 依赖里整个拿掉**
+（依据：`:lib/src/main` 里 `import com.phonedsh.dsh.*` **0 处**）。
+
+`-Ppdsh.uiCoreOnly=true` 现在**发布直接失败**，且在写文件之前失败（POM md5 逐字节未变）。
+
+### 偏好层：11 个键 + 一条能失败的 CI 守卫（L68）
+
+键名与 iOS **同名同义**（`NativeChatPreferences.swift` 的键是无前缀的）。
+设备证据：写 → `force-stop` → 新进程 → `语言=English`、`外观=深色`（深色主题真生效）。
+
+`SessionArchiveWiringTest` **直接读编译后的 `.class` 常量池**，断言字段描述符、`<init>` Methodref、
+`save`/`currentSessionId`/`latest` 的调用点、以及模块边。**两次红证据**：删掉调用点 →
+`a cold start would stop painting`；改成可空 → `nothing builds the cache`。
+**两次都是「可编译但坏掉」的改动。**
+
+恢复措辞 `完成（上次进程）` + `显示上次对话 · 上次进程的回合`。
+**没有照抄 iOS 的「引擎在后台启动…」**——Android 这行会留到下一轮，引擎起来后就是假话。
+
+### 仍然不完整的地方（本轮没解决的）
+
+| # | 项 | 状态 |
+|---|---|---|
+| 1 | **真机验证** | `device` = 0 格，全部证据是模拟器 |
+| 2 | **P6 设备连接器** | 仍是 `InMemory*` demo，真实协议不在本仓 |
+| 3 | **UI 跨平台像素差 19.72%** | 比上一版**变差 0.36 个点**（结构差异占大头）|
+| 4 | **结构差异未修** | plugins 渲染另一页、model 独立 sheet、egress 的 `⋯` 与行高、sessions 两态共用一图 |
+| 5 | **`primary/secondary/tertiary/selector` 值不符** | L67 发现四个 token 的值与各自引用行不符，**没动**（覆盖六个签名面，需 iOS owner） |
+| 6 | **`systemLabel` 只发了 token** | 页面还没切，chat 家族 iOS 墨色是 #0F1115 不是 #000000 |
+| 7 | **`ubuntu` 只能 mock** | 跑不了真编译 |
+| 8 | **arm64-only JNI** | 32 位机型装得上用不了 |
+| 9 | **调试签名** | 不能上架 |
