@@ -90,6 +90,7 @@ public object ThinkingPillTokens {
  *   unknown or unavailable. A one-line full source can still be expanded.
  * @param onOpenFile host router for relative workspace links in compact reasoning.
  * @param onOpenResource host router for scoped file/sandbox resource URIs.
+ * @param imageSource the host's workspace/session image reader, when available.
  * @param detailTruncated true only when the host reports a bounded source excerpt.
  */
 @Composable
@@ -102,6 +103,7 @@ public fun ThinkingPill(
     detail: String? = null,
     onOpenFile: ((String) -> Unit)? = null,
     onOpenResource: ((String) -> Unit)? = null,
+    imageSource: MarkdownImageSource? = null,
     detailTruncated: Boolean? = null,
 ) {
     val tokens = LocalUiTokens.current
@@ -207,6 +209,7 @@ public fun ThinkingPill(
                     onOpenFile = onOpenFile,
                     onOpenResource = onOpenResource,
                     variant = MarkdownVariant.COMPACT,
+                    imageSource = imageSource,
                 )
                 if (detailTruncated == true) {
                     BasicText(

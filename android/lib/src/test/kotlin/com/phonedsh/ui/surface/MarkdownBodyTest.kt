@@ -9,6 +9,9 @@ package com.phonedsh.ui.surface
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.semantics.SemanticsActions
@@ -68,6 +71,39 @@ class MarkdownBodyTest {
     }
 
     @Test
+    fun `math-bearing paragraph uses the injected native span backend and keeps source text`() {
+        val rendered = mutableListOf<Triple<String, Float, Boolean>>()
+        val fake = MarkdownMathSpanBackend { _, latex, fontSizeDp, _, displayMode ->
+            rendered += Triple(latex, fontSizeDp, displayMode)
+            TestReplacementSpan()
+        }
+        compose.setContent {
+            CompositionLocalProvider(LocalMarkdownMathSpanBackend provides fake) {
+                PdshTheme {
+                    MarkdownBody(markdown = "Inline ${'$'}x^2${'$'} remains selectable text.")
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag(MARKDOWN_MATH_TEXT_VIEW_TAG).assertIsDisplayed()
+        assertEquals("x^2", rendered.single().first)
+        assertTrue(rendered.single().second > 0f)
+        assertEquals(false, rendered.single().third)
+    }
+
+    @Test
+    fun `pure prose remains on the original Compose text path`() {
+        val fake = MarkdownMathSpanBackend { _, _, _, _, _ -> error("pure prose asked for a math span") }
+        compose.setContent {
+            CompositionLocalProvider(LocalMarkdownMathSpanBackend provides fake) {
+                PdshTheme { MarkdownBody(markdown = "Plain prose stays Compose text.") }
+            }
+        }
+        compose.onNodeWithText("Plain prose stays Compose text.").assertIsDisplayed()
+        compose.onAllNodesWithTag(MARKDOWN_MATH_TEXT_VIEW_TAG).assertCountEquals(0)
+    }
+
+    @Test
     fun `inline math inside a table cell becomes a math run`() {
         val table = MarkdownParser.parse(
             "| a | b |\n|--|--|\n| TeX | ${'$'}x^2 + y^2 = z^2${'$'} |",
@@ -122,11 +158,40 @@ class MarkdownBodyTest {
     }
 
     @Test
-    fun `image markdown keeps its alt text without fetching the image`() {
-        val paragraph = MarkdownParser.parse("![架构图](https://example.com/diagram.png)").single()
+    fun `a standalone image paragraph preserves source alt and title`() {
+        val image = MarkdownParser.parse("![架构图](https://example.com/diagram.png \"topology\")").single()
+            as MarkdownBlock.Image
+        assertEquals("https://example.com/diagram.png", image.source)
+        assertEquals("架构图", image.alt)
+        assertEquals("topology", image.title)
+    }
+
+    @Test
+    fun `inline image alt text stays unchanged inside prose`() {
+        val paragraph = MarkdownParser.parse("See ![架构图](https://example.com/diagram.png) here.").single()
             as MarkdownBlock.Paragraph
-        assertEquals(listOf(MarkdownInline.Image("架构图")), paragraph.inlines)
-        assertEquals("架构图", plainText(paragraph.inlines))
+        assertEquals(listOf(MarkdownInline.Text("See "), MarkdownInline.Image("架构图"), MarkdownInline.Text(" here.")), paragraph.inlines)
+        assertEquals("See 架构图 here.", plainText(paragraph.inlines))
+    }
+
+    @Test
+    fun `image followed by prose without a blank line stays one inline paragraph`() {
+        val paragraph = MarkdownParser.parse("![架构图](diagram.png) caption on next line").single()
+            as MarkdownBlock.Paragraph
+        assertEquals("架构图 caption on next line", plainText(paragraph.inlines))
+    }
+
+    @Test
+    fun `an image-only list item preserves a block source while mixed item content keeps inline alt`() {
+        val standalone = MarkdownParser.parse("- ![diagram](diagram.png \"list image\")").single()
+            as MarkdownBlock.ListBlock
+        assertEquals("diagram.png", standalone.items.single().imageBlock?.source)
+        assertEquals("list image", standalone.items.single().imageBlock?.title)
+        assertTrue(standalone.items.single().inlines.isEmpty())
+
+        val mixed = MarkdownParser.parse("- ![diagram](diagram.png) caption").single() as MarkdownBlock.ListBlock
+        assertEquals(null, mixed.items.single().imageBlock)
+        assertEquals("diagram caption", plainText(mixed.items.single().inlines))
     }
 
     @Test
@@ -159,26 +224,6 @@ class MarkdownBodyTest {
         assertEquals(listOf(MarkdownInline.Text("parent")), list.items.single().inlines)
         val child = list.items.single().children.single() as MarkdownBlock.ListBlock
         assertEquals(listOf(MarkdownInline.Text("child")), child.items.single().inlines)
-    }
-
-    @Test
-    fun `TeX typesetting italicises variables and raises a superscript`() {
-        val runs = mathRuns("E = mc^2")
-        assertEquals(
-            listOf(
-                MathRun("E", italic = true, script = 0),
-                MathRun(" = ", italic = false, script = 0),
-                MathRun("mc", italic = true, script = 0),
-                MathRun("2", italic = false, script = 1),
-            ),
-            runs,
-        )
-    }
-
-    @Test
-    fun `an unknown TeX command stays visible instead of disappearing`() {
-        assertEquals("\\foo", mathRuns("\\foo").single().text)
-        assertEquals("×", mathRuns("\\times").single().text)
     }
 
     @Test

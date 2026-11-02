@@ -12,10 +12,8 @@
 //   * the PR22 message body is 16/24 from `HomeSpec.swift:47-48`;
 //   * a table is a real table (`NativeMarkdownTable`, `:132-199`): header row in the
 //     selector fill, one hairline under every cell, GFM column alignment;
-//   * math is typeset, not echoed (`:108-111` display, `:285-290` inline). The
-//     renderer here is a bounded TeX subset — variables italic, `^`/`_` scripts,
-//     common symbols — because the sample and the baseline only need that; an
-//     unknown command stays visible verbatim instead of being dropped;
+//   * math is rendered by the native RaTeX span (`:108-111` display, `:285-290` inline); the
+//     TeX source remains in the TextView backing text for selection and copying;
 //   * raw HTML is literal text (`:293` `Text(value)`), never parsed and never a
 //     WebView: `<b>` on screen is exactly the iOS output;
 //   * a footnote reference is a small superscript (`:291-292`, 9 pt raised 6 pt).
@@ -88,6 +86,7 @@ public fun MarkdownBody(
     onOpenFile: ((String) -> Unit)? = null,
     onOpenResource: ((String) -> Unit)? = null,
     variant: MarkdownVariant = MarkdownVariant.NORMAL,
+    imageSource: MarkdownImageSource? = null,
 ) {
     val blocks = remember(markdown) { MarkdownParser.parse(markdown) }
     MarkdownBlocks(
@@ -96,6 +95,7 @@ public fun MarkdownBody(
         onOpenFile = onOpenFile,
         onOpenResource = onOpenResource,
         variant = variant,
+        imageSource = imageSource,
     )
 }
 
@@ -110,6 +110,7 @@ internal fun MarkdownBlocks(
     onOpenFile: ((String) -> Unit)? = null,
     onOpenResource: ((String) -> Unit)? = null,
     variant: MarkdownVariant = MarkdownVariant.NORMAL,
+    imageSource: MarkdownImageSource? = null,
 ) {
     Column(
         modifier = modifier.fillMaxWidth().testTag(MARKDOWN_BODY_TAG),
@@ -118,7 +119,7 @@ internal fun MarkdownBlocks(
             else ChatMetrics.MARKDOWN_BLOCK_SPACING_PT.dp,
         ),
     ) {
-        blocks.forEach { block -> MarkdownBlockView(block, onOpenFile, onOpenResource, variant) }
+        blocks.forEach { block -> MarkdownBlockView(block, onOpenFile, onOpenResource, variant, imageSource) }
     }
 }
 
@@ -129,6 +130,7 @@ private fun MarkdownBlockView(
     onOpenFile: ((String) -> Unit)?,
     onOpenResource: ((String) -> Unit)?,
     variant: MarkdownVariant,
+    imageSource: MarkdownImageSource?,
 ) {
     val tokens = LocalUiTokens.current
     when (block) {
@@ -151,6 +153,14 @@ private fun MarkdownBlockView(
         is MarkdownBlock.Code -> CodeBlock(language = block.language, body = block.body)
 
         is MarkdownBlock.Math -> DisplayMath(latex = block.latex, variant = variant)
+
+        is MarkdownBlock.Image -> MarkdownImageBlock(
+            source = block.source,
+            alt = block.alt,
+            title = block.title,
+            imageSource = imageSource,
+            variant = variant,
+        )
 
         is MarkdownBlock.Table -> MarkdownTable(
             header = block.header,
@@ -194,16 +204,27 @@ private fun MarkdownBlockView(
                                 .wrapContentWidth(androidx.compose.ui.Alignment.End)
                                 .padding(top = ChatMetrics.MARKDOWN_MARKER_TOP_INSET_PT.dp),
                         )
-                        MarkdownInlineText(
-                            inlines = item.inlines,
-                            style = markdownBodyStyle(variant),
-                            onOpenFile = onOpenFile,
-                            onOpenResource = onOpenResource,
-                            variant = variant,
-                        )
+                        val image = item.imageBlock
+                        if (image != null) {
+                            MarkdownImageBlock(
+                                source = image.source,
+                                alt = image.alt,
+                                title = image.title,
+                                imageSource = imageSource,
+                                variant = variant,
+                            )
+                        } else {
+                            MarkdownInlineText(
+                                inlines = item.inlines,
+                                style = markdownBodyStyle(variant),
+                                onOpenFile = onOpenFile,
+                                onOpenResource = onOpenResource,
+                                variant = variant,
+                            )
+                        }
                     }
                     item.children.forEach { child ->
-                        MarkdownBlockView(child, onOpenFile, onOpenResource, variant)
+                        MarkdownBlockView(child, onOpenFile, onOpenResource, variant, imageSource)
                     }
                 }
             }
@@ -236,7 +257,7 @@ private fun MarkdownBlockView(
             ),
         ) {
             block.blocks.forEach { child ->
-                MarkdownBlockView(child, onOpenFile, onOpenResource, variant)
+                MarkdownBlockView(child, onOpenFile, onOpenResource, variant, imageSource)
             }
         }
 
@@ -435,12 +456,15 @@ private fun MarkdownTableCards(
             ) {
                 for (index in 0 until columns) {
                     Column(verticalArrangement = Arrangement.spacedBy(ChatMetrics.MARKDOWN_TABLE_LABEL_VALUE_GAP_PT.dp)) {
-                        BasicText(
-                            text = plainMarkdownText(header.getOrNull(index).orEmpty()),
+                        MarkdownInlineText(
+                            inlines = header.getOrNull(index).orEmpty(),
                             style = type.caption.copy(
                                 color = tokens.colors.secondary,
                                 fontWeight = FontWeight.Medium,
                             ),
+                            onOpenFile = onOpenFile,
+                            onOpenResource = onOpenResource,
+                            variant = variant,
                         )
                         MarkdownInlineText(
                             inlines = cells.getOrNull(index).orEmpty(),
@@ -456,20 +480,6 @@ private fun MarkdownTableCards(
     }
 }
 
-private fun plainMarkdownText(inlines: List<MarkdownInline>): String = inlines.joinToString("") { part ->
-    when (part) {
-        is MarkdownInline.Text -> part.text
-        is MarkdownInline.Strong -> plainMarkdownText(part.children)
-        is MarkdownInline.Emphasis -> plainMarkdownText(part.children)
-        is MarkdownInline.Delete -> plainMarkdownText(part.children)
-        is MarkdownInline.Code -> part.code
-        is MarkdownInline.Link -> plainMarkdownText(part.children)
-        is MarkdownInline.Image -> part.alt
-        is MarkdownInline.Math -> part.latex
-        is MarkdownInline.Footnote -> "[${part.id}]"
-    }
-}
-
 /**
  * Display math: the iOS block is a horizontal `ScrollView` around the typeset
  * label (`NativeMarkdownBody.swift:109-111`), so a long formula scrolls instead of
@@ -477,15 +487,21 @@ private fun plainMarkdownText(inlines: List<MarkdownInline>): String = inlines.j
  */
 @Composable
 private fun DisplayMath(latex: String, variant: MarkdownVariant) {
-    val scroll = rememberScrollState()
     val style = markdownBodyStyle(variant)
-    val text = remember(latex, style) { mathAnnotatedString(latex, style.fontSize) }
-    BasicText(
-        text = text,
+    val type = LocalUiType.current
+    val codeFontFamily = if (variant == MarkdownVariant.COMPACT) FontFamily.Monospace else type.code.fontFamily
+    val codeFontSize = if (variant == MarkdownVariant.COMPACT) {
+        ChatMetrics.MARKDOWN_COMPACT_INLINE_CODE_SIZE_PT.sp
+    } else {
+        (type.code.fontSize.value + ChatMetrics.MARKDOWN_INLINE_CODE_SIZE_OFFSET_PT).sp
+    }
+    MarkdownMathTextView(
+        inlines = listOf(MarkdownInline.Math(latex)),
         style = style,
-        modifier = Modifier
-            .horizontalScroll(scroll)
-            .testTag(MARKDOWN_MATH_TAG),
+        codeFontFamily = codeFontFamily,
+        codeFontSize = codeFontSize,
+        displayMode = true,
+        testTag = MARKDOWN_MATH_TAG,
     )
 }
 
@@ -511,6 +527,18 @@ internal fun MarkdownInlineText(
         ChatMetrics.MARKDOWN_COMPACT_INLINE_CODE_SIZE_PT.sp
     } else {
         (type.code.fontSize.value + ChatMetrics.MARKDOWN_INLINE_CODE_SIZE_OFFSET_PT).sp
+    }
+    if (containsMarkdownMath(inlines)) {
+        MarkdownMathTextView(
+            inlines = inlines,
+            style = style,
+            codeFontFamily = codeFontFamily,
+            codeFontSize = codeFontSize,
+            modifier = modifier,
+            onOpenFile = onOpenFile,
+            onOpenResource = onOpenResource,
+        )
+        return
     }
     val text = remember(
         inlines,
@@ -686,157 +714,12 @@ private fun AnnotatedString.Builder.appendInlines(
                     ),
                 ),
             ) { append("[${part.id}]") }
-            is MarkdownInline.Math -> appendMath(part.latex, span)
+            // Math-containing paragraphs are dispatched to MarkdownMathTextView.
+            // Keep TeX source as a literal fallback if this builder is reused directly.
+            is MarkdownInline.Math -> withStyle(span) { append(part.latex) }
         }
     }
 }
-
-/** Typesets one TeX run into the annotated string. */
-private fun AnnotatedString.Builder.appendMath(latex: String, span: SpanStyle) {
-    mathRuns(latex).forEach { run ->
-        withStyle(
-            span.merge(
-                SpanStyle(
-                    fontStyle = if (run.italic) FontStyle.Italic else FontStyle.Normal,
-                    fontSize = if (run.script == 0) {
-                        span.fontSize
-                    } else {
-                        scaledSize(span.fontSize, SCRIPT_SCALE)
-                    },
-                    baselineShift = when (run.script) {
-                        1 -> BaselineShift(SCRIPT_RAISE)
-                        -1 -> BaselineShift(-SCRIPT_RAISE)
-                        else -> null
-                    },
-                ),
-            ),
-        ) { append(run.text) }
-    }
-}
-
-/** Display math as a standalone annotated string (the block renderer's entry). */
-private fun mathAnnotatedString(latex: String, size: TextUnit): AnnotatedString {
-    val builder = AnnotatedString.Builder()
-    mathRuns(latex).forEach { run ->
-        builder.withStyle(
-            SpanStyle(
-                fontStyle = if (run.italic) FontStyle.Italic else FontStyle.Normal,
-                fontSize = if (run.script == 0) size else scaledSize(size, SCRIPT_SCALE),
-                baselineShift = when (run.script) {
-                    1 -> BaselineShift(SCRIPT_RAISE)
-                    -1 -> BaselineShift(-SCRIPT_RAISE)
-                    else -> null
-                },
-            ),
-        ) { append(run.text) }
-    }
-    return builder.toAnnotatedString()
-}
-
-/** `size * factor` for a sp size; a unit that is not sp keeps its size. */
-private fun scaledSize(size: TextUnit, factor: Float): TextUnit =
-    if (size.isSp) size * factor else size
-
-/**
- * Splits a TeX run into visible runs.
- *
- * The subset is bounded on purpose: letters are variables (italic), digits and
- * operators upright, `^`/`_` take the next group or character as a script, and a
- * small command table covers the symbols an answer actually uses. An unknown
- * command is emitted verbatim (`\foo` stays `\foo`) so no content disappears.
- *
- * @param latex the TeX source between the delimiters.
- */
-internal fun mathRuns(latex: String): List<MathRun> {
-    val runs = mutableListOf<MathRun>()
-    fun push(text: String, italic: Boolean, script: Int) {
-        if (text.isEmpty()) return
-        val last = runs.lastOrNull()
-        if (last != null && last.italic == italic && last.script == script) {
-            runs[runs.lastIndex] = last.copy(text = last.text + text)
-        } else {
-            runs.add(MathRun(text, italic, script))
-        }
-    }
-
-    var script = 0
-    var singleScript = false
-    var grouped = false
-    var i = 0
-    while (i < latex.length) {
-        val char = latex[i]
-        when {
-            char == '\\' && i + 1 < latex.length -> {
-                val next = latex[i + 1]
-                if (next.isLetter()) {
-                    var end = i + 1
-                    while (end < latex.length && latex[end].isLetter()) end++
-                    val command = latex.substring(i + 1, end)
-                    push(MATH_SYMBOLS[command] ?: latex.substring(i, end), false, script)
-                    i = end
-                } else {
-                    // `\,` `\;` `\!` `\%` `\{` and friends: the escaped character.
-                    push(if (next == ',') " " else next.toString(), false, script)
-                    i += 2
-                }
-                if (singleScript) {
-                    script = 0
-                    singleScript = false
-                }
-            }
-
-            char == '^' || char == '_' -> {
-                script = if (char == '^') 1 else -1
-                val hasGroup = i + 1 < latex.length && latex[i + 1] == '{'
-                singleScript = !hasGroup
-                grouped = hasGroup
-                i++
-            }
-
-            char == '{' -> {
-                grouped = true
-                i++
-            }
-
-            char == '}' -> {
-                if (grouped) {
-                    script = 0
-                    grouped = false
-                }
-                i++
-            }
-
-            else -> {
-                push(char.toString(), char.isLetter(), script)
-                i++
-                if (singleScript) {
-                    script = 0
-                    singleScript = false
-                }
-            }
-        }
-    }
-    return runs
-}
-
-/**
- * One visible run of a TeX source.
- *
- * @param text the characters to draw.
- * @param italic true for a variable (a letter), false for an operator/digit/symbol.
- * @param script `1` superscript, `-1` subscript, `0` baseline.
- */
-internal data class MathRun(
-    public val text: String,
-    public val italic: Boolean,
-    public val script: Int,
-)
-
-/** A script's size relative to the base run (a typeset script is ~0.68 em). */
-private const val SCRIPT_SCALE: Float = 0.68f
-
-/** A script's raise/lower relative to the base run. */
-private const val SCRIPT_RAISE: Float = 0.32f
 
 private const val MARKER_BULLET: String = "•"
 private const val MARKER_CHECKED: String = "[x]"
@@ -856,15 +739,3 @@ private fun listSpacing(variant: MarkdownVariant) = if (variant == MarkdownVaria
 } else {
     ChatMetrics.MESSAGE_LIST_SPACING_PT.dp
 }
-
-/** The TeX commands the renderer maps to a glyph; everything else stays verbatim. */
-private val MATH_SYMBOLS: Map<String, String> = mapOf(
-    "times" to "×", "cdot" to "·", "pm" to "±", "mp" to "∓",
-    "le" to "≤", "leq" to "≤", "ge" to "≥", "geq" to "≥", "ne" to "≠", "neq" to "≠",
-    "approx" to "≈", "equiv" to "≡", "to" to "→", "rightarrow" to "→", "leftarrow" to "←",
-    "infty" to "∞", "sum" to "∑", "prod" to "∏", "int" to "∫", "sqrt" to "√",
-    "pi" to "π", "alpha" to "α", "beta" to "β", "gamma" to "γ", "delta" to "δ",
-    "theta" to "θ", "lambda" to "λ", "mu" to "μ", "sigma" to "σ", "phi" to "φ",
-    "omega" to "ω", "Delta" to "Δ", "Omega" to "Ω",
-    "left" to "", "right" to "", "quad" to " ", "qquad" to "  ",
-)

@@ -85,6 +85,8 @@ public data class MarkdownListItem(
     public val inlines: List<MarkdownInline>,
     /** Nested blocks under this item, preserving the CommonMark/GFM hierarchy. */
     public val children: List<MarkdownBlock> = emptyList(),
+    /** A direct image-only paragraph in the list item, if present. */
+    public val imageBlock: MarkdownBlock.Image? = null,
 )
 
 /** One block of an answer (`NativeMarkdownBlock`). */
@@ -110,6 +112,13 @@ public sealed interface MarkdownBlock {
 
     /** Display math: the TeX source between `$$…$$` or `\[…\]`. */
     public data class Math(public val latex: String) : MarkdownBlock
+
+    /** A paragraph whose only child is a Markdown image, preserving its complete source metadata. */
+    public data class Image(
+        public val source: String,
+        public val alt: String,
+        public val title: String,
+    ) : MarkdownBlock
 
     /** A bullet or ordered list. */
     public data class ListBlock(
@@ -194,6 +203,17 @@ public object MarkdownParser {
             when {
                 trimmed.isEmpty() -> {
                     flushParagraph()
+                    i++
+                }
+
+                trimmed.startsWith("![") -> {
+                    val image = if (paragraph.isEmpty()) standaloneImage(trimmed) else null
+                    if (image != null && endsStandaloneImageParagraph(lines, i)) {
+                        out.add(image)
+                    } else {
+                        // Image labels inside a prose paragraph keep the existing inline-alt path.
+                        paragraph.add(line)
+                    }
                     i++
                 }
 
@@ -328,7 +348,9 @@ public object MarkdownParser {
                                 checked = task.groupValues[1].equals("x", ignoreCase = true)
                                 text = task.groupValues[2]
                             }
-                            pending.add(MarkdownListItem(checked, inlines(text)) to mutableListOf())
+                            pending.add(
+                                MarkdownListItem(checked, inlines(text), imageBlock = standaloneImage(text)) to mutableListOf(),
+                            )
                             j++
                         } else if (pending.isNotEmpty() && candidateIndent > listIndent) {
                             // Strip the parent marker's continuation indent so the
@@ -347,7 +369,12 @@ public object MarkdownParser {
                         }
                     }
                     val items = pending.map { (item, childLines) ->
-                        item.copy(children = parseBlocks(childLines))
+                        val standalone = item.imageBlock.takeIf { childLines.isEmpty() }
+                        item.copy(
+                            inlines = if (standalone == null) item.inlines else emptyList(),
+                            imageBlock = standalone,
+                            children = parseBlocks(childLines),
+                        )
                     }
                     out.add(MarkdownBlock.ListBlock(ordered, start, items))
                     i = j
@@ -382,6 +409,57 @@ public object MarkdownParser {
         val columns = cells(header).size
         val markers = cells(delimiter)
         return markers.size == columns && markers.all { DELIMITER_CELL.matches(it) }
+    }
+
+    /** iOS promotes an image only when its entire Markdown paragraph is one image child. */
+    private fun endsStandaloneImageParagraph(lines: List<String>, index: Int): Boolean {
+        if (index + 1 >= lines.size || lines[index + 1].isBlank()) return true
+        val next = lines[index + 1].trim()
+        return next.startsWith(FENCE) || next.startsWith("$$") || next.startsWith("\\[") ||
+            HEADING.matches(next) || RULE.matches(next) || next.startsWith(">") ||
+            isTableHeader(lines, index + 1) || BULLET.matches(lines[index + 1]) || ORDERED.matches(lines[index + 1])
+    }
+
+    /** Parses one standalone `![alt](destination "title")` line without changing source identity. */
+    private fun standaloneImage(line: String): MarkdownBlock.Image? {
+        if (!line.startsWith("![")) return null
+        val labelEnd = line.indexOf(']', startIndex = 2)
+        if (labelEnd < 2 || labelEnd + 2 >= line.length || line[labelEnd + 1] != '(' || !line.endsWith(')')) {
+            return null
+        }
+        val label = line.substring(2, labelEnd)
+        val contents = line.substring(labelEnd + 2, line.lastIndex).trim()
+        if (contents.isEmpty()) return null
+
+        val destinationEnd = when {
+            contents.startsWith('<') -> contents.indexOf('>').takeIf { it > 0 }?.plus(1) ?: return null
+            else -> {
+                var depth = 0
+                var index = 0
+                while (index < contents.length) {
+                    when (val char = contents[index]) {
+                        '\\' -> index++
+                        '(' -> depth++
+                        ')' -> if (depth > 0) depth-- else break
+                        else -> if (char.isWhitespace() && depth == 0) break
+                    }
+                    index++
+                }
+                index
+            }
+        }
+        if (destinationEnd <= 0) return null
+        val rawDestination = contents.substring(0, destinationEnd).removeSurrounding("<", ">").trim()
+        if (rawDestination.isEmpty()) return null
+        val rawTitle = contents.substring(destinationEnd).trim()
+        val title = when {
+            rawTitle.length >= 2 && rawTitle.first() == '"' && rawTitle.last() == '"' -> rawTitle.substring(1, rawTitle.lastIndex)
+            rawTitle.length >= 2 && rawTitle.first() == '\'' && rawTitle.last() == '\'' -> rawTitle.substring(1, rawTitle.lastIndex)
+            rawTitle.length >= 2 && rawTitle.first() == '(' && rawTitle.last() == ')' -> rawTitle.substring(1, rawTitle.lastIndex)
+            rawTitle.isEmpty() -> ""
+            else -> return null
+        }
+        return MarkdownBlock.Image(source = rawDestination, alt = label, title = title)
     }
 
     private fun alignment(cell: String): MarkdownTableAlign? = when {
