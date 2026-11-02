@@ -22,9 +22,14 @@
 //     ("we make it leave a trace"), not a stronger one.
 //   * the seal's own chmods are excused. `SealSelfEvents` announces them and
 //     [BuildSealTripwire] drops exactly one matching `IN_ATTRIB` per
-//     announcement. A guest `chmod` that lands inside that microsecond window
-//     would be excused too; the window is one syscall wide and the alternative
-//     (never arming around a seal) leaves a bigger hole.
+//     announcement. A guest `chmod` that lands inside that window would be
+//     excused too — and the window is [EXCUSE_WINDOW_MS] (2 s), **not** the
+//     "one syscall" this comment used to claim: a guest that chmods the same
+//     root within two seconds of the seal's own chmod is silently excused.
+//     An independent audit measured the 2000 ms constant against this comment
+//     and called the three-orders-of-magnitude gap out; the alternative (never
+//     arming around a seal) leaves a bigger hole, so the window stays and the
+//     cost is now stated instead of denied.
 //
 // `IN_ATTRIB` is the load-bearing event: it is what `chmod` produces, so it is
 // the "deliberate act" half of the design. `IN_OPEN` is the read half; it is
@@ -157,6 +162,16 @@ class BuildSealTripwire(
 
     /** `true` when at least one access has been recorded in the open window. */
     fun observedSoFar(): Boolean = synchronized(lock) { seen }
+
+    /**
+     * The same verdict under the name the job record and `ubuntu.status` use
+     * (`bridge.md` §12.8's `internalAccessObserved`).
+     *
+     * An alias rather than a second field: two names for one fact cannot drift,
+     * and the caller that writes the audit status does not have to know which
+     * class owns the window.
+     */
+    val internalAccessObserved: Boolean get() = observedSoFar()
 
     /**
      * Closes the audit window and returns what the job saw.

@@ -11,12 +11,16 @@
 // ---- why the session id comes from the caller ---------------------------------
 // The gate cannot know what a session is: `:dsh` sees host tool calls, not DSH
 // conversations. The Worker does know — the ambient tool-call context carries
-// the session id — so `ubuntu run` forwards it and the gate binds the grant to
-// exactly that id. Two consequences, both intended:
+// the session id — so `ubuntu run` forwards it out of band (the EXEC_REQ `env`
+// member the exec bridge writes from that context; never an argv flag, because
+// `phone` is an ordinary `bash` command and `--session` would be a flag the
+// model can type) and the gate binds the grant to exactly that id. Two
+// consequences, both intended:
 //
-//   * an unknown session id (no tool-call context, e.g. a console dispatch)
-//     never binds: the gate asks on **every** run, because it has nothing to
-//     scope a grant to;
+//   * an unknown session id (no tool-call context) never binds: the gate asks on
+//     **every** run, because it has nothing to scope a grant to. The `ubuntu`
+//     host tool refuses such a dispatch before it reaches this gate, so in the
+//     device's own lane this is a defence-in-depth branch, not the normal path;
 //   * a *different* session id invalidates the previous grant, so "the approval
 //     does not cross a session" holds even if the app process outlives the
 //     session that granted it. [endSession] is the explicit hook for the case
@@ -53,7 +57,9 @@ import kotlinx.coroutines.withTimeoutOrNull
  * own rule — a command line is where a credential leaks).
  *
  * @param sessionId the DSH session the grant would bind to, or `null` when the
- *   caller had no session context (then no grant is stored).
+ *   caller had no session context (then no grant is stored). The `ubuntu` host
+ *   tool only reaches this request with a session it read out of band from the
+ *   Worker, so a `null` here means "a path the host does not let a model take".
  * @param env the environment id the job would run in (`ubuntu-24.04`, …).
  * @param backend the adapter's backend name; `mock` in this build.
  * @param label the caller's short audit label, if any.
@@ -322,6 +328,26 @@ class UbuntuApprovalGate(
             val bytes = MessageDigest.getInstance("SHA-256").digest(sessionId.toByteArray(Charsets.UTF_8))
             return bytes.take(4).joinToString("") { byte -> "%02x".format(byte) }
         }
+
+        /** What [summary] says when the caller had no bindable session. */
+        const val NO_SESSION: String = "none"
+
+        /**
+         * The session name a person can read and compare: 8 hex of [digest].
+         *
+         * The `ubuntu` confirmation shows this string. It has to be shown even
+         * though the dialog is native and the gate already knows the session,
+         * because the user's only defence against a later forged-session path is
+         * recognizing "this is not the session I just refused". Two properties
+         * are load-bearing:
+         *
+         *   * it is derived from the session id, so the same session always
+         *     shows the same 8 hex and a different one shows different hex;
+         *   * it is a digest, not the id, so the dialog never prints a raw DSH
+         *     session identifier.
+         */
+        fun summary(sessionId: String?): String =
+            sessionId?.takeIf { SESSION_ID.matches(it) }?.let(::digest) ?: NO_SESSION
     }
 }
 

@@ -322,6 +322,47 @@ $ grep -rn "\bDomainStore\b" android/*/src/main --include="*.kt" | grep -v "andr
 `:lib` 的页面与组件簇，**没有扫 `android/*/src/main` 的非 UI 模块**。「页面上没有入口」和「模块里没有死代码」
 是两个命题：本轮页面数从 README 快照的 21 涨到 36，而 `:domain` 的 1,019 + 1,141 行一直没进过死簇名单。
 
+**本轮补记的第五条（L59）：`:platform-android` 的密封/绊线簇已接线，但它上面的入口仍是断的。**
+
+审计复核抓到的是一条「只活在测试里」的安全核心：`BuildSeal.kt`（768 行）、
+`BuildSealTripwire.kt`（261）、`FileObserverTripwireSource.kt`（67）在 `android/*/src/main` 里
+只有注释引用；而 Agent 真正跑的 `ubuntu run` 用的是 `MockUbuntuSeal`——它自己的注释写着
+「opens and closes nothing」，**所以 chmod 一次都没发生过**。设备侧 25/25 的密封测试证明的
+只是一个没有消费者的实现。
+
+本轮已接线：
+
+- 新增 `platform-android/…/BuildSealUbuntu.kt`（366 行）：把 lane 的四个方法映射到
+  `BuildSeal.seal/restore`、`BuildSealTripwire.internalAccessObserved`、
+  `BuildSeal.recoverIfNeeded()`，并把 `BuildSealTripwire` 作为 `BuildSeal` 的 `SealSelfEvents`
+  （否则密封自己的 chmod 会被绊线记成访问，每个 job 都会报 `internalAccessObserved: true`）；
+- 注入点在组合根：`ProbeEngineViewModel` 构造 `BuildSealUbuntu.forWorkspace(filesDir/xl)`
+  并经 `HostExec.defaultTools(seal = …)` 传进 `UbuntuHostTool → MockUbuntuSession → UbuntuJobLane`。
+  `HostExec` 的默认值改成 fail-closed 的 `UbuntuSeal.unwired`（不再是 mock），
+  `sealMock` 也改成从 `UbuntuSeal.isMock` 读，而不是写死 `true`；
+- `repair()` 在 `host.start()` **之前**跑（`ProbeEngineViewModel` 的属性初始化器）。
+  设备实测：先造出崩溃状态（`marker` + `d---------`）→ 启动 App →
+  `build-seal: recovered job "uj-l59-crash" after a crash; 1 root(s) put back`，
+  `adb shell ls -ld` 从 `d---------` 回到 `drwxr-x---`。
+
+所以这 1,096 行**不再是死簇**（另加 366 行新适配器）。**仍无生产消费者**的是
+`BuildSealReaper.kt`（371）+ `BuildRuntime.kt`（419）= 790 行：它们属于「环境生命周期 +
+进程树收割」，要等真适配器（proot）落地才有意义；`EchoJobAdapter.kt` 归另一条车道。
+
+**但还有一处空着，必须写明：Agent 的 `ubuntu run` 目前到不了这一层。** 宿主端
+`UbuntuHostTool` 要求 EXEC_REQ 带 `PDSH_TOOL_CALL_SESSION`（本轮另一条车道的会话加固），
+而生产 worker 构造 EXEC_REQ env 的位置是 `plugins/exec-bridge/src/transport.ts`，**它不写这个
+成员**（`shell-ext/src/bridge.ts` 写了，但 worker 的图里没有那条路径）。设备实测原话：
+
+```text
+W PDSHHost: ubuntu run refused: the dispatch carried no trusted tool-call session
+```
+
+所以「Agent 跑一次 `ubuntu run`，期间内部根真的变成 000」这一条**本轮拿不到**——不是密封的
+问题，是 job 在 approval gate 之前就被 fail-closed 拒了。修法是一行
+（`transport.ts` 从 `AcceleratorRequest.sessionId` 写入该成员并删除调用方自带值）+ 重建
+`examples/probe-app/Bundle/worker`；之后 L59 留在 `/tmp/l59/` 的取证脚本可原样复跑。
+
 对照：`domain/connector/`（2,493 行）**不在**死簇里——`DeviceConnectionSource` / `DeviceSessionSource` 和
 transcript 值类型被 `:lib` 页面真实引用，`PdshNavHost.kt` 用 `InMemory*` 夹具把它们接成了 demo。它的问题是
 「demo 级接线」而不是「零消费者」，两件事不该混在一起登记。
@@ -827,16 +868,45 @@ APK            clean 重建 18 dex，AndroidSecureStore / WindowHold / TurnWindo
 | **权限请求** | 真系统弹窗、批准/拒绝/持久化、`Unavailable` 行不可点 |
 | **预测性返回** | `platform delivered OnBackStarted`、根页退出、子页逐级出栈 |
 
-### 仍然开着的（全部登记，一条没藏）
+### 仍然开着的（**按 HEAD 重列**——原表是 01:29 的快照）
 
-| # | 项 | 为什么没做 |
+> **独立审计指出这张表有 ≥3 条已经过时**（#3、#5、#6 被后续提交关掉，#9 的两项 spec 已裁）。
+> 「一条没藏」这个承诺被我**后来的提交**打破了。下面按 HEAD 重列。
+
+| # | 项 | 现状 |
 |---|---|---|
-| 1 | **P6 设备连接器** | `InMemory*` demo；真实协议在 TonoTeam 侧预研清单里，不在本方案实施范围 |
-| 2 | **真机 gate** | 需求方明确本轮不做真机；全部证据是 `emulator`，`device` = 0 格 |
-| 3 | **`ubuntu` 的批准门** | 契约里 `not implemented`；说明已改成「本 build 不询问批准」而不是谎称有 |
-| 4 | **`ubuntu` 的传输** | 仍是 `0x20 EXEC_REQ`，不是 §12 的 bridge——Android 没有那套实现 |
-| 5 | **`ubuntu fetch` CLI** | lane 有实现，artifacts 只列不取 |
-| 6 | **「已排队未进执行槽」不算窗口** | 极早 HOME 仍会 drain；要读 pending 需 Context seam |
-| 7 | **12 个页面里 4 个字段不可聚焦** | 宿主 `writable=NO`，只能按结构判断，没拿到真实键盘截图 |
-| 8 | **11 个零调用页面 + `IngressQueue` 435 行** | 页面可达性缺口，见 §六 |
-| 9 | **3 份 spec 待 owner 决定** | `scenePhase` 口径已裁（§十三）、`fileLimitBytes` 默认值、并发上限按 session 还是 workspace |
+| 1 | **P6 设备连接器** | 仍 `InMemory*` demo；真实协议在 TonoTeam 侧预研清单，不在本方案范围 |
+| 2 | **真机 gate** | 仍 `device` = 0 格（需求方定本轮不做） |
+| 3 | ~~批准门 not implemented~~ | **已关**：`UbuntuApproval` + 弹窗 + 拒绝落 durable 记录 |
+| 4 | **`ubuntu` 的传输** | 仍是 `0x20`，不是 §12 bridge。**而且这是违反 `exec.md` §3 的不变式**（写工具走了只读 accelerator 的通道），见设计 §4.3.1 / §4.3.3 |
+| 5 | ~~`fetch` 没做成 CLI~~ | **已关**：`ubuntu fetch` 完整实现（512 KiB 分块、三重预检、append 链） |
+| 6 | ~~已排队不算窗口~~ | **已关**：`SCHEDULED` 相位 + `TurnWindow.InPlace(backend, phase)`。**但换出一个新残余**：`onStartJob` 无条件 `begin()` 可能复活已停窗口 |
+| 7 | **4 个页面里 2 个只读** | WebSearch / MCP 判为 **(b) 产品不可用**并给了具体理由；ModelProvider / Shell 已真可写/可读，**键盘截图已拿到** |
+| 8 | ~~11 个零调用页~~ | **已关**：11 → 0（7 接 4 删） |
+| 9 | ~~3 份 spec 待定~~ | **已裁**：`scenePhase`（§十三）、`fileLimitBytes` 默认 15 MiB、并发按 workspace |
+
+**新开的**（审计与各车道报的，全部登记）：
+
+| # | 项 | 为什么挂着 |
+|---|---|---|
+| 10 | **`onStartJob` 复活竞态** | `begin()` 不看 phase/epoch；彻底关需要组件契约改动 |
+| 11 | **绊线有零痕迹绕过** | 预开 fd / `/proc/<pid>/fd` 不产生 inotify 事件；缓解需 fd 清扫 + 措辞降级 |
+| 12 | **撤销无 UI** | `UbuntuApproval.revoke()` 有 API 零调用点；要 `:lib` 设置入口 |
+
+### 独立审计的两条 🔴（正在修）
+
+审计（盲审 AVD 5714，25/25 connectedTest + 手工补跑两阶段崩溃测试）给出的两条必须先修的：
+
+1. **`--session` 是 caller flag**：`phone` 是 bash 命令，`bash -c 'phone ubuntu run --session S2 -- …'`
+   可伪造 session → 换 ID 重弹 → **用户在弹窗上分辨不出来**。我在提交里写的
+   「模型和脚本无法选择花哪个 session 的批准」**是假的**。
+2. **密封/绊线/收割栈零生产消费者**：`MockUbuntuSession.kt:169` 用 `MockUbuntuSeal`，
+   真 `BuildSeal`（768 行，设备级验证全过）**在 `:dsh` main 里只出现在注释中**。
+   Agent 实际跑的链路里 **chmod 一次都没发生过**。**而我用「死簇清单」方法论抓别人，没抓自己。**
+
+**审计同时确认的部分**（同样重要）：`chmod 000` 对同 UID 真的生效、marker-先于-chmod 的崩溃恢复
+（它手工补跑了被 skip 的两阶段）、进程组收割、FileObserver 捕获 guest chmod ——**全部独立复验通过**；
+§12 状态机 9 态/14 边与代码逐边一致；`egress`/`authorityExited` 字段纪律真实存在。
+
+**审计对「这套东西在解决什么问题」的回答**：**跑不了任何编译**——`MockUbuntuAdapter` 不执行进程，
+全树无 proot/rootfs。交付物是 §12 纸面契约 + 模型可见的 job 协议 + 一套已验证未接线的安全机制。

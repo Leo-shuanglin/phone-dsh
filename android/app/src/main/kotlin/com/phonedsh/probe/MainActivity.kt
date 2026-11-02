@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.phonedsh.dsh.background.NotificationCapability
 import com.phonedsh.dsh.localexec.UbuntuApproval
 import com.phonedsh.dsh.localexec.UbuntuApprovalDecision
+import com.phonedsh.dsh.localexec.UbuntuApprovalGate
 import com.phonedsh.dsh.localexec.UbuntuApprovalPrompt
 import com.phonedsh.dsh.localexec.UbuntuApprovalRequest
 import com.phonedsh.ui.page.PhoneCapability
@@ -345,8 +346,14 @@ private class PendingUbuntuApproval(
  * Shape follows `PhonePermissionsPage`'s `ConfirmationDialog`: a title, the
  * purpose, and 取消 / 继续. Here 继续 is 允许 because the decision grants the
  * whole session, not one system prompt. It says what this build can and cannot
- * promise: the mock seal is named, the session scope is named, and a refusal is
- * stated to start nothing.
+ * promise: the seal is a real `chmod 000` but not a hard boundary, the session
+ * scope is named *and printed as a digest*, and a refusal is stated to start
+ * nothing.
+ *
+ * The session digest is not decoration. This dialog is the user's only view of
+ * who is asking, so "the same 8 hex as last time" and "a different 8 hex" have
+ * to be tellable apart at a glance: if any future path lets a model spend
+ * another session's approval, the user can still see that the question changed.
  *
  * @param pending the request on screen, or `null` when none is waiting.
  * @param onAnswer `true` for 允许, `false` for 拒绝 / dismissal.
@@ -365,14 +372,16 @@ private fun UbuntuApprovalDialog(
             Column {
                 Text("环境：${request.env}（backend=${request.backend}）")
                 request.label?.let { Text("用途：$it") }
+                Text("会话：${UbuntuApprovalGate.summary(request.sessionId)}")
                 Text("")
                 Text(
-                    "它能读到的只有工作区；job 期间三个内部根被密封，" +
-                        "但同 UID 的代码有办法恢复权限。本构建的密封是 mock 的，" +
-                        "答案会标注 sealMock。",
+                    "它能读到的只有工作区；job 期间三个内部根真的被 chmod 000 密封，" +
+                        "同 UID 的代码仍可 chmod 回来——但那会触发绊线（internalAccessObserved），" +
+                        "并在 job 结束时告诉你。",
                 )
                 Text("")
-                Text("一次批准覆盖本 session 内后续的 ubuntu run；停止本地引擎或 session 结束后失效。")
+                Text("一次批准覆盖上面这个 session 内后续的 ubuntu run；停止本地引擎或 session 结束后失效。")
+                Text("摘要变了，就说明是另一个 session 在请求，不是刚才那个。")
                 Text("")
                 Text("拒绝则本次 run 失败（cause=approval_denied），不会启动任何命令，也不会截断任何文件。")
             }

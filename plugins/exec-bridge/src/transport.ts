@@ -184,7 +184,41 @@ export function withPhoneExecFields(request: ExecRequest, lastMseq: bigint): Exe
       )
     }
   }
-  return { ...request, requires_mseq: requiresMseq, idem_key: idemKey }
+  return { ...request, env: withTrustedSession(request), requires_mseq: requiresMseq, idem_key: idemKey }
+}
+
+/**
+ * The env member that carries the tool call's session to the host, so the host
+ * can bind an approval to it without trusting anything the model wrote.
+ *
+ * It lives here, not in `shell-ext`'s accelerator wrapper, because **this** is
+ * where the production Worker builds the EXEC_REQ: a write in the wrapper was
+ * invisible to the real path, and the host's fail-closed gate then refused
+ * every `ubuntu run` on device with "the dispatch carried no trusted tool-call
+ * session" (measured 2026-11-02). The wrapper keeps its own write for the
+ * paths that go through it; both end at the same env member.
+ */
+export const TOOL_CALL_SESSION_ENV = 'PDSH_TOOL_CALL_SESSION'
+
+/**
+ * Overwrite the session member from the ambient tool-call context, deleting any
+ * caller-supplied value first — the same discipline as `XL_IDEMPOTENCY_KEY`: a
+ * script that exports the name must not be able to choose whose approval it
+ * spends. Outside a tool call the member is simply absent and the host refuses.
+ */
+function withTrustedSession(
+  request: ExecRequest,
+): Record<string, string | null> | undefined {
+  // Only the `phone` tool has a session-scoped decision to bind. Adding the
+  // member to `rg`/`jaq` would put a session id in every accelerator's
+  // EXEC_REQ and move their golden vectors for no reason.
+  if (request.argv[0] !== 'phone') return request.env
+  const session = currentToolCall()?.sessionId
+  if (session === undefined) return request.env
+  const next: Record<string, string | null> = { ...request.env }
+  delete next[TOOL_CALL_SESSION_ENV]
+  next[TOOL_CALL_SESSION_ENV] = session
+  return next
 }
 
 /** Derive the D10 key from the request env or the ambient tool-call context; undefined outside both. */

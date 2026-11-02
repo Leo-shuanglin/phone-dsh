@@ -108,7 +108,9 @@ object TurnBackground {
         val appContext = context.applicationContext
         val snapshot = TurnRuntime.snapshot()
         // Closes RUNNING and SCHEDULED alike in one step; a second close (a
-        // duplicated stop) reports `false` and touches nothing.
+        // duplicated stop) reports `false`. It still revokes a retriable system
+        // stop, because a job the platform rescheduled must not resume a turn
+        // the user just ended (L60 #7).
         val hadWindow = TurnRuntime.closeWindow(reason)
         if (hadWindow) {
             // A stop the user asked for is not an interruption to report later.

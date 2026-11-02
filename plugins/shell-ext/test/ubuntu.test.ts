@@ -15,12 +15,13 @@
 //      tail and the mock seal are all visible, and a mock `succeeded` keeps the
 //      job's own exit code.
 //   5. **The host call shape is the contract.** `run` sends
-//      `phone ubuntu run --env ... --session ... -- <argv...>` with the command
-//      unparsed, so no shell re-splits it, and with the session id taken from
-//      the trusted tool-call context rather than a script's flags.
+//      `phone ubuntu run --env ... -- <argv...>` with the command unparsed, so
+//      no shell re-splits it.
 //   6. **The approval gate is fed, not trusted.** The Worker forwards the
-//      ambient session id and renders the host's decision; a script cannot
-//      choose the session.
+//      ambient session id out of band (the dispatch's `sessionId` field, which
+//      the bridge writes into the EXEC_REQ `env`), never as an argv flag, and
+//      renders the host's decision; a script cannot choose the session, and
+//      `--session` is refused by name rather than silently ignored.
 //   7. **`fetch` writes through the standard VFS mutation shape.** One complete
 //      write of at most 15 MiB, then appended suffixes, and a refusal before
 //      the first byte — never a truncated file.
@@ -109,6 +110,22 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true })
 })
 
+/**
+ * Run one command the way the Agent's calls run: inside a tool call.
+ *
+ * The session id is identity, so `run`/`status`/`fetch`/`close` refuse to
+ * dispatch without one — the host would have no session to bind an approval (or
+ * a denial) to. A test that exercises an op therefore has to look like a call.
+ * A test that needs the no-context shape (the refusal case) calls `shell.run`
+ * directly.
+ */
+function asToolCall<T>(body: () => Promise<T>, sessionId = 'sess-test'): Promise<T> {
+  return toolCallStorage().run(
+    { sessionId, callId: 'call-1', key: 'k'.repeat(64), turnId: '1', stepId: '1', spawns: 0 },
+    body,
+  )
+}
+
 test('with no probe answer the command does not exist: exit 127, not a timeout', async () => {
   setUbuntuCapability(undefined)
   const { shell } = await fixture({ withUbuntu: false })
@@ -169,10 +186,10 @@ test('ubuntu with no arguments prints the description but is a usage error', asy
 
 test('run sends the command unparsed after -- and renders the job', async () => {
   const { shell, calls } = await fixture({ withUbuntu: true })
-  const result = await shell.run(
+  const result = await asToolCall(() => shell.run(
     ['ubuntu', 'run', '--cwd', '/dsh/workspace', '--label', 'fib', '--', 'gcc', '-o', 'a', 'a.c'],
     { cwd: CWD },
-  )
+  ))
   assert.equal(result.exitCode, 0, result.stderr)
   const argv = calls[0]?.argv ?? []
   assert.deepEqual(
@@ -188,10 +205,10 @@ test('run sends the command unparsed after -- and renders the job', async () => 
 
 test('run requires the -- separator and a command', async () => {
   const { shell, calls } = await fixture({ withUbuntu: true })
-  const missing = await shell.run(['ubuntu', 'run', 'gcc', '-o', 'a', 'a.c'], { cwd: CWD })
+  const missing = await asToolCall(() => shell.run(['ubuntu', 'run', 'gcc', '-o', 'a', 'a.c'], { cwd: CWD }))
   assert.equal(missing.exitCode, 2)
   assert.match(missing.stderr, /put the command after `--`/u)
-  const noCommand = await shell.run(['ubuntu', 'run', '--'], { cwd: CWD })
+  const noCommand = await asToolCall(() => shell.run(['ubuntu', 'run', '--'], { cwd: CWD }))
   assert.equal(noCommand.exitCode, 2)
   assert.match(noCommand.stderr, /needs a command after `--`/u)
   assert.equal(calls.length, 0)
@@ -199,18 +216,18 @@ test('run requires the -- separator and a command', async () => {
 
 test('status sends exactly the job id and renders the record', async () => {
   const { shell, calls } = await fixture({ withUbuntu: true })
-  const result = await shell.run(['ubuntu', 'status', 'uj-abc'], { cwd: CWD })
+  const result = await asToolCall(() => shell.run(['ubuntu', 'status', 'uj-abc'], { cwd: CWD }))
   assert.equal(result.exitCode, 0)
   assert.deepEqual([...(calls[0]?.argv ?? [])], ['phone', 'ubuntu', 'status', 'uj-abc'])
   assert.match(result.stdout, /ubuntu: status job=uj-abc/u)
-  const bad = await shell.run(['ubuntu', 'status'], { cwd: CWD })
+  const bad = await asToolCall(() => shell.run(['ubuntu', 'status'], { cwd: CWD }))
   assert.equal(bad.exitCode, 2)
   assert.match(bad.stderr, /status needs exactly one job id/u)
 })
 
 test('close reports that files are not kept', async () => {
   const { shell, calls } = await fixture({ withUbuntu: true })
-  const result = await shell.run(['ubuntu', 'close'], { cwd: CWD })
+  const result = await asToolCall(() => shell.run(['ubuntu', 'close'], { cwd: CWD }))
   assert.equal(result.exitCode, 0)
   assert.deepEqual([...(calls[0]?.argv ?? [])], ['phone', 'ubuntu', 'close'])
   assert.match(result.stdout, /closed\. Files inside the environment are not kept/u)
@@ -230,7 +247,7 @@ test('a host refusal is 127 with the reason, not a fake success', async () => {
       },
     },
   })
-  const result = await shell.run(['ubuntu', 'run', '--', 'true'], { cwd: CWD })
+  const result = await asToolCall(() => shell.run(['ubuntu', 'run', '--', 'true'], { cwd: CWD }))
   assert.equal(result.exitCode, 127)
   assert.match(result.stderr, /this host cannot answer that job/u)
   assert.match(result.stderr, /does not provide the local environment/u)
@@ -286,35 +303,39 @@ test('the published capability is what the table reads and is cleared again', as
 // The approval gate: the Worker forwards identity, the host decides
 // ---------------------------------------------------------------------------
 
-test('run forwards the trusted session id from the tool-call context', async () => {
+test('run forwards the trusted session id out of band, never as an argv word', async () => {
   const { shell, calls } = await fixture({ withUbuntu: true })
-  let result: { exitCode: number; stdout: string; stderr: string } | undefined
-  await toolCallStorage().run(
-    { sessionId: 'sess-test', callId: 'call-1', key: 'k'.repeat(64), spawns: 0 },
-    async () => {
-      result = await shell.run(['ubuntu', 'run', '--', 'true'], { cwd: CWD })
-    },
-  )
-  assert.equal(result?.exitCode, 0, result?.stderr)
+  const result = await asToolCall(() => shell.run(['ubuntu', 'run', '--', 'true'], { cwd: CWD }))
+  assert.equal(result.exitCode, 0, result.stderr)
+  // The session is identity: it rides the dispatch field, and the host argv a
+  // script can also type (`phone ubuntu run ...`) carries no way to choose one.
   assert.deepEqual(
     [...(calls[0]?.argv ?? [])],
-    ['phone', 'ubuntu', 'run', '--env', 'ubuntu-24.04', '--session', 'sess-test', '--', 'true'],
+    ['phone', 'ubuntu', 'run', '--env', 'ubuntu-24.04', '--', 'true'],
   )
+  assert.equal((calls[0]?.argv ?? []).includes('--session'), false)
+  assert.equal(calls[0]?.sessionId, 'sess-test')
 })
 
-test('a script cannot choose the session: --session is not a user flag', async () => {
+test('a script cannot choose the session: --session is refused by name, not ignored', async () => {
   const { shell, calls } = await fixture({ withUbuntu: true })
-  const forged = await shell.run(['ubuntu', 'run', '--session', 'sess-forged', '--', 'true'], { cwd: CWD })
+  const forged = await asToolCall(() => shell.run(['ubuntu', 'run', '--session', 'sess-forged', '--', 'true'], { cwd: CWD }))
   assert.equal(forged.exitCode, 2)
-  assert.match(forged.stderr, /unknown option "--session"/u)
+  assert.match(forged.stderr, /--session is not a flag/u)
   assert.equal(calls.length, 0)
 })
 
-test('a run with no tool-call context sends no session and the host asks its own gate', async () => {
+test('a run with no tool-call context is refused in the Worker and never reaches the host', async () => {
+  // No ambient tool-call context means no session to bind an approval to. The
+  // honest answer is a refusal that starts nothing, not a dispatch the host has
+  // to guess about — and definitely not a prompt the user cannot attribute.
   const { shell, calls } = await fixture({ withUbuntu: true })
+  // Deliberately NOT `asToolCall`: this is the shape the Worker shell produces
+  // when no tool-call context exists.
   const result = await shell.run(['ubuntu', 'run', '--', 'true'], { cwd: CWD })
-  assert.equal(result.exitCode, 0)
-  assert.equal((calls[0]?.argv ?? []).includes('--session'), false)
+  assert.equal(result.exitCode, 1)
+  assert.match(result.stderr, /needs the session of the tool call/u)
+  assert.equal(calls.length, 0)
 })
 
 test('a denied run renders the decision and the honest cause', () => {
@@ -480,7 +501,7 @@ function artifactWrites(fixture: { readonly writes: readonly RecordedWrite[] }):
 
 test('fetch writes a small artifact as one complete mutation', async () => {
   const fixture = fetchFixture({ total: 12 })
-  const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'tiny.txt'], { cwd: CWD })
+  const result = await asToolCall(() => fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'tiny.txt'], { cwd: CWD }))
   assert.equal(result.exitCode, 0, result.stderr)
   assert.match(result.stdout, /ubuntu: fetch job=uj-abc artifact=tiny\.txt bytes=12/u)
   assert.match(result.stdout, /ubuntu: wrote \/dsh\/workspace\/\.ubuntu\/uj-abc\/tiny\.txt/u)
@@ -497,7 +518,7 @@ test('fetch writes a small artifact as one complete mutation', async () => {
 test('fetch splits 15 MiB + 512 KiB into a complete write and one appended suffix', async () => {
   const total = UBUNTU_MUTATION_MAX_BYTES + UBUNTU_FETCH_CHUNK_BYTES
   const fixture = fetchFixture({ total })
-  const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'mid.bin'], { cwd: CWD })
+  const result = await asToolCall(() => fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'mid.bin'], { cwd: CWD }))
   assert.equal(result.exitCode, 0, result.stderr)
   assert.match(result.stdout, /chunks=31 mutations=2/u)
   assert.deepEqual(
@@ -519,7 +540,7 @@ test('fetch refuses an over-limit artifact before writing a byte', async () => {
       bytes: 20 * 1024 * 1024,
     },
   })
-  const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'huge.bin'], { cwd: CWD })
+  const result = await asToolCall(() => fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'huge.bin'], { cwd: CWD }))
   assert.equal(result.exitCode, 1)
   assert.match(result.stdout, /VFS_REFUSED reason=file-too-large limit=16777216 bytes=20971520/u)
   assert.match(result.stdout, /nothing was written/u)
@@ -528,7 +549,7 @@ test('fetch refuses an over-limit artifact before writing a byte', async () => {
 
 test('fetch preflights the workspace bucket before writing', async () => {
   const fixture = fetchFixture({ total: 200, workspaceLimitBytes: 100 })
-  const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'tiny.txt'], { cwd: CWD })
+  const result = await asToolCall(() => fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'tiny.txt'], { cwd: CWD }))
   assert.equal(result.exitCode, 1)
   assert.match(result.stdout, /VFS_REFUSED reason=quota-exceeded limit=100 bytes=200/u)
   assert.deepEqual(artifactWrites(fixture), [])
@@ -539,7 +560,7 @@ test('fetch preflights the Worker single-file budget before writing', async () =
   try {
     configureSingleFileLimit(1024 * 1024)
     const fixture = fetchFixture({ total: 2 * 1024 * 1024 })
-    const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'big.bin'], { cwd: CWD })
+    const result = await asToolCall(() => fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'big.bin'], { cwd: CWD }))
     assert.equal(result.exitCode, 1)
     assert.match(result.stdout, /VFS_REFUSED reason=file-too-large limit=1048576/u)
     assert.deepEqual(artifactWrites(fixture), [])
@@ -556,7 +577,7 @@ test('fetch preflights the launch-published single-file budget before writing', 
   process.env.PDSH_SINGLE_FILE_LIMIT_BYTES = String(16 * 1024 * 1024)
   try {
     const fixture = fetchFixture({ total: 20 * 1024 * 1024 })
-    const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'huge.bin'], { cwd: CWD })
+    const result = await asToolCall(() => fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'huge.bin'], { cwd: CWD }))
     assert.equal(result.exitCode, 1)
     assert.match(result.stdout, /VFS_REFUSED reason=file-too-large limit=16777216 bytes=20971520/u)
     assert.match(result.stdout, /nothing was written/u)
@@ -572,10 +593,10 @@ test('fetch --offset resumes at the accepted prefix instead of rewriting it', as
   // The chain stopped after 4 bytes; resuming must append, not rewrite.
   await fixture.fs.mkdir('/dsh/workspace/.ubuntu/uj-abc', { recursive: true })
   await fixture.fs.writeFile('/dsh/workspace/.ubuntu/uj-abc/tiny.bin', new Uint8Array([0, 1, 2, 3]))
-  const result = await fixture.shell.run(
+  const result = await asToolCall(() => fixture.shell.run(
     ['ubuntu', 'fetch', 'uj-abc', 'tiny.bin', '--offset', '4'],
     { cwd: CWD },
-  )
+  ))
   assert.equal(result.exitCode, 0, result.stderr)
   assert.deepEqual(
     artifactWrites(fixture).map(write => [write.op, write.size]),
@@ -589,10 +610,10 @@ test('fetch --offset refuses a file that is not the stated prefix', async () => 
   const fixture = fetchFixture({ total: 12 })
   await fixture.fs.mkdir('/dsh/workspace/.ubuntu/uj-abc', { recursive: true })
   await fixture.fs.writeFile('/dsh/workspace/.ubuntu/uj-abc/tiny.bin', new Uint8Array([0, 1, 2]))
-  const result = await fixture.shell.run(
+  const result = await asToolCall(() => fixture.shell.run(
     ['ubuntu', 'fetch', 'uj-abc', 'tiny.bin', '--offset', '4'],
     { cwd: CWD },
-  )
+  ))
   assert.equal(result.exitCode, 1)
   assert.match(result.stderr, /--offset 4 does not match/u)
   assert.deepEqual(artifactWrites(fixture), [])
@@ -600,20 +621,20 @@ test('fetch --offset refuses a file that is not the stated prefix', async () => 
 
 test('fetch resolves --path under the cwd and refuses a non-mutation path', async () => {
   const fixture = fetchFixture({ total: 12 })
-  const result = await fixture.shell.run(
+  const result = await asToolCall(() => fixture.shell.run(
     ['ubuntu', 'fetch', 'uj-abc', 'tiny.txt', '--path', 'out/tiny.txt'],
     { cwd: CWD },
-  )
+  ))
   assert.equal(result.exitCode, 0, result.stderr)
   assert.match(result.stdout, /wrote \/dsh\/workspace\/out\/tiny\.txt/u)
   assert.deepEqual(artifactWrites(fixture).map(write => write.path), ['/dsh/workspace/out/tiny.txt'])
   assert.equal(readFileSync(onDisk(fixture.root, '/dsh/workspace/out/tiny.txt')).byteLength, 12)
 
   const before = fixture.host.calls.length
-  const refused = await fixture.shell.run(
+  const refused = await asToolCall(() => fixture.shell.run(
     ['ubuntu', 'fetch', 'uj-abc', 'tiny.txt', '--path', '/dsh/home/tiny.txt'],
     { cwd: CWD },
-  )
+  ))
   assert.equal(refused.exitCode, 2)
   assert.match(refused.stderr, /not a \/dsh\/workspace mutation path/u)
   assert.equal(fixture.host.calls.length, before)
@@ -623,10 +644,10 @@ test('fetch refuses to overwrite an explicit path it did not write', async () =>
   const fixture = fetchFixture({ total: 12 })
   await fixture.fs.mkdir('/dsh/workspace/out', { recursive: true })
   await fixture.fs.writeFile('/dsh/workspace/out/existing.txt', new Uint8Array([9, 9, 9]))
-  const result = await fixture.shell.run(
+  const result = await asToolCall(() => fixture.shell.run(
     ['ubuntu', 'fetch', 'uj-abc', 'tiny.txt', '--path', 'out/existing.txt'],
     { cwd: CWD },
-  )
+  ))
   assert.equal(result.exitCode, 1)
   assert.match(result.stderr, /refusing to overwrite a file this job did not write/u)
   assert.deepEqual(artifactWrites(fixture), [])
@@ -634,10 +655,10 @@ test('fetch refuses to overwrite an explicit path it did not write', async () =>
 
 test('fetch rejects a malformed invocation as a usage error', async () => {
   const { shell, calls } = await fixture({ withUbuntu: true })
-  const missing = await shell.run(['ubuntu', 'fetch', 'uj-abc'], { cwd: CWD })
+  const missing = await asToolCall(() => shell.run(['ubuntu', 'fetch', 'uj-abc'], { cwd: CWD }))
   assert.equal(missing.exitCode, 2)
   assert.match(missing.stderr, /fetch needs exactly one job id and one artifact name/u)
-  const badOffset = await shell.run(['ubuntu', 'fetch', 'uj-abc', 'tiny.txt', '--offset', '-1'], { cwd: CWD })
+  const badOffset = await asToolCall(() => shell.run(['ubuntu', 'fetch', 'uj-abc', 'tiny.txt', '--offset', '-1'], { cwd: CWD }))
   assert.equal(badOffset.exitCode, 2)
   assert.match(badOffset.stderr, /--offset takes a non-negative decimal integer/u)
   assert.equal(calls.length, 0)

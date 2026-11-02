@@ -7,6 +7,11 @@
 // `fetch` answer shape. The job machine itself is covered by
 // UbuntuJobLaneTest / UbuntuJobRecoveryTest; this file covers the wiring the
 // Agent's `ubuntu` command actually reaches.
+//
+// The session binding is pinned here rather than in the gate tests: the gate's
+// own scope is UbuntuApprovalTest's job, while this file proves **where the id
+// comes from** — the out-of-band `env` member the Worker's exec bridge writes,
+// never `argv`, and never a `--session` flag a model could type.
 
 package com.phonedsh.dsh.localexec
 
@@ -25,6 +30,9 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/** The trusted tool-call session every normal dispatch carries. */
+private const val DEFAULT_SESSION = "sess-a"
+
 class UbuntuHostToolTest {
     private val clock = TestClock()
 
@@ -33,14 +41,25 @@ class UbuntuHostToolTest {
         budgets: ControllerBudgets = ControllerBudgets.forTier(ControllerBudgets.DEFAULT_TIER),
     ): UbuntuHostTool = UbuntuHostTool(clock = clock, budgets = budgets, approval = gate)
 
+    /**
+     * One dispatch.
+     *
+     * [session] is the out-of-band `env` member the Worker's exec bridge writes
+     * from the trusted tool-call context; `null` sends a dispatch with no
+     * session at all, which is what a script invoking `phone` directly produces.
+     */
     private fun invoke(
         tool: PhoneTool,
         argv: List<String>,
         idem: String = ExecFixtures.IDEM_A,
         deadline: Long? = null,
+        session: String? = DEFAULT_SESSION,
     ): ToolOutcome = runBlocking {
         val json = ExecFixtures.baseRequest(argv = argv, idemKey = idem)
         if (deadline != null) json.put("deadline", deadline)
+        if (session != null) {
+            json.put("env", JSONObject().put(UbuntuHostTool.SESSION_ENV, session))
+        }
         tool.invoke(ToolInvocation(idem, UbuntuHostTool.PHONE_TOOL, json.toString()))
     }
 
@@ -74,7 +93,6 @@ class UbuntuHostToolTest {
                     "phone", "ubuntu", "run",
                     "--env", MockUbuntuAdapter.DEFAULT_ENV,
                     "--label", "fib",
-                    "--session", "sess-a",
                     "--", "gcc", "-o", "a", "a.c",
                 ),
             ),
@@ -108,7 +126,7 @@ class UbuntuHostToolTest {
     fun the_first_run_in_a_session_asks_and_later_runs_do_not() {
         val (gate, prompt) = approvalGate(clock = clock)
         val tool = tool(gate)
-        val first = payload(invoke(tool, listOf("phone", "ubuntu", "run", "--session", "sess-a", "--", "true")))
+        val first = payload(invoke(tool, listOf("phone", "ubuntu", "run", "--", "true")))
         assertEquals("succeeded", first.getString("state"))
         assertEquals(1, prompt.requests.size)
         assertEquals("sess-a", prompt.requests[0].sessionId)
@@ -117,7 +135,7 @@ class UbuntuHostToolTest {
         // The second run in the same session: no dialog, and the audit says the
         // grant (not a fresh prompt) admitted it.
         val second = payload(
-            invoke(tool, listOf("phone", "ubuntu", "run", "--session", "sess-a", "--", "true"), idem = ExecFixtures.IDEM_B),
+            invoke(tool, listOf("phone", "ubuntu", "run", "--", "true"), idem = ExecFixtures.IDEM_B),
         )
         assertEquals("succeeded", second.getString("state"))
         assertEquals(1, prompt.requests.size)
@@ -129,7 +147,7 @@ class UbuntuHostToolTest {
     fun a_denial_is_a_failed_record_with_the_denial_cause_and_nothing_ran() {
         val (gate, prompt) = approvalGate(answer = UbuntuApprovalDecision.Denied, clock = clock)
         val tool = tool(gate)
-        val reply = payload(invoke(tool, listOf("phone", "ubuntu", "run", "--session", "sess-a", "--", "gcc", "x.c")))
+        val reply = payload(invoke(tool, listOf("phone", "ubuntu", "run", "--", "gcc", "x.c")))
         assertEquals("failed", reply.getString("state"))
         assertTrue(reply.isNull("exitCode"))
         val failure = reply.getJSONObject("failure")
@@ -149,7 +167,7 @@ class UbuntuHostToolTest {
         // The denial is remembered for the session: a retry asks nobody and
         // fails the same way, instead of nagging.
         val again = payload(
-            invoke(tool, listOf("phone", "ubuntu", "run", "--session", "sess-a", "--", "true"), idem = ExecFixtures.IDEM_B),
+            invoke(tool, listOf("phone", "ubuntu", "run", "--", "true"), idem = ExecFixtures.IDEM_B),
         )
         assertEquals("failed", again.getString("state"))
         assertEquals(UbuntuCause.APPROVAL_DENIED, again.getJSONObject("failure").getString("cause"))
@@ -160,12 +178,12 @@ class UbuntuHostToolTest {
     fun a_denial_does_not_cross_a_session_boundary() {
         val (gate, prompt) = approvalGate(answer = UbuntuApprovalDecision.Denied, clock = clock)
         val tool = tool(gate)
-        payload(invoke(tool, listOf("phone", "ubuntu", "run", "--session", "sess-a", "--", "true")))
+        payload(invoke(tool, listOf("phone", "ubuntu", "run", "--", "true")))
         assertEquals(1, prompt.requests.size)
         // A different session never inherits the denial: it gets its own dialog.
         prompt.answers(UbuntuApprovalDecision.Approved)
         val next = payload(
-            invoke(tool, listOf("phone", "ubuntu", "run", "--session", "sess-b", "--", "true"), idem = ExecFixtures.IDEM_B),
+            invoke(tool, listOf("phone", "ubuntu", "run", "--", "true"), idem = ExecFixtures.IDEM_B, session = "sess-b"),
         )
         assertEquals("succeeded", next.getString("state"))
         assertEquals(2, prompt.requests.size)
@@ -173,20 +191,45 @@ class UbuntuHostToolTest {
     }
 
     @Test
-    fun a_run_without_a_session_context_asks_every_time() {
+    fun a_dispatch_without_the_trusted_session_is_refused_before_any_dialog() {
+        // The dispatch a script produces by running `phone ubuntu run …` from
+        // `bash`: `phone` is an ordinary command, so the host has to be able to
+        // refuse it. It carries no session (the exec bridge only writes one for
+        // the `ubuntu` command), and "no session" must not become "ask the user
+        // on the model's behalf" — that is the forged-session attack.
         val (gate, prompt) = approvalGate(clock = clock)
         val tool = tool(gate)
-        payload(invoke(tool, listOf("phone", "ubuntu", "run", "--", "true")))
-        payload(invoke(tool, listOf("phone", "ubuntu", "run", "--", "true"), idem = ExecFixtures.IDEM_B))
-        assertEquals(2, prompt.requests.size)
-        assertEquals(null, prompt.requests[0].sessionId)
+        val refused = invoke(tool, listOf("phone", "ubuntu", "run", "--", "true"), session = null)
+        assertEquals(ToolOutcome.Failure(UbuntuHostTool.CODE_UNSUPPORTED, UbuntuHostTool.REFUSED_UNTRUSTED), refused)
+        assertEquals("nobody was asked", 0, prompt.requests.size)
         assertNull(gate.boundSession())
+        // Nothing was admitted either: no job record, so `status` cannot show one.
+        val status = payload(invoke(tool, listOf("phone", "ubuntu", "status", "uj-anything"), idem = ExecFixtures.IDEM_B))
+        assertEquals("unknown", status.getString("state"))
+    }
+
+    @Test
+    fun every_session_scoped_op_needs_the_trusted_session_probe_only_reports() {
+        val tool = tool()
+        for (op in listOf(
+            listOf("phone", "ubuntu", "run", "--", "true"),
+            listOf("phone", "ubuntu", "status", "uj-x"),
+            listOf("phone", "ubuntu", "fetch", "uj-x", "n.txt"),
+            listOf("phone", "ubuntu", "close"),
+        )) {
+            val outcome = invoke(tool, op, session = null)
+            assertTrue("$op must be refused without a session, was $outcome", outcome is ToolOutcome.Failure)
+            assertEquals(UbuntuHostTool.REFUSED_UNTRUSTED, (outcome as ToolOutcome.Failure).message)
+        }
+        // The boot probe runs before any tool call exists and decides nothing,
+        // so it is the one op that must still answer.
+        assertTrue(payload(invoke(tool, listOf("phone", "ubuntu", "probe"), session = null)).getBoolean("available"))
     }
 
     @Test
     fun a_host_with_no_prompt_fails_closed() {
         val tool = tool(headlessGate(clock))
-        val reply = payload(invoke(tool, listOf("phone", "ubuntu", "run", "--session", "sess-a", "--", "true")))
+        val reply = payload(invoke(tool, listOf("phone", "ubuntu", "run", "--", "true")))
         assertEquals("failed", reply.getString("state"))
         val failure = reply.getJSONObject("failure")
         assertEquals(UbuntuCause.APPROVAL_UNAVAILABLE, failure.getString("cause"))
@@ -195,12 +238,32 @@ class UbuntuHostToolTest {
     }
 
     @Test
-    fun a_run_with_a_malformed_session_flag_does_not_bind_a_grant() {
+    fun a_session_flag_on_argv_is_refused_not_ignored() {
+        // Even a dispatch that DID come from the `ubuntu` command cannot pick a
+        // session with a flag: the host has no `--session` grammar any more, so
+        // the request is refused as malformed instead of quietly binding the
+        // trusted id while the caller believes it chose another.
         val (gate, prompt) = approvalGate(clock = clock)
         val tool = tool(gate)
-        payload(invoke(tool, listOf("phone", "ubuntu", "run", "--session", "not a session", "--", "true")))
+        val outcome = invoke(
+            tool,
+            listOf("phone", "ubuntu", "run", "--session", "sess-b", "--", "true"),
+            session = DEFAULT_SESSION,
+        )
+        assertEquals(ToolOutcome.Failure(UbuntuHostTool.CODE_UNSUPPORTED, UbuntuHostTool.RUN_USAGE), outcome)
+        assertEquals("no dialog for a malformed dispatch", 0, prompt.requests.size)
         assertNull(gate.boundSession())
-        assertEquals(null, prompt.requests.single().sessionId)
+    }
+
+    @Test
+    fun a_malformed_trusted_session_is_not_a_session_and_never_asks() {
+        val (gate, prompt) = approvalGate(clock = clock)
+        val tool = tool(gate)
+        val outcome = invoke(tool, listOf("phone", "ubuntu", "run", "--", "true"), session = "not a session")
+        assertTrue(outcome is ToolOutcome.Failure)
+        assertEquals(UbuntuHostTool.REFUSED_UNTRUSTED, (outcome as ToolOutcome.Failure).message)
+        assertEquals(0, prompt.requests.size)
+        assertNull(gate.boundSession())
     }
 
     @Test
@@ -217,7 +280,7 @@ class UbuntuHostToolTest {
         }
         val (gate, _) = approvalGate(clock = clock)
         val tool = UbuntuHostTool(clock = clock, logger = log, approval = gate)
-        payload(invoke(tool, listOf("phone", "ubuntu", "run", "--session", "sess-a", "--", "true")))
+        payload(invoke(tool, listOf("phone", "ubuntu", "run", "--", "true")))
         val granted = lines.single { it.contains("ubuntu approval=granted") }
         assertTrue(granted.contains("env=ubuntu-24.04"))
         assertTrue(granted.contains("prompted=true"))
@@ -230,7 +293,7 @@ class UbuntuHostToolTest {
         // `huge.bin` crosses it; `tiny.txt` still fetches. This pins the
         // refusal shape `channel.md` §4.8 already defines.
         val tool = tool(budgets = BUDGETS_3_GIB)
-        val run = payload(invoke(tool, listOf("phone", "ubuntu", "run", "--session", "sess-a", "--", "true")))
+        val run = payload(invoke(tool, listOf("phone", "ubuntu", "run", "--", "true")))
         assertEquals("ingestRefused", run.getString("state"))
         val jobId = run.getString("jobId")
 

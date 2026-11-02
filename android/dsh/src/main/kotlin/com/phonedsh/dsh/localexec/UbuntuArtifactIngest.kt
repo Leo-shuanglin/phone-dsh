@@ -21,6 +21,13 @@
 // never wired the seal has no protection to claim, and a job must not start on a
 // claim.
 //
+// ---- who implements it in production ---------------------------------------
+// `BuildSealUbuntu` in `:platform-android` (over `BuildSeal` + `BuildSealTripwire`
+// + the real `FileObserver`), constructed by the composition root (`:app`),
+// which injects it through `HostExec.defaultTools` and runs its `repair()` on
+// boot before the workspace opens. `:dsh` still links no platform adapter; the
+// seam is what keeps that direction.
+//
 // ---- the ingest math --------------------------------------------------------
 // [UbuntuArtifactIngest.precheck] is the single place bridge.md §12.7's two
 // limits are applied. It runs in ascending `name` order and adds each accepted
@@ -65,6 +72,18 @@ interface UbuntuSeal {
 
     /** Repairs a seal a killed process left behind; idempotent, run once per boot. */
     suspend fun repair(): Boolean
+
+    /**
+     * `true` when this seal protects nothing.
+     *
+     * The job record and `ubuntu.status` carry a `sealMock` flag, and it must be
+     * read from the implementation rather than written as a literal by the host
+     * tool: the composition root now injects the real `BuildSeal` adapter
+     * (`BuildSealUbuntu` in `:platform-android`), and a hard-coded `true` would
+     * report a protected window as a mock one — or, worse, the opposite.
+     * [MockUbuntuSeal] answers `true`; a real seal and [unwired] answer `false`.
+     */
+    val isMock: Boolean get() = false
 
     companion object {
         /**

@@ -5,9 +5,23 @@
 // The wiring half of the L47 mock: it builds the `ubuntu.exec` lane over
 // [MockUbuntuAdapter] so the Agent-facing `ubuntu` command has a host tool to
 // call. It is deliberately NOT the real environment (no proot, no rootfs, no
-// chmod seal); everything it stands in for is named "mock" here and rendered as
-// `backend=mock` / `sealMock=true` in the answer, so a synthetic exit 0 can
-// never be read as a real compile.
+// real command); everything it stands in for is named "mock" here and rendered
+// as `backend=mock` in the answer, so a synthetic exit 0 can never be read as a
+// real compile.
+//
+// ---- the seal is injected, and defaults to the mock -------------------------
+// The real `BuildSeal` lives in `:platform-android` and `:dsh` does not depend on
+// it, so the seal arrives as an [UbuntuSeal] from the composition root (`:app`
+// passes `BuildSealUbuntu`). The default here is still [MockUbuntuSeal], because
+// this class *is* the mock environment and its unit suite builds it with no
+// device; `HostExec.defaultTools` — the one production construction point —
+// defaults to `UbuntuSeal.unwired` instead, so a host that forgets to inject one
+// fails closed (`seal_unavailable`) rather than claiming a sealed window it never
+// opened.
+//
+// [MockUbuntuSeal] opens and closes nothing; its tripwire observes nothing. It
+// reports `isMock = true`, and the host tool copies that into `sealMock` instead
+// of writing `true` as a literal, so a real seal is rendered as a real one.
 //
 // ---- why the job store lives under a temp directory ----
 // The mock adapter dies with the process, so a job persisted anywhere else could
@@ -15,14 +29,6 @@
 // A per-process temp directory is the honest store for an in-process mock; the
 // record format and the atomic replace are the production ones, so the lane's
 // durability path is still exercised.
-//
-// ---- the seal is a mock, and says so ----
-// The real `BuildSeal` lives in `:platform-android` and `:dsh` does not depend on
-// it. [MockUbuntuSeal] opens and closes nothing; its tripwire observes nothing.
-// The lane therefore records `seal: sealed/restored` because the state machine
-// ran, and the host tool adds `sealMock: true` so neither the Worker nor the
-// Agent can read that as a protected window. This is the one place a mock
-// answer could be mistaken for an audit fact, which is why it is flagged twice.
 
 package com.phonedsh.dsh.localexec
 
@@ -97,7 +103,8 @@ class MockRecordDurability : Durability {
  * Never use this for a real environment — [UbuntuSeal.unwired] is the
  * fail-closed seam for that case, and this class exists only because the mock
  * adapter reads no workspace byte, so there is no window to protect. The host
- * tool marks every answer `sealMock: true`.
+ * tool renders `sealMock` from [isMock], so an answer produced through this seam
+ * says so.
  */
 class MockUbuntuSeal : UbuntuSeal {
     override suspend fun seal(jobId: String): UbuntuSealResult = UbuntuSealResult.Sealed
@@ -107,6 +114,9 @@ class MockUbuntuSeal : UbuntuSeal {
     override fun observed(jobId: String): Boolean = false
 
     override suspend fun repair(): Boolean = true
+
+    /** This seam protects nothing, and every answer it produces says so. */
+    override val isMock: Boolean = true
 }
 
 /**
@@ -118,6 +128,13 @@ class MockUbuntuSeal : UbuntuSeal {
  * @param logger token-free host log.
  * @param adapter the environment; a fresh mock is built when this is omitted so
  *   a session that outlives one job still has an adapter.
+ * @param seal the seal the lane runs inside. The composition root injects the
+ *   real one (`BuildSealUbuntu` in `:platform-android`); the default is the mock
+ *   because this class is the mock environment. `HostExec.defaultTools` never
+ *   relies on this default — it passes its own seam, whose default is the
+ *   fail-closed `UbuntuSeal.unwired`.
+ * @param admissionOpen the host's admission state, read at job start.
+ * @param storeRoot the job store; a per-process temp directory when omitted.
  */
 class MockUbuntuSession(
     private val clock: Clock,
@@ -132,6 +149,7 @@ class MockUbuntuSession(
         clock = clock,
         fileLimitBytes = MockUbuntuAdapter.HUGE_BYTES,
     ),
+    private val seal: UbuntuSeal = MockUbuntuSeal(),
     private val admissionOpen: () -> Boolean = { true },
     private val storeRoot: Path? = null,
 ) {
@@ -140,6 +158,15 @@ class MockUbuntuSession(
 
     /** The one backend name every answer carries. */
     val backend: String = BACKEND
+
+    /**
+     * `true` while the lane's seal is the mock one.
+     *
+     * The host tool copies this into `sealMock`; it is the difference between "a
+     * job ran inside a real `chmod 000` window" and "a job ran inside a seam that
+     * opens nothing", and the audit is not allowed to guess which.
+     */
+    val sealIsMock: Boolean get() = seal.isMock
 
     private val jobsDir: Path = storeRoot ?: Files.createTempDirectory("pdsh-ubuntu-jobs")
 
@@ -166,7 +193,7 @@ class MockUbuntuSession(
             clock = clock,
             store = UbuntuJobStore(jobsDir, MockRecordDurability(), logger),
             adapters = mapOf(adapter.env to adapter),
-            seal = MockUbuntuSeal(),
+            seal = seal,
             budgets = budgets,
             vfsRoot = jobsDir,
             sink = { _, _, _ -> Unit },

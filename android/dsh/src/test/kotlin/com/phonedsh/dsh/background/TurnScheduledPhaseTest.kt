@@ -125,8 +125,9 @@ class TurnScheduledPhaseTest {
         )
         // `TurnJobService.onStartJob` / `TurnForegroundService.onStartCommand`:
         val started = TurnRuntime.begin(TurnRuntime.Backend.USER_INITIATED_JOB, request(epoch = 84))
-        assertEquals(TurnRuntime.Phase.RUNNING, started.phase)
-        assertTrue("execution opens admission", started.admissionOpen)
+        assertTrue("the component's own start opens the window", started is TurnRuntime.BeginResult.Started)
+        assertEquals(TurnRuntime.Phase.RUNNING, started.snapshot.phase)
+        assertTrue("execution opens admission", started.snapshot.admissionOpen)
     }
 
     @Test

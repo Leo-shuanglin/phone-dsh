@@ -52,6 +52,7 @@ import com.phonedsh.dsh.exec.ExecCapability
 import com.phonedsh.dsh.exec.ExecWorkspace
 import com.phonedsh.dsh.localexec.UbuntuHostTool
 import com.phonedsh.dsh.localexec.UbuntuPhoneCatalog
+import com.phonedsh.dsh.localexec.UbuntuSeal
 import com.phonedsh.dsh.tools.InMemoryRequestLedger
 import com.phonedsh.dsh.tools.RegisteredTool
 import com.phonedsh.dsh.tools.RequestLedger
@@ -88,6 +89,15 @@ object HostExec {
      * @param shellMounts guest-to-host mounts for the Rust accelerators, normally
      *   the WAL's materialized `workspace/` and `home/` directories. Empty means
      *   "this host has no workspace the accelerators may read".
+     * @param seal the seal the `ubuntu` lane runs each job inside. `:dsh` links
+     *   no platform adapter, so the real one (`BuildSealUbuntu` over
+     *   `BuildSeal`, in `:platform-android`) is injected here by the composition
+     *   root (`:app`). The default is [UbuntuSeal.unwired] — **not** the mock —
+     *   so a host built without one refuses every `ubuntu run` with
+     *   `seal_unavailable` instead of reporting a sealed window that never
+     *   existed. That default is the audit's fix: the previous wiring answered
+     *   `sealed` from a seam that opened nothing, on the production path, for
+     *   every job.
      *
      * Historical note: this function was named `phoneOnly` while `phone info`
      * was the only registered accelerator. The old name is kept here so code
@@ -100,6 +110,7 @@ object HostExec {
         logger: HostLog,
         ledger: RequestLedger = InMemoryRequestLedger(),
         shellMounts: List<AcceleratorMount> = emptyList(),
+        seal: UbuntuSeal = UbuntuSeal.unwired,
     ): ExecBridge {
         val tools = ArrayList<RegisteredTool>(1 + shellMounts.size)
         // `phone` is one tool with a small catalog: `info` (the device facts,
@@ -118,6 +129,7 @@ object HostExec {
                         clock = clock,
                         logger = logger,
                         admissionOpen = { controller.admission == Admission.OPEN },
+                        seal = seal,
                     ),
                 ),
             ),

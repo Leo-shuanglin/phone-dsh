@@ -73,6 +73,13 @@ fun interface JobLauncher {
  * `setsid`ed shell, which is what makes that true even when `setsid` itself had
  * to fork (it forks only when the caller was already a group leader).
  *
+ * The child inherits no descriptor above stdio: Android's `ProcessBuilder`
+ * closes them before `exec` (measured, not assumed — L60 #3 device test). That
+ * closes the inheritance half of the pre-opened-fd bypass; the other half, a job
+ * reading `/proc/<app-pid>/fd/<n>` of this app, stays open and is declared as the
+ * design's §2 residual instead of being papered over with a sweep that cannot
+ * work from Kotlin (see [launch]).
+ *
  * The job's argv is passed as positional parameters rather than spliced into a
  * command string, so a command containing quotes or spaces needs no escaping.
  *
@@ -98,6 +105,18 @@ class ShellJobLauncher(
             "sh",
             pidFile.toString(),
         ) + command
+        // No fd sweep happens here, and that is a measurement (L60 #3): the
+        // platform's `ProcessBuilder` already closes every descriptor above stdio
+        // in the child. Device-verified on API 35: an `Os.open` descriptor with
+        // no `O_CLOEXEC` is absent from the job's `/proc/self/fd`, and only the
+        // job's own stdio pipes are listed (see
+        // `ShellJobLauncherFdIsolationDeviceTest`). The two Kotlin-side sweeps both
+        // failed on the device: `mksh` only accepts single-digit descriptors in a
+        // redirection (`exec 10>&-` is parsed as a command and exits 127), and
+        // `ParcelFileDescriptor.adoptFd` aborts under fdsan for a descriptor
+        // owned by another Java object. The zero-trace path that remains is not
+        // inheritance at all: the job reads `/proc/<app-pid>/fd/<n>` of the app
+        // itself, which no child-side sweep can close (design §2 residual).
         val process = ProcessBuilder(argv)
             .directory(workingDirectory.toFile())
             .redirectErrorStream(true)

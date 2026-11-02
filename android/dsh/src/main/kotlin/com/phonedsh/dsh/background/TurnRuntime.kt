@@ -102,6 +102,14 @@ object TurnRuntime {
         val step: Int = 0,
         val totalSteps: Int = 0,
         val stopReason: StopReason? = null,
+        /**
+         * `true` only for a stop the platform asked for and will retry
+         * (`onStopJob` returning `true`): the same job — same epoch — is
+         * rescheduled, and the component it starts is a **resume**, not a
+         * resurrection. Every other way a turn ends clears it, and [begin]
+         * refuses a stopped epoch that is not retriable.
+         */
+        val retriable: Boolean = false,
     ) {
         /** Execution: the component the platform started is running this turn. */
         val isRunning: Boolean get() = phase == Phase.RUNNING
@@ -131,16 +139,81 @@ object TurnRuntime {
      */
     data class JobBinding(val service: JobService, val params: JobParameters)
 
-    fun begin(backend: Backend, request: TurnRequest): Snapshot = synchronized(lock) {
-        state = Snapshot(
-            phase = Phase.RUNNING,
-            admissionOpen = true,
-            backend = backend,
-            epoch = request.epoch,
-            step = request.step,
-            totalSteps = request.totalSteps,
-        )
-        state
+    /**
+     * What the platform-started component gets when it asks to open the window.
+     *
+     * The answer is a result rather than a silent state write because the
+     * component has to *close what the platform started* when it is refused
+     * (L60 #7): `onStartJob` calls `jobFinished(params, false)`, the foreground
+     * service calls `stopSelf(startId)`. A refusal that only logged would leave
+     * the job open and the notification attached for a turn nobody owns.
+     */
+    sealed interface BeginResult {
+        /** The state after the call, whether it opened or refused. */
+        val snapshot: Snapshot
+
+        /** The window opened: this component now owns the turn. */
+        data class Started(override val snapshot: Snapshot) : BeginResult
+
+        /**
+         * The window did not open and [snapshot] is the unchanged state. The
+         * component must finish without running the turn: no marker, no
+         * notification, no admission.
+         */
+        data class Refused(
+            val reason: RefusalReason,
+            override val snapshot: Snapshot,
+        ) : BeginResult
+    }
+
+    /** Why [begin] refused a component the platform started. */
+    enum class RefusalReason(val wire: String) {
+        /**
+         * The turn already ended in this process (`COMPLETED`, `USER_STOPPED`,
+         * `TASK_REMOVED`, `SERVICE_STOPPED`, …) while the component's start was
+         * still queued. Reopening `RUNNING` here is the ghost window L60 #7
+         * found: the drain guard reads `InPlace(RUNNING)` and the next `begin`
+         * path rewrites the interrupted marker for a turn the user killed.
+         */
+        TURN_ENDED("turn_ended"),
+    }
+
+    /**
+     * The component the platform started asks to run [request] on [backend].
+     *
+     * One refusal, epoch-scoped, symmetric with [scheduled]'s second refusal:
+     * a `STOPPED` state **for this same epoch** is a window that must not come
+     * back. The stop can run on the controller's coroutine while `onStartJob` is
+     * already queued on the main thread; whichever gets there second used to
+     * win, which meant the platform could revive a turn its owner had ended.
+     *
+     * The exception is [Snapshot.retriable]: a UIDT `onStopJob` returns `true`
+     * and the system reschedules the *same* job — same epoch — so that
+     * component's `begin` is the documented resume, not a ghost. The flag is
+     * cleared by every terminal close, and a late start after one is refused.
+     *
+     * @return [BeginResult.Started] with the new `RUNNING` state, or
+     *   [BeginResult.Refused] carrying the unchanged state and the reason.
+     */
+    fun begin(backend: Backend, request: TurnRequest): BeginResult = synchronized(lock) {
+        val current = state
+        if (
+            current.phase == Phase.STOPPED &&
+            current.epoch == request.epoch &&
+            !current.retriable
+        ) {
+            BeginResult.Refused(RefusalReason.TURN_ENDED, current)
+        } else {
+            state = Snapshot(
+                phase = Phase.RUNNING,
+                admissionOpen = true,
+                backend = backend,
+                epoch = request.epoch,
+                step = request.step,
+                totalSteps = request.totalSteps,
+            )
+            BeginResult.Started(state)
+        }
     }
 
     /**
@@ -199,8 +272,22 @@ object TurnRuntime {
         state
     }
 
-    fun finish(reason: StopReason): Snapshot = synchronized(lock) {
-        state = state.copy(phase = Phase.STOPPED, admissionOpen = false, stopReason = reason)
+    /**
+     * Ends the turn.
+     *
+     * @param retriable `true` only from `onStopJob` returning `true`: the
+     *   platform will reschedule this same epoch, so a late [begin] for it is a
+     *   resume. The flag is only armed when a window was still open — if the
+     *   turn already ended some other way, a late system stop must not re-arm
+     *   it (that ordering is the second half of L60 #7).
+     */
+    fun finish(reason: StopReason, retriable: Boolean = false): Snapshot = synchronized(lock) {
+        state = state.copy(
+            phase = Phase.STOPPED,
+            admissionOpen = false,
+            stopReason = reason,
+            retriable = retriable && state.hasWindow,
+        )
         state
     }
 
@@ -214,15 +301,25 @@ object TurnRuntime {
      * killed, and the end of the turn would be reported up to 600 s late
      * (`WindowHold`'s bound) instead of immediately.
      *
-     * @return `true` when a window existed and was closed. `false` (no state
-     *   change) when the phase is already `IDLE`/`STOPPED`: there is nothing to
-     *   close and nothing to report.
+     * @return `true` when a window existed and was closed. `false` (no window)
+     *   when the phase is already `IDLE`/`STOPPED` — but the call still revokes
+     *   a [Snapshot.retriable] stop: the user's stop arriving *after* `onStopJob`
+     *   must survive the system's reschedule, or the queued job would resume a
+     *   turn its owner already ended (L60 #7).
      */
     fun closeWindow(reason: StopReason): Boolean = synchronized(lock) {
         if (state.hasWindow) {
-            state = state.copy(phase = Phase.STOPPED, admissionOpen = false, stopReason = reason)
+            state = state.copy(
+                phase = Phase.STOPPED,
+                admissionOpen = false,
+                stopReason = reason,
+                retriable = false,
+            )
             true
         } else {
+            if (state.phase == Phase.STOPPED && state.retriable) {
+                state = state.copy(stopReason = reason, retriable = false)
+            }
             false
         }
     }

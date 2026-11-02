@@ -92,6 +92,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
@@ -359,6 +360,53 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     private val workspaceRoot: Path = File(application.filesDir, WORKSPACE_DIRECTORY).toPath()
 
     /**
+     * The real seal behind the `ubuntu` lane: `BuildSeal` + `BuildSealTripwire`.
+     *
+     * Design §3 layers 3 and 4 are "the core countermeasure", and until this
+     * property existed the production path ran `MockUbuntuSeal`, which opens and
+     * closes nothing — so `chmod 000` never happened for any job the Agent ran.
+     * The adapter lives in `:platform-android` (`BuildSealUbuntu`); `:dsh` only
+     * sees the `UbuntuSeal` seam, which is why the injection point is here.
+     *
+     * The sealed roots are `materialized/home/{sessions,storages,tool-journal}`
+     * under this same [workspaceRoot], i.e. the tree the WAL materializes and the
+     * accelerators are mounted on — not a second copy.
+     */
+    private val ubuntuSeal: UbuntuWorkspaceSeal = UbuntuWorkspaceSeal.forWorkspace(
+        xlRoot = workspaceRoot,
+        log = { line -> LogcatHostLog.info(line) },
+    )
+
+    /**
+     * The boot repair — **must run before `host.start()` opens the workspace**.
+     *
+     * A process killed inside a job's window leaves every root under
+     * `materialized/home` at
+     * `chmod 000` *and* leaves the seal marker, so a boot that skipped this would
+     * fail its first reconcile of that tree and could not resume its own stores.
+     * `BuildSeal.recoverIfNeeded()` (reached through `BuildSealUbuntu.repair()`)
+     * is idempotent and reads one file that normally does not exist, so the cost
+     * on a healthy boot is one failed `exists` check — the same synchronous,
+     * small, composition-time read this class already makes for
+     * `hostStateStore.load()` two properties below.
+     *
+     * The outcome is logged, never swallowed: a `false` means the marker is still
+     * there (the next boot retries) and the workspace is not healthy.
+     */
+    private val ubuntuSealRepaired: Boolean = runBlocking {
+        ubuntuSeal.repair()
+    }.also { repaired ->
+        if (repaired) {
+            LogcatHostLog.info("ubuntu seal: boot repair found nothing to undo")
+        } else {
+            LogcatHostLog.warn(
+                "ubuntu seal: boot repair FAILED; the seal marker is still on disk " +
+                    "and the internal roots may still be 000",
+            )
+        }
+    }
+
+    /**
      * `host-state.json`, the file `PERSIST_HOST_STATE` writes (P15).
      *
      * Until this existed the boot below passed a literal `persistedState = null`
@@ -496,6 +544,12 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     walPaths.materializedHome.toString(),
                 ),
             ),
+            // Design §3 layers 3 and 4: the real `chmod 000` window and its
+            // FileObserver tripwire. Injected here because `:dsh` must not link
+            // `:platform-android`; `HostExec`'s own default is the fail-closed
+            // `UbuntuSeal.unwired`, so this line is what makes the Agent's
+            // `ubuntu run` actually seal anything.
+            seal = ubuntuSeal,
         ),
         logger = LogcatHostLog,
         // The one upstream session; no longer a null placeholder.

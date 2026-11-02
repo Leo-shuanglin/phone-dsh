@@ -129,6 +129,26 @@ class UbuntuApprovalTest {
     }
 
     @Test
+    fun the_dialog_summary_is_eight_hex_of_the_session_digest() {
+        // The confirmation prints this string. It is the user's only way to tell
+        // "the same session asking again" from "a different session asking", so
+        // the shape and the stability are both contract: 8 lowercase hex, the
+        // same for one session, different for another, never the raw id.
+        val summary = UbuntuApprovalGate.summary("sess-a")
+        assertEquals(UbuntuApprovalGate.digest("sess-a"), summary)
+        assertEquals(8, summary.length)
+        assertTrue("expected 8 lowercase hex, was $summary", summary.matches(Regex("[0-9a-f]{8}")))
+        assertEquals(summary, UbuntuApprovalGate.summary("sess-a"))
+        assertFalse(UbuntuApprovalGate.summary("sess-b") == summary)
+        assertEquals("the summary never prints the session id", false, summary.contains("sess-a"))
+        // A session the gate cannot validate has no summary; the dialog says so
+        // instead of inventing one (the host tool refuses such a dispatch before
+        // it reaches the dialog at all — this is the defensive shape).
+        assertEquals(UbuntuApprovalGate.NO_SESSION, UbuntuApprovalGate.summary(null))
+        assertEquals(UbuntuApprovalGate.NO_SESSION, UbuntuApprovalGate.summary("not a session"))
+    }
+
+    @Test
     fun the_audit_line_names_the_decision_and_never_the_raw_session_id() = runBlocking {
         val lines = mutableListOf<String>()
         val log = object : HostLog {

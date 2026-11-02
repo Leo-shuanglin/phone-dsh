@@ -38,10 +38,15 @@
  * ---- the approval gate is the host's, and this command feeds it ----
  * `run` forwards the ambient tool-call session id (from the trusted
  * `currentToolCall()` context, never from a shell variable) so the host can
- * scope one approval to one session. The dialog itself is native (the app's
- * `UbuntuApprovalPrompt`); this file only carries the id and renders the
- * answer. That is why a denial arrives as `failure cause=approval_denied`, not
- * as a host refusal: it is a decision, not a defect.
+ * scope one approval to one session. The id travels **out of band**: it is an
+ * `AcceleratorRequest.sessionId` field that the bridge writes into the EXEC_REQ
+ * `env` member, never an argv word — `phone` is itself an ordinary command
+ * inside `bash`, so a `--session` flag on the host dispatch would be a flag the
+ * model can type (`spec/v1/bridge.md` §12's gate exists to stop exactly that).
+ * The dialog itself is native (the app's `UbuntuApprovalPrompt`); this file only
+ * carries the id and renders the answer. That is why a denial arrives as
+ * `failure cause=approval_denied`, not as a host refusal: it is a decision, not
+ * a defect.
  *
  * ---- why `fetch` writes through the standard VFS ----
  * The host cannot produce a `VFS_MUT` (channel.md §6 makes the Worker the only
@@ -468,9 +473,11 @@ interface RunOptions {
 /**
  * Parse `run [flags] -- <command...>`.
  *
- * `--session` is deliberately not accepted here: the session id is identity,
- * not a caller flag. The command appends it from the trusted tool-call context
- * so a script cannot choose which session's approval it spends.
+ * `--session` is not a flag at all: the session id is identity, so it comes from
+ * the trusted tool-call context and reaches the host out of band
+ * (`AcceleratorRequest.sessionId`). It is refused with a sentence instead of
+ * being ignored, so a caller that tries to choose a session learns that the
+ * command does not accept one — a silent drop would look like it worked.
  * @param args - argv after the `run` verb.
  * @returns the options, or a string explaining the usage error.
  */
@@ -485,6 +492,9 @@ function parseRun(args: readonly string[]): RunOptions | string {
     if (word === '--') {
       index += 1
       break
+    }
+    if (word === '--session') {
+      return '--session is not a flag: this command takes the session id from the tool call it runs in'
     }
     const value = args[index + 1]
     if (word === '--env' || word === '--cwd' || word === '--label' || word === '--timeout-ms') {
@@ -982,7 +992,9 @@ export interface UbuntuCommandOptions {
    * Defaults to the trusted ambient `currentToolCall()?.sessionId`. It is a
    * function so a long-lived command re-reads the session that is running the
    * call, and it is never read from the shell environment: a script must not be
-   * able to pick which session's approval it spends.
+   * able to pick which session's approval it spends. The id reaches the host as
+   * the dispatch's out-of-band `sessionId` field
+   * (`bridge.ts`'s `TOOL_CALL_SESSION_ENV`), not as a `--session` argv flag.
    */
   readonly sessionId?: (() => string | undefined) | undefined
 }
@@ -1006,6 +1018,22 @@ export function createUbuntuCommand(
 ): CustomCommand {
   const sessionIdOf = options.sessionId ?? (() => currentToolCall()?.sessionId)
   return defineCommand('ubuntu', async (args, ctx) => {
+    // The session id is identity, so it is read here — inside the invocation,
+    // from the trusted tool-call context — and handed to the host as an
+    // out-of-band dispatch field, never as an argv word and never from the
+    // calling shell's environment. A call with no session cannot be attributed
+    // to one, so the command refuses instead of asking the host to guess: the
+    // host would have no session to bind a grant (or a denial) to.
+    const session = sessionIdOf()
+    const trustedSession = session !== undefined && D6.test(session) ? session : undefined
+    /** The refusal every op returns when the tool-call session is missing. */
+    const noSession = (): { stdout: string; stderr: string; exitCode: number } => ({
+      stdout: '',
+      stderr: 'ubuntu: this command needs the session of the tool call it runs in, so the host can bind '
+        + 'one approval to it; this invocation has none, so nothing was started\n',
+      exitCode: 1,
+    })
+
     // One host-tool round trip. Every op answers one JSON object on stdout;
     // stderr and the exit code belong to the host tool, never to the job.
     const dispatch = async (argv: readonly string[]): Promise<HostAnswer> => {
@@ -1019,6 +1047,7 @@ export function createUbuntuCommand(
         env,
         stdin,
         signal: ctx.signal,
+        sessionId: trustedSession,
       })
       return {
         text: decodeUtf8(byteStringToBytes(result.stdout)),
@@ -1063,17 +1092,13 @@ export function createUbuntuCommand(
       if (typeof parsed === 'string') {
         return { stdout: '', stderr: `ubuntu: ${parsed}\n${UBUNTU_USAGE}\n`, exitCode: 2 }
       }
-      // The session id is identity, so it is appended here from the trusted
-      // context — never taken from the caller's flags or the shell environment.
-      const session = sessionIdOf()
-      const trustedSession = session !== undefined && D6.test(session) ? session : undefined
+      if (trustedSession === undefined) return noSession()
       return render(await dispatch([
         'run',
         '--env', parsed.env,
         ...parsed.cwd === undefined ? [] : ['--cwd', parsed.cwd],
         ...parsed.label === undefined ? [] : ['--label', parsed.label],
         ...parsed.timeoutMs === undefined ? [] : ['--timeout-ms', parsed.timeoutMs],
-        ...trustedSession === undefined ? [] : ['--session', trustedSession],
         '--',
         ...parsed.command,
       ]), 'run')
@@ -1084,6 +1109,7 @@ export function createUbuntuCommand(
       if (jobId === undefined || jobId === '' || args.length !== 2) {
         return { stdout: '', stderr: `ubuntu: status needs exactly one job id\n${UBUNTU_USAGE}\n`, exitCode: 2 }
       }
+      if (trustedSession === undefined) return noSession()
       return render(await dispatch(['status', jobId]), 'status')
     }
 
@@ -1092,6 +1118,7 @@ export function createUbuntuCommand(
       if (typeof parsed === 'string') {
         return { stdout: '', stderr: `ubuntu: ${parsed}\n${UBUNTU_USAGE}\n`, exitCode: 2 }
       }
+      if (trustedSession === undefined) return noSession()
       const outcome = await fetchArtifact(parsed, ctx, dispatch)
       return { stdout: outcome.stdout, stderr: outcome.stderr, exitCode: outcome.exitCode }
     }
@@ -1100,6 +1127,7 @@ export function createUbuntuCommand(
       if (args.length !== 1) {
         return { stdout: '', stderr: `ubuntu: close takes no arguments\n${UBUNTU_USAGE}\n`, exitCode: 2 }
       }
+      if (trustedSession === undefined) return noSession()
       const answer = await dispatch(['close'])
       if (answer.exitCode !== 0) {
         const detail = answer.stderr.trim() !== '' ? answer.stderr.trim() : answer.text.trim()

@@ -19,6 +19,24 @@
 // `failed` record through `recordRefusal`, so the audit keeps the user's
 // decision and `ubuntu.status` can answer for the attempt.
 //
+// ---- the session is out-of-band, and only the `ubuntu` command carries it ---
+// `phone` is an accelerator, so the Worker registers it as an ordinary `bash`
+// command: `bash -c 'phone ubuntu run --session S2 -- …'` would be a model-
+// typed flag, and binding a grant to it would let the model spend another
+// session's approval. The session id therefore never appears in `argv`. The
+// Worker's `ubuntu` command reads it from the trusted tool-call context and the
+// exec bridge writes it into the EXEC_REQ `env` member
+// (`shell-ext/src/bridge.ts`'s `TOOL_CALL_SESSION_ENV`), from which
+// [SESSION_ENV] reads it here.
+//
+// That member is also how "did the `ubuntu` command build this dispatch?" is
+// answered: every OTHER dispatch of this tool — a script invoking `phone`
+// directly — arrives with the name deleted, and is refused before any dialog.
+// A refusal is the honest answer there: the host cannot tell such a request
+// from a forged one, so it must not try to ask on its behalf. `probe` is the one
+// exception: the boot probe runs before any tool call exists and only reports
+// whether this host has an environment.
+//
 // ---- why the answer is JSON on stdout ----
 // `bridge.md` §12.8's status payload is an object, and the Worker command is the
 // only place that decides how to render it for the model. Keeping the host side
@@ -26,10 +44,12 @@
 // host never grows a second wording for the same facts.
 //
 // ---- what this does NOT do ----
-// It does not seal, snapshot, fork a process or read a workspace byte. It runs
-// the mock adapter, so every job is `backend = mock`; the answer says so and
-// the seal member is flagged `sealMock`. A real environment replaces the
-// session, not this dispatch surface.
+// It does not snapshot, fork a process or read a workspace byte. It runs the
+// mock adapter, so every job is `backend = mock`; the answer says so. The seal
+// is not this file's either: it is injected (see the `seal` constructor
+// parameter), the production composition root passes the real one, and every
+// answer renders `sealMock` from that implementation instead of writing a
+// literal. A real environment replaces the session, not this dispatch surface.
 
 package com.phonedsh.dsh.localexec
 
@@ -57,6 +77,11 @@ import org.json.JSONObject
  *   bridge already refused the dispatch when admission was closed.
  * @param approval the session gate. The default is the process-wide gate the app
  *   installs its dialog into; a test passes its own so no global state leaks.
+ * @param seal the seal the lane runs each job inside. The mock default keeps this
+ *   class's own unit suite device-free; the composition root injects the real
+ *   `BuildSealUbuntu` through `HostExec.defaultTools`, whose own default is the
+ *   fail-closed `UbuntuSeal.unwired` rather than this one. Every answer renders
+ *   `sealMock` from it, so a real chmod window can never be reported as a mock.
  */
 class UbuntuHostTool(
     private val clock: Clock,
@@ -64,6 +89,7 @@ class UbuntuHostTool(
     private val budgets: ControllerBudgets = ControllerBudgets.forTier(ControllerBudgets.DEFAULT_TIER),
     private val admissionOpen: () -> Boolean = { true },
     private val approval: UbuntuApprovalGate = UbuntuApproval.gate,
+    private val seal: UbuntuSeal = MockUbuntuSeal(),
 ) : PhoneTool {
 
     private val lock = Any()
@@ -76,9 +102,21 @@ class UbuntuHostTool(
             clock = clock,
             budgets = budgets,
             logger = logger,
+            seal = seal,
             admissionOpen = admissionOpen,
         ).also { created = it }
     }
+
+    /**
+     * The `sealMock` member every answer carries.
+     *
+     * `UbuntuSeal.isMock` is answered by the implementation, not by the class
+     * that renders it: `MockUbuntuSeal` says `true`, the real `BuildSealUbuntu`
+     * and the fail-closed `unwired` say `false`. The distinction is the audit's:
+     * a `seal: sealed/restored` pair produced by a seam that opens nothing must
+     * never read as a protected window, and a real one must not read as a mock.
+     */
+    private fun sealIsMock(): Boolean = session().sealIsMock
 
     override suspend fun invoke(invocation: ToolInvocation): ToolOutcome {
         val request = try {
@@ -90,15 +128,41 @@ class UbuntuHostTool(
         if (argv.size < 3 || argv[0] != PHONE_TOOL || argv[1] != UBUNTU_TOOL) {
             return ToolOutcome.Failure(CODE_UNSUPPORTED, REFUSED_OPS)
         }
-        return when (argv[2]) {
-            OP_PROBE -> probe()
-            OP_RUN -> run(request, argv.subList(3, argv.size))
+        val op = argv[2]
+        // The boot probe is the one op that runs outside a tool call: it reports
+        // whether this host has an environment, decides nothing and starts
+        // nothing, so it needs no session to bind.
+        if (op == OP_PROBE) return probe()
+        if (op !in SESSION_OPS) return ToolOutcome.Failure(CODE_UNSUPPORTED, REFUSED_OPS)
+        val session = trustedSession(request)
+        if (session == null) {
+            // Not "no session to bind, so ask every time": a request the
+            // `ubuntu` command did not build is indistinguishable from a forged
+            // one, and asking the user on its behalf is the attack. Refuse it
+            // before the gate, before any job id and before any dialog.
+            logger.warn("ubuntu $op refused: the dispatch carried no trusted tool-call session")
+            return ToolOutcome.Failure(CODE_UNSUPPORTED, REFUSED_UNTRUSTED)
+        }
+        return when (op) {
+            OP_RUN -> run(request, argv.subList(3, argv.size), session)
             OP_STATUS -> status(argv.subList(3, argv.size))
             OP_FETCH -> fetch(argv.subList(3, argv.size))
             OP_CLOSE -> close(argv.subList(3, argv.size))
             else -> ToolOutcome.Failure(CODE_UNSUPPORTED, REFUSED_OPS)
         }
     }
+
+    /**
+     * The session the Worker carried out of band, or `null` when there is none.
+     *
+     * [SESSION_ENV] is written by the exec bridge from the trusted tool-call
+     * context and deleted from the caller's environment first, so a script that
+     * exports the same name changes nothing. A value that is not a D6 identifier
+     * is treated as absent: an id the gate cannot validate must not scope a
+     * grant, and must not turn into a dialog either.
+     */
+    private fun trustedSession(request: ExecRequest): String? =
+        request.env[SESSION_ENV]?.takeIf { UbuntuApprovalGate.SESSION_ID.matches(it) }
 
     /** The boot probe: available only when the session really opened. */
     private suspend fun probe(): ToolOutcome {
@@ -133,8 +197,11 @@ class UbuntuHostTool(
      * until the gate answers [UbuntuApprovalState.GRANTED]. A refusal is a
      * terminal `failed` record with `outcome = not_started` — a job that never
      * ran, kept in the audit because the user's decision is testimony.
+     *
+     * @param session the trusted tool-call session that scopes the grant; never
+     *   read from `argv` (see the file header).
      */
-    private suspend fun run(request: ExecRequest, args: List<String>): ToolOutcome {
+    private suspend fun run(request: ExecRequest, args: List<String>, session: String): ToolOutcome {
         val parsed = parseRun(args)
             ?: return ToolOutcome.Failure(CODE_UNSUPPORTED, RUN_USAGE)
         val job = try {
@@ -154,7 +221,7 @@ class UbuntuHostTool(
         }
         val decision = approval.authorize(
             UbuntuApprovalRequest(
-                sessionId = parsed.session,
+                sessionId = session,
                 env = job.env,
                 backend = MockUbuntuSession.BACKEND,
                 label = job.label,
@@ -235,7 +302,7 @@ class UbuntuHostTool(
                         .put("failure", failureObject("provider_unavailable", "unknown", "adapter_gone", "no job $jobId on this host"))
                         .put("internalAccessObserved", JSONObject.NULL)
                         .put("seal", JSONObject().put("state", "pending").put("reason", JSONObject.NULL))
-                        .put("sealMock", true)
+                        .put("sealMock", sealIsMock())
                         .put("egress", false)
                         .put("authorityExited", JSONObject.NULL)
                         .put("approval", JSONObject.NULL),
@@ -311,9 +378,10 @@ class UbuntuHostTool(
             .put("failure", failure ?: JSONObject.NULL)
             .put("internalAccessObserved", record.internalAccessObserved ?: JSONObject.NULL)
             .put("seal", JSONObject().put("state", record.seal.wire).put("reason", record.sealReason ?: JSONObject.NULL))
-            // The lane's seal state is the mock's; this flag is what keeps a
-            // `sealed`/`restored` pair from reading as a protected window.
-            .put("sealMock", true)
+            // Read from the seal that actually ran the job, never written as a
+            // literal: `sealed`/`restored` means a real `chmod 000` window unless
+            // this flag says the seam that produced it opens nothing.
+            .put("sealMock", sealIsMock())
             .put("egress", record.egress)
             .put("authorityExited", record.authorityExited ?: JSONObject.NULL)
             .put("argvDigest", record.argvDigest)
@@ -353,7 +421,7 @@ class UbuntuHostTool(
         .put("failure", failureObject("provider_unavailable", UbuntuOutcome.NOT_STARTED, null, "$code: $message"))
         .put("internalAccessObserved", JSONObject.NULL)
         .put("seal", JSONObject().put("state", "pending").put("reason", JSONObject.NULL))
-        .put("sealMock", true)
+        .put("sealMock", sealIsMock())
         .put("egress", false)
         .put("authorityExited", JSONObject.NULL)
         .put("approval", JSONObject.NULL)
@@ -377,7 +445,7 @@ class UbuntuHostTool(
         )
         .put("internalAccessObserved", JSONObject.NULL)
         .put("seal", JSONObject().put("state", UbuntuSealState.PENDING.wire).put("reason", JSONObject.NULL))
-        .put("sealMock", true)
+        .put("sealMock", sealIsMock())
         .put("egress", false)
         .put("authorityExited", JSONObject.NULL)
         .put("approval", approvalObject(approval))
@@ -458,23 +526,22 @@ class UbuntuHostTool(
         val cwd: String?,
         val label: String?,
         val jobTimeoutMs: Long,
-        /**
-         * The DSH session the Worker forwards from its trusted tool-call
-         * context, or `null` when it had none. The host never invents one: a
-         * missing session means the gate cannot scope a grant (it asks every
-         * time), which is the honest failure mode.
-         */
-        val session: String?,
         val command: List<String>,
     )
 
-    /** Parse the run flags; null for any shape this tool cannot honour. */
+    /**
+     * Parse the run flags; null for any shape this tool cannot honour.
+     *
+     * `--session` is not one of them: the session is identity and arrives out of
+     * band (see the file header). An argv that carries it is refused with
+     * [RUN_USAGE] rather than ignored — a silently dropped flag would let a
+     * caller believe it chose a session.
+     */
     private fun parseRun(args: List<String>): RunArgs? {
         var env: String? = null
         var cwd: String? = null
         var label: String? = null
         var timeoutMs = UbuntuExecRequest.DEFAULT_JOB_TIMEOUT_MS
-        var session: String? = null
         var index = 0
         while (index < args.size) {
             val word = args[index]
@@ -484,7 +551,7 @@ class UbuntuHostTool(
             }
             if (
                 word != "--env" && word != "--cwd" && word != "--label" &&
-                word != "--timeout-ms" && word != "--session"
+                word != "--timeout-ms"
             ) {
                 return null
             }
@@ -495,14 +562,11 @@ class UbuntuHostTool(
                 "--cwd" -> cwd = value
                 "--label" -> label = value
                 "--timeout-ms" -> timeoutMs = value.toLongOrNull() ?: return null
-                // A malformed session id is not a session: drop it rather than
-                // letting an id the gate cannot validate scope a grant.
-                "--session" -> session = value.takeIf { UbuntuApprovalGate.SESSION_ID.matches(it) }
             }
         }
         val command = args.subList(index, args.size)
         if (command.isEmpty()) return null
-        return RunArgs(env, cwd, label, timeoutMs, session, command)
+        return RunArgs(env, cwd, label, timeoutMs, command)
     }
 
     /** One parsed `fetch`. */
@@ -556,11 +620,41 @@ class UbuntuHostTool(
         const val OP_FETCH: String = "fetch"
         const val OP_CLOSE: String = "close"
 
+        /**
+         * The ops that need a trusted tool-call session: every op but the probe.
+         *
+         * `probe` runs before any tool call exists and decides nothing; the rest
+         * are the Agent's lane and are only reachable through the Worker's
+         * `ubuntu` command (see the file header).
+         */
+        val SESSION_OPS: Set<String> = setOf(OP_RUN, OP_STATUS, OP_FETCH, OP_CLOSE)
+
+        /**
+         * The EXEC_REQ `env` member that carries the trusted tool-call session.
+         *
+         * Written by the exec bridge from the Worker's `currentToolCall()`
+         * context (`shell-ext/src/bridge.ts`'s `TOOL_CALL_SESSION_ENV`), and
+         * deleted from whatever the shell exported first. It is not part of the
+         * EXEC_REQ schema — `env` is — so the wire does not change; this is the
+         * host-private payload the session binding travels in.
+         */
+        const val SESSION_ENV: String = "PDSH_TOOL_CALL_SESSION"
+
         /** The refusal message for an op outside the five. */
         const val REFUSED_OPS: String = "only `phone ubuntu <probe|run|status|fetch|close>` is implemented"
 
+        /**
+         * The refusal for a dispatch that carried no trusted session.
+         *
+         * It names the only caller entitled to dispatch this tool, because the
+         * model can read this sentence after `phone ubuntu run …` from a script.
+         */
+        const val REFUSED_UNTRUSTED: String =
+            "ubuntu run/status/fetch/close are only reachable through the Worker's `ubuntu` command; " +
+                "this dispatch carried no trusted tool-call session"
+
         /** The `run` and `fetch` shapes, for a malformed dispatch. */
-        const val RUN_USAGE: String = "run takes [--env V] [--cwd P] [--label L] [--timeout-ms N] [--session S] -- <command…>"
+        const val RUN_USAGE: String = "run takes [--env V] [--cwd P] [--label L] [--timeout-ms N] -- <command…>"
         const val FETCH_USAGE: String = "fetch takes <jobId> <name> [--offset N] [--path P]"
 
         /** The one guest root the mock advertises (bridge.md §12.2's default). */
