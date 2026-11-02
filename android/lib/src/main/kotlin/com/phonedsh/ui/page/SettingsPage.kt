@@ -1831,9 +1831,12 @@ private const val NOTE_FONT_SCOPE: String = "仅影响会话内容、代码和�
  */
 internal object SettingsPageTokens {
     val refs: List<String> = listOf(
+        UiTokenNames.COLORS_PAGE,
+        UiTokenNames.COLORS_TEXT_PRIMARY,
+        UiTokenNames.COLORS_TEXT_SECONDARY,
+        UiTokenNames.COLORS_TEXT_TERTIARY,
         UiTokenNames.COLORS_ACCENT,
         UiTokenNames.COLORS_BORDER_LIGHT,
-        UiTokenNames.COLORS_GROUPED_BACKGROUND,
         UiTokenNames.COLORS_INPUT,
         UiTokenNames.COLORS_PRIMARY,
         UiTokenNames.COLORS_SECONDARY,

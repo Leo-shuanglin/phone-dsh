@@ -10,7 +10,7 @@
 // its own token, `geometry.bubbleBadgeGap` (`ChatPage.swift:891`). Surface
 // ownership is what keeps both off `PageGeometryTokenTest`'s "used by two pages"
 // rule (no page file reads the bubble). The old scalar `bubblePadding` was a
-// misnamed device-session error inset; that page now reads `deviceSessionErrorInset`.
+// misnamed device-session error inset; that page uses the shared 12pt card inset.
 //
 // The surface is two pieces: `ChatBubble` draws the bubble, `BubbleBadge` draws
 // the queue label a user row puts under it (spec §3 "行下标签"). The row owns

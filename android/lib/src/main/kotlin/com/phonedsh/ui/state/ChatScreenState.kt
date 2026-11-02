@@ -935,18 +935,18 @@ public data class ContextLostReceipt(
 public data class ManagedQueueItemState(
     public val id: QueueItemId,
     public val text: String,
-    /** Worker session that owns the durable inbox item; null for local-only rows. */
-    public val sessionId: String? = null,
-    public val lane: String? = null,
     public val state: QueueItemStatus? = null,
     public val canEdit: Boolean? = null,
     public val canRemove: Boolean? = null,
     public val canSteer: Boolean? = null,
     public val busy: Boolean? = null,
     public val actionRequestId: StateRequestId? = null,
+    public val receipt: QueueActionReceipt? = null,
+    /** Worker session that owns the durable inbox item; null for local-only rows. */
+    public val sessionId: String? = null,
+    public val lane: String? = null,
     /** Stable backend prompt identity for a locally pending queue/steer submission. */
     public val promptRequestId: StateRequestId? = null,
-    public val receipt: QueueActionReceipt? = null,
 )
 
 public data class QueueActionReceipt(
@@ -967,20 +967,18 @@ public sealed interface QueueItemId {
 
 public enum class QueueItemStatus { QUEUED, SENDING, STEERED }
 
-/** Count-preserving reconciliation: each local row consumes at most one same-text durable row. */
+/** Durable rows keep their actionable IDs; local echoes are never paired by text. */
 public fun reconcileQueueRows(
     durable: List<ManagedQueueItemState>,
     local: List<ManagedQueueItemState>,
-): List<ManagedQueueItemState> {
-    val remaining = durable.toMutableList()
-    local.forEach { localRow ->
-        val key = localRow.text.trim().split(Regex("\\s+")).joinToString(" ")
-        val index = remaining.indexOfFirst { row ->
-            row.text.trim().split(Regex("\\s+")).joinToString(" ") == key
-        }
-        if (index >= 0) remaining.removeAt(index)
-    }
-    return remaining + local
+): List<ManagedQueueItemState> = durable + local
+
+/** Retire only the local echo for the exact backend prompt acknowledged and read back. */
+public fun retireAcceptedQueuePrompt(
+    local: List<ManagedQueueItemState>,
+    promptRequestId: StateRequestId,
+): List<ManagedQueueItemState> = local.filterNot { item ->
+    item.id is QueueItemId.Local && item.promptRequestId == promptRequestId
 }
 
 /** The complete screen state of the chat page. */

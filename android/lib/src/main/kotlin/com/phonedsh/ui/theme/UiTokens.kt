@@ -192,7 +192,6 @@ public data class UiGeometry(
     public val toolDetailVertical: Dp,
     public val toolCardInset: Dp,
     public val terminalCardMaxHeight: Dp,
-    public val bubblePadding: Dp,
     /** User-bubble horizontal text inset (PR22 16 h). */
     public val bubblePaddingH: Dp,
     /** User-bubble vertical text inset (PR22 12 v). */
@@ -384,7 +383,6 @@ public data class UiTokens(
                 toolDetailVertical = UiTokenData.geometryToolDetailVertical.dp(),
                 toolCardInset = UiTokenData.geometryToolCardInset.dp(),
                 terminalCardMaxHeight = UiTokenData.geometryTerminalCardMaxHeight.dp(),
-                bubblePadding = UiTokenData.geometryBubblePadding.dp(),
                 bubblePaddingH = UiTokenData.geometryBubblePaddingH.dp(),
                 bubblePaddingV = UiTokenData.geometryBubblePaddingV.dp(),
                 bubbleBadgeGap = UiTokenData.geometryBubbleBadgeGap.dp(),

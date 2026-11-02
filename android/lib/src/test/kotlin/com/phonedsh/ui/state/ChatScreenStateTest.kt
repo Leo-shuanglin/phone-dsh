@@ -102,7 +102,7 @@ class ChatScreenStateTest {
     }
 
     @Test
-    fun `queue reconciliation retains duplicate identical messages and stable id namespaces`() {
+    fun `queue reconciliation preserves actionable durable IDs beside duplicate local echoes`() {
         val durable = listOf(
             ManagedQueueItemState(QueueItemId.Durable("d1"), "same text", QueueItemStatus.QUEUED),
             ManagedQueueItemState(QueueItemId.Durable("d2"), "same text", QueueItemStatus.QUEUED),
@@ -112,9 +112,13 @@ class ChatScreenStateTest {
             ManagedQueueItemState(QueueItemId.Local("l2"), "same text", QueueItemStatus.SENDING),
         )
         val merged = reconcileQueueRows(durable, local)
-        assertEquals(2, merged.size)
-        assertEquals(listOf(QueueItemId.Local("l1"), QueueItemId.Local("l2")), merged.map { it.id })
+        assertEquals(4, merged.size)
+        assertEquals(
+            listOf(QueueItemId.Durable("d1"), QueueItemId.Durable("d2"), QueueItemId.Local("l1"), QueueItemId.Local("l2")),
+            merged.map { it.id },
+        )
         assertEquals(QueueItemStatus.SENDING, merged.last().state)
+        assertTrue(merged.take(2).all { (it.id as? QueueItemId.Durable) != null })
     }
 
     @Test
