@@ -47,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -77,6 +78,7 @@ import com.phonedsh.ui.nav.PdshNavHost
 import com.phonedsh.ui.nav.PdshNavState
 import com.phonedsh.ui.nav.PdshRoute
 import com.phonedsh.ui.page.PhoneCapability
+import com.phonedsh.ui.page.ProviderDraft
 import com.phonedsh.ui.page.WorkbenchSection
 import com.phonedsh.ui.theme.PdshTheme
 import com.phonedsh.ui.theme.PdshThemeValues
@@ -130,12 +132,17 @@ internal fun HostShell(
     // asks the host for anything itself. `backgroundRevision` is the one key that
     // is not engine state: a permission answer lands after the first walk and must
     // not leave the runtime page showing the pre-answer verdict.
+    // `settingsRevision` is the same kind of key for a write this host performed:
+    // the device store changed, so the walk must run again — the facts themselves
+    // still come only from reads.
+    var settingsRevision by remember { mutableIntStateOf(0) }
     val facts: PdshNavFacts = remember(
         state,
         handshake,
         turn,
         backgroundRevision,
         permissionRevision,
+        settingsRevision,
     ) {
         engine.navFacts(state, handshake, turn)
     }
@@ -219,7 +226,12 @@ internal fun HostShell(
                         onBack = { nav = nav.pop() },
                         onHome = { nav = nav.popToHome() },
                         onHostAction = { action ->
-                            val feedback = handleHostAction(action, onStart, onStop)
+                            val feedback = handleHostAction(
+                                action = action,
+                                onStart = onStart,
+                                onStop = onStop,
+                                onSettingsChanged = { settingsRevision++ },
+                            )
                             if (feedback != null) notice = feedback
                         },
                         // The mirrored settings index has three write gestures and
@@ -305,18 +317,25 @@ internal fun HostShell(
 /**
  * Hands one page gesture to the composition root and returns the line to show.
  *
- * This host has no settings/folder/MCP write command (§1 names none), so those
- * actions only log and hand off; the facts do not move, and the returned line
- * says so. The engine stop, start and Web-surface retry are real host commands
- * and are performed here; their line says what was requested.
+ * The engine commands (stop, start, retry) and the model-service save are real
+ * host commands and are performed here; their line says what happened. Every
+ * other gesture is a handoff this build cannot complete, and the returned line
+ * says exactly that instead of leaving a dead control silent.
  *
+ * @param action the page's gesture.
+ * @param onStart start the engine.
+ * @param onStop stop the engine.
+ * @param onSettingsChanged bumped after a write really landed, so the next facts
+ *   walk re-reads the device store. It never carries a value.
  * @return the note-bar line for the gesture, or `null` when nothing should be
- *   shown (no action currently returns null; the seam keeps that possible).
+ *   shown: the page already says it itself (its inline editor opened, or the
+ *   route note covers a read-only page).
  */
 private fun handleHostAction(
     action: PdshHostAction,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onSettingsChanged: () -> Unit = {},
 ): String? {
     // The label is token-free: an action never carries user text into the log.
     Log.i(TAG_NAV, "host action handed off: ${action.wire}")
@@ -336,13 +355,150 @@ private fun handleHostAction(
             "已请求：重试本地引擎"
         }
 
+        // The page's editor is its own inline form (`ModelProviderSettingsPage`
+        // opens it before calling this), so the handoff is only the notification
+        // and there is nothing for the host to open. No line: a notice saying
+        // "opened" would duplicate the editor the person can already see.
+        is PdshHostAction.OpenProviderEditor -> null
+
+        PdshHostAction.RefreshModelProvider -> {
+            onSettingsChanged()
+            "已重新读取：模型服务"
+        }
+
+        is PdshHostAction.SaveProvider -> saveProvider(action.draft, onSettingsChanged)
+
+        is PdshHostAction.DeleteProvider -> deleteProvider(onSettingsChanged)
+
+        // A connectivity test would have to reach the endpoint from this device,
+        // through the same gateway the turn uses; this build has no such probe, so
+        // the gesture gets the fact instead of a fabricated 通过.
+        is PdshHostAction.TestProvider -> "本宿主没有往模型端点发测试请求的命令，本次未测试"
+
+        is PdshHostAction.RunShellCommand ->
+            "只读：本宿主列出了本机可执行的加速器，但没有调用 exec 桥的命令，本次未运行"
+
         // §1 assigns the MCP save to the host, so the gesture is a handoff. The
-        // parenthetical is the other half of the truth: this host cannot persist
-        // it yet, and the page must not be told otherwise.
+        // registry lives in the Worker (`/dsh/home/mcp.json`) and is edited through
+        // the `phone/mcpUpsert` host tool, which this build does not register: a
+        // second registry in the App would be a document nothing reads.
         is PdshHostAction.SaveMcpServer ->
-            "已提交给宿主：保存 MCP 服务器（本宿主未实现持久化）"
+            "本次未保存：本宿主没有改写 MCP 注册表的工具（phone/mcpUpsert）"
 
         else -> "宿主未实现：${actionLabel(action)}，本次未提交"
+    }
+}
+
+/**
+ * Stores one model-service draft and, when it carries one, its key.
+ *
+ * The order is deliberate: every rejection is decided before anything is
+ * written, so a refused save cannot leave half a record behind. The non-secret
+ * record goes to [ProviderConfigStore]; the key goes to [ApiKeyStore], which is
+ * the only component that ever holds it.
+ *
+ * @param draft the page's edited form (may carry the typed key).
+ * @param onSettingsChanged bumped only after the record is really on disk.
+ * @return the note-bar line; it never quotes the key or the URL.
+ */
+private fun saveProvider(draft: ProviderDraft, onSettingsChanged: () -> Unit): String {
+    val store = ProviderConfigStore.active()
+        ?: return "本宿主没有安装模型服务存储，本次未保存"
+    val keyStore = ApiKeyStore.active()
+    if (draft.apiKey.isNotBlank()) {
+        ProviderDraftRules.keyRejection(draft.apiKey)?.let { return it }
+    }
+    if ((draft.apiKey.isNotBlank() || draft.removeStoredKey) && keyStore == null) {
+        return "本宿主没有安装密钥存储，本次未保存"
+    }
+    val launch = ProbeLaunchConfig.active()
+    // Captured before the write so the line can say whether this replaced the row:
+    // the store holds exactly one service (one key account, one Worker env slot), so
+    // 添加 behaves as 替换. Saying so is the difference between a host limit and a
+    // row that silently swallowed the previous configuration.
+    val previous = store.current()
+    val record = ProviderConfigStore.recordOf(
+        draft = draft,
+        previous = previous,
+        launchEndpoint = launch.deepseekBaseUrl,
+        launchModel = launch.modelName,
+    )
+    ProviderDraftRules.endpointRejection(record.endpoint)?.let { return it }
+    if (record.name.isEmpty()) return "模型服务名不能为空，本次未保存"
+    when (val outcome = store.save(record)) {
+        ProviderWriteOutcome.Saved -> Unit
+        is ProviderWriteOutcome.Rejected -> return outcome.reason
+        else -> return "本机存储不可写，本次未保存"
+    }
+    // The record is on disk; now the key. A key failure is reported as itself —
+    // the record stays saved, and the page's key state says 未配置 afterwards.
+    val keyLine: String = when {
+        draft.removeStoredKey -> {
+            keyStore?.clear()
+            "，密钥已删除"
+        }
+        draft.apiKey.isNotBlank() -> {
+            try {
+                keyStore?.save(draft.apiKey)
+                "，密钥已保存"
+            } catch (rejected: IllegalArgumentException) {
+                return "配置已保存；密钥未通过校验，本次未保存密钥"
+            } catch (failed: java.io.IOException) {
+                return "配置已保存；密钥写入失败，本次未保存密钥"
+            }
+        }
+        else -> ""
+    }
+    onSettingsChanged()
+    // Precise on purpose: `ProbeEngineViewModel` builds the Worker env and the model
+    // edge once, when the App process starts, so the stored endpoint/model apply at
+    // the next *App* start — an in-session 停止/启动 re-runs the host but keeps the
+    // env it was constructed with. The key is read live by ApiKeyStore, so it is
+    // already in effect for later requests; that half is only claimed when one was
+    // actually written.
+    val effect = if (keyLine.isEmpty()) {
+        "下次启动 App 时生效"
+    } else {
+        "下次启动 App 时生效；密钥即刻生效"
+    }
+    // A saved *new* service with no previous record is the ordinary first save. One
+    // with a previous record replaced it: this host keeps a single model service.
+    val replaceLine = if (draft.isNew && previous != null) {
+        "；本宿主只保存一个模型服务，本次替换了原有的"
+    } else {
+        ""
+    }
+    return "已保存到本机：模型服务$keyLine（$effect）$replaceLine"
+}
+
+/**
+ * Removes what this host really owns: the saved record and its key.
+ *
+ * When no record is stored the row *is* the launch's service, which this App
+ * cannot delete; only its key can be removed, and the line says which of the two
+ * happened.
+ *
+ * @param onSettingsChanged bumped only after the record really changed.
+ */
+private fun deleteProvider(onSettingsChanged: () -> Unit): String {
+    val store = ProviderConfigStore.active()
+        ?: return "本宿主没有安装模型服务存储，本次未删除"
+    val hasRecord = store.current() != null
+    if (hasRecord) {
+        when (store.delete()) {
+            ProviderWriteOutcome.Deleted -> Unit
+            else -> return "本机存储不可写，本次未删除"
+        }
+    }
+    val keyStore = ApiKeyStore.active()
+    keyStore?.clear()
+    onSettingsChanged()
+    return when {
+        !hasRecord && keyStore == null -> "本宿主没有安装密钥存储：没有可删除的内容"
+        hasRecord && keyStore == null ->
+            "已删除本机保存的模型服务；密钥存储未安装，密钥未删除"
+        hasRecord -> "已删除本机保存的模型服务与密钥；引擎退回启动配置的那个服务"
+        else -> "已删除密钥；模型服务本身来自启动配置，本宿主不能删除"
     }
 }
 
@@ -359,6 +515,9 @@ private fun actionLabel(action: PdshHostAction): String = when (action) {
     PdshHostAction.RefreshConfiguration -> "重新读取会话配置"
     is PdshHostAction.OpenProviderEditor -> "模型服务编辑器"
     PdshHostAction.RefreshModelProvider -> "重新读取模型服务"
+    is PdshHostAction.SaveProvider -> "保存模型服务"
+    is PdshHostAction.DeleteProvider -> "删除模型服务"
+    is PdshHostAction.TestProvider -> "测试模型服务"
     is PdshHostAction.SetWebSearchEnabled -> "网页搜索开关"
     is PdshHostAction.SelectWebSearchBackend -> "网页搜索后端"
     PdshHostAction.RefreshWebSearch -> "重新读取网页搜索"
@@ -367,6 +526,7 @@ private fun actionLabel(action: PdshHostAction): String = when (action) {
     PdshHostAction.StopRuntime -> "停止本地引擎"
     PdshHostAction.RestartRuntime -> "启动本地引擎"
     PdshHostAction.RefreshRuntime -> "重新读取运行时"
+    is PdshHostAction.RunShellCommand -> "运行命令"
     PdshHostAction.RefreshEgress -> "重新读取出网白名单"
     is PdshHostAction.OpenWorkbenchFile -> "读取文件预览"
     PdshHostAction.RetryWebSurface -> "重试本地引擎"
@@ -379,8 +539,9 @@ private fun actionLabel(action: PdshHostAction): String = when (action) {
  * The route-wide read-only statement, or `null` on a route whose actions are real.
  *
  * These are the routes §1 gives host-owned writes that this host has no command
- * for. The note is the host's disclosure, not a page string: the page keeps its
- * own wording and stays unmodified.
+ * for. The note is the host's disclosure; a page that owns a field for the same
+ * sentence (网页搜索's `readOnlyReason`) prints it itself, and this function then
+ * returns `null` so the reason is not doubled.
  */
 private fun hostRouteNote(route: PdshRoute): String? = when (route) {
     // Files are read: the row's file list opens the materialized workspace (the
@@ -389,19 +550,24 @@ private fun hostRouteNote(route: PdshRoute): String? = when (route) {
     PdshRoute.WorkspaceFolders ->
         "只读：本宿主未实现文件夹的新建、切换、删除"
 
-    // Another lane now reads a real local provider profile into these facts; what
-    // this route cannot do is edit or save one, so the note says only that.
-    PdshRoute.ModelProvider ->
-        "本宿主未接入模型服务的编辑与保存"
+    // The model service is writable now: the device record holds the row and the
+    // Keystore holds the key, and the page's own 生效方式 line says when a save
+    // applies. A route note would contradict it.
+    PdshRoute.ModelProvider -> null
 
-    PdshRoute.WebSearch ->
-        "只读：本宿主未实现网页搜索的读取与保存"
+    // 网页搜索 prints the host's reason itself, under the controls it disabled
+    // (`WebSearchFacts.readOnlyReason`): one statement, not a bar plus a footnote.
+    PdshRoute.WebSearch -> null
 
+    // The registry is the Worker's document; this App has no `phone/mcpUpsert`
+    // host tool to change it, and writing a second registry here would be a
+    // document nothing reads. The note names the missing tool, not just 只读.
     PdshRoute.Mcp ->
-        "只读：本宿主未实现 MCP 服务器注册表的读取"
+        "只读：MCP 注册表在 Worker 的 /dsh/home/mcp.json，改写要走宿主的 phone/mcpUpsert 工具；" +
+            "本宿主只注册了 phone info 与 phone ubuntu"
 
     is PdshRoute.McpEditor ->
-        "保存会提交给宿主；本宿主未实现持久化"
+        "保存不会落盘：本宿主没有 phone/mcpUpsert 这个 host tool"
 
     PdshRoute.Configuration ->
         "只读：本宿主未实现会话配置的读取与写入"
@@ -417,11 +583,10 @@ private fun hostRouteNote(route: PdshRoute): String? = when (route) {
     is PdshRoute.Workbench ->
         "本宿主未实现文件内容读取；预览保持待读"
 
-    // 命令 and 导出诊断 became reachable from the settings index (N4). This host
-    // has neither a shell snapshot nor an export command, and the note says so
-    // instead of letting an empty page look like a broken one.
-    PdshRoute.Tools ->
-        "只读：本宿主没有命令快照，运行命令需要宿主实现"
+    // 命令 has a real snapshot now (the HELLO's accelerators): when there is one
+    // the page shows the run form, and when there is none its own 还没接上命令 body
+    // is the honest state. A route-wide line would be a second, weaker version.
+    PdshRoute.Tools -> null
 
     PdshRoute.Export ->
         "本宿主没有导出诊断的命令，页面只显示它读到的状态"

@@ -97,7 +97,6 @@ import com.phonedsh.ui.page.SessionWorkspace
 import com.phonedsh.ui.page.SettingsPage
 import com.phonedsh.ui.page.SettingsScreenState
 import com.phonedsh.ui.page.ShellLocalState
-import com.phonedsh.ui.page.ShellSnapshot
 import com.phonedsh.ui.page.ShellUiEvent
 import com.phonedsh.ui.page.ToolsScreenState
 import com.phonedsh.ui.page.WebSearchLocalState
@@ -384,7 +383,7 @@ public fun PdshNavHost(
             is PdshRoute.McpEditor -> McpEditorRoute(route, facts, onBack, onHostAction)
             PdshRoute.Runtime -> RuntimeRoute(facts, onBack, onHostAction, backLevel)
             PdshRoute.Egress -> EgressRoute(facts, onBack)
-            PdshRoute.Tools -> ToolsRoute(onBack)
+            PdshRoute.Tools -> ToolsRoute(facts, onBack, onHostAction)
             PdshRoute.Export -> ExportRoute(onBack)
             is PdshRoute.Workbench ->
                 WorkbenchRoute(route, facts, onBack, onHostAction, onNavigate, backLevel)
@@ -715,28 +714,48 @@ private fun ConfigurationRoute(
 }
 
 /**
- * 命令: the read-only accelerator shell.
+ * 命令: the accelerator shell over the host's measured command surface.
  *
- * The host has no shell snapshot yet (`ShellSnapshot()` is empty), so the page shows
- * its 还没接上命令 body rather than an invented command list. The run form is local
- * UI state; running a command needs a host command this build does not have, so the
- * two run gestures are handed to an empty receiver and the page's own guard keeps
- * the button disabled while nothing is linked.
+ * The facts carry what the host really advertises (`PdshNavFacts.shell`): the
+ * accelerators its HELLO named and the limits the bridge enforces. A host that
+ * advertises none leaves the snapshot at its empty default, and the page shows
+ * its 还没接上命令 body rather than an invented command list.
+ *
+ * The run form is local UI state; 运行 is the host's gesture, so it is handed
+ * over as one [PdshHostAction.RunShellCommand] instead of an empty receiver. A
+ * host with no exec entry point answers with that fact, which is the same
+ * "never a dead tap" rule every other host-owned action follows.
  *
  * The body is `PDSHShellPage`, the inset-grouped card layout of
  * `PDSHShellPage.swift`; `ToolsScreenState` stays the reducer the JVM tests drive.
+ *
+ * @param facts the host snapshot; only `shell` is read here.
+ * @param onHostAction the 运行 handoff.
  */
 @Composable
-private fun ToolsRoute(onBack: () -> Unit) {
+private fun ToolsRoute(
+    facts: PdshNavFacts,
+    onBack: () -> Unit,
+    onHostAction: (PdshHostAction) -> Unit,
+) {
     var local by remember { mutableStateOf(ShellLocalState()) }
+    val state = ToolsScreenState.from(facts.shell, local)
     PDSHShellPage(
-        state = ToolsScreenState.from(ShellSnapshot(), local),
+        state = state,
         onSelectCommand = { name -> local = local.apply(ShellUiEvent.SelectCommand(name)) },
         onWorkingDirectoryChange = { value ->
             local = local.apply(ShellUiEvent.SetWorkingDirectory(value))
         },
         onArgumentsChange = { value -> local = local.apply(ShellUiEvent.SetArguments(value)) },
-        onRun = {},
+        onRun = {
+            onHostAction(
+                PdshHostAction.RunShellCommand(
+                    command = state.selectedCommand,
+                    workingDirectory = state.workingDirectory,
+                    arguments = state.arguments,
+                ),
+            )
+        },
         onCancel = {},
         onBack = onBack,
     )
@@ -854,6 +873,11 @@ private fun SettingsRoute(
     // …which means the gesture had nothing to pop but the sheet: back from the child
     // page closed the whole settings sheet. One level means the child page.
     RouteBackLevel(backLevel, permissionDefaults) { permissionDefaults = false }
+    // L55: 关于 and 开发者工具 are the sheet's other two sub-surfaces. They are page
+    // swaps for the same reason as 新会话默认权限 — the baseline renders both inside
+    // the settings sheet, and neither is a route. Each surface registers its own back
+    // level (see `SettingsSurfaces.kt`), so this frame only decides what the body is.
+    var surface by remember { mutableStateOf(SettingsSurface.NONE) }
     // The sheet's five tabs are host state (§1: 通用 / 模型 / 插件 / 手机权限 / 预设).
     // Before this lane the tab was never set and the picker's callback was empty, so
     // the four non-通用 bodies were unreachable even though each page already ships
@@ -864,7 +888,15 @@ private fun SettingsRoute(
     // The mirrored index reads `settings`, appendix included: the facts are one
     // value, and the host fills the platform rows where it measures them.
     val settings = facts.settings
-    if (permissionDefaults) {
+    if (surface == SettingsSurface.ABOUT) {
+        AboutSurface(facts = facts, onBack = { surface = SettingsSurface.NONE }, backLevel = backLevel)
+    } else if (surface == SettingsSurface.DEV_TOOLS) {
+        DeveloperToolsSurface(
+            facts = facts,
+            onBack = { surface = SettingsSurface.NONE },
+            backLevel = backLevel,
+        )
+    } else if (permissionDefaults) {
         PermissionDefaultsPage(
             state = PermissionDefaultsState.from(settings.defaultPermissionTier),
             onSelect = { tier -> onSettingsWrite(SettingsWrite.DefaultPermissionTier(tier)) },
@@ -874,10 +906,11 @@ private fun SettingsRoute(
         SettingsPage(
             state = SettingsScreenState.from(settings),
             onNavigate = { destination ->
-                if (destination == SettingsDestination.PERMISSION_DEFAULTS) {
-                    permissionDefaults = true
-                } else {
-                    PdshSettingsRows.targetOf(destination)?.let(onNavigate)
+                when (destination) {
+                    SettingsDestination.PERMISSION_DEFAULTS -> permissionDefaults = true
+                    SettingsDestination.ABOUT -> surface = SettingsSurface.ABOUT
+                    SettingsDestination.DEV_TOOLS -> surface = SettingsSurface.DEV_TOOLS
+                    else -> PdshSettingsRows.targetOf(destination)?.let(onNavigate)
                 }
             },
             onToggleBackgroundKeepAlive = { value ->
@@ -938,6 +971,14 @@ private fun ModelProviderRoute(
         onBack = onBack,
         // The settings sheet's 模型 tab draws the same page without its own header.
         embedded = embedded,
+        // The page's editor is its own inline form; these four are the writes it
+        // cannot perform itself. Each is handed over as one host action and the
+        // page still never mutates its facts: the host re-reads them after a save,
+        // so a row can only change because the device store changed.
+        onStartEngine = { onHostAction(PdshHostAction.RestartRuntime) },
+        onSave = { draft -> onHostAction(PdshHostAction.SaveProvider(draft)) },
+        onTest = { draft -> onHostAction(PdshHostAction.TestProvider(draft)) },
+        onDelete = { id -> onHostAction(PdshHostAction.DeleteProvider(id)) },
     )
 }
 
@@ -954,6 +995,11 @@ private fun WebSearchRoute(
         onSelectBackend = { id -> onHostAction(PdshHostAction.SelectWebSearchBackend(id)) },
         onToggleBackends = { local = local.apply(WebSearchUiEvent.ToggleBackends) },
         onBack = onBack,
+        // 什么时候生效's two engine verbs are real host commands. The write controls stay
+        // disabled (`writable = NO` and the host's own reason under them), but without
+        // these two the page still drew a live-looking 启动本地引擎 that nobody performs.
+        onStartEngine = { onHostAction(PdshHostAction.RestartRuntime) },
+        onStopEngine = { onHostAction(PdshHostAction.StopRuntime) },
     )
 }
 

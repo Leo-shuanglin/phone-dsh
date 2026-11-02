@@ -81,6 +81,16 @@ internal class TempDir : AutoCloseable {
                 Thread.sleep(20)
             } catch (_: java.nio.file.NoSuchFileException) {
                 return
+            } catch (race: java.io.UncheckedIOException) {
+                // `Files.walk` is lazy: a record file the lane renamed over (or
+                // deleted) between two iterations surfaces as an unchecked
+                // `NoSuchFileException` from the iterator, not from the delete.
+                // Same teardown race as above; look again.
+                if (race.cause is java.nio.file.NoSuchFileException) {
+                    Thread.sleep(20)
+                } else {
+                    throw race
+                }
             }
         }
     }
@@ -168,6 +178,9 @@ internal class RecordingSink(private val root: Path) : UbuntuMutationSink {
 /** The 8 GiB row, budgets.md §4's default. */
 internal val BUDGETS: ControllerBudgets = ControllerBudgets.forTier(MemoryTier.GIB_8)
 
+/** The 3 GiB row: its `single_file_limit` is the 16 MiB floor. */
+internal val BUDGETS_3_GIB: ControllerBudgets = ControllerBudgets.forTier(MemoryTier.AT_MOST_3)
+
 /** The default file limit: 15 MiB, one complete mutation. */
 internal const val FIFTEEN_MIB: Long = 15L * 1_048_576L
 
@@ -176,6 +189,45 @@ internal const val SIXTEEN_MIB: Long = 16L * 1_048_576L
 
 /** The default tier's workspace bucket: 288 MB. */
 internal val WORKSPACE_BUCKET: Long = BUDGETS.workspaceBytes
+
+/**
+ * A prompt that answers with [answer] and records every request it was shown.
+ *
+ * It is the test's stand-in for the app's dialog, so a gate test can assert both
+ * the decision and whether the user was asked at all.
+ */
+internal class RecordingApprovalPrompt(
+    private var answer: UbuntuApprovalDecision = UbuntuApprovalDecision.Approved,
+) : UbuntuApprovalPrompt {
+    val requests: MutableList<UbuntuApprovalRequest> = mutableListOf()
+
+    /** Answers every later request with [next]. */
+    fun answers(next: UbuntuApprovalDecision) {
+        answer = next
+    }
+
+    override suspend fun ask(request: UbuntuApprovalRequest): UbuntuApprovalDecision {
+        requests += request
+        return answer
+    }
+}
+
+/** A gate over [prompt]; the pair lets a test assert the dialog count. */
+internal fun approvalGate(
+    answer: UbuntuApprovalDecision = UbuntuApprovalDecision.Approved,
+    clock: Clock = TestClock(),
+    timeoutMillis: Long = 5_000L,
+): Pair<UbuntuApprovalGate, RecordingApprovalPrompt> {
+    val prompt = RecordingApprovalPrompt(answer)
+    return UbuntuApprovalGate(prompt = { prompt }, clock = clock, timeoutMillis = timeoutMillis) to prompt
+}
+
+/** A gate whose dialog always approves; the ordinary host-tool fixture. */
+internal fun approvingGate(clock: Clock = TestClock()): UbuntuApprovalGate = approvalGate(clock = clock).first
+
+/** A gate with no prompt at all: the fail-closed host a headless caller gets. */
+internal fun headlessGate(clock: Clock = TestClock()): UbuntuApprovalGate =
+    UbuntuApprovalGate(prompt = { null }, clock = clock)
 
 /** Builds a lane over one temp directory, the mock adapter and the fakes above. */
 internal fun newLane(

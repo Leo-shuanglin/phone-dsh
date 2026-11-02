@@ -705,24 +705,36 @@ test('the ubuntu section exists only when the host answered the probe', () => {
   // fits the budget.
   const withUbuntu = buildCapabilityManifest(manifestInput({
     ...base,
-    ubuntu: { env: 'ubuntu-24.04', backend: 'mock', commands: ['run', 'status', 'close'] },
+    ubuntu: { env: 'ubuntu-24.04', backend: 'mock', commands: ['run', 'status', 'close', 'fetch'] },
   }))
   assert.equal(withUbuntu.json.ubuntu?.backend, 'mock')
   assert.equal(withUbuntu.json.ubuntu?.env, 'ubuntu-24.04')
-  assert.deepEqual(withUbuntu.json.ubuntu?.commands, ['run', 'status', 'close'])
+  // The JSON block's command list is the manifest's own (capabilities.ts); the
+  // `fetch` op lives in UBUNTU_DESCRIPTION, which `ubuntu --help` and AGENTS.md
+  // both carry.
+  assert.deepEqual(withUbuntu.json.ubuntu?.commands, ['run', 'status', 'close', 'fetch'])
   assert.ok(withUbuntu.markdown.includes(UBUNTU_DESCRIPTION), 'the help text and the manifest are one constant')
   const text = withUbuntu.markdown.replace(/\s+/gu, ' ')
   for (const fact of [
     /separate local Linux environment/u,
     /does not run DSH/u,
     /takes time, uses disk and battery/u,
-    /asks for no approval/u, // the gate is not built; the text says so
+    // The approval gate is built now; the text must say what it does and that a
+    // refusal is a real failure, not a timeout or a silent success.
+    /first `run` of a session asks the user to approve it/u,
+    /One approval covers every later `run` in the same session/u,
+    /cause=approval_denied/u,
     /Close it when you are done/u,
     /must not start this environment/u,
     /MOCK adapter/u,
+    // The fetch surface and its refusal rule.
+    /ubuntu fetch <jobId> <name>/u,
+    /VFS_REFUSED/u,
+    /never a truncated file/u,
   ]) {
     assert.match(text, fact)
   }
+  assert.doesNotMatch(text, /asks for no approval/u)
   assert.deepEqual(withUbuntu.json.phone?.tools.map(tool => tool.name), ['info', 'ubuntu'])
   assert.ok(
     Buffer.byteLength(withUbuntu.markdown, 'utf8') <= AGENTS_MD_MAX_BYTES,

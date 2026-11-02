@@ -262,18 +262,25 @@ class SettingsPageTest {
         scrollTo(UiStrings.SETTINGS_ROW_EXPORT)
         compose.onNodeWithText(UiStrings.SETTINGS_ROW_EXPORT).performClick()
         assertEquals(SettingsDestination.EXPORT_DIAGNOSTICS, opened.last())
+        // L55: the two entries to the pages the iOS baseline left without one.
+        // 开发者工具 opens the Android-only index (记忆 / 设备探针 / 后台保活 / 任务屏 /
+        // 每日简报 / 会话活动), and 当前版本 now opens the about page.
+        scrollTo("开发者工具")
+        compose.onNodeWithText("开发者工具").performClick()
+        assertEquals(SettingsDestination.DEV_TOOLS, opened.last())
+        scrollTo("当前版本")
+        compose.onNodeWithText("当前版本").performClick()
+        assertEquals(SettingsDestination.ABOUT, opened.last())
         assertEquals(
             listOf(
                 SettingsDestination.PERMISSION_DEFAULTS,
                 SettingsDestination.LICENSES,
                 SettingsDestination.EXPORT_DIAGNOSTICS,
+                SettingsDestination.DEV_TOOLS,
+                SettingsDestination.ABOUT,
             ),
             opened,
         )
-        // 当前版本 is a read-only row: tapping it reports nothing.
-        scrollTo("当前版本")
-        compose.onNodeWithText("当前版本").assertHasNoClickAction()
-        assertEquals(3, opened.size)
     }
 
     /**
@@ -445,6 +452,9 @@ class SettingsPageTest {
             listOf(
                 SettingsScreenState.BACKGROUND_ROW_ID,
                 SettingsScreenState.EXPORT_ROW_ID,
+                // L55: the Android-only entry to the pages whose iOS baseline has
+                // no entry (关于 is reached from the 版本 row above instead).
+                SettingsScreenState.DEV_TOOLS_ROW_ID,
                 SettingsScreenState.NOTIFICATIONS_ROW_ID,
                 SettingsScreenState.BATTERY_ROW_ID,
                 SettingsScreenState.BACK_ROW_ID,

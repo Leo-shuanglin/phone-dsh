@@ -22,6 +22,14 @@
 // turn cut short. `DefaultPhoneDshHost.WINDOW_HOLD_MAX_MILLIS` documents the
 // value and its relation to the job's own timeout.
 //
+// That bound is what makes a `SCHEDULED` window safe to hold (L53). A scheduled
+// window is an accepted promise, not a running component, and it may be accepted
+// and then never start (the job's constraint is never satisfied, the system
+// quietly drops the job without `onStopJob`). It is still bounded here because
+// the clock starts at the background edge, not at the start of the window: a
+// `SCHEDULED` phase that never becomes `RUNNING` expires exactly like a stalled
+// `RUNNING` one, and a `SCHEDULED -> RUNNING` transition does not re-arm it.
+//
 // ---- one more refusal -------------------------------------------------------
 // After a hold expires, the same window may not defer another edge until the app
 // has been in the foreground again. Otherwise a background frame that raced the
@@ -54,7 +62,11 @@ internal class WindowHold(
     }
 
     /** What is being held: which window, and since when (monotonic millis). */
-    data class Held(val backend: TurnWindowBackend, val sinceMillis: Long)
+    data class Held(
+        val backend: TurnWindowBackend,
+        val phase: TurnWindowPhase,
+        val sinceMillis: Long,
+    )
 
     /**
      * One ended hold.
@@ -62,11 +74,13 @@ internal class WindowHold(
      * @param reason why it ended.
      * @param heldMillis how long the edge was deferred.
      * @param backend the window that deferred it.
+     * @param phase how far that window had got when the hold ended.
      */
     data class Release(
         val reason: ReleaseReason,
         val heldMillis: Long,
         val backend: TurnWindowBackend,
+        val phase: TurnWindowPhase,
     )
 
     private val lock = Any()
@@ -81,6 +95,10 @@ internal class WindowHold(
 
     /**
      * Offers one `scenePhase(background)` to the window.
+     *
+     * A `SCHEDULED` window (the platform accepted the job/service but has not
+     * started it) is offered exactly like a `RUNNING` one: the edge is deferred
+     * either way.
      *
      * @return the held edge when the edge must **not** be fed, or `null` when the
      *   caller must feed it now (no window, an unreadable window, or a previous
@@ -105,9 +123,10 @@ internal class WindowHold(
             return when (reading) {
                 is TurnWindow.InPlace -> {
                     val now = clock.monotonicMillis()
-                    held = Held(reading.backend, now)
+                    held = Held(reading.backend, reading.phase, now)
                     logger.info(
-                        "window: the turn window is in place (backend=${reading.backend.wireName}); " +
+                        "window: the turn window is in place (backend=${reading.backend.wireName}, " +
+                            "phase=${reading.phase.wireName}); " +
                             "the Running -> Draining edge is deferred",
                     )
                     held
@@ -168,6 +187,11 @@ internal class WindowHold(
     /**
      * Ends a hold when the window watch fires.
      *
+     * A `SCHEDULED -> RUNNING` transition is the same window making progress, not
+     * a new one: [Held.sinceMillis] is kept, so the bound does not restart when
+     * the job finally enters its execution slot. The hold also keeps reporting
+     * the latest reading, so a release names the phase the window had reached.
+     *
      * @return the ended hold, or `null` while it must stay held.
      */
     fun check(): Release? {
@@ -175,18 +199,37 @@ internal class WindowHold(
             val current = held ?: return null
             val reading = readSafely()
             val heldMillis = (clock.monotonicMillis() - current.sinceMillis).coerceAtLeast(0L)
+            val live = reading as? TurnWindow.InPlace
             val reason = when {
-                reading !is TurnWindow.InPlace -> ReleaseReason.WINDOW_ENDED
+                live == null -> ReleaseReason.WINDOW_ENDED
                 heldMillis >= maxHoldMillis -> ReleaseReason.HOLD_DEADLINE
-                else -> return null
+                else -> {
+                    if (live.phase != current.phase || live.backend != current.backend) {
+                        // Same hold, same start: only the reading got sharper.
+                        held = current.copy(backend = live.backend, phase = live.phase)
+                        logger.info(
+                            "window: the held window changed reading " +
+                                "(${current.backend.wireName}/${current.phase.wireName} -> " +
+                                "${live.backend.wireName}/${live.phase.wireName}) after $heldMillis ms; " +
+                                "the hold and its ${maxHoldMillis} ms bound stay as they were",
+                        )
+                    }
+                    return null
+                }
             }
             held = null
             if (reason == ReleaseReason.HOLD_DEADLINE) expired = true
-            val release = Release(reason, heldMillis, current.backend)
+            val release = Release(
+                reason = reason,
+                heldMillis = heldMillis,
+                backend = live?.backend ?: current.backend,
+                phase = live?.phase ?: current.phase,
+            )
             when {
                 reason == ReleaseReason.HOLD_DEADLINE -> logger.warn(
-                    "window: ${current.backend.wireName} is still in place after $heldMillis ms " +
-                        "(the bound is $maxHoldMillis ms); the hold expires and the drain runs",
+                    "window: ${release.backend.wireName} is still in place after $heldMillis ms " +
+                        "(phase=${release.phase.wireName}, the bound is $maxHoldMillis ms); " +
+                        "the hold expires and the drain runs",
                 )
 
                 reading is TurnWindow.Unreadable -> logger.warn(
@@ -195,7 +238,8 @@ internal class WindowHold(
                 )
 
                 else -> logger.info(
-                    "window: the ${current.backend.wireName} window ended after $heldMillis ms; " +
+                    "window: the ${release.backend.wireName} window ended after $heldMillis ms " +
+                        "(phase=${release.phase.wireName}); " +
                         "the deferred background edge is released",
                 )
             }

@@ -58,6 +58,15 @@ object UbuntuCause {
     const val HOST_LOST = "host_lost"
     const val INGEST_LOST = "ingest_lost"
     const val PAGE_CANCEL = "page_cancel"
+
+    /**
+     * The user declined the local environment for this session (design §3
+     * layer 1). A cancel that never reached an adapter: nothing ran.
+     */
+    const val APPROVAL_DENIED = "approval_denied"
+
+    /** No confirmation could be shown or answered, so the run failed closed. */
+    const val APPROVAL_UNAVAILABLE = "approval_unavailable"
 }
 
 /** One job failure; `message` never carries a path, a token or a file byte. */
@@ -163,6 +172,38 @@ object UbuntuFailures {
         outcome = UbuntuOutcome.NOT_STARTED,
         retryable = true,
         cause = cause,
+    )
+
+    /**
+     * The user declined the local environment for this session (design §3
+     * layer 1).
+     *
+     * `code = cancelled` with `outcome = not_started` is the existing vocabulary's
+     * own reading of "a stop arrived before any adapter was contacted"; the
+     * message says what actually happened. `retryable = false` because the
+     * denial is bound to the session: the same run would be refused again until
+     * the session ends or the user revokes.
+     */
+    fun approvalDenied(): UbuntuJobFailure = UbuntuJobFailure(
+        code = UbuntuJobFailure.CANCELLED,
+        message = "the user declined the local environment for this session; nothing was started",
+        outcome = UbuntuOutcome.NOT_STARTED,
+        retryable = false,
+        cause = UbuntuCause.APPROVAL_DENIED,
+    )
+
+    /**
+     * No confirmation could be shown or answered, so the run failed closed.
+     *
+     * This is not a denial: the user never said no. It is also not a job that
+     * ran — `outcome = not_started` is the fact, and no adapter was contacted.
+     */
+    fun approvalUnavailable(reason: String): UbuntuJobFailure = UbuntuJobFailure(
+        code = UbuntuJobFailure.PROVIDER_UNAVAILABLE,
+        message = "the approval confirmation could not be answered ($reason); nothing was started",
+        outcome = UbuntuOutcome.NOT_STARTED,
+        retryable = false,
+        cause = UbuntuCause.APPROVAL_UNAVAILABLE,
     )
 
     fun adapterFailed(reason: String): UbuntuJobFailure = UbuntuJobFailure(

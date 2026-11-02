@@ -440,7 +440,7 @@ public object UiStrings {
     public const val PROVIDER_FAILURE_KEY: String = "读取不到这台设备上的密钥"
     public const val PROVIDER_FAILURE_UNKNOWN: String = "模型服务读取失败"
     public const val PROVIDER_PRIVACY: String = "密钥不会写进配置、日志或页面文本里，界面最多显示后四位"
-    public const val PROVIDER_EFFECT: String = "配置从下一次启动引擎起生效"
+    public const val PROVIDER_EFFECT: String = "配置从下一次启动 App 起生效"
 
     // Web search: the switch, the backend choice, and why a switch is held.
     public const val WEB_SEARCH_TITLE: String = "网页搜索"
@@ -1775,7 +1775,7 @@ public object UiStrings {
     public const val PROVIDER_SECTION_APPLY: String = "生效方式"
     public const val PROVIDER_START_ENGINE: String = "启动本地引擎"
     public const val PROVIDER_RESTART_HINT_IDLE: String = "配置会在下次启动主机时生效。"
-    public const val PROVIDER_RESTART_HINT_RUNNING: String = "保存后需要停止并重新启动主机，新的服务和模型才会用于后续请求。"
+    public const val PROVIDER_RESTART_HINT_RUNNING: String = "保存已落盘。新的服务和模型在下一次启动 App 时装配进引擎——停止并重启主机不会重读配置（引擎的环境在进程启动时就建好了）。"
     public const val PROVIDER_EDIT: String = "编辑"
     public const val PROVIDER_DELETE: String = "删除"
     public const val PROVIDER_DELETE_CONFIRM_TITLE: String = "删除模型服务？"

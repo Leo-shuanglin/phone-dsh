@@ -231,9 +231,9 @@ call has returned before the command starts.
 
 | Method | `params` | `result` |
 | --- | --- | --- |
-| `ubuntu.exec` | `{env, argv, workspace?, cwd?, label?, jobTimeoutMs?}` | `{job}` — the §12.2 `JobRef` |
+| `ubuntu.exec` | `{env, argv, workspace?, cwd?, label?, jobTimeoutMs?, session?}` | `{job}` — the §12.2 `JobRef` |
 | `ubuntu.status` | `{jobId}` | §12.8 |
-| `ubuntu.fetch` | `{jobId, name, offset?, path?}` | `{jobId, name, offset, bytes, eof, chunk?, refusal?}` |
+| `ubuntu.fetch` | `{jobId, name, offset?, path?}` | `{jobId, name, offset, bytes, eof, limits, chunk?, refusal?}` |
 
 - `env` is required (§12.1's pattern); `argv` is required, 1–256 strings of 1–8192 bytes with no NUL, and the whole
   `params` must fit §4's 256 KiB request cap (an `argv` above 64 KiB in total is
@@ -244,12 +244,8 @@ call has returned before the command starts.
   `cwd` (default `/dsh/workspace`) is the guest working directory and must be inside `workspace`.
 - `label` is 0–120 characters for the audit line, never a credential. `jobTimeoutMs` is 1 000 to
   3 600 000, default 600 000.
-- The `JobRef` is `{jobId, env, state, seq, createdAtMs, updatedAtMs, egress, authorityExited,
-  argvDigest, exec, limits}`: `jobId` matches `channel.md` §6's identifier rule and is unique for the
-  workspace's lifetime, `argvDigest` is the lowercase sha256 of the canonical JSON `argv`
-  (`channel.md` §5) so the audit can name the command without storing it, `exec` is
-  `{argvLength, cwd, workspace}` and `limits` is `{fileLimitBytes, workspaceLimitBytes,
-  rssLimitBytes?}`.
+- `session` is the DSH session the **approval gate** binds to (design §3 layer 1: one approval covers every later job in that session); the Worker supplies it from its trusted tool-call context, never a caller flag — a command must not choose which session's approval it spends — and an absent `session` binds nothing (the gate then asks on every job); it follows `channel.md` §6.
+- The `JobRef` is `{jobId, env, state, seq, createdAtMs, updatedAtMs, egress, authorityExited, argvDigest, exec, limits, approval}`: `jobId` matches `channel.md` §6's identifier rule and is unique for the workspace's lifetime, `argvDigest` is the lowercase sha256 of the canonical JSON `argv` (`channel.md` §5) so the audit can name the command without storing it, `exec` is `{argvLength, cwd, workspace}`, `limits` is `{fileLimitBytes, workspaceLimitBytes, rssLimitBytes?}`, and `approval` is `{state, sessionId?, atMs} | null`: `state` is `granted`/`denied`/`unavailable`, `sessionId` is the bound session (or `null` when the caller had none), `atMs` is when the decision was taken, an approval refusal still writes a record (§12.3) so `status` answers for an attempt that never ran, and `null` means "this record cannot say", never "the user approved".
 
 ### 12.3 Job states, every transition, and the boot mapping
 
@@ -295,6 +291,8 @@ envelope: `BRIDGE_BAD_MESSAGE`, `BRIDGE_INVALID_PARAMS`, `BRIDGE_MESSAGE_TOO_LAR
 workspace, because two guests do not fit the app-process row. Everything from `env` resolution
 onwards is a terminal state instead, because a user must be able to see in the audit what was
 attempted even when nothing ran.
+
+**The approval gate is the one refusal before `admitted` that writes a record**: it runs before row 1 and admits nothing when it says no, so it is not a transition — the host writes one record already `failed`, with `outcome = "not_started"`, `cause = "approval_denied"` (a denial) or `"approval_unavailable"` (no surface, or no answer in time), plus the §12.2 `approval` member. The user's decision is testimony the audit must keep (a log line would not survive a restart, and `ubuntu.status` answers "what did I refuse, and when"), and nothing reached an adapter, so `not_started` is a fact. The concurrency bound is **not** the approval granularity: one approval covers a session's jobs, while one non-terminal job at a time is a *resource* bound (two guests do not fit the app-process row), and the two never widen each other.
 
 Boot mapping, which is `budgets.md` §3's pinned rows applied to a job. A boot repairs a seal left
 behind by #4 before it does anything else (a `chmod` restore is idempotent, and a process killed
@@ -364,7 +362,7 @@ sub-reason member, not a new code. `retryable` is `false` whenever `outcome != "
 the command may have run (the rule `exec.md` §2.2 states for artifact-producing writes); for a job
 that did not start it is the cause's judgement — `true` for `admission_closed` and
 `memory_insufficient`, `false` for `env_unavailable`, `seal_failed` and `snapshot_too_large`, none of
-which a retry of the same command can fix.
+which a retry of the same command can fix. `approval_denied` is `false` too: the denial is bound to the session, so the same run would be refused again until the session ends or the user revokes (design §3 layer 1).
 
 | Condition | `state` | `failure.code` | `outcome` | `cause` |
 | --- | --- | --- | --- | --- |
@@ -379,6 +377,8 @@ which a retry of the same command can fix.
 | The process died with the job in `handingOff`/`remote`/`reclaiming` | `failed` | `provider_unavailable` | `unknown` | `handoff_lost`, `host_lost`, `ingest_lost` |
 | The process died before any adapter was contacted | `failed` | `provider_unavailable` | `not_started` | `host_lost` |
 | A cancel or a drain arrived before any adapter was contacted | `failed` | `cancelled` | `not_started` | `page_cancel`, `host_draining` |
+| The user declined the local environment for this session (§3 layer 1) | `failed` | `cancelled` | `not_started` | `approval_denied` |
+| No confirmation could be shown, or none was answered in time | `failed` | `provider_unavailable` | `not_started` | `approval_unavailable` |
 | The adapter refused to start the command | `failed` | `provider_unavailable` | `not_started` | `adapter_refused` |
 | The adapter no longer knows the job, or failed in flight | `failed` | `provider_unavailable` | `unknown` | `adapter_gone`, `adapter_failed` |
 | A resumed job cannot re-establish its seal | `failed` | `provider_unavailable` | `unknown` | `seal_failed` |
@@ -409,11 +409,10 @@ would fill the one bucket the user's work lives in. So:
 - `ubuntu.fetch` pulls one artifact on request, at most 524 288 decoded bytes per call (§4's binary
   cap), each chunk idempotent per `offset`, and **the host stages nothing**: bytes come from the
   adapter at fetch time, so a manifest costs no workspace bytes and an expired adapter retention
-  makes an entry `missing` instead of silently serving a stale copy.
-- The page (the Worker) writes the bytes with the mutations `channel.md` §6 already fixes: one
-  complete `op = 1` write of at most 15 MiB, then appended suffixes whose `append_from` is the
-  accepted logical length. The append chain is how a raised limit is honoured; the 15 MiB boundary is
-  the mutation's, never the file's.
+  makes an entry `missing` instead of silently serving a stale copy. Its result carries `limits` (the JobRef's `{fileLimitBytes, workspaceLimitBytes, rssLimitBytes?}`) so the page can refuse an impossible write **before** it moves a byte.
+- The page (the Worker) writes the bytes with the mutations `channel.md` §6 already fixes: one complete `op = 1` write of at most 15 MiB, then appended suffixes whose `append_from` is the accepted logical length. The append chain is how a raised limit is honoured; the 15 MiB boundary is
+  the mutation's, never the file's. `--offset` resumes at an accepted prefix: the target must exist with exactly that many bytes, and the next mutation is an append from it.
+- A refusal happens **before the first write**: the host's `fileLimitBytes` precheck at `offset = 0` and the page's own `single_file_limit` are both applied to the artifact's whole size first, so `VFS_REFUSED` / `file-too-large` (or `quota-exceeded`) leaves no file behind; a genuine mid-chain failure (the device fills up) is reported as the prefix it left, with its byte count and a resume offset, never as a silent success.
 - `limits.fileLimitBytes` defaults to 15 MiB (15 728 640) so that the default ingest is one atomic
   mutation that cannot leave a half-written file, and an environment may raise it up to the tier's
   `single_file_limit` (16 MiB … 256 MiB, clamped as `budgets.md` §4 clamps that value). The raise is
@@ -422,7 +421,7 @@ would fill the one bucket the user's work lives in. So:
 ### 12.8 What `ubuntu.status` answers
 
 `{job, exitCode, logTail, artifacts[], failure, internalAccessObserved, seal}`, all bounded and
-read-only:
+read-only (and `approval` is inside `job`):
 
 - `job` is the current `JobRef` (§12.2), including `state`, `seq`, `egress`, `authorityExited` and
   `limits`. `seq` increases by one per state change and per artifact-state change, so two polls tell a

@@ -61,6 +61,6 @@ class UbuntuPhoneCatalog(
     companion object {
         /** Stable refusal for every shape this catalog does not implement. */
         const val MESSAGE_UNSUPPORTED: String =
-            "only `phone info` and `phone ubuntu <probe|run|status|close>` are implemented"
+            "only `phone info` and `phone ubuntu <probe|run|status|fetch|close>` are implemented"
     }
 }

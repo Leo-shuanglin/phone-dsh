@@ -11,15 +11,41 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import com.phonedsh.dsh.background.NotificationCapability
+import com.phonedsh.dsh.localexec.UbuntuApproval
+import com.phonedsh.dsh.localexec.UbuntuApprovalDecision
+import com.phonedsh.dsh.localexec.UbuntuApprovalPrompt
+import com.phonedsh.dsh.localexec.UbuntuApprovalRequest
 import com.phonedsh.ui.page.PhoneCapability
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class MainActivity : ComponentActivity() {
     private val engine: ProbeEngineViewModel by viewModels()
+
+    /**
+     * The one confirmation the `ubuntu` approval gate is waiting on, if any.
+     *
+     * The gate lives in `:dsh` and knows nothing about Compose; the prompt this
+     * Activity installs publishes the request here, the dialog below renders it,
+     * and the user's answer completes [PendingUbuntuApproval.answer]. It is a
+     * `StateFlow` so the write can come from the host-tool coroutine.
+     */
+    private val pendingUbuntuApproval = MutableStateFlow<PendingUbuntuApproval?>(null)
 
     /**
      * Bumped when the notification answer changes what the background facts may
@@ -112,6 +138,10 @@ class MainActivity : ComponentActivity() {
         // asks it for the key's *state* while building the Worker env, and before
         // the view model constructs the gateway that asks it for the credential.
         ApiKeyStore.install(applicationContext)
+        // The model service's device record, installed before the launch config:
+        // `ProbeLaunchConfig.from` overlays the saved endpoint/model on the launch
+        // extras, which is what makes a 保存 apply at the next host start.
+        ProviderConfigStore.install(applicationContext)
         // The phone-permissions page's ask log, read before the first facts build so
         // the very first frame already knows which rows were already answered.
         PhonePermissionAsks.install(applicationContext)
@@ -129,6 +159,23 @@ class MainActivity : ComponentActivity() {
         // The launch values must be installed before the view model's first
         // access constructs the engine and its `env` page parameter.
         ProbeLaunchConfig.install(intent)
+        // The `ubuntu` approval gate's dialog. Installed before the engine can
+        // start so the first `ubuntu run` already has a surface; the gate reads
+        // the prompt at decision time, so order is not a correctness property —
+        // it is just the honest place for the install.
+        UbuntuApproval.install(object : UbuntuApprovalPrompt {
+            override suspend fun ask(request: UbuntuApprovalRequest): UbuntuApprovalDecision {
+                val answer = CompletableDeferred<UbuntuApprovalDecision>()
+                pendingUbuntuApproval.value = PendingUbuntuApproval(request, answer)
+                return try {
+                    answer.await()
+                } finally {
+                    // Clear only if this request is still the one on screen: a
+                    // later request (or a destroy) may already have replaced it.
+                    if (pendingUbuntuApproval.value?.answer === answer) pendingUbuntuApproval.value = null
+                }
+            }
+        })
         // targetSdk 35 enforces edge-to-edge; consume the insets in ProbeScreen.
         enableEdgeToEdge()
         setContent {
@@ -138,6 +185,7 @@ class MainActivity : ComponentActivity() {
             val channel by engine.channel.collectAsState()
             val turn by engine.turn.collectAsState()
             val recoveryNotice by ProbeRecovery.notice.collectAsState()
+            val ubuntuApproval by pendingUbuntuApproval.asStateFlow().collectAsState()
             HostShell(
                 engine = engine,
                 state = state,
@@ -149,12 +197,42 @@ class MainActivity : ComponentActivity() {
                 backgroundRevision = backgroundRevision,
                 permissionRevision = permissionRevision,
                 onStart = engine::start,
-                onStop = engine::stop,
+                // Stopping the local engine ends every DSH session it hosts, so
+                // the session-scoped `ubuntu` approval must go with it. Starting
+                // again requires a fresh confirmation, which is the design's
+                // "session end invalidates the grant" made observable.
+                onStop = {
+                    engine.stop()
+                    UbuntuApproval.endSession()
+                },
                 onRunTurn = ::runTurnOrAskForNotifications,
                 onPhonePermissionRequest = ::requestPhonePermission,
                 onPhonePermissionSettings = ::openPhonePermissionSettings,
             )
+            UbuntuApprovalDialog(
+                pending = ubuntuApproval,
+                onAnswer = { approved ->
+                    val pending = ubuntuApproval ?: return@UbuntuApprovalDialog
+                    pendingUbuntuApproval.value = null
+                    pending.answer.complete(
+                        if (approved) UbuntuApprovalDecision.Approved else UbuntuApprovalDecision.Denied,
+                    )
+                },
+            )
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // A configuration change is the same session on a new Activity; anything
+        // else destroys the surface that could answer a pending confirmation.
+        if (isChangingConfigurations) return
+        UbuntuApproval.install(null)
+        UbuntuApproval.endSession()
+        pendingUbuntuApproval.value?.answer?.complete(
+            UbuntuApprovalDecision.Unavailable("activity_destroyed"),
+        )
+        pendingUbuntuApproval.value = null
     }
 
     /**
@@ -246,4 +324,68 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val TAG = "PDSHMain"
     }
+}
+
+/**
+ * One confirmation the `ubuntu` gate is waiting on.
+ *
+ * [answer] is completed exactly once — by the dialog, by [MainActivity.onDestroy]
+ * with `Unavailable`, or never (then the gate's own timeout answers). The
+ * request carries no `argv`: the dialog describes the environment and the use,
+ * and the command is named by digest in the audit.
+ */
+private class PendingUbuntuApproval(
+    val request: UbuntuApprovalRequest,
+    val answer: CompletableDeferred<UbuntuApprovalDecision>,
+)
+
+/**
+ * The `ubuntu` confirmation.
+ *
+ * Shape follows `PhonePermissionsPage`'s `ConfirmationDialog`: a title, the
+ * purpose, and 取消 / 继续. Here 继续 is 允许 because the decision grants the
+ * whole session, not one system prompt. It says what this build can and cannot
+ * promise: the mock seal is named, the session scope is named, and a refusal is
+ * stated to start nothing.
+ *
+ * @param pending the request on screen, or `null` when none is waiting.
+ * @param onAnswer `true` for 允许, `false` for 拒绝 / dismissal.
+ */
+@Composable
+private fun UbuntuApprovalDialog(
+    pending: PendingUbuntuApproval?,
+    onAnswer: (Boolean) -> Unit,
+) {
+    if (pending == null) return
+    val request = pending.request
+    AlertDialog(
+        onDismissRequest = { onAnswer(false) },
+        title = { Text("允许使用本地 Ubuntu 环境？") },
+        text = {
+            Column {
+                Text("环境：${request.env}（backend=${request.backend}）")
+                request.label?.let { Text("用途：$it") }
+                Text("")
+                Text(
+                    "它能读到的只有工作区；job 期间三个内部根被密封，" +
+                        "但同 UID 的代码有办法恢复权限。本构建的密封是 mock 的，" +
+                        "答案会标注 sealMock。",
+                )
+                Text("")
+                Text("一次批准覆盖本 session 内后续的 ubuntu run；停止本地引擎或 session 结束后失效。")
+                Text("")
+                Text("拒绝则本次 run 失败（cause=approval_denied），不会启动任何命令，也不会截断任何文件。")
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onAnswer(true) }) {
+                Text("允许", textAlign = TextAlign.End, modifier = Modifier.padding(horizontal = 4.dp))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { onAnswer(false) }) {
+                Text("拒绝", textAlign = TextAlign.End, modifier = Modifier.padding(horizontal = 4.dp))
+            }
+        },
+    )
 }

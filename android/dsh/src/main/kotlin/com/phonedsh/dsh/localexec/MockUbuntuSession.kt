@@ -179,8 +179,16 @@ class MockUbuntuSession(
         return lane
     }
 
-    /** Submit one job (bridge.md §12.2). */
-    suspend fun submit(request: UbuntuExecRequest): UbuntuSubmit = lane().submit(request)
+    /**
+     * Submit one job (bridge.md §12.2).
+     *
+     * @param approval the session decision that admitted it, written into the
+     *   record's audit line; `null` for a caller with no gate (tests).
+     */
+    suspend fun submit(
+        request: UbuntuExecRequest,
+        approval: UbuntuJobApproval? = null,
+    ): UbuntuSubmit = lane().submit(request, approval)
 
     /** The current record, or null for an id this process never knew. */
     suspend fun status(jobId: String): UbuntuJobRecord? = lane().status(jobId)

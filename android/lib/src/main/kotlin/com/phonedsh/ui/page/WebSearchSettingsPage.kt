@@ -115,6 +115,12 @@ public enum class WebSearchFailureReason {
  * @param noModelProfile true when no model service is configured at all.
  * @param writable `NO` disables the controls and prints
  *   [UiStrings.HOST_READ_ONLY_HINT]; `UNKNOWN` is not `NO`.
+ * @param readOnlyReason the host's own sentence for why this page cannot be
+ *   written, or `null` when it offers no reason. It is the host's copy, not the
+ *   page's: only the host knows which command is missing, and a generic
+ *   "只读" would hide the difference between "this device must not" and "this
+ *   build cannot". It renders only when [writable] is `NO`, so a writable host
+ *   can never leave a stale reason on screen.
  */
 @Immutable
 public data class WebSearchFacts(
@@ -127,6 +133,7 @@ public data class WebSearchFacts(
     public val noModelProfile: Boolean = false,
     public val failure: WebSearchFailureReason? = null,
     public val writable: FactState = FactState.UNKNOWN,
+    public val readOnlyReason: String? = null,
 )
 
 // ---------------------------------------------------------------------------
@@ -145,6 +152,8 @@ public data class WebSearchFacts(
  * @param restartHint the 什么时候生效 sentence, chosen from [engineStarted].
  * @param notesExpanded whether the 还要知道 group is open.
  * @param canWrite false when the host reported the page is not writable.
+ * @param readOnlyReason the host's sentence for why this page cannot be written;
+ *   `null` when it reported none. Rendered only while [canWrite] is false.
  * @param failure the page-owned failure copy, or `null`.
  */
 @Immutable
@@ -160,6 +169,7 @@ public data class WebSearchScreenState(
     public val launchWarning: String?,
     public val notesExpanded: Boolean = true,
     public val canWrite: Boolean = true,
+    public val readOnlyReason: String? = null,
     public val failure: String? = null,
 ) {
     /** The last read failed; [failure] explains it. */
@@ -217,6 +227,7 @@ public data class WebSearchScreenState(
                 launchWarning = facts.launchWarning,
                 notesExpanded = local.fold.isExpanded(NOTES_SECTION_ID),
                 canWrite = facts.writable != FactState.NO,
+                readOnlyReason = facts.readOnlyReason?.trim()?.takeIf { it.isNotEmpty() },
                 failure = facts.failure?.text(),
             )
         }
@@ -334,6 +345,16 @@ public fun WebSearchSettingsPage(
                     verticalArrangement = Arrangement.Top,
                 ) {
                     modeGroup(state = state, enabled = state.canWrite, onModeChange = onModeChange)
+                    // The host's own reason, right under the controls it disabled:
+                    // "why can this page not be written" is a host fact, and a
+                    // bare 只读 would leave the person unable to tell a product
+                    // limit from a missing command. It renders only while the
+                    // controls are disabled, so a writable host never shows it.
+                    if (!state.canWrite && state.readOnlyReason != null) {
+                        item(key = "mode.readonly.reason") {
+                            SettingsFootnoteRow(text = state.readOnlyReason)
+                        }
+                    }
                     if (state.isSearchApi) {
                         addressGroup(
                             address = address,

@@ -32,14 +32,15 @@ class PageTokenReferenceTest {
         "ChatRows.kt" to ChatRowsTokens.refs,
         "SessionPageChrome.kt" to SessionPageChromeTokens.refs,
         "SessionsPage.kt" to SessionsPageTokens.refs,
-        "SessionHistoryPage.kt" to SessionHistoryPageTokens.refs,
         "SessionActivityPage.kt" to SessionActivityPageTokens.refs,
-        // The N5 mirror lane: the files page and the commands page declare the
-        // same inventory as the session pages, so an extra or missing token use
-        // fails here too.
+        // L55 removed `SessionHistoryPage.kt`, `GoalDetailPage.kt` and the `ToolsPage`
+        // composable (with its inventory object): all three were zero-call pages, so
+        // there is no inventory left to compare for them. `ToolsPage.kt` still exists
+        // as the shared reducer behind `PDSHShellPage`, but it declares no view and
+        // therefore no token inventory.
+        // The N5 mirror lane: the files page declares the same inventory as the
+        // session pages, so an extra or missing token use fails here too.
         "FilesPage.kt" to FilesPageTokens.refs,
-        "ToolsPage.kt" to ToolsPageTokens.refs,
-        "GoalDetailPage.kt" to GoalDetailTokens.refs,
         // The two pages that landed after this test was written. Listing them here is
         // what makes the equality assertion below bite: an unlisted page silently
         // escaped the inventory check until its file was added to this map.

@@ -70,7 +70,13 @@ sealed interface UbuntuSubmit {
 
 /** One `ubuntu.fetch` answer (bridge.md §12.8). */
 sealed interface UbuntuFetch {
-    /** Bytes `[offset, offset + chunk.size)`, at most 512 KiB decoded. */
+    /**
+     * Bytes `[offset, offset + chunk.size)`, at most 512 KiB decoded.
+     *
+     * [limits] is the JobRef's published bound set: the page needs the declared
+     * `fileLimitBytes` and the workspace bucket to refuse an impossible write
+     * *before* it moves a byte (a refusal that starts writing is a truncation).
+     */
     data class Chunk(
         val jobId: String,
         val name: String,
@@ -78,10 +84,16 @@ sealed interface UbuntuFetch {
         val bytes: Long,
         val eof: Boolean,
         val chunk: ByteArray,
+        val limits: UbuntuJobLimits,
     ) : UbuntuFetch
 
     /** A resource refusal; the same shape `artifacts[].refusal` has. */
-    data class Refused(val jobId: String, val name: String, val refusal: UbuntuVfsRefusal) : UbuntuFetch
+    data class Refused(
+        val jobId: String,
+        val name: String,
+        val refusal: UbuntuVfsRefusal,
+        val limits: UbuntuJobLimits,
+    ) : UbuntuFetch
 
     /** A §5 error the page answers with the error envelope. */
     data class Unavailable(
@@ -169,9 +181,18 @@ class UbuntuJobLane(
      * Admits a job and returns its `JobRef` (bridge.md §12.2).
      *
      * One non-terminal job per workspace: a second is `BRIDGE_BUSY` and creates
-     * no record, because two guests do not fit the app-process row.
+     * no record, because two guests do not fit the app-process row. That bound
+     * is a **resource** fact and stays where it is; the approval gate's
+     * *session* scope is a separate axis and never widens it (design §3
+     * layer 1's own note: concurrency is not the approval granularity).
+     *
+     * @param approval the session decision that admitted this job. It is part
+     *   of the audit line, so a record with a gate refusal cause must carry it.
      */
-    suspend fun submit(request: UbuntuExecRequest): UbuntuSubmit {
+    suspend fun submit(
+        request: UbuntuExecRequest,
+        approval: UbuntuJobApproval? = null,
+    ): UbuntuSubmit {
         val answer = mutex.withLock {
             val live = jobs.values.firstOrNull { !it.terminal }
             if (live != null) {
@@ -209,6 +230,7 @@ class UbuntuJobLane(
                 seal = UbuntuSealState.PENDING,
                 sealReason = null,
                 jobTimeoutMs = request.jobTimeoutMs,
+                approval = approval,
             )
             if (!store.save(record)) {
                 return@withLock UbuntuSubmit.Refused(BRIDGE_FAILED, "the job record could not be persisted")
@@ -223,6 +245,65 @@ class UbuntuJobLane(
             scope.launch { drive(jobId) }
         }
         return answer
+    }
+
+    /**
+     * Writes one terminal record for a job the approval gate refused.
+     *
+     * No adapter is contacted and no state is entered: the record is born
+     * `failed` with `outcome = not_started`, which is exactly what happened. It
+     * still uses the job store's one record shape, because the user's decision
+     * ("I declined this session") is testimony the audit must keep — a
+     * `ubuntu.status` of this id answers it, and the log line alone would not
+     * survive a restart.
+     *
+     * @param request the command that was asked for.
+     * @param failure the gate's failure (`approval_denied` / `approval_unavailable`).
+     * @param approval the decision itself.
+     * @returns the saved record, or `null` when the store refused the write.
+     */
+    suspend fun recordRefusal(
+        request: UbuntuExecRequest,
+        failure: UbuntuJobFailure,
+        approval: UbuntuJobApproval,
+    ): UbuntuJobRecord? = mutex.withLock {
+        val adapter = adapters[request.env]
+        val now = clock.nowMillis()
+        val record = UbuntuJobRecord(
+            jobId = "uj-" + UUID.randomUUID().toString().replace("-", ""),
+            env = request.env,
+            state = UbuntuJobState.FAILED,
+            seq = 1,
+            createdAtMs = now,
+            updatedAtMs = now,
+            egress = false,
+            authorityExited = null,
+            argvDigest = digest(request.argv),
+            argvLength = request.argv.size,
+            cwd = request.cwd,
+            workspace = request.workspace,
+            limits = UbuntuJobLimits.of(
+                budgets,
+                configuredFileLimitBytes = adapter?.fileLimitBytes ?: UbuntuJobLimits.DEFAULT_FILE_LIMIT_BYTES,
+                rssLimitBytes = adapter?.rssLimitBytes,
+            ),
+            label = request.label,
+            exitCode = null,
+            logTail = "",
+            artifacts = emptyList(),
+            failure = failure,
+            internalAccessObserved = null,
+            seal = UbuntuSealState.PENDING,
+            sealReason = null,
+            jobTimeoutMs = request.jobTimeoutMs,
+            approval = approval,
+        )
+        if (!store.save(record)) {
+            logger.error("the approval refusal for env ${request.env} could not be persisted")
+            return@withLock null
+        }
+        jobs[record.jobId] = record
+        record
     }
 
     /** The current record, or `null` for a job this process never heard of. */
@@ -422,7 +503,7 @@ class UbuntuJobLane(
         }
         val artifact = record.artifact(name)
             ?: return UbuntuFetch.Unavailable(jobId, name, BRIDGE_INVALID_PARAMS, "no artifact '$name'")
-        artifact.refusal?.let { return UbuntuFetch.Refused(jobId, name, it) }
+        artifact.refusal?.let { return UbuntuFetch.Refused(jobId, name, it, record.limits) }
         if (artifact.state == UbuntuArtifactState.MISSING) {
             return UbuntuFetch.Unavailable(
                 jobId,
@@ -436,7 +517,7 @@ class UbuntuJobLane(
         }
         if (offset == 0L) {
             val limitRefusal = precheckOne(artifact, record.limits)
-            if (limitRefusal != null) return UbuntuFetch.Refused(jobId, name, limitRefusal)
+            if (limitRefusal != null) return UbuntuFetch.Refused(jobId, name, limitRefusal, record.limits)
         }
         val adapter = adapters[record.env]
             ?: return UbuntuFetch.Unavailable(jobId, name, BRIDGE_UNAVAILABLE, "no adapter for '${record.env}'")
@@ -446,7 +527,7 @@ class UbuntuJobLane(
             update(jobId) { it.withArtifact(name) { artifactRecord -> artifactRecord.copy(state = UbuntuArtifactState.MISSING) } }
             return UbuntuFetch.Unavailable(jobId, name, BRIDGE_UNAVAILABLE, "the environment no longer has '$name'")
         }
-        return UbuntuFetch.Chunk(jobId, name, offset, artifact.bytes, chunk.eof, chunk.bytes)
+        return UbuntuFetch.Chunk(jobId, name, offset, artifact.bytes, chunk.eof, chunk.bytes, record.limits)
     }
 
     /**

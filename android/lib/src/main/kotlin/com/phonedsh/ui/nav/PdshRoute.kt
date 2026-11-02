@@ -409,9 +409,12 @@ public data class PdshNavState(public val stack: List<PdshRoute> = listOf(PdshRo
  *
  * The settings page is the iOS baseline's fixed index, whose rows name destination
  * ids instead of host-built row ids (`SettingsDestination`), so the router maps the
- * destination. Two destinations have no route this host owns: 新会话默认权限 is the
- * settings sheet's own child page, and 开源许可 (LicensesPage) is an iOS-only list
- * this app does not have — its row is a non-navigating explanation instead.
+ * destination. Four destinations have no route this host owns: 新会话默认权限 and
+ * 关于 are the settings sheet's own child pages, 开源许可 (LicensesPage) is an
+ * iOS-only list this app does not have — its row is a non-navigating explanation
+ * instead — and 开发者工具 is the Android-only index of the pages the iOS baseline
+ * left without an entry. `SettingsRoute` renders those three surfaces itself, so a
+ * `null` here is "the sheet swaps its own body", never "the row does nothing".
  */
 public object PdshSettingsRows {
     public fun targetOf(destination: SettingsDestination): PdshRoute? = when (destination) {
@@ -426,6 +429,8 @@ public object PdshSettingsRows {
         SettingsDestination.SHORTCUTS -> PdshRoute.Shortcuts
         SettingsDestination.PERMISSION_DEFAULTS,
         SettingsDestination.LICENSES,
+        SettingsDestination.ABOUT,
+        SettingsDestination.DEV_TOOLS,
         -> null
     }
 }

@@ -9,6 +9,8 @@
 package com.phonedsh.ui.nav
 
 import com.phonedsh.ui.page.SettingsDestination
+import com.phonedsh.ui.page.SettingsFacts
+import com.phonedsh.ui.page.SettingsScreenState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -30,15 +32,36 @@ class PdshSettingsRouteTest {
     }
 
     /**
-     * The two destinations this host does not route:
-     * 新会话默认权限 is the settings sheet's own child page (a local page swap, not a
-     * route), and 开源许可 has no Android page — its row is a disabled explanation,
-     * so it never emits a destination.
+     * The four destinations this host does not route — each is a surface the
+     * settings sheet draws itself:
+     * 新会话默认权限, 关于 and 开发者工具 are the sheet's own child pages (a local page
+     * swap), and 开源许可 has no Android page — its row is a disabled explanation.
      */
     @Test
-    fun `the two unrouted destinations stay null`() {
+    fun `the four unrouted destinations stay null`() {
         assertNull(PdshSettingsRows.targetOf(SettingsDestination.PERMISSION_DEFAULTS))
         assertNull(PdshSettingsRows.targetOf(SettingsDestination.LICENSES))
+        assertNull(PdshSettingsRows.targetOf(SettingsDestination.ABOUT))
+        assertNull(PdshSettingsRows.targetOf(SettingsDestination.DEV_TOOLS))
+    }
+
+    /**
+     * L55: the two Android-only entries. 版本 → 关于 and the appendix's 开发者工具 row
+     * are the only ways to reach the seven pages whose iOS baseline has no entry, so
+     * their destinations are pinned here — a rename that drops one would leave those
+     * pages unreachable again while every other test stayed green.
+     */
+    @Test
+    fun `the settings rows expose the about page and the developer tools index`() {
+        val state = SettingsScreenState.from(SettingsFacts())
+        assertEquals(
+            SettingsDestination.ABOUT,
+            state.row(SettingsScreenState.VERSION_ROW_ID)?.destination,
+        )
+        assertEquals(
+            SettingsDestination.DEV_TOOLS,
+            state.row(SettingsScreenState.DEV_TOOLS_ROW_ID)?.destination,
+        )
     }
 
     /** Every destination the page can name is covered by one of the two tests above. */
@@ -56,12 +79,15 @@ class PdshSettingsRouteTest {
                 SettingsDestination.RUNTIME_DETAILS, // PdshRoute.Runtime
                 SettingsDestination.EXPORT_DIAGNOSTICS, // PdshRoute.Export
                 SettingsDestination.SHORTCUTS, // PdshRoute.Shortcuts
-                // PERMISSION_DEFAULTS and LICENSES are the two null ones.
+                // PERMISSION_DEFAULTS, LICENSES, ABOUT and DEV_TOOLS are the four
+                // the settings sheet draws itself (a local page swap, no route).
                 SettingsDestination.LICENSES,
                 SettingsDestination.PERMISSION_DEFAULTS,
+                SettingsDestination.ABOUT,
+                SettingsDestination.DEV_TOOLS,
             ).sorted(),
             SettingsDestination.entries.sorted(),
         )
-        assertEquals(SettingsDestination.entries.size - 2, routed.size)
+        assertEquals(SettingsDestination.entries.size - 4, routed.size)
     }
 }

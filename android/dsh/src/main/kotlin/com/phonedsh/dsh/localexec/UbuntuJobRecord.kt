@@ -250,6 +250,8 @@ data class UbuntuExecRequest(
  * @param authorityExited which authority the job left; `null` until `remote`.
  * @param argvDigest sha256 of the canonical JSON `argv`, so the audit can name the
  *   command without storing it.
+ * @param approval the session approval that admitted this job, `null` only for a
+ *   record written before the gate existed (a reader must not invent one).
  */
 data class UbuntuJobRecord(
     val jobId: String,
@@ -274,6 +276,7 @@ data class UbuntuJobRecord(
     val seal: UbuntuSealState,
     val sealReason: String?,
     val jobTimeoutMs: Long,
+    val approval: UbuntuJobApproval? = null,
 ) {
     init {
         require(jobId.matches(JOB_ID)) { "not a D6 job id: $jobId" }
@@ -284,6 +287,16 @@ data class UbuntuJobRecord(
         require(!egress || authorityExited != null) { "egress without an authority is not a fact" }
         require(authorityExited == null || authorityExited in AUTHORITIES) {
             "authorityExited must be worker-vfs or device"
+        }
+        // A gate refusal is recorded with its decision and its cause; neither
+        // may appear without the other, or the audit could not say what happened.
+        val approvalCause = failure?.cause
+        if (approvalCause == UbuntuCause.APPROVAL_DENIED || approvalCause == UbuntuCause.APPROVAL_UNAVAILABLE) {
+            require(state == UbuntuJobState.FAILED) { "an approval refusal is a failed job, not ${state.wire}" }
+            require(approval != null) { "an approval refusal records its decision" }
+            require(approval!!.state != UbuntuApprovalState.GRANTED) {
+                "a granted approval cannot carry an approval refusal cause"
+            }
         }
     }
 

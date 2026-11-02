@@ -1,12 +1,10 @@
-// The drawer (sessions, workspaces, archive) and the embedded queue page.
+// The drawer (sessions, workspaces, archive).
 // SPDX-License-Identifier: MIT
 //
-// Spec: `spec/ui/v1/README.md` §1 (SessionsPage: 会话列表、重命名、删除、开关; the
-// queue is one of the embedded sub-pages implemented with its parent) and §3.1
-// (the two layers). The baseline is
+// Spec: `spec/ui/v1/README.md` §1 (SessionsPage: 会话列表、重命名、删除、开关) and
+// §3.1 (the two layers). The baseline is
 // `examples/probe-app/PhoneDSHProbe/SessionsPage.swift`, which draws the drawer
-// as eight `Section` blocks: five in the drawer itself and three in the
-// `SessionQueuePage` that lives in the same file.
+// as five `Section` blocks in the page body.
 //
 // The drawer's sections, in the baseline's order:
 //   1. 新建会话, its blocked reason, the failure line and the ungrouped sessions;
@@ -14,8 +12,14 @@
 //   3. one section per workspace: the folder row, its menu, then its sessions;
 //   4. 添加工作文件夹 (hidden while the drawer is completely empty);
 //   5. 已归档: a header with the count, then the archived rows and 恢复.
-// The queue page's Sections 6-8 are: the loading line, one section per queued
-// message (下一轮 / 当前步骤) and the error section.
+//
+// L55 removed the `SessionQueuePage` that used to live in this file. The baseline
+// keeps that screen as a **private** sub-view of `SessionsPage.swift:656`, opened
+// by `navigationDestination(item: $selectedQueueSession)` — and `selectedQueueSession`
+// is declared at `:101` and never assigned anywhere in the probe app, so the
+// screen has no entry on iOS either. The queue a person actually sees is Chat's
+// own `queueDock` (`ChatPage.swift`). A page with no entry on either platform, no
+// own contract and no route was the zero-call debt this lane was asked to close.
 //
 // Two layers, kept apart on purpose (§3.1):
 //   * host facts: sessions, workspace membership, archived ids, the current
@@ -1909,340 +1913,6 @@ private fun DeleteWorkspaceDialog(
     )
 }
 
-/** Which lane a queued message waits in. */
-public enum class QueueLane { NEXT_TURN, CURRENT_STEP }
-
-/** Maps the host's lane string; anything that is not `next-turn` is the current step. */
-public fun queueLaneOf(raw: String): QueueLane =
-    if (raw == NEXT_TURN_LANE) QueueLane.NEXT_TURN else QueueLane.CURRENT_STEP
-
-/** One queued message exactly as the host lists it. */
-public data class SessionQueueItem(
-    public val id: String,
-    public val lane: QueueLane,
-    public val text: String = "",
-)
-
-/** The queue page's local events: only the edit draft is local. */
-public data class SessionQueueLocalState(
-    public val editingID: String? = null,
-    public val editDraft: String = "",
-)
-
-/** What the queue page currently knows. */
-public enum class QueueStatus {
-    /** The host has not read this session's queue yet (the baseline's progress view). */
-    LOADING,
-
-    /** The host read the queue and it is empty. */
-    EMPTY,
-
-    /** The host read at least one queued message. */
-    READY,
-}
-
-/** One visible queued message. */
-public data class SessionQueueRowView(
-    public val id: String,
-    public val lane: QueueLane,
-    /** 下一轮 or 当前步骤. */
-    public val laneLabel: String,
-    public val text: String,
-    public val editing: Boolean,
-)
-
-/**
- * The queue page's state.
- *
- * @param status loading until the host reports this session's queue.
- * @param rows the queued messages, in the host's order: the baseline lists
- *   `next-turn` before `next-step`.
- * @param failure the host's read failure; the page shows it as its own 错误
- *   section (the baseline's Section 8).
- */
-public data class SessionQueueScreenState(
-    public val status: QueueStatus,
-    public val rows: List<SessionQueueRowView>,
-    public val failure: String?,
-    public val editDraft: String = "",
-    /** True while a host refresh is in flight (the pull-to-refresh indicator). */
-    public val refreshInFlight: Boolean = false,
-) {
-    public companion object {
-        /**
-         * Projects the queue read into the page state.
-         *
-         * Pure: the same items and the same edit script always yield the same
-         * lanes, labels and editor, so the sequence replays on the JVM.
-         *
-         * @param sessionID the session whose queue this page shows.
-         * @param items the host's queue; `null` means it has not been read yet.
-         * @param queueSessionID the session the host's last queue read belongs
-         *   to; when it differs from [sessionID] the page is still loading (the
-         *   baseline's `queueSessionID != session.id` check).
-         * @param failure the host's read failure, if any.
-         * @param local the local edit editor.
-         */
-        public fun from(
-            sessionID: String,
-            items: List<SessionQueueItem>? = null,
-            queueSessionID: String? = null,
-            failure: String? = null,
-            local: SessionQueueLocalState = SessionQueueLocalState(),
-            refreshing: Boolean = false,
-        ): SessionQueueScreenState {
-            val status = when {
-                queueSessionID != sessionID || items == null -> QueueStatus.LOADING
-                items.isEmpty() -> QueueStatus.EMPTY
-                else -> QueueStatus.READY
-            }
-            val editingID = local.editingID?.takeIf { id -> items.orEmpty().any { it.id == id } }
-            val rows = if (status == QueueStatus.READY) {
-                items.orEmpty().map { item ->
-                    SessionQueueRowView(
-                        id = item.id,
-                        lane = item.lane,
-                        laneLabel = when (item.lane) {
-                            QueueLane.NEXT_TURN -> UiStrings.SESSIONS_QUEUE_NEXT_TURN
-                            QueueLane.CURRENT_STEP -> UiStrings.SESSIONS_QUEUE_CURRENT_STEP
-                        },
-                        text = item.text,
-                        editing = item.id == editingID,
-                    )
-                }
-            } else {
-                emptyList()
-            }
-            return SessionQueueScreenState(
-                status = status,
-                rows = rows,
-                failure = failure,
-                editDraft = local.editDraft,
-                refreshInFlight = refreshing,
-            )
-        }
-    }
-}
-
-/**
- * The queue page (the baseline's `SessionQueuePage`, Sections 6-8).
- *
- * The baseline wires a navigation destination for it but never sets the
- * selection, so no drawer row opens it there; this port mirrors that and does
- * not invent an entry point. The page is public so the host can present it when
- * it grows one.
- *
- * @param state the pure screen state ([SessionQueueScreenState.from]).
- * @param onBack leave the page.
- * @param onEdit open the editor dialog for one message.
- * @param onEditDraftChange edit the replacement text.
- * @param onEditSave commit the replacement (`action: edit` upstream).
- * @param onEditCancel close the editor.
- * @param onSteer make one message the current steer (`action: steer`).
- * @param onRemove remove one message (`action: remove`).
- * @param onRetry retry a failed queue read.
- * @param onRefresh pull-to-refresh (the baseline's `.refreshable`).
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-public fun SessionQueuePage(
-    state: SessionQueueScreenState,
-    modifier: Modifier = Modifier,
-    onBack: (() -> Unit)? = null,
-    onEdit: (SessionQueueRowView) -> Unit = {},
-    onEditDraftChange: (String) -> Unit = {},
-    onEditSave: (SessionQueueRowView) -> Unit = {},
-    onEditCancel: () -> Unit = {},
-    onSteer: (SessionQueueRowView) -> Unit = {},
-    onRemove: (SessionQueueRowView) -> Unit = {},
-    onRetry: (() -> Unit)? = null,
-    onRefresh: (() -> Unit)? = null,
-) {
-    val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
-    PageFrame(
-        title = UiStrings.SESSIONS_QUEUE_TITLE,
-        onBack = onBack,
-        rootTag = UiPageTags.SESSION_QUEUE_ROOT,
-        modifier = modifier,
-    ) {
-        PullToRefreshBox(
-            isRefreshing = state.refreshInFlight,
-            onRefresh = onRefresh ?: {},
-            modifier = Modifier.fillMaxSize().testTag(UiPageTags.SESSION_QUEUE_REFRESH),
-        ) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().testTag(UiPageTags.SESSION_QUEUE_LIST),
-            ) {
-                when (state.status) {
-                    QueueStatus.LOADING -> item(key = "queue-loading") {
-                        BasicText(
-                            text = UiStrings.SESSIONS_QUEUE_LOADING,
-                            style = type.secondary.copy(color = tokens.colors.secondary),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag(UiPageTags.SESSION_QUEUE_LOADING)
-                                .padding(
-                                    horizontal = tokens.geometry.pageOuterMarginH,
-                                    vertical = tokens.spacing.iconText,
-                                ),
-                        )
-                    }
-
-                    QueueStatus.EMPTY -> item(key = "queue-empty") {
-                        EmptyHint(
-                            title = UiStrings.SESSIONS_QUEUE_EMPTY,
-                            hint = UiStrings.SESSIONS_QUEUE_EMPTY_HINT,
-                            tag = UiPageTags.SESSION_QUEUE_EMPTY,
-                            modifier = Modifier.fillParentMaxSize(),
-                        )
-                    }
-
-                    QueueStatus.READY -> items(
-                        items = state.rows,
-                        key = { "queue-${it.id}" },
-                    ) { row ->
-                        SessionSectionLabel(
-                            text = row.laneLabel,
-                            modifier = Modifier.testTag(UiPageTags.SESSION_QUEUE_SECTION),
-                        )
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag(UiPageTags.SESSION_QUEUE_ROW)
-                                .padding(
-                                    horizontal = tokens.geometry.pageOuterMarginH,
-                                    vertical = tokens.spacing.badgeInsetV,
-                                ),
-                            verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
-                        ) {
-                            BasicText(
-                                text = if (row.text.isEmpty()) {
-                                    UiStrings.SESSIONS_QUEUE_NO_TEXT
-                                } else {
-                                    row.text
-                                },
-                                style = type.body.copy(color = tokens.colors.primary),
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
-                            ) {
-                                SessionTextAction(
-                                    label = UiStrings.SESSIONS_QUEUE_EDIT,
-                                    onClick = { onEdit(row) },
-                                    tone = SessionActionTone.ACCENT,
-                                    modifier = Modifier.testTag(UiPageTags.SESSION_QUEUE_EDIT),
-                                )
-                                SessionTextAction(
-                                    label = UiStrings.SESSIONS_QUEUE_STEER,
-                                    onClick = { onSteer(row) },
-                                    tone = SessionActionTone.SECONDARY,
-                                    modifier = Modifier.testTag(UiPageTags.SESSION_QUEUE_STEER),
-                                )
-                                SessionTextAction(
-                                    label = UiStrings.SESSIONS_QUEUE_REMOVE,
-                                    onClick = { onRemove(row) },
-                                    tone = SessionActionTone.DANGER,
-                                    modifier = Modifier.testTag(UiPageTags.SESSION_QUEUE_REMOVE),
-                                )
-                            }
-                        }
-                    }
-                }
-                if (state.failure != null) {
-                    item(key = "queue-error") {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            SessionSectionLabel(
-                                text = UiStrings.SESSIONS_QUEUE_ERROR,
-                                modifier = Modifier.testTag(UiPageTags.SESSION_QUEUE_ERROR),
-                            )
-                            BasicText(
-                                text = state.failure,
-                                style = type.caption.copy(color = tokens.colors.danger),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(
-                                        horizontal = tokens.geometry.pageOuterMarginH,
-                                        vertical = tokens.spacing.badgeInsetV,
-                                    ),
-                            )
-                            if (onRetry != null) {
-                                SessionTextAction(
-                                    label = UiStrings.RETRY,
-                                    onClick = onRetry,
-                                    tone = SessionActionTone.ACCENT,
-                                    modifier = Modifier.padding(
-                                        horizontal = tokens.geometry.pageOuterMarginH,
-                                    ),
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        state.rows.firstOrNull { it.editing }?.let { row ->
-            EditQueueDialog(
-                text = state.editDraft,
-                onTextChange = onEditDraftChange,
-                onSave = { onEditSave(row) },
-                onCancel = onEditCancel,
-            )
-        }
-    }
-}
-
-/**
- * The queue message editor: the baseline's `.sheet` with a TextEditor.
- *
- * Modal on purpose, like the other editors; the standard dialog keeps the
- * interaction one design instead of an inline field that only this page has.
- */
-@Composable
-private fun EditQueueDialog(
-    text: String,
-    onTextChange: (String) -> Unit,
-    onSave: () -> Unit,
-    onCancel: () -> Unit,
-) {
-    val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
-    DialogFrame(
-        title = UiStrings.SESSIONS_QUEUE_EDIT_TITLE,
-        onDismissRequest = onCancel,
-        text = {
-            BasicTextField(
-                value = text,
-                onValueChange = onTextChange,
-                textStyle = type.body.copy(color = tokens.colors.primary),
-                cursorBrush = SolidColor(tokens.colors.accent),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = tokens.geometry.pageRowMinHeight)
-                    .testTag(UiPageTags.SESSION_QUEUE_EDIT_FIELD)
-                    .semantics { contentDescription = UiStrings.SESSIONS_QUEUE_EDIT_TITLE },
-            )
-        },
-        confirmButton = {
-            TextButton(
-                onClick = onSave,
-                colors = ButtonDefaults.textButtonColors(contentColor = tokens.colors.accent),
-                modifier = Modifier.testTag(UiPageTags.SESSION_QUEUE_SAVE),
-            ) {
-                BasicText(
-                    text = UiStrings.SAVE,
-                    style = type.body.copy(color = tokens.colors.accent),
-                )
-            }
-        },
-        dismissButton = {
-            DialogDismissButton(onCancel, UiPageTags.SESSION_QUEUE_CANCEL)
-        },
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Copy policy and pure helpers
 // ---------------------------------------------------------------------------
@@ -2410,7 +2080,6 @@ private val DEFAULT_WORKSPACE_TITLES: Set<String> =
     setOf("workspace", "工作区", "工作文件夹", "default")
 
 private const val WORKSPACE_NAME_LIMIT: Int = 12
-private const val NEXT_TURN_LANE: String = "next-turn"
 private const val EXPANDED_ROTATION: Float = 90f
 private const val MINUTE_MS: Long = 60_000
 private const val HOUR_MS: Long = 3_600_000

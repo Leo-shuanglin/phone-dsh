@@ -46,7 +46,7 @@
 // trip stays inside budgets.md §2 instead of growing an edge the contract does
 // not have.
 //
-// ---- the window that guards that drain (L49) ------------------------------
+// ---- the window that guards that drain (L49, completed by L53) --------------
 // The D14 row's premise is "no background window". While the platform holds a
 // UIDT job or a dataSync foreground service for this turn it has *granted*
 // execution authority, and plan §7.9 promises "尽量完成" there; draining then
@@ -58,6 +58,13 @@
 // unreadable window is treated as no window — a failed reading can cost a turn,
 // it can never exempt one. [TurnWindowRead] is the reading; nothing here
 // hard-codes `true`.
+//
+// L53 extended "window" to the phase before the component runs: a UIDT job that
+// `JobScheduler.schedule()` accepted but that is still pending on its network
+// constraint is a window in place (`TurnWindowPhase.SCHEDULED`), so an early
+// HOME after a cold boot no longer drains a turn the platform promised to run.
+// The bound is unchanged: [WINDOW_HOLD_MAX_MILLIS] is measured from the
+// background edge, so a `SCHEDULED` phase that never starts still expires.
 
 package com.phonedsh.dsh.host
 
@@ -750,6 +757,11 @@ class DefaultPhoneDshHost(
     /**
      * Offers one `scenePhase(background)` to the measured turn window.
      *
+     * A `SCHEDULED` window (accepted by the platform, component not started yet)
+     * defers the edge exactly like a `RUNNING` one: the drain's premise is "no
+     * background window", and an accepted UIDT job or foreground-service start is
+     * a window. The log names the phase so the two readings are distinguishable.
+     *
      * @return `true` when the edge is deferred (the caller must not feed it), i.e.
      *   a window is in place. `false` for no window, an unreadable window and a
      *   hold that already expired — all three feed the edge, which is the
@@ -759,9 +771,10 @@ class DefaultPhoneDshHost(
         val heldWindow = hold.hold() ?: return false
         startHoldWatch()
         logger.info(
-            "window: scenePhase(background) with a ${heldWindow.backend.wireName} window in place; " +
-                "keeping Running (plan §7.9). The window watch feeds the edge when the window " +
-                "ends, and at the latest after $windowHoldMaxMillis ms",
+            "window: scenePhase(background) with a ${heldWindow.backend.wireName} window in place " +
+                "(phase=${heldWindow.phase.wireName}); keeping Running (plan §7.9). The window " +
+                "watch feeds the edge when the window ends, and at the latest after " +
+                "$windowHoldMaxMillis ms",
         )
         return true
     }
@@ -831,7 +844,8 @@ class DefaultPhoneDshHost(
         }
         logger.info(
             "window: feeding the deferred scenePhase(background) " +
-                "(reason=${release.reason.wireName}, held ${release.heldMillis} ms); " +
+                "(reason=${release.reason.wireName}, window=${release.backend.wireName}/" +
+                "${release.phase.wireName}, held ${release.heldMillis} ms); " +
                 "the ordinary Draining -> Parked exit runs now",
         )
         dispatch(ControllerSignal.ScenePhaseChanged(ScenePhase.BACKGROUND))
@@ -1342,6 +1356,11 @@ class DefaultPhoneDshHost(
          * platform's execution slot is shorter than this and ends first: the
          * window then reads absent and the ordinary drain runs without waiting for
          * the bound.
+         *
+         * The clock starts when the background edge is held, never when the window
+         * starts (L53): a `SCHEDULED` window whose job never enters its execution
+         * slot is bounded by this same value, and a later
+         * `SCHEDULED -> RUNNING` transition does not restart it.
          */
         const val WINDOW_HOLD_MAX_MILLIS: Long = 600_000L
 

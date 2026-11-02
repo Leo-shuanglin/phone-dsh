@@ -59,14 +59,6 @@
    "reviewBy": "2027-06-30"
   },
   {
-   "page": "sessions",
-   "kind": "unresolved-section",
-   "name": "row.laneLabel",
-   "reason": "The Android queue section title is the queue lane label (`row.laneLabel`); the baseline keeps that screen in the embedded SessionQueuePage, so the contract has no title for it.",
-   "owner": "android-parity",
-   "reviewBy": "2027-06-30"
-  },
-  {
    "page": "files",
    "kind": "unresolved-section",
    "name": "<untitled: folder>",

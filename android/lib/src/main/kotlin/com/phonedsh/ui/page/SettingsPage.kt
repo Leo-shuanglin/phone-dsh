@@ -230,6 +230,14 @@ public enum class SettingsRowKind {
  * there. The three rows that need a destination this app does not have (字号大小,
  * 快捷键, and 开源许可, which is an iOS-only list) hand their id to the host, which
  * maps them to a route or to nothing.
+ *
+ * L55 appended two values that are **not** routes: [ABOUT] and [DEV_TOOLS] are
+ * sub-surfaces of the settings sheet itself. In the baseline the about page is a
+ * settings-family page (`SettingsAboutPage`, preview-only after PR #13), and the
+ * developer-tools page that hosted `MemoryPage`/`ProbesPage`/`BackgroundPage`/
+ * `TaskScreenPage` was deleted by the same PR — so their Android entries belong
+ * inside the sheet, not on the route stack. `PdshSettingsRows.targetOf` returns
+ * `null` for both, and `SettingsRoute` swaps its own body instead.
  */
 public enum class SettingsDestination {
     PERMISSION_DEFAULTS,
@@ -243,6 +251,12 @@ public enum class SettingsDestination {
     LICENSES,
     EXPORT_DIAGNOSTICS,
     SHORTCUTS,
+
+    /** 关于: the settings about page (版本 / 平台 / 开源许可). */
+    ABOUT,
+
+    /** 开发者工具: the Android-only index of the pages iOS left without an entry. */
+    DEV_TOOLS,
 }
 
 /** One entry of a menu row's menu. */
@@ -469,6 +483,7 @@ public data class SettingsScreenState(
         public const val LICENSES_ROW_ID: String = "about.licenses"
         public const val BACKGROUND_ROW_ID: String = "platform.backgroundKeepAlive"
         public const val EXPORT_ROW_ID: String = "platform.exportDiagnostics"
+        public const val DEV_TOOLS_ROW_ID: String = "developer.tools"
         public const val NOTIFICATIONS_ROW_ID: String = "platform.notifications"
         public const val BATTERY_ROW_ID: String = "platform.battery"
         public const val BACK_ROW_ID: String = "platform.back"
@@ -616,10 +631,15 @@ public data class SettingsScreenState(
                 rows = listOf(
                     SettingsRowView(
                         id = VERSION_ROW_ID,
-                        kind = SettingsRowKind.VALUE,
+                        // L55: the version row opens the about page. The label and
+                        // the value are unchanged; only the chevron and the
+                        // destination are new, and both are the settings sheet's
+                        // own (no route).
+                        kind = SettingsRowKind.NAVIGATION,
                         title = ROW_VERSION,
                         value = facts.versionName ?: UiStrings.UNKNOWN,
                         tone = if (facts.versionName == null) PageTone.UNKNOWN else PageTone.NORMAL,
+                        destination = SettingsDestination.ABOUT,
                     ),
                     SettingsRowView(
                         id = LICENSES_ROW_ID,
@@ -663,6 +683,20 @@ public data class SettingsScreenState(
                             kind = SettingsRowKind.NAVIGATION,
                             title = UiStrings.SETTINGS_ROW_EXPORT,
                             destination = SettingsDestination.EXPORT_DIAGNOSTICS,
+                        ),
+                    )
+                    // L55: the four developer pages iOS deleted with the
+                    // developer-tools page (Memory / 设备探针 / 后台保活 / 任务屏)
+                    // plus the two product pages its baseline never wired
+                    // (每日简报 / 会话活动) live behind this one Android-only row.
+                    // The contract gate cannot see a settings row, so this entry
+                    // is proven on a device (uiautomator) instead.
+                    add(
+                        SettingsRowView(
+                            id = DEV_TOOLS_ROW_ID,
+                            kind = SettingsRowKind.NAVIGATION,
+                            title = ROW_DEV_TOOLS,
+                            destination = SettingsDestination.DEV_TOOLS,
                         ),
                     )
                     addAll(platformRows(facts.platform ?: SettingsPlatformFacts()))
@@ -1310,6 +1344,9 @@ private const val ROW_FONT_SIZE: String = "字号大小"
 private const val ROW_TRANSCRIPT_VIEW: String = "工作步骤展示"
 private const val ROW_COLLAPSE_TIMING: String = "工作步骤收起时机"
 private const val ROW_DEVELOPER_TOOLS: String = "显示代码工作视图"
+
+/** The Android-only entry to the pages iOS has no entry for (L55). */
+private const val ROW_DEV_TOOLS: String = "开发者工具"
 private const val ROW_SHORTCUTS: String = "快捷键"
 private const val ROW_BUSY_ENTER: String = "繁忙时的发送行为"
 private const val ROW_PERFORMANCE: String = "性能与用量"

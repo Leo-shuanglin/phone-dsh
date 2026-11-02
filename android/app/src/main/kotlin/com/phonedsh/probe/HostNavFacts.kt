@@ -18,16 +18,17 @@
 // background lane's readings (the merged manifest's components, the notification
 // link and the API level, which together decide whether a background window can
 // open), the battery-exemption fact, the launch's exact egress grant, whether the
-// app's one workspace directory exists, the sessions the journal lane stored, and
-// the phone-permission matrix's device reads (the app's own declared/granted
-// permissions, device-admin denials, the notification app-op, DND access and
-// hardware presence).
+// app's one workspace directory exists, the sessions the journal lane stored, the
+// model service's device record and key state, the command surface the HELLO
+// advertised, and the phone-permission matrix's device reads (the app's own
+// declared/granted permissions, device-admin denials, the notification app-op,
+// DND access and hardware presence).
 //
 // Not measured (so `null`): archived sessions, pinned order, the session queue,
-// schedules, session configuration, model profiles, web-search settings, MCP
-// servers, memory budget and power. The workspace *catalog* is not measured
-// either: this host has no `workspace/list` read, so the one folder row below is
-// the single workspace root this app itself owns, not a catalog entry.
+// schedules, session configuration, web-search settings, MCP servers, memory
+// budget and power. The workspace *catalog* is not measured either: this host has
+// no `workspace/list` read, so the one folder row below is the single workspace
+// root this app itself owns, not a catalog entry.
 package com.phonedsh.probe
 
 import android.view.View
@@ -36,6 +37,7 @@ import com.phonedsh.engine.EngineState
 import com.phonedsh.engine.HandshakeSummary
 import com.phonedsh.gateway.GatewayHostRule
 import com.phonedsh.platform.EngineHostState
+import com.phonedsh.shell.AcceleratorLimits
 import com.phonedsh.ui.nav.PdshNavFacts
 import com.phonedsh.ui.page.AutomationFacts
 import com.phonedsh.ui.page.ConfigurationFacts
@@ -49,6 +51,7 @@ import com.phonedsh.engine.KernelVerdict
 import com.phonedsh.engine.WebViewKernelReport
 import com.phonedsh.ui.page.NewSessionBlock
 import com.phonedsh.ui.page.PhoneCapability
+import com.phonedsh.ui.page.ProviderFailureReason
 import com.phonedsh.ui.page.ProviderKeyStatus
 import com.phonedsh.ui.page.ProviderProfile
 import com.phonedsh.ui.page.ModelProviderFacts
@@ -62,6 +65,8 @@ import com.phonedsh.ui.page.SessionsLocalState
 import com.phonedsh.ui.page.SessionsScreenState
 import com.phonedsh.ui.page.SettingsFacts
 import com.phonedsh.ui.page.SettingsPlatformFacts
+import com.phonedsh.ui.page.ShellLimits
+import com.phonedsh.ui.page.ShellSnapshot
 import com.phonedsh.ui.page.WebSearchFacts
 import com.phonedsh.ui.page.WebSurfaceFacts
 import com.phonedsh.ui.page.WebSurfaceSnapshot
@@ -203,19 +208,32 @@ internal fun buildNavFacts(
     return PdshNavFacts(
         workspaceFolders = workspaceFoldersFact(readings.workspacePresent),
         workbench = workbench,
-        // The model key is the one setting this host *can* read: it is stored in the
-        // Android Keystore under this App's own account, so the page can show the
-        // key's existence and its masked suffix. Everything else about the provider
-        // (model name, endpoint) is unknown — the host has no DSH settings store.
-        modelProvider = ModelProviderFacts(
-            profiles = listOf(localProviderProfile()),
+        // The model service is the one setting this host *can* write: the device
+        // record holds the non-secret row (name/model/endpoint) and the key lives in
+        // [ApiKeyStore]'s Keystore envelope. `writable` is YES only when that record
+        // is installed — a host without it has no save command, and saying NO is the
+        // difference between "the page is read-only" and "this build cannot save".
+        modelProvider = modelProviderFacts(engineFact),
+        // 网页搜索 is (b): this host cannot make the write *work*, not merely
+        // *land*. The reason is the host's own sentence and the page prints it
+        // under the disabled controls (see WEB_SEARCH_READ_ONLY_REASON).
+        webSearch = WebSearchFacts(
             writable = FactState.NO,
+            readOnlyReason = WEB_SEARCH_READ_ONLY_REASON,
+            // 什么时候生效 offers the one engine verb that matches this state; the page
+            // must not offer 启动 while the engine already runs (the router now passes
+            // both verbs to the host).
+            engineStarted = engineFact,
         ),
-        webSearch = WebSearchFacts(writable = FactState.NO),
         mcp = MCPRegistryFacts(),
         // Adding a server starts from an empty form: nothing is stored under a
         // new id. Editing an existing id is 未知 and the router says so.
         mcpEditor = MCPEditorFacts(writable = FactState.NO),
+        // The command surface is the accelerators this host really advertises: the
+        // HELLO's host caps are the one measurement that says which of them the
+        // engine was told it can run. No HELLO means no snapshot, and the page keeps
+        // its 还没接上命令 body.
+        shell = shellSnapshot(handshake),
         runtime = RuntimeFacts(
             snapshot = RuntimeSnapshot(
                 engine = engineFact,
@@ -276,14 +294,15 @@ internal fun buildNavFacts(
         settings = SettingsFacts(
             // No permission editor exists on this host, so no preset is stored.
             defaultPermissionTier = null,
-            // The one service this host can speak about is its own key. A stored key
-            // — even one the service rejected — is a configured provider; the store
-            // saying "none" is 未配置. An unreadable store also renders 未配置,
-            // because the baseline's row has no third wording (reported as a gap).
-            modelProviderName = when (providerKey.status) {
-                ProviderKeyStatus.CONFIGURED, ProviderKeyStatus.INVALID -> LOCAL_PROVIDER_NAME
-                ProviderKeyStatus.NOT_CONFIGURED, ProviderKeyStatus.UNKNOWN -> null
-            },
+            // The one service this host can speak about is its own row: the saved
+            // device record names it, or — when nothing is saved — the launch's
+            // service does. A stored key (even one the service rejected) is a
+            // configured provider; the store saying "none" is 未配置.
+            modelProviderName = ProviderConfigStore.active()?.current()?.name
+                ?: when (providerKey.status) {
+                    ProviderKeyStatus.CONFIGURED, ProviderKeyStatus.INVALID -> LOCAL_PROVIDER_NAME
+                    ProviderKeyStatus.NOT_CONFIGURED, ProviderKeyStatus.UNKNOWN -> null
+                },
             // No MCP registry, web-search setting or composer preference is read.
             mcpServerCount = null,
             backgroundKeepAlive = foregroundService,
@@ -576,3 +595,106 @@ private fun localProviderProfile(): ProviderProfile {
         selected = true,
     )
 }
+
+/**
+ * The model-service page's facts, from the device record when there is one.
+ *
+ * Three honest states, and only the middle one is a save:
+ *   * the store is not installed (a preview, a Robolectric host, an `:app` build
+ *     without a files dir) → `writable = NO`, because there is no save command;
+ *   * a record exists or the store is empty → `writable = YES`; an empty store
+ *     shows the launch-derived service, which is the one the engine really uses;
+ *   * the record cannot be read → `profiles = null` and CONFIG_UNREADABLE: 未知,
+ *     never "no service" (which would invite an overwrite).
+ *
+ * @param engineStarted whether the local engine runs, so the page can say whether
+ *   a saved change is already in effect.
+ */
+private fun modelProviderFacts(engineStarted: FactState): ModelProviderFacts {
+    val store = ProviderConfigStore.active()
+        ?: return ModelProviderFacts(writable = FactState.NO)
+    return when (val read = store.read()) {
+        is ProviderStoreRead.Stored -> ModelProviderFacts(
+            profiles = listOf(profileOf(read.record)),
+            writable = FactState.YES,
+            engineStarted = engineStarted,
+        )
+        ProviderStoreRead.Empty -> ModelProviderFacts(
+            profiles = listOf(localProviderProfile()),
+            writable = FactState.YES,
+            engineStarted = engineStarted,
+        )
+        ProviderStoreRead.Unreadable -> ModelProviderFacts(
+            profiles = null,
+            failure = ProviderFailureReason.CONFIG_UNREADABLE,
+            writable = FactState.YES,
+            engineStarted = engineStarted,
+        )
+    }
+}
+
+/** One stored record as the page's row, with the key fact read from the Keystore. */
+private fun profileOf(record: ProviderRecord): ProviderProfile = ProviderProfile(
+    id = record.id,
+    name = record.name,
+    model = record.model.takeIf { it.isNotBlank() },
+    endpoint = record.endpoint,
+    key = ApiKeyStore.activeFact(),
+    selected = true,
+)
+
+/**
+ * The command surface the HELLO says this host advertised.
+ *
+ * The measurement is `hostCapabilities`: the host builds those strings from the
+ * exec bridge it really registered (`HostExec.defaultTools`), so filtering the
+ * `accelerator:` prefix yields exactly the executables the engine was told it can
+ * run — `phone`, `rg`, `jaq` on a boot whose accelerators mounted. No HELLO (the
+ * engine is stopped, or has not handshaken) means no snapshot, and the page keeps
+ * its 还没接上命令 body rather than a list that nothing backs.
+ *
+ * `environment` and `mounts` stay `null`: the caps carry neither, and they are not
+ * this host's two accelerator mounts (the page would print 2 个工作文件夹 for two
+ * directories). The limits are the bridge's own enforced constants, read from the
+ * same `AcceleratorLimits` the Rust side uses, not typed here.
+ *
+ * @param handshake the merged HELLO, or `null` before the page handshook.
+ */
+private fun shellSnapshot(handshake: HandshakeSummary?): ShellSnapshot {
+    val accelerators = handshake?.hostCapabilities.orEmpty()
+        .filter { it.startsWith(ACCELERATOR_CAPABILITY_PREFIX) }
+        .map { it.removePrefix(ACCELERATOR_CAPABILITY_PREFIX) }
+        .filter { it.isNotEmpty() }
+    if (accelerators.isEmpty()) return ShellSnapshot()
+    val limits = AcceleratorLimits()
+    return ShellSnapshot(
+        commands = accelerators,
+        limits = ShellLimits(
+            timeoutMilliseconds = limits.timeoutMs,
+            maxOutputBytes = limits.maxOutputBytes,
+            maxFiles = limits.maxFiles.toInt(),
+            maxFileBytes = limits.maxFileBytes,
+        ),
+    )
+}
+
+/** The HELLO capability prefix one executable accelerator is advertised under. */
+private const val ACCELERATOR_CAPABILITY_PREFIX: String = "accelerator:"
+
+/**
+ * Why 网页搜索 is read-only on this host — the host's own sentence, printed under
+ * the disabled mode rows.
+ *
+ * This is the (b) answer, and the distinction matters: the page *could* be given a
+ * store, but the write would not work. An independent search service needs its key
+ * injected by the host's egress proxy on the `/search` and `/fetch` paths
+ * (`PhoneWebSearchSettings` on iOS does exactly that), and this App's proxy is
+ * `ModelGatewayCredentialProvider`: one model endpoint, no search/fetch route, and
+ * the launch allow-list holds one exact origin. A saved configuration would leave
+ * the Worker with a placeholder key and a host the gateway may not even reach, so
+ * a 保存 button here would be a promise the engine cannot keep.
+ */
+private const val WEB_SEARCH_READ_ONLY_REASON: String =
+    "只读：独立搜索服务的密钥要由宿主在出网时注入 /search、/fetch 两条路径；" +
+        "Android 的出网代理只认模型服务的那个端点，没有搜索凭证路由，" +
+        "启动时也只放行一个精确 origin。写这份配置引擎用不上，所以本页不提供保存。"

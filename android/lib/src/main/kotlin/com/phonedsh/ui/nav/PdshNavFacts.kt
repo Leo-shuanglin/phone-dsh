@@ -11,16 +11,17 @@
 // state; it never becomes `0`, `emptyList()` or a fabricated success. A host
 // fills a field only from a measurement it actually made.
 //
-// [PdshHostAction] is the other direction. This host implements no settings
-// write, no folder mutation and no MCP save (§1 names no such command), so the
-// router hands those gestures back as an action. The Android host logs the
-// handoff and performs only the three actions it really owns (engine stop,
-// engine start/restart, Web-surface retry). A page is never told a write
-// succeeded: the facts only change when a real read reports a new value.
+// [PdshHostAction] is the other direction. This file only names the gestures; a
+// host performs the ones it owns and answers the rest with that fact. The Android
+// host, for instance, performs the engine stop/start, the Web-surface retry and
+// the model-service save (into its own device store), and says so on the routes
+// whose writes it cannot perform. A page is never told a write succeeded: the
+// facts only change when a real read reports a new value.
 package com.phonedsh.ui.nav
 
 import androidx.compose.runtime.Immutable
 import com.phonedsh.ui.page.AutomationFacts
+import com.phonedsh.ui.page.BackgroundFacts
 import com.phonedsh.ui.page.BusyEnterMode
 import com.phonedsh.ui.page.ConfigurationFacts
 import com.phonedsh.ui.page.EgressAllowListFacts
@@ -30,8 +31,10 @@ import com.phonedsh.ui.page.MCPServerDraft
 import com.phonedsh.ui.page.ModelProviderFacts
 import com.phonedsh.ui.page.PermissionTier
 import com.phonedsh.ui.page.PhonePermissionsFacts
+import com.phonedsh.ui.page.ProviderDraft
 import com.phonedsh.ui.page.RuntimeFacts
 import com.phonedsh.ui.page.SettingsFacts
+import com.phonedsh.ui.page.ShellSnapshot
 import com.phonedsh.ui.page.WebSearchFacts
 import com.phonedsh.ui.page.WebSurfaceFacts
 import com.phonedsh.ui.page.WorkbenchSnapshot
@@ -83,10 +86,19 @@ public sealed interface SettingsWrite {
  * @param webSurface the engine/WebView/page facts; no read by default.
  * @param settings the mirrored settings index's row values, one field per row,
  *   including the platform appendix.
+ * @param shell the command surface the host really carries: the accelerators it
+ *   advertises, their read-only limits and the run being shown. The default is
+ *   the empty snapshot, which the page renders as 还没接上命令 — never as "no
+ *   commands exist".
  * @param phonePermissions the phone-capability matrix's read-only input: what this
  *   host read about its own permissions, and the use audit it has (or has not). The
  *   default reports no read at all, so a host that never wired the matrix renders
  *   未知 on every row instead of borrowing a status.
+ * @param background 后台保活的诊断读数. It was missing until the L55 lane wired
+ *   `BackgroundPage`: without a field the page could only be handed
+ *   `BackgroundFacts()` inline, which made "the host never reads this" and "this
+ *   router does not accept the read" look the same. The default still reports no
+ *   snapshot — an unread host renders 未知, never 0 seconds.
  */
 @Immutable
 public data class PdshNavFacts(
@@ -102,16 +114,19 @@ public data class PdshNavFacts(
     public val configuration: ConfigurationFacts = ConfigurationFacts(),
     public val webSurface: WebSurfaceFacts = WebSurfaceFacts(),
     public val settings: SettingsFacts = SettingsFacts(),
+    public val shell: ShellSnapshot = ShellSnapshot(),
     public val phonePermissions: PhonePermissionsFacts = PhonePermissionsFacts(),
+    public val background: BackgroundFacts = BackgroundFacts(),
 )
 
 /**
  * One gesture this host cannot complete itself, handed to the composition root.
  *
- * Every action is token-free: no action carries a prompt, a credential or a
- * command line the host did not already own. [wire] is the stable label the host
- * logs, so an acceptance run can prove the handoff happened without quoting user
- * content.
+ * Every action's [wire] label is token-free, and a host logs only that label: no
+ * log line quotes a prompt, a credential, a URL or a command line. A payload may
+ * still carry what the person just typed (a draft's key, a shell argument) —
+ * that is the gesture's data, handed to the host once, never a fact the page
+ * reads back.
  */
 public sealed interface PdshHostAction {
     /** The stable, token-free label a host may log. */
@@ -172,6 +187,33 @@ public sealed interface PdshHostAction {
         override val wire: String = "provider.refresh"
     }
 
+    /**
+     * Persist one model-service draft that the person finished editing.
+     *
+     * The draft is the page's own view state, so it may carry the key the person
+     * just typed. [wire] never does, and no host logs a payload: the host hands
+     * the key to its device store and keeps nothing else. A host that cannot
+     * persist the draft reports that instead of moving the facts.
+     */
+    public data class SaveProvider(public val draft: ProviderDraft) : PdshHostAction {
+        override val wire: String = "provider.save"
+    }
+
+    /** Persist the removal of one service, by id. */
+    public data class DeleteProvider(public val id: String) : PdshHostAction {
+        override val wire: String = "provider.delete"
+    }
+
+    /**
+     * Ask the host to test one draft against its endpoint.
+     *
+     * A host with no test command answers with that fact; the page never claims a
+     * test ran.
+     */
+    public data class TestProvider(public val draft: ProviderDraft) : PdshHostAction {
+        override val wire: String = "provider.test"
+    }
+
     /** Re-read the web-search configuration. */
     public data object RefreshWebSearch : PdshHostAction {
         override val wire: String = "websearch.refresh"
@@ -210,6 +252,22 @@ public sealed interface PdshHostAction {
     /** Re-read the runtime snapshot. */
     public data object RefreshRuntime : PdshHostAction {
         override val wire: String = "runtime.refresh"
+    }
+
+    /**
+     * Run one command from the commands page's form.
+     *
+     * The form is local view state; this action is the person's 运行 gesture with
+     * the command, the working directory and the arguments they typed. A host
+     * with no exec entry point answers with that fact (and the page keeps the
+     * form), instead of handing a live-looking button to nothing.
+     */
+    public data class RunShellCommand(
+        public val command: String,
+        public val workingDirectory: String,
+        public val arguments: String,
+    ) : PdshHostAction {
+        override val wire: String = "shell.run"
     }
 
     /** Re-read the allow list. */

@@ -1,9 +1,10 @@
 // phone-dsh — :app: the launch-time configuration of the demo host.
 // SPDX-License-Identifier: MIT
 //
-// The App stays a probe: it has no settings screen, no accounts and no account
-// UI. The non-secret launch values are therefore read once, in the composition
-// root, from explicit Intent extras:
+// The App stays a probe: it has no accounts and no account UI. The non-secret
+// launch values are read once, in the composition root, from explicit Intent
+// extras (the model service the settings page saves is a device record that
+// overrides two of them — see `ProviderConfigStore`):
 //
 //   pdsh.deepseek.baseUrl  the provider's Messages base (may carry a path prefix)
 //   pdsh.egress.origin     the exact origin the `/v1/http` gateway may reach
@@ -305,28 +306,35 @@ internal data class ProbeLaunchConfig(
 
         /** Parses [intent] without trusting any value: a malformed one is ignored. */
         fun from(intent: Intent?): ProbeLaunchConfig {
-            if (intent == null) return ProbeLaunchConfig()
-            val base = intent.getStringExtra(EXTRA_BASE_URL)?.trim()
+            // The model service the settings page saved (ProviderConfigStore) is a
+            // device record, so the next host boot applies it: its endpoint and model
+            // id are overlaid here, with an explicit launch extra still winning. That
+            // is what makes the page's 下次启动主机时生效 sentence true; without this
+            // read the save would only repaint the row.
+            val stored = ProviderConfigStore.active()?.current()
+            val base = intent?.getStringExtra(EXTRA_BASE_URL)?.trim()
                 ?.takeIf { it.isNotEmpty() }
                 ?.takeIf { parseHttpUrl(it) != null }
-            val egress = intent.getStringExtra(EXTRA_EGRESS_ORIGIN)?.trim()
+                ?: stored?.endpoint
+            val egress = intent?.getStringExtra(EXTRA_EGRESS_ORIGIN)?.trim()
                 ?.takeIf { it.isNotEmpty() && !it.contains('*') }
                 ?.takeIf { parseHttpUrl(it) != null }
-            val prompt = intent.getStringExtra(EXTRA_PROMPT)?.trim()
+            val prompt = intent?.getStringExtra(EXTRA_PROMPT)?.trim()
                 ?.takeIf { it.isNotEmpty() }
                 ?: DEFAULT_PROMPT
-            val model = intent.getStringExtra(EXTRA_MODEL_NAME)?.trim()
+            val model = intent?.getStringExtra(EXTRA_MODEL_NAME)?.trim()
                 ?.takeIf { it.isNotEmpty() }
+                ?: stored?.model?.takeIf { it.isNotEmpty() }
                 ?: DEFAULT_MODEL
             return ProbeLaunchConfig(
                 deepseekBaseUrl = base,
                 egressOrigin = egress,
                 prompt = prompt,
                 modelName = model,
-                egressProbe = intent.getBooleanExtra(EXTRA_EGRESS_PROBE, false),
-                modelProxy = intent.getBooleanExtra(EXTRA_MODEL_PROXY, true),
-                webFace = intent.getBooleanExtra(EXTRA_WEB_FACE, false),
-                bootOverlay = intent.getBooleanExtra(EXTRA_BOOT_OVERLAY, true),
+                egressProbe = intent?.getBooleanExtra(EXTRA_EGRESS_PROBE, false) ?: false,
+                modelProxy = intent?.getBooleanExtra(EXTRA_MODEL_PROXY, true) ?: true,
+                webFace = intent?.getBooleanExtra(EXTRA_WEB_FACE, false) ?: false,
+                bootOverlay = intent?.getBooleanExtra(EXTRA_BOOT_OVERLAY, true) ?: true,
             )
         }
 

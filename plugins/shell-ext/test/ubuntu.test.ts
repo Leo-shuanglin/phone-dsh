@@ -15,18 +15,29 @@
 //      tail and the mock seal are all visible, and a mock `succeeded` keeps the
 //      job's own exit code.
 //   5. **The host call shape is the contract.** `run` sends
-//      `phone ubuntu run --env ... -- <argv...>` with the command unparsed, so
-//      no shell re-splits it.
+//      `phone ubuntu run --env ... --session ... -- <argv...>` with the command
+//      unparsed, so no shell re-splits it, and with the session id taken from
+//      the trusted tool-call context rather than a script's flags.
+//   6. **The approval gate is fed, not trusted.** The Worker forwards the
+//      ambient session id and renders the host's decision; a script cannot
+//      choose the session.
+//   7. **`fetch` writes through the standard VFS mutation shape.** One complete
+//      write of at most 15 MiB, then appended suffixes, and a refusal before
+//      the first byte — never a truncated file.
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
+import { toolCallStorage } from '@phone-dsh/dsh-exec-bridge'
 import { VfsFileSystem, WorkerShell } from '../src/index.ts'
+import type { IFileSystem } from 'just-bash'
 import type { AcceleratorHost, AcceleratorRequest } from '../src/bridge.ts'
 import { createWorkerCommands } from '../src/commands.ts'
 import {
   UBUNTU_DESCRIPTION,
+  UBUNTU_FETCH_CHUNK_BYTES,
+  UBUNTU_MUTATION_MAX_BYTES,
   UBUNTU_USAGE,
   exitOfReply,
   getUbuntuCapability,
@@ -34,6 +45,7 @@ import {
   setUbuntuCapability,
 } from '../src/ubuntu.ts'
 import type { UbuntuCapability } from '../src/ubuntu.ts'
+import { configureSingleFileLimit, MAX_FILE_SIZE } from '../../wasi-toolbox/src/limits.ts'
 
 /** vfs cwd every invocation runs in. */
 const CWD = '/dsh/workspace'
@@ -112,7 +124,7 @@ test('a host probe answer registers the command and `which` reports it', async (
   assert.match(which.stdout, /ubuntu/u)
 })
 
-test('the description states the cost and the mock backend', () => {
+test('the description states the cost, the approval gate and the mock backend', () => {
   // The Agent reads the manifest section and `--help`; both are this constant.
   // Match across the render's line wraps, which are not part of the facts.
   const text = UBUNTU_DESCRIPTION.replace(/\s+/gu, ' ')
@@ -120,15 +132,23 @@ test('the description states the cost and the mock backend', () => {
     /separate local Linux environment/u,
     /does not run DSH/u,
     /takes time, uses disk and battery/u,
-    // The approval gate is not built yet, so the description must say so rather
-    // than promise it. Flip this back when the gate lands.
-    /This build asks for no approval/u,
+    // The gate exists now, so the description must describe it: one approval
+    // per session, and a refusal that starts nothing.
+    /first `run` of a session asks the user to approve it/u,
+    /One approval covers every later `run` in the same session/u,
+    /cause=approval_denied/u,
     /Close it when you are/u,
     /must not start this environment/u,
     /MOCK adapter/u,
+    // The fetch surface and its refusal rule.
+    /ubuntu fetch <jobId> <name>/u,
+    /VFS_REFUSED/u,
+    /never a truncated file/u,
   ]) {
     assert.match(text, fact)
   }
+  // The old sentence claimed the gate was absent; it must not come back.
+  assert.doesNotMatch(text, /no approval/u)
 })
 
 test('ubuntu --help prints the description and usage, exit 0', async () => {
@@ -260,4 +280,365 @@ test('the published capability is what the table reads and is cleared again', as
   const { shell } = await fixture({ withUbuntu: false })
   const result = await shell.run(['bash', '-c', 'ubuntu'], { cwd: CWD })
   assert.equal(result.exitCode, 127)
+})
+
+// ---------------------------------------------------------------------------
+// The approval gate: the Worker forwards identity, the host decides
+// ---------------------------------------------------------------------------
+
+test('run forwards the trusted session id from the tool-call context', async () => {
+  const { shell, calls } = await fixture({ withUbuntu: true })
+  let result: { exitCode: number; stdout: string; stderr: string } | undefined
+  await toolCallStorage().run(
+    { sessionId: 'sess-test', callId: 'call-1', key: 'k'.repeat(64), spawns: 0 },
+    async () => {
+      result = await shell.run(['ubuntu', 'run', '--', 'true'], { cwd: CWD })
+    },
+  )
+  assert.equal(result?.exitCode, 0, result?.stderr)
+  assert.deepEqual(
+    [...(calls[0]?.argv ?? [])],
+    ['phone', 'ubuntu', 'run', '--env', 'ubuntu-24.04', '--session', 'sess-test', '--', 'true'],
+  )
+})
+
+test('a script cannot choose the session: --session is not a user flag', async () => {
+  const { shell, calls } = await fixture({ withUbuntu: true })
+  const forged = await shell.run(['ubuntu', 'run', '--session', 'sess-forged', '--', 'true'], { cwd: CWD })
+  assert.equal(forged.exitCode, 2)
+  assert.match(forged.stderr, /unknown option "--session"/u)
+  assert.equal(calls.length, 0)
+})
+
+test('a run with no tool-call context sends no session and the host asks its own gate', async () => {
+  const { shell, calls } = await fixture({ withUbuntu: true })
+  const result = await shell.run(['ubuntu', 'run', '--', 'true'], { cwd: CWD })
+  assert.equal(result.exitCode, 0)
+  assert.equal((calls[0]?.argv ?? []).includes('--session'), false)
+})
+
+test('a denied run renders the decision and the honest cause', () => {
+  const text = renderUbuntuReply({
+    state: 'failed',
+    jobId: 'uj-denied',
+    approval: { state: 'denied', sessionId: 'sess-a' },
+    failure: {
+      code: 'cancelled',
+      outcome: 'not_started',
+      cause: 'approval_denied',
+      message: 'the user declined the local environment for this session; nothing was started',
+    },
+    seal: { state: 'pending' },
+    internalAccessObserved: null,
+    egress: false,
+  }, 'run')
+  assert.match(text, /ubuntu: approval=denied/u)
+  assert.match(text, /failure code=cancelled outcome=not_started cause=approval_denied/u)
+  assert.match(text, /the user declined the local environment for this session/u)
+  assert.equal(exitOfReply({ state: 'failed' }), 1)
+})
+
+// ---------------------------------------------------------------------------
+// `ubuntu fetch`: chunks in, one complete write plus appends out
+// ---------------------------------------------------------------------------
+
+interface RecordedWrite {
+  readonly op: 'writeFile' | 'appendFile'
+  readonly path: string
+  readonly size: number
+}
+
+interface FetchHostOptions {
+  readonly total: number
+  readonly fileLimitBytes?: number
+  readonly workspaceLimitBytes?: number
+  readonly refusal?: { readonly name: string; readonly reason: string; readonly limit: number; readonly bytes: number }
+}
+
+/** A host that serves one deterministic artifact in 512 KiB chunks. */
+function artifactHost(options: FetchHostOptions): AcceleratorHost & { calls: AcceleratorRequest[] } {
+  const calls: AcceleratorRequest[] = []
+  const limits = {
+    fileLimitBytes: options.fileLimitBytes ?? 128 * 1024 * 1024,
+    workspaceLimitBytes: options.workspaceLimitBytes ?? 288 * 1024 * 1024,
+    rssLimitBytes: null,
+  }
+  const reply = (payload: Record<string, unknown>): { stdout: string; stderr: string; exitCode: number } => ({
+    stdout: Buffer.from(`${JSON.stringify(payload)}\n`, 'utf8').toString('latin1'),
+    stderr: '',
+    exitCode: 0,
+  })
+  return {
+    names: ['phone'],
+    calls,
+    async exec(request) {
+      calls.push(request)
+      const argv = request.argv
+      if (argv[2] !== 'fetch') {
+        return reply(JSON.parse(JOB_REPLY) as Record<string, unknown>)
+      }
+      const name = argv[4] ?? ''
+      const offsetIndex = argv.indexOf('--offset')
+      const offset = offsetIndex >= 0 ? Number(argv[offsetIndex + 1] ?? 0) : 0
+      if (options.refusal !== undefined && name === options.refusal.name) {
+        return reply({
+          backend: 'mock',
+          jobId: argv[3] ?? 'uj-abc',
+          name,
+          offset: 0,
+          bytes: options.refusal.bytes,
+          eof: false,
+          chunk: null,
+          refusal: {
+            code: 'VFS_REFUSED',
+            reason: options.refusal.reason,
+            limit: options.refusal.limit,
+            bytes: options.refusal.bytes,
+          },
+          failure: null,
+          limits,
+        })
+      }
+      const size = Math.min(UBUNTU_FETCH_CHUNK_BYTES, options.total - offset)
+      const data = Buffer.alloc(size)
+      for (let index = 0; index < size; index++) data[index] = (offset + index) & 0xff
+      return reply({
+        backend: 'mock',
+        jobId: argv[3] ?? 'uj-abc',
+        name,
+        offset,
+        bytes: options.total,
+        eof: offset + size >= options.total,
+        chunk: data.toString('base64'),
+        refusal: null,
+        failure: null,
+        limits,
+      })
+    },
+  }
+}
+
+/** A VFS that records every write the command performs. */
+function recordingFs(inner: IFileSystem): { fs: IFileSystem; writes: RecordedWrite[] } {
+  const writes: RecordedWrite[] = []
+  const proxy = new Proxy(inner, {
+    get(target, property) {
+      if (property === 'writeFile' || property === 'appendFile') {
+        return async (path: string, content: string | Uint8Array) => {
+          const size = typeof content === 'string' ? Buffer.byteLength(content) : content.byteLength
+          writes.push({ op: property, path, size })
+          const method = target[property] as (p: string, c: string | Uint8Array) => Promise<void>
+          return await method.call(target, path, content)
+        }
+      }
+      const value = Reflect.get(target, property)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as IFileSystem
+  return { fs: proxy, writes }
+}
+
+/** A shell whose VFS is a fresh temp root and whose writes are recorded. */
+function fetchFixture(options: FetchHostOptions): {
+  readonly root: string
+  readonly fs: VfsFileSystem
+  readonly shell: WorkerShell
+  readonly host: AcceleratorHost & { calls: AcceleratorRequest[] }
+  readonly writes: RecordedWrite[]
+} {
+  const root = mkdtempSync(join(tmpdir(), 'pdsh-shell-ubuntu-fetch-'))
+  roots.push(root)
+  const rawFs = new VfsFileSystem({ root })
+  const { fs, writes } = recordingFs(rawFs)
+  const host = artifactHost(options)
+  const commands = createWorkerCommands({
+    accelerators: host,
+    git: false,
+    curl: false,
+    gzip: false,
+    toolbox: false,
+    ubuntu: CAPABILITY,
+  })
+  return { root, fs: rawFs, shell: new WorkerShell({ fs, commands }), host, writes }
+}
+
+/** The temp-root path of a VFS path. */
+function onDisk(root: string, vfsPath: string): string {
+  return join(root, vfsPath.replace(/^\//u, ''))
+}
+
+/**
+ * The writes that landed under the workspace.
+ *
+ * The shell materializes `/dsh/home/capabilities.json` on first use; that is
+ * not the artifact being tested, and counting it would make every assertion
+ * about mutations wrong for a reason unrelated to `fetch`.
+ */
+function artifactWrites(fixture: { readonly writes: readonly RecordedWrite[] }): RecordedWrite[] {
+  return fixture.writes.filter(write => write.path.startsWith('/dsh/workspace/'))
+}
+
+test('fetch writes a small artifact as one complete mutation', async () => {
+  const fixture = fetchFixture({ total: 12 })
+  const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'tiny.txt'], { cwd: CWD })
+  assert.equal(result.exitCode, 0, result.stderr)
+  assert.match(result.stdout, /ubuntu: fetch job=uj-abc artifact=tiny\.txt bytes=12/u)
+  assert.match(result.stdout, /ubuntu: wrote \/dsh\/workspace\/\.ubuntu\/uj-abc\/tiny\.txt/u)
+  // One complete write, no append: the ordinary case is one mutation.
+  assert.deepEqual(
+    artifactWrites(fixture).map(write => [write.op, write.size]),
+    [['writeFile', 12]],
+  )
+  const written = readFileSync(onDisk(fixture.root, '/dsh/workspace/.ubuntu/uj-abc/tiny.txt'))
+  assert.equal(written.byteLength, 12)
+  assert.equal(written[3], 3)
+})
+
+test('fetch splits 15 MiB + 512 KiB into a complete write and one appended suffix', async () => {
+  const total = UBUNTU_MUTATION_MAX_BYTES + UBUNTU_FETCH_CHUNK_BYTES
+  const fixture = fetchFixture({ total })
+  const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'mid.bin'], { cwd: CWD })
+  assert.equal(result.exitCode, 0, result.stderr)
+  assert.match(result.stdout, /chunks=31 mutations=2/u)
+  assert.deepEqual(
+    artifactWrites(fixture).map(write => [write.op, write.size]),
+    [['writeFile', UBUNTU_MUTATION_MAX_BYTES], ['appendFile', UBUNTU_FETCH_CHUNK_BYTES]],
+  )
+  const written = readFileSync(onDisk(fixture.root, '/dsh/workspace/.ubuntu/uj-abc/mid.bin'))
+  assert.equal(written.byteLength, total)
+  assert.equal(written[total - 1], (total - 1) & 0xff)
+})
+
+test('fetch refuses an over-limit artifact before writing a byte', async () => {
+  const fixture = fetchFixture({
+    total: 20 * 1024 * 1024,
+    refusal: {
+      name: 'huge.bin',
+      reason: 'file-too-large',
+      limit: 16 * 1024 * 1024,
+      bytes: 20 * 1024 * 1024,
+    },
+  })
+  const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'huge.bin'], { cwd: CWD })
+  assert.equal(result.exitCode, 1)
+  assert.match(result.stdout, /VFS_REFUSED reason=file-too-large limit=16777216 bytes=20971520/u)
+  assert.match(result.stdout, /nothing was written/u)
+  assert.deepEqual(artifactWrites(fixture), [])
+})
+
+test('fetch preflights the workspace bucket before writing', async () => {
+  const fixture = fetchFixture({ total: 200, workspaceLimitBytes: 100 })
+  const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'tiny.txt'], { cwd: CWD })
+  assert.equal(result.exitCode, 1)
+  assert.match(result.stdout, /VFS_REFUSED reason=quota-exceeded limit=100 bytes=200/u)
+  assert.deepEqual(artifactWrites(fixture), [])
+})
+
+test('fetch preflights the Worker single-file budget before writing', async () => {
+  const before = MAX_FILE_SIZE
+  try {
+    configureSingleFileLimit(1024 * 1024)
+    const fixture = fetchFixture({ total: 2 * 1024 * 1024 })
+    const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'big.bin'], { cwd: CWD })
+    assert.equal(result.exitCode, 1)
+    assert.match(result.stdout, /VFS_REFUSED reason=file-too-large limit=1048576/u)
+    assert.deepEqual(artifactWrites(fixture), [])
+  } finally {
+    configureSingleFileLimit(before)
+  }
+})
+
+test('fetch preflights the launch-published single-file budget before writing', async () => {
+  // The device publishes its tier limit as PDSH_SINGLE_FILE_LIMIT_BYTES; the VFS
+  // enforces it, and the CLI must use the same number. Using the process-wide
+  // default here would write 15 MiB and only then fail on the append.
+  const before = process.env.PDSH_SINGLE_FILE_LIMIT_BYTES
+  process.env.PDSH_SINGLE_FILE_LIMIT_BYTES = String(16 * 1024 * 1024)
+  try {
+    const fixture = fetchFixture({ total: 20 * 1024 * 1024 })
+    const result = await fixture.shell.run(['ubuntu', 'fetch', 'uj-abc', 'huge.bin'], { cwd: CWD })
+    assert.equal(result.exitCode, 1)
+    assert.match(result.stdout, /VFS_REFUSED reason=file-too-large limit=16777216 bytes=20971520/u)
+    assert.match(result.stdout, /nothing was written/u)
+    assert.deepEqual(artifactWrites(fixture), [])
+  } finally {
+    if (before === undefined) delete process.env.PDSH_SINGLE_FILE_LIMIT_BYTES
+    else process.env.PDSH_SINGLE_FILE_LIMIT_BYTES = before
+  }
+})
+
+test('fetch --offset resumes at the accepted prefix instead of rewriting it', async () => {
+  const fixture = fetchFixture({ total: 12 })
+  // The chain stopped after 4 bytes; resuming must append, not rewrite.
+  await fixture.fs.mkdir('/dsh/workspace/.ubuntu/uj-abc', { recursive: true })
+  await fixture.fs.writeFile('/dsh/workspace/.ubuntu/uj-abc/tiny.bin', new Uint8Array([0, 1, 2, 3]))
+  const result = await fixture.shell.run(
+    ['ubuntu', 'fetch', 'uj-abc', 'tiny.bin', '--offset', '4'],
+    { cwd: CWD },
+  )
+  assert.equal(result.exitCode, 0, result.stderr)
+  assert.deepEqual(
+    artifactWrites(fixture).map(write => [write.op, write.size]),
+    [['appendFile', 8]],
+  )
+  const written = readFileSync(onDisk(fixture.root, '/dsh/workspace/.ubuntu/uj-abc/tiny.bin'))
+  assert.deepEqual([...written], [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+})
+
+test('fetch --offset refuses a file that is not the stated prefix', async () => {
+  const fixture = fetchFixture({ total: 12 })
+  await fixture.fs.mkdir('/dsh/workspace/.ubuntu/uj-abc', { recursive: true })
+  await fixture.fs.writeFile('/dsh/workspace/.ubuntu/uj-abc/tiny.bin', new Uint8Array([0, 1, 2]))
+  const result = await fixture.shell.run(
+    ['ubuntu', 'fetch', 'uj-abc', 'tiny.bin', '--offset', '4'],
+    { cwd: CWD },
+  )
+  assert.equal(result.exitCode, 1)
+  assert.match(result.stderr, /--offset 4 does not match/u)
+  assert.deepEqual(artifactWrites(fixture), [])
+})
+
+test('fetch resolves --path under the cwd and refuses a non-mutation path', async () => {
+  const fixture = fetchFixture({ total: 12 })
+  const result = await fixture.shell.run(
+    ['ubuntu', 'fetch', 'uj-abc', 'tiny.txt', '--path', 'out/tiny.txt'],
+    { cwd: CWD },
+  )
+  assert.equal(result.exitCode, 0, result.stderr)
+  assert.match(result.stdout, /wrote \/dsh\/workspace\/out\/tiny\.txt/u)
+  assert.deepEqual(artifactWrites(fixture).map(write => write.path), ['/dsh/workspace/out/tiny.txt'])
+  assert.equal(readFileSync(onDisk(fixture.root, '/dsh/workspace/out/tiny.txt')).byteLength, 12)
+
+  const before = fixture.host.calls.length
+  const refused = await fixture.shell.run(
+    ['ubuntu', 'fetch', 'uj-abc', 'tiny.txt', '--path', '/dsh/home/tiny.txt'],
+    { cwd: CWD },
+  )
+  assert.equal(refused.exitCode, 2)
+  assert.match(refused.stderr, /not a \/dsh\/workspace mutation path/u)
+  assert.equal(fixture.host.calls.length, before)
+})
+
+test('fetch refuses to overwrite an explicit path it did not write', async () => {
+  const fixture = fetchFixture({ total: 12 })
+  await fixture.fs.mkdir('/dsh/workspace/out', { recursive: true })
+  await fixture.fs.writeFile('/dsh/workspace/out/existing.txt', new Uint8Array([9, 9, 9]))
+  const result = await fixture.shell.run(
+    ['ubuntu', 'fetch', 'uj-abc', 'tiny.txt', '--path', 'out/existing.txt'],
+    { cwd: CWD },
+  )
+  assert.equal(result.exitCode, 1)
+  assert.match(result.stderr, /refusing to overwrite a file this job did not write/u)
+  assert.deepEqual(artifactWrites(fixture), [])
+})
+
+test('fetch rejects a malformed invocation as a usage error', async () => {
+  const { shell, calls } = await fixture({ withUbuntu: true })
+  const missing = await shell.run(['ubuntu', 'fetch', 'uj-abc'], { cwd: CWD })
+  assert.equal(missing.exitCode, 2)
+  assert.match(missing.stderr, /fetch needs exactly one job id and one artifact name/u)
+  const badOffset = await shell.run(['ubuntu', 'fetch', 'uj-abc', 'tiny.txt', '--offset', '-1'], { cwd: CWD })
+  assert.equal(badOffset.exitCode, 2)
+  assert.match(badOffset.stderr, /--offset takes a non-negative decimal integer/u)
+  assert.equal(calls.length, 0)
 })

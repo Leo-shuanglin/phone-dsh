@@ -868,7 +868,7 @@ export function ubuntuCapability(
     backend: capability.backend,
     env: capability.env,
     invocation: `${UBUNTU_COMMAND_NAME} run [--env <id>] [--cwd <path>] [--label <text>] [--timeout-ms <n>] -- <command...>`,
-    commands: ['run', 'status', 'close'],
+    commands: ['run', 'status', 'close', 'fetch'],
     description: UBUNTU_DESCRIPTION,
     cost: [
       'starting the environment takes time, disk space and battery',
@@ -899,7 +899,7 @@ export function phoneCapability(ubuntu: boolean = false): NonNullable<Capability
       ...ubuntu
         ? [{
             name: 'ubuntu',
-            usage: `${PHONE_COMMAND_NAME} ubuntu <run|status|close>`,
+            usage: `${PHONE_COMMAND_NAME} ubuntu <run|status|close|fetch>`,
             note: 'the local Linux environment (bridge.md §12); normally reached through the `ubuntu` command, '
               + 'and present only because the boot probe answered',
           }]

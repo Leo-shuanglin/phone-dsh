@@ -133,6 +133,10 @@ class UbuntuJobStore(
         private const val KEY_OBSERVED = "internal_access_observed"
         private const val KEY_SEAL_STATE = "seal_state"
         private const val KEY_SEAL_REASON = "seal_reason"
+        private const val KEY_APPROVAL = "approval"
+        private const val KEY_APPROVAL_STATE = "state"
+        private const val KEY_APPROVAL_SESSION = "session_id"
+        private const val KEY_APPROVAL_AT = "at_ms"
 
         /** The record as canonical-ish JSON; the member names are this file's, not the wire's. */
         fun encode(record: UbuntuJobRecord): String {
@@ -175,6 +179,17 @@ class UbuntuJobStore(
                     .put(KEY_FAILURE_FOREGROUND, failure.foregroundRequired)
                     .put(KEY_FAILURE_CAUSE, failure.cause ?: JSONObject.NULL)
             }
+            // The session approval is part of the audit: who allowed this job,
+            // when, and whether the user was asked now or earlier in the session.
+            val approval = record.approval
+            val approvalJson = if (approval == null) {
+                JSONObject.NULL
+            } else {
+                JSONObject()
+                    .put(KEY_APPROVAL_STATE, approval.state.wire)
+                    .put(KEY_APPROVAL_SESSION, approval.sessionId ?: JSONObject.NULL)
+                    .put(KEY_APPROVAL_AT, approval.atMs)
+            }
             return JSONObject()
                 .put(KEY_VERSION, VERSION)
                 .put(KEY_JOB_ID, record.jobId)
@@ -199,6 +214,7 @@ class UbuntuJobStore(
                 .put(KEY_OBSERVED, record.internalAccessObserved ?: JSONObject.NULL)
                 .put(KEY_SEAL_STATE, record.seal.wire)
                 .put(KEY_SEAL_REASON, record.sealReason ?: JSONObject.NULL)
+                .put(KEY_APPROVAL, approvalJson)
                 .toString()
         }
 
@@ -247,6 +263,17 @@ class UbuntuJobStore(
                     cause = it.optionalString(KEY_FAILURE_CAUSE),
                 )
             }
+            // A record written before the approval gate has no member: `null` is
+            // "this record cannot say", never "the user approved".
+            val approval = json.optJSONObject(KEY_APPROVAL)?.let { approvalJson ->
+                val approvalState = UbuntuApprovalState.ofWire(approvalJson.optString(KEY_APPROVAL_STATE, ""))
+                    ?: return null
+                UbuntuJobApproval(
+                    state = approvalState,
+                    sessionId = approvalJson.optionalString(KEY_APPROVAL_SESSION),
+                    atMs = approvalJson.getLong(KEY_APPROVAL_AT),
+                )
+            }
             return UbuntuJobRecord(
                 jobId = json.getString(KEY_JOB_ID),
                 env = json.getString(KEY_ENV),
@@ -270,6 +297,7 @@ class UbuntuJobStore(
                 seal = seal,
                 sealReason = json.optionalString(KEY_SEAL_REASON),
                 jobTimeoutMs = json.getLong(KEY_JOB_TIMEOUT),
+                approval = approval,
             )
         }
 
