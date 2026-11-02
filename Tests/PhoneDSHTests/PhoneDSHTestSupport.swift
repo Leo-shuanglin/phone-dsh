@@ -951,6 +951,8 @@ final class MockEngine: WebEngineControlling, WebEngineRestartRequesting,
     private var lockdown = false
     private var attached = true
     private var bootError: Error?
+    /// How many more boots `bootError` fails; `Int.max` means every boot.
+    private var bootFailuresRemaining = 0
     private var stopError: Error?
     private var shutdownError: Error?
     private var bootCountValue = 0
@@ -1056,9 +1058,13 @@ final class MockEngine: WebEngineControlling, WebEngineRestartRequesting,
         lock.unlock()
     }
 
-    func setBootError(_ error: Error?) {
+    /// Makes the next `times` boots fail with `error` (`Int.max` for every
+    /// boot). A bounded count lets a regression prove the host's one-retry
+    /// replacement-Worker recovery without inventing a second engine.
+    func setBootError(_ error: Error?, times: Int = Int.max) {
         lock.lock()
         bootError = error
+        bootFailuresRemaining = error == nil ? 0 : max(0, times)
         lock.unlock()
     }
 
@@ -1076,7 +1082,15 @@ final class MockEngine: WebEngineControlling, WebEngineRestartRequesting,
         lock.lock()
         bootCountValue += 1
         lastConfigurationValue = configuration
-        let error = bootError
+        var error = bootError
+        if error != nil {
+            if bootFailuresRemaining > 0 {
+                bootFailuresRemaining -= 1
+            } else {
+                // A bounded failure count is spent; this boot connects.
+                error = nil
+            }
+        }
         let delay = bootDelayValue
         lock.unlock()
         if let error { throw error }

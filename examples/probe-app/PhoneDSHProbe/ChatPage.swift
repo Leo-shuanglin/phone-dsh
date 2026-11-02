@@ -548,12 +548,17 @@ struct ChatPage: View {
             #endif
             if model.isStarted { Task { await management.refresh() } }
             // The native surface owns the one host now, so a cold launch
-            // starts it directly instead of waiting for a tap.
+            // starts it directly instead of waiting for a tap. `autoRecover`
+            // lets a persisted `Failed` controller (D14) be acknowledged once
+            // at launch, so reopening the App is enough to get a working
+            // engine back.
             if !model.isStarted, !model.busy {
                 #if DEBUG
-                if previewItems == nil && PreviewScreen.requested == nil { Task { await model.start() } }
+                if previewItems == nil && PreviewScreen.requested == nil {
+                    Task { await model.start(autoRecover: true) }
+                }
                 #else
-                Task { await model.start() }
+                Task { await model.start(autoRecover: true) }
                 #endif
             }
             // Device-test automation (PDSH_CHAT_AUTOSTART / PDSH_CHAT_AUTOPROMPT).
@@ -987,6 +992,14 @@ struct ChatPage: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             if model.failedPrompt != nil {
                 Button("重试") { Task { _ = await model.retryFailedPrompt() } }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ChatPage.accent)
+            }
+            // A host that failed loud stays down until the user acknowledges it
+            // (D14). Without this button that acknowledgement was unreachable,
+            // so one failure kept the engine from ever booting again.
+            if model.engineNeedsReset {
+                Button("重新启动引擎") { Task { await model.restartEngine() } }
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(ChatPage.accent)
             }
@@ -2334,7 +2347,7 @@ struct ChatPage: View {
     private var composerEnabled: Bool {
         guard model.pendingQuestion == nil, model.pendingPermission == nil, !isSelectingAccessMode else { return false }
         if model.turnRunning { return busyEnterMode == "steer" ? model.canSteer : model.canSend }
-        return model.canSend
+        return model.canSend || model.canStartBySending
     }
 
     private var canSubmit: Bool {

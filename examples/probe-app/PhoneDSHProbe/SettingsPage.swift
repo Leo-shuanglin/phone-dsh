@@ -94,6 +94,7 @@ private struct NativeGeneralSettingsPage: View {
     @State private var preferences = NativeChatPreferences.shared
     @State private var configuration = NativeConfigurationModel.shared
     @StateObject private var phonePermissions = PhonePermissionRequester.shared
+    @State private var chat = ChatModel.shared
 
     var body: some View {
         List {
@@ -103,6 +104,19 @@ private struct NativeGeneralSettingsPage: View {
                 }
                 Text(NativeText("选择新会话的默认权限模式", "Default permission for new sessions"))
                     .font(.footnote).foregroundStyle(.secondary)
+            }
+
+            Section {
+                LabeledContent(NativeText("引擎状态", "Engine state"), value: chat.hostState)
+                if chat.engineNeedsReset {
+                    Button(NativeText("重新启动引擎", "Restart engine")) {
+                        Task { await chat.restartEngine() }
+                    }
+                    Text(NativeText(
+                        "上次启动失败后引擎不会自动重试。重新启动会确认这次失败并重新启动宿主，会话数据不受影响。",
+                        "The engine does not retry after a failure. Restarting acknowledges the failure and boots the host again; session data is kept."))
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
 
             Section {
