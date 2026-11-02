@@ -70,11 +70,11 @@ import com.phonedsh.domain.connector.DeviceSessionSnapshot
 import com.phonedsh.domain.connector.DeviceToolState
 import com.phonedsh.domain.connector.DeviceTranscriptItem
 import com.phonedsh.domain.connector.DeviceTranscriptProjector
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.UiMetrics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
-import com.phonedsh.ui.theme.generated.UiTokenNames
 import com.phonedsh.ui.surface.MarkdownBody
 
 /** The session page's local UI state: which foldable rows the user opened. */
@@ -175,19 +175,19 @@ public fun NativeDeviceSessionPage(
                     .fillMaxWidth()
                     .testTag(UiPageTags.DEVICE_SESSION_STRIP)
                     .height(DEVICE_SESSION_STRIP_HEIGHT_DP.dp)
-                    .padding(horizontal = tokens.geometry.pageOuterMarginH)
+                    .padding(horizontal = HomeMetrics.contentInset)
                     .semantics(mergeDescendants = true) {},
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(DEVICE_SESSION_LABEL_GAP_DP.dp),
             ) {
                 BasicText(
                     text = UiStrings.DEVICE_SESSION_TITLE,
-                    style = type.caption.copy(color = tokens.colors.secondary),
+                    style = type.listItem.copy(color = tokens.colors.textSecondary),
                     modifier = Modifier.weight(1f),
                 )
                 BasicText(
                     text = state.sessionBadge,
-                    style = type.codeLabel.copy(color = tokens.colors.tertiary),
+                    style = type.codeLabel.copy(color = tokens.colors.textTertiary),
                 )
             }
 
@@ -204,13 +204,13 @@ public fun NativeDeviceSessionPage(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag(UiPageTags.DEVICE_SESSION_READ_ONLY)
-                    .padding(horizontal = tokens.geometry.pageOuterMarginH, vertical = READ_ONLY_BAR_INSET_DP.dp)
+                    .padding(horizontal = HomeMetrics.contentInset, vertical = READ_ONLY_BAR_INSET_DP.dp)
                     .semantics(mergeDescendants = true) {},
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 BasicText(
                     text = UiStrings.DEVICE_SESSION_READ_ONLY,
-                    style = type.caption.copy(color = tokens.colors.secondary),
+                    style = type.listItem.copy(color = tokens.colors.textSecondary),
                 )
             }
         }
@@ -262,7 +262,7 @@ private fun DeviceTranscript(
                     )
                     BasicText(
                         text = UiStrings.DEVICE_SESSION_LOADING,
-                        style = type.secondary.copy(color = tokens.colors.secondary),
+                        style = type.listItem.copy(color = tokens.colors.textSecondary),
                         modifier = Modifier.padding(start = tokens.spacing.iconText),
                     )
                 }
@@ -300,10 +300,10 @@ private fun DeviceTranscript(
                             role = Role.Button,
                             onClick = onLoadEarlier,
                         )
-                        .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+                        .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
                             .clip(RoundedCornerShape(tokens.radius.card))
-                            .background(tokens.colors.input)
-                            .border(tokens.stroke.hairline, tokens.colors.border, RoundedCornerShape(tokens.radius.card))
+                            .background(tokens.colors.surface)
+                            .border(tokens.stroke.hairline, tokens.colors.borderList, RoundedCornerShape(tokens.radius.card))
                             .padding(horizontal = tokens.spacing.cardInset, vertical = tokens.spacing.iconText),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
@@ -318,12 +318,12 @@ private fun DeviceTranscript(
                     if (state.loadingEarlier) {
                         BasicText(
                             text = UiStrings.DEVICE_SESSION_READING_EARLIER,
-                            style = type.secondary.copy(color = tokens.colors.tertiary),
+                            style = type.listItem.copy(color = tokens.colors.textTertiary),
                         )
                     } else {
                         BasicText(
                             text = UiStrings.DEVICE_SESSION_READ_EARLIER,
-                            style = type.secondary.copy(color = tokens.colors.accent),
+                            style = type.listItem.copy(color = tokens.colors.pageAccent),
                         )
                     }
                 }
@@ -370,7 +370,7 @@ private fun DeviceReadOnlyRow(
             body = {
                 BasicText(
                     text = item.text.ifEmpty { DeviceTranscriptProjector.PLACEHOLDER },
-                    style = type.caption.copy(color = tokens.colors.secondary),
+                    style = type.listItem.copy(color = tokens.colors.textSecondary),
                 )
             },
         )
@@ -404,9 +404,9 @@ private fun DeviceReadOnlyRow(
         ) {
             BasicText(
                 text = item.title.ifEmpty { UiStrings.DEVICE_CONTEXT_LABEL },
-                style = type.caption.copy(color = tokens.colors.tertiary),
+                style = type.listItem.copy(color = tokens.colors.textTertiary),
             )
-            BasicText(text = item.text, style = type.caption.copy(color = tokens.colors.secondary))
+            BasicText(text = item.text, style = type.listItem.copy(color = tokens.colors.textSecondary))
         }
     }
 }
@@ -436,21 +436,24 @@ private fun Bubble(item: DeviceTranscriptItem, fromDevice: Boolean) {
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(tokens.radius.bubble))
-            .background(tokens.colors.secondary.copy(alpha = BUBBLE_TINT_ALPHA))
-            .padding(tokens.geometry.bubblePadding)
+            .background(tokens.colors.textSecondary.copy(alpha = BUBBLE_TINT_ALPHA))
+            .padding(
+                horizontal = tokens.geometry.bubblePaddingH,
+                vertical = tokens.geometry.bubblePaddingV,
+            )
             .semantics(mergeDescendants = true) {},
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
     ) {
         if (fromDevice) {
             BasicText(
                 text = item.title.ifEmpty { UiStrings.DEVICE_DEVICE_LABEL },
-                style = style.caption.copy(color = tokens.colors.tertiary),
+                style = style.caption.copy(color = tokens.colors.textTertiary),
                 modifier = Modifier.semantics { heading() },
             )
         }
         if (item.text.isNotEmpty()) {
             SelectionContainer {
-                BasicText(text = item.text, style = style.body.copy(color = tokens.colors.primary))
+                BasicText(text = item.text, style = style.body.copy(color = tokens.colors.textPrimary))
             }
         }
         AttachmentLabels(item.attachments)
@@ -466,7 +469,7 @@ private fun AttachmentLabels(attachments: List<DeviceAttachment>) {
         BasicText(
             text = (if (attachment.isImage) UiStrings.DEVICE_IMAGE else UiStrings.DEVICE_FILE) +
                 "：" + attachment.name,
-            style = type.caption.copy(color = tokens.colors.tertiary),
+            style = type.listItem.copy(color = tokens.colors.textTertiary),
         )
     }
 }
@@ -490,7 +493,7 @@ private fun FoldableRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .defaultMinSize(minHeight = tokens.geometry.pageListRowMinHeight)
+                .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
                 .clickable(role = Role.Button, onClick = onToggle)
                 .semantics(mergeDescendants = true) { contentDescription = title },
             verticalAlignment = Alignment.CenterVertically,
@@ -500,11 +503,11 @@ private fun FoldableRow(
         ) {
             BasicText(
                 text = if (expanded) FOLD_OPEN_GLYPH else FOLD_CLOSED_GLYPH,
-                style = type.caption.copy(color = tokens.colors.tertiary),
+                style = type.listItem.copy(color = tokens.colors.textTertiary),
             )
             BasicText(
                 text = title,
-                style = type.caption.copy(color = tone.ink(tokens)),
+                style = type.listItem.copy(color = tone.ink(tokens)),
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -512,7 +515,7 @@ private fun FoldableRow(
             if (trailing != null) {
                 BasicText(
                     text = trailing,
-                    style = type.caption.copy(color = tone.ink(tokens)),
+                    style = type.listItem.copy(color = tone.ink(tokens)),
                 )
             }
         }
@@ -572,7 +575,7 @@ private fun ToolRow(
         } else if (state == DeviceToolState.RUNNING) {
             BasicText(
                 text = UiStrings.DEVICE_TOOL_WAITING,
-                style = type.caption.copy(color = tokens.colors.tertiary),
+                style = type.listItem.copy(color = tokens.colors.textTertiary),
             )
         }
     }
@@ -587,14 +590,14 @@ private fun DeviceMonospaceCard(title: String, text: String, isError: Boolean) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(tokens.radius.card))
-            .background(tokens.colors.secondary.copy(alpha = CARD_TINT_ALPHA))
+            .background(tokens.colors.textSecondary.copy(alpha = CARD_TINT_ALPHA))
             .padding(tokens.spacing.badgeInsetH)
             .semantics(mergeDescendants = true) {},
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
     ) {
         BasicText(
             text = title,
-            style = type.caption.copy(color = tokens.colors.secondary),
+            style = type.listItem.copy(color = tokens.colors.textSecondary),
             modifier = Modifier.semantics { heading() },
         )
             SelectionContainer {
@@ -607,7 +610,7 @@ private fun DeviceMonospaceCard(title: String, text: String, isError: Boolean) {
                     BasicText(
                         text = text,
                         style = type.code.copy(
-                            color = if (isError) tokens.colors.danger else tokens.colors.primary,
+                            color = if (isError) tokens.colors.pageDanger else tokens.colors.textPrimary,
                         ),
                     )
                 }
@@ -622,7 +625,7 @@ private fun InformationRow(text: String, tone: InformationTone) {
     val type = LocalUiType.current
     BasicText(
         text = text,
-        style = type.caption.copy(color = tone.ink(tokens)),
+        style = type.listItem.copy(color = tone.ink(tokens)),
         modifier = Modifier.fillMaxWidth().padding(vertical = tokens.spacing.iconText),
     )
 }
@@ -636,12 +639,12 @@ private fun DeviceSessionFailureLine(message: String) {
         modifier = Modifier
             .fillMaxWidth()
             .testTag(UiPageTags.DEVICE_SESSION_FAILURE)
-            .background(tokens.colors.danger.copy(alpha = FAILURE_TINT_ALPHA))
+            .background(tokens.colors.pageDanger.copy(alpha = FAILURE_TINT_ALPHA))
             .padding(tokens.spacing.cardInset)
             // Fail-loud is audible too: an assertive live region interrupts.
             .semantics { liveRegion = LiveRegionMode.Assertive },
     ) {
-        BasicText(text = message, style = type.caption.copy(color = tokens.colors.danger))
+        BasicText(text = message, style = type.listItem.copy(color = tokens.colors.pageDanger))
     }
 }
 
@@ -660,9 +663,9 @@ private fun DeviceSessionHint(title: String, hint: String?, tag: String, modifie
             },
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
-        BasicText(text = title, style = type.body.copy(color = tokens.colors.tertiary))
+        BasicText(text = title, style = type.body.copy(color = tokens.colors.textTertiary))
         if (hint != null) {
-            BasicText(text = hint, style = type.caption.copy(color = tokens.colors.tertiary))
+            BasicText(text = hint, style = type.listItem.copy(color = tokens.colors.textTertiary))
         }
     }
 }
@@ -674,8 +677,8 @@ private enum class InformationTone {
     ;
 
     fun ink(tokens: com.phonedsh.ui.theme.UiTokens): androidx.compose.ui.graphics.Color = when (this) {
-        SECONDARY -> tokens.colors.secondary
-        DANGER -> tokens.colors.danger
+        SECONDARY -> tokens.colors.textSecondary
+        DANGER -> tokens.colors.pageDanger
     }
 }
 
@@ -685,34 +688,31 @@ private enum class InformationTone {
  */
 internal object NativeDeviceSessionPageTokens {
     val refs: List<String> = listOf(
-        UiTokenNames.COLORS_PRIMARY,
-        UiTokenNames.COLORS_SECONDARY,
-        UiTokenNames.COLORS_INPUT,
-        UiTokenNames.COLORS_BORDER,
-        UiTokenNames.COLORS_TERTIARY,
-        UiTokenNames.COLORS_ACCENT,
-        UiTokenNames.COLORS_DANGER,
-        UiTokenNames.TYPOGRAPHY_BODY,
-        UiTokenNames.TYPOGRAPHY_SECONDARY,
-        UiTokenNames.TYPOGRAPHY_CAPTION,
-        UiTokenNames.TYPOGRAPHY_CODE,
-        UiTokenNames.TYPOGRAPHY_CODE_LABEL,
-        UiTokenNames.RADIUS_BUBBLE,
-        UiTokenNames.RADIUS_CARD,
-        UiTokenNames.SPACING_ICON_TEXT,
-        UiTokenNames.STROKE_HAIRLINE,
-        UiTokenNames.SPACING_BADGE_INSET_V,
-        UiTokenNames.SPACING_BADGE_INSET_H,
-        UiTokenNames.SPACING_COPY_GAP,
-        UiTokenNames.SPACING_CARD_INSET,
-        UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
-        UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_PAGE_LIST_ROW_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_BUBBLE_PADDING,
-        UiTokenNames.GEOMETRY_CARD_OUTER_MARGIN_V,
-        UiTokenNames.GEOMETRY_DISCLOSURE_ICON_GAP,
-        UiTokenNames.GEOMETRY_THINKING_CONTENT_INDENT,
-        UiTokenNames.GEOMETRY_TERMINAL_CARD_MAX_HEIGHT,
+        "colors.textPrimary",
+        "colors.textSecondary",
+        "colors.textTertiary",
+        "colors.borderList",
+        "colors.pageAccent",
+        "colors.pageDanger",
+        "colors.surface",
+        "typography.body",
+        "typography.listItem",
+        "typography.code",
+        "typography.codeLabel",
+        "radius.bubble",
+        "radius.card",
+        "spacing.iconText",
+        "spacing.badgeInsetV",
+        "spacing.badgeInsetH",
+        "spacing.copyGap",
+        "spacing.cardInset",
+        "stroke.hairline",
+        "geometry.bubblePaddingH",
+        "geometry.bubblePaddingV",
+        "geometry.cardOuterMarginV",
+        "geometry.disclosureIconGap",
+        "geometry.thinkingContentIndent",
+        "geometry.terminalCardMaxHeight",
     )
 }
 

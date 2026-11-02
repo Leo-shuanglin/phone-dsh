@@ -17,13 +17,12 @@
 // existing `DeviceConnector.state` through `ConnectorStatus`. This page owns no
 // connection life cycle of its own: its local state is the row that is opening.
 //
-// Geometry: the page margin, the header floor, the row floor and the status dot all
-// come from `spec/ui/v1/tokens.json` (page-level block); no value is invented here
-// and no signature-surface geometry is borrowed.
+// Geometry: page margins use reviewed HomeSpec metrics; row and section spacing
+// use the current UI theme. No page-only token is assumed.
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,15 +33,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -55,10 +52,13 @@ import com.phonedsh.domain.connector.DeviceConnectionSnapshot
 import com.phonedsh.domain.connector.DeviceOpenFailure
 import com.phonedsh.domain.connector.DeviceTransmission
 import com.phonedsh.domain.connector.DeviceTransmissionRow
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.icon.PdshIcon
+import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
-import com.phonedsh.ui.theme.generated.UiTokenNames
+import com.phonedsh.ui.theme.UiColors
 
 /**
  * What the 真实连接设备 section shows.
@@ -100,6 +100,10 @@ public data class DeviceConnectionScreenState(
     public val failedDeviceId: String?,
     public val canForget: Boolean,
     public val openingDeviceId: String?,
+    /** Per-device link state reported by the host; absent keys render unknown. */
+    public val deviceOnline: Map<String, Boolean?> = emptyMap(),
+    /** Device ids with a saved session mapping in the host snapshot. */
+    public val mappedDeviceIds: Set<String> = emptySet(),
 ) {
     public companion object {
         /**
@@ -111,6 +115,7 @@ public data class DeviceConnectionScreenState(
         public fun from(
             snapshot: DeviceConnectionSnapshot,
             local: DeviceConnectionLocalState = DeviceConnectionLocalState(),
+            deviceOnline: Map<String, Boolean?> = emptyMap(),
         ): DeviceConnectionScreenState {
             val list = when {
                 !snapshot.connectorAvailable -> DeviceListState.UNAVAILABLE
@@ -127,6 +132,8 @@ public data class DeviceConnectionScreenState(
                 failedDeviceId = snapshot.failedDeviceId,
                 canForget = snapshot.canForget(snapshot.failedDeviceId),
                 openingDeviceId = local.openingDeviceId,
+                deviceOnline = deviceOnline,
+                mappedDeviceIds = snapshot.forgettableDeviceIds,
             )
         }
 
@@ -199,14 +206,14 @@ public fun NativeDeviceConnectionPage(
                                     .fillMaxWidth()
                                     .testTag(UiPageTags.DEVICE_FORGET)
                                     .clickable(role = Role.Button) { onForgetMapping(failed) }
-                                    .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-                                    .padding(horizontal = tokens.geometry.pageOuterMarginH)
+                                    .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
+                                    .padding(horizontal = HomeMetrics.chromeInset)
                                     .semantics(mergeDescendants = true) {},
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 BasicText(
                                     text = UiStrings.DEVICE_FORGET_MAPPING,
-                                    style = type.secondary.copy(color = tokens.colors.accent),
+                                    style = type.listItem.copy(color = tokens.colors.textPrimary),
                                     maxLines = 1,
                                 )
                             }
@@ -244,6 +251,8 @@ public fun NativeDeviceConnectionPage(
                         device = device,
                         opening = state.openingDeviceId == device.deviceId,
                         enabled = state.openingDeviceId == null,
+                        online = state.deviceOnline[device.deviceId],
+                        sessionMapped = device.deviceId in state.mappedDeviceIds,
                         onOpen = { onOpen(device) },
                     )
                     SessionHairline()
@@ -259,12 +268,12 @@ public fun NativeDeviceConnectionPage(
             item(key = "transport-footer") {
                 BasicText(
                     text = UiStrings.DEVICE_TRANSPORT_FOOTER,
-                    style = type.caption.copy(color = tokens.colors.tertiary),
+                    style = type.listItem.copy(color = tokens.colors.textTertiary),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag(UiPageTags.DEVICE_TRANSPORT_FOOTER)
                         .padding(
-                            horizontal = tokens.geometry.pageOuterMarginH,
+                            horizontal = HomeMetrics.chromeInset,
                             vertical = tokens.spacing.iconText,
                         ),
                 )
@@ -284,6 +293,8 @@ private fun DeviceRow(
     device: DeviceConnectionEntry,
     opening: Boolean,
     enabled: Boolean,
+    online: Boolean?,
+    sessionMapped: Boolean,
     onOpen: () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
@@ -293,37 +304,63 @@ private fun DeviceRow(
             .fillMaxWidth()
             .testTag(UiPageTags.DEVICE_ROW)
             .clickable(enabled = enabled, role = Role.Button, onClick = onOpen)
-            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+            .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.chromeInset,
                 vertical = tokens.spacing.iconText,
             )
-            .semantics(mergeDescendants = true) { contentDescription = device.displayName },
+            .semantics(mergeDescendants = true) {
+                val onlineLabel = when (online) {
+                    true -> DEVICE_ONLINE
+                    false -> DEVICE_OFFLINE
+                    null -> DEVICE_STATUS_UNKNOWN
+                }
+                val mappingLabel = if (sessionMapped) DEVICE_SESSION_MAPPED else DEVICE_SESSION_UNMAPPED
+                contentDescription = "${device.displayName}. ${device.deviceId}. $mappingLabel. $onlineLabel"
+            },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
-        DevicePhoneGlyph(online = true)
+        DevicePhoneGlyph(online = online)
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
         ) {
             BasicText(
                 text = device.displayName,
-                style = type.body.copy(color = tokens.colors.primary),
+                style = type.body.copy(color = tokens.colors.textPrimary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             BasicText(
                 text = device.deviceId,
-                style = type.caption.copy(color = tokens.colors.tertiary),
+                style = type.listItem.copy(color = tokens.colors.textSecondary),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            BasicText(
+                text = buildString {
+                    append(if (sessionMapped) DEVICE_SESSION_MAPPED else DEVICE_SESSION_UNMAPPED)
+                    append(" · ")
+                    append(when (online) {
+                        true -> DEVICE_ONLINE
+                        false -> DEVICE_OFFLINE
+                        null -> DEVICE_STATUS_UNKNOWN
+                    })
+                    if (device.capabilityCount > 0) {
+                        append(" · ")
+                        append(DEVICE_CAPABILITY_COUNT.format(device.capabilityCount))
+                    }
+                },
+                style = type.listItem.copy(color = tokens.colors.textSecondary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
         BasicText(
             text = if (opening) OPENING_GLYPH else CHEVRON_GLYPH,
-            style = type.caption.copy(
-                color = if (opening) tokens.colors.accent else tokens.colors.tertiary,
+            style = type.listItem.copy(
+                color = if (opening) tokens.colors.textPrimary else tokens.colors.textTertiary,
             ),
         )
     }
@@ -331,42 +368,29 @@ private fun DeviceRow(
 
 /** The baseline's `iphone` glyph and six-point online mark (`NativeDeviceEntryIcon`). */
 @Composable
-private fun DevicePhoneGlyph(online: Boolean) {
+private fun DevicePhoneGlyph(online: Boolean?) {
     val tokens = LocalUiTokens.current
-    Canvas(
-        Modifier.size(
-            width = tokens.geometry.pageRowMinHeight * DEVICE_ICON_WIDTH_TO_ROW_RATIO,
-            height = tokens.geometry.pageRowMinHeight * DEVICE_ICON_HEIGHT_TO_ROW_RATIO,
+    Box(
+        modifier = Modifier.size(
+            width = HomeMetrics.defaultMinListRowHeight * DEVICE_ICON_WIDTH_TO_ROW_RATIO,
+            height = HomeMetrics.defaultMinListRowHeight * DEVICE_ICON_HEIGHT_TO_ROW_RATIO,
         ),
     ) {
-        val phoneWidth = size.width * 0.55f
-        val phoneHeight = size.height * 0.86f
-        val phoneTopLeft = Offset((size.width - phoneWidth) / 2f, (size.height - phoneHeight) / 2f)
-        val line = size.minDimension * DEVICE_ICON_STROKE_RATIO
-        drawRoundRect(
-            color = tokens.colors.secondary,
-            topLeft = phoneTopLeft,
-            size = Size(phoneWidth, phoneHeight),
-            cornerRadius = CornerRadius(phoneWidth * 0.19f, phoneWidth * 0.19f),
-            style = Stroke(width = line),
+        PdshIconView(
+            icon = PdshIcon.DEVICE,
+            size = HomeMetrics.navIcon,
+            tint = tokens.colors.textSecondary,
+            contentDescription = null,
+            modifier = Modifier.align(Alignment.Center),
         )
-        drawLine(
-            color = tokens.colors.secondary,
-            start = Offset(size.width * 0.44f, phoneTopLeft.y + phoneHeight * 0.12f),
-            end = Offset(size.width * 0.56f, phoneTopLeft.y + phoneHeight * 0.12f),
-            strokeWidth = line,
-        )
-        drawLine(
-            color = tokens.colors.secondary,
-            start = Offset(size.width * 0.44f, phoneTopLeft.y + phoneHeight * 0.88f),
-            end = Offset(size.width * 0.56f, phoneTopLeft.y + phoneHeight * 0.88f),
-            strokeWidth = line,
-        )
-        if (online) {
-            val center = Offset(size.width * 0.85f, size.height * 0.19f)
-            val dotRadius = tokens.geometry.statusDotDiameter.toPx() / 2f
-            drawCircle(tokens.colors.input, radius = dotRadius + line / 2f, center = center)
-            drawCircle(tokens.colors.success, radius = dotRadius, center = center)
+        if (online == true) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .size(tokens.geometry.statusDotDiameter)
+                    .background(tokens.colors.sessionSuccess, CircleShape)
+                    .border(tokens.stroke.hairline, tokens.colors.surface, CircleShape),
+            )
         }
     }
 }
@@ -384,9 +408,9 @@ private fun TransportRow(row: DeviceTransmissionRow) {
         modifier = Modifier
             .fillMaxWidth()
             .testTag(UiPageTags.DEVICE_TRANSPORT_ROW)
-            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+            .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.chromeInset,
                 vertical = tokens.spacing.iconText,
             )
             .semantics(mergeDescendants = true) {},
@@ -395,7 +419,7 @@ private fun TransportRow(row: DeviceTransmissionRow) {
     ) {
         BasicText(
             text = label,
-            style = type.body.copy(color = tokens.colors.primary),
+            style = type.body.copy(color = tokens.colors.textPrimary),
             modifier = Modifier.weight(1f),
         )
         BasicText(
@@ -404,8 +428,8 @@ private fun TransportRow(row: DeviceTransmissionRow) {
             } else {
                 UiStrings.DEVICE_TRANSPORT_NOT_PROVIDED
             },
-            style = type.secondary.copy(
-                color = if (row.available) tokens.colors.success else tokens.colors.tertiary,
+            style = type.listItem.copy(
+            color = if (row.available) tokens.colors.sessionSuccess else tokens.colors.textTertiary,
             ),
         )
     }
@@ -421,14 +445,14 @@ private fun DeviceUnavailable(title: String, hint: String, tag: String) {
             .fillMaxWidth()
             .testTag(tag)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.chromeInset,
                 vertical = tokens.geometry.cardOuterMarginV,
             )
             .semantics(mergeDescendants = true) { contentDescription = "$title. $hint" },
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
-        BasicText(text = title, style = type.body.copy(color = tokens.colors.secondary))
-        BasicText(text = hint, style = type.caption.copy(color = tokens.colors.tertiary))
+        BasicText(text = title, style = type.body.copy(color = tokens.colors.textPrimary))
+        BasicText(text = hint, style = type.listItem.copy(color = tokens.colors.textTertiary))
     }
 }
 
@@ -438,21 +462,18 @@ private fun DeviceUnavailable(title: String, hint: String, tag: String) {
  */
 internal object DeviceConnectionPageTokens {
     val refs: List<String> = listOf(
-        UiTokenNames.COLORS_PRIMARY,
-        UiTokenNames.COLORS_SECONDARY,
-        UiTokenNames.COLORS_TERTIARY,
-        UiTokenNames.COLORS_ACCENT,
-        UiTokenNames.COLORS_SUCCESS,
-        UiTokenNames.COLORS_INPUT,
-        UiTokenNames.TYPOGRAPHY_BODY,
-        UiTokenNames.TYPOGRAPHY_SECONDARY,
-        UiTokenNames.TYPOGRAPHY_CAPTION,
-        UiTokenNames.SPACING_ICON_TEXT,
-        UiTokenNames.SPACING_BADGE_INSET_V,
-        UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
-        UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_STATUS_DOT_DIAMETER,
-        UiTokenNames.GEOMETRY_CARD_OUTER_MARGIN_V,
+        "colors.sessionSuccess",
+        "colors.surface",
+        "colors.textPrimary",
+        "colors.textSecondary",
+        "colors.textTertiary",
+        "geometry.cardOuterMarginV",
+        "geometry.statusDotDiameter",
+        "spacing.badgeInsetV",
+        "spacing.iconText",
+        "stroke.hairline",
+        "typography.body",
+        "typography.listItem",
     )
 }
 
@@ -463,4 +484,12 @@ private const val CHEVRON_GLYPH: String = "›"
 private const val OPENING_GLYPH: String = "…"
 private const val DEVICE_ICON_WIDTH_TO_ROW_RATIO: Float = 0.5f
 private const val DEVICE_ICON_HEIGHT_TO_ROW_RATIO: Float = 0.54545f
-private const val DEVICE_ICON_STROKE_RATIO: Float = 0.0625f
+private const val DEVICE_SESSION_MAPPED: String = "已有会话映射"
+private const val DEVICE_SESSION_UNMAPPED: String = "未建立会话映射"
+private const val DEVICE_ONLINE: String = "在线"
+private const val DEVICE_OFFLINE: String = "离线"
+private const val DEVICE_STATUS_UNKNOWN: String = "连接状态未知"
+private const val DEVICE_CAPABILITY_COUNT: String = "%d 项设备能力"
+
+/** Canonical spec name, backed by the theme's resolved success role. */
+private val UiColors.sessionSuccess: Color get() = success

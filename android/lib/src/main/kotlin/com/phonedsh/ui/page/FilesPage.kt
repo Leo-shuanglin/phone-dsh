@@ -31,12 +31,9 @@
 // query). §3.1 rule 3 makes that snapshot the UiState-side input on a page with no
 // harness event anchor, so the listing and the folder sequence are asserted on the JVM.
 //
-// Geometry: the page margin and the row floors are page-level tokens
-// (`geometry.pageOuterMarginH`, `geometry.pageRowMinHeight`); nothing here invents a
-// colour or a length.
+// Geometry: page margins and 48pt touch rows use HomeMetrics; icons use PdshIcons.
 package com.phonedsh.ui.page
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -55,38 +52,34 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
-import com.phonedsh.ui.ShellFilesMetrics
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.UiStrings
-import com.phonedsh.ui.surface.CubeGlyph
+import com.phonedsh.ui.icon.PdshIcon
+import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.surface.PageBarCapsule
 import com.phonedsh.ui.surface.SettingsSubPageFrame
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
-import com.phonedsh.ui.theme.generated.UiTokenNames
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
@@ -135,6 +128,13 @@ public enum class FileKind {
 
     /** Everything else: Quick Look on iOS (images, PDF, Office, archives). */
     EXTERNAL,
+}
+
+/** Host receipt for a document-picker request; cancellation is a completed answer. */
+public enum class FilesImportReceipt {
+    CANCELLED,
+    IMPORTED,
+    FAILED,
 }
 
 /** The baseline's three extension sets, kept in one place so a test can pin them. */
@@ -239,6 +239,7 @@ public data class FilesScreenState(
     public val files: List<WorkspaceFile> = emptyList(),
     public val waiting: Boolean = true,
     public val workspaceEmpty: Boolean = false,
+    public val importReceipt: FilesImportReceipt? = null,
 ) {
     /** True when the current directory is below the workspace root. */
     public val canNavigateUp: Boolean get() = directory.isNotEmpty()
@@ -259,6 +260,7 @@ public data class FilesScreenState(
         public fun from(
             source: FilesSource,
             local: FilesLocalState = FilesLocalState(),
+            importReceipt: FilesImportReceipt? = null,
         ): FilesScreenState {
             val all = source.files
             val directory = local.directory
@@ -297,6 +299,7 @@ public data class FilesScreenState(
                 files = files,
                 waiting = all == null,
                 workspaceEmpty = all != null && all.isEmpty(),
+                importReceipt = importReceipt,
             )
         }
 
@@ -480,51 +483,60 @@ public fun FilesPage(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenDemo: (() -> Unit)? = null,
+    onImportRequest: (() -> Unit)? = null,
 ) {
     // back-gesture (§5): a sub-directory is one level below its parent, so the
     // header's back walks the same stack the baseline's NavigationStack walks.
     val onHeaderBack = if (state.canNavigateUp) onNavigateUp else onBack
-    // The toolbar entry is drawn unconditionally; this sheet is the destination
-    // when the host passes no `onOpenDemo`. iOS presents the bundled
-    // `demo/spin.html` in a `PDSHPageView`; `:lib` ships no WebView and no
-    // bundled library page, so the sheet carries the app's own 3D answer
-    // (`UiStrings.PREVIEW_REASON_MODEL`) instead of pretending to render a cube.
-    var showingDemo by rememberSaveable { mutableStateOf(false) }
-    val openDemo: () -> Unit = onOpenDemo ?: { showingDemo = true }
-
-    // The baseline is a **large-title** page: `.navigationTitle(...)` +
-    // `.navigationBarTitleDisplayMode(.large)` (`FilesPage.swift:51`–`:52`), which
-    // `ios-files.png` measures at 34 pt with its ink box at y 125.33–155.33 and a
-    // 17.33 pt leading inset. `PageFrame` draws the bar's 17 pt inline title
-    // instead, so this page takes the large-title frame the settings sub-pages
-    // already use and paints the page fill the baseline sets explicitly
-    // (`.background(NativePagePalette.page)`, `:55` — #FFFFFF; the default frame
-    // leaves the Material surface, i.e. one grey step, showing through).
+    // The iOS page uses an inline navigation title. The viewer and document
+    // picker remain host-owned seams; absent callbacks disable their controls.
     val tokens = LocalUiTokens.current
     SettingsSubPageFrame(
-        largeTitle = state.groupTitle,
+        title = state.groupTitle,
         onBack = onHeaderBack,
         backGlyph = PAGE_BACK_GLYPH,
         pageFill = true,
         rootTag = UiPageTags.FILES_ROOT,
         modifier = modifier,
         trailing = {
-            // `:77`–`:82`: the toolbar item is a `Label(…, systemImage: "cube")`, and
-            // a toolbar renders it icon-only — `ios-files.png` has the cube at
-            // x 353.0–374.33, y 72.33–96.33 in a white 44 pt pill (the pill is
-            // visible only through its shadow, hence the halo in the shot).
-            PageBarCapsule(
-                // The visible name is the baseline's `Label` title 3D 示例; the
-                // spoken one is its `.accessibilityLabel` 打开 3D 示例 (`:81`).
-                description = UiStrings.FILES_DEMO,
-                onClick = openDemo,
-                insetH = tokens.geometry.pageBarButtonInsetH,
-                elevation = tokens.geometry.pageBarButtonElevation,
-                showsLabel = false,
-                glyph = { CubeGlyph() },
-                tag = UiPageTags.FILES_DEMO,
-                accessibilityLabel = UiStrings.FILES_DEMO_OPEN,
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV)) {
+                PageBarCapsule(
+                    description = FILES_IMPORT_LABEL,
+                    onClick = { onImportRequest?.invoke() },
+                    insetH = HomeMetrics.navButton / 4,
+                    elevation = HomeMetrics.blockGap / 4,
+                    showsLabel = true,
+                    glyph = {
+                        PdshIconView(
+                            icon = PdshIcon.DOCUMENT,
+                            size = HomeMetrics.navIcon,
+                            tint = tokens.colors.textPrimary,
+                            contentDescription = null,
+                        )
+                    },
+                    enabled = onImportRequest != null,
+                    tag = FILES_IMPORT_TEST_TAG,
+                    accessibilityLabel = if (onImportRequest == null) FILES_IMPORT_UNAVAILABLE else FILES_IMPORT_LABEL,
+                )
+                PageBarCapsule(
+                    description = UiStrings.FILES_DEMO,
+                    onClick = { onOpenDemo?.invoke() },
+                    insetH = HomeMetrics.navButton / 4,
+                    elevation = HomeMetrics.blockGap / 4,
+                    showsLabel = false,
+                    glyph = {
+                        PdshIconView(
+                            icon = PdshIcon.PUZZLE,
+                            size = HomeMetrics.navIcon,
+                            tint = tokens.colors.textPrimary,
+                            contentDescription = null,
+                        )
+                    },
+                    enabled = onOpenDemo != null,
+                    tag = UiPageTags.FILES_DEMO,
+                    accessibilityLabel = if (onOpenDemo == null) FILES_DEMO_UNAVAILABLE else UiStrings.FILES_DEMO_OPEN,
+                )
+            }
         },
     ) {
         ListingBody(
@@ -532,51 +544,25 @@ public fun FilesPage(
             onOpenFolder = onOpenFolder,
             onOpenFile = onOpenFile,
             onQueryChange = onQueryChange,
+            onImportUnavailable = onImportRequest == null,
         )
-    }
-    if (showingDemo) {
-        DemoSheet(onDismiss = { showingDemo = false })
     }
 }
 
 /**
  * The 「3D 示例」 sheet (`FilesPage.swift:62`–`:75`).
  *
- * The baseline's sheet is a `NavigationStack` titled 3D 示例 with a 完成 cancel
- * key; the body is a bundled web page. Android keeps the sheet, its title and
- * its cancel key, and puts the app's documented 3D answer in the body.
+ * The native iOS viewer is not available in this Compose module. The toolbar
+ * remains disabled until the host supplies a real viewer route.
  */
-@Composable
-private fun DemoSheet(onDismiss: () -> Unit) {
-    val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            BasicText(
-                text = UiStrings.FILES_PREVIEW_DONE,
-                style = type.secondary.copy(color = tokens.colors.accent),
-                modifier = Modifier
-                    .testTag(UiPageTags.FILES_DEMO_DONE)
-                    .clickable(role = Role.Button, onClick = onDismiss)
-                    .padding(tokens.spacing.iconText),
-            )
-        },
-        title = {
-            BasicText(
-                text = UiStrings.FILES_DEMO,
-                style = type.rowLabel.copy(color = tokens.colors.primary),
-            )
-        },
-        text = {
-            BasicText(
-                text = UiStrings.PREVIEW_REASON_MODEL,
-                style = type.secondary.copy(color = tokens.colors.secondary),
-            )
-        },
-        containerColor = tokens.colors.input,
-    )
-}
+private const val FILES_IMPORT_LABEL = "导入文件"
+private const val FILES_IMPORT_UNAVAILABLE = "导入文件，宿主未提供文档选择器"
+private const val FILES_IMPORT_UNAVAILABLE_HINT = "当前宿主没有提供文件选择器，尚未导入文件。"
+private const val FILES_IMPORT_CANCELLED = "文件导入已取消"
+private const val FILES_IMPORT_COMPLETED = "文件已导入工作区"
+private const val FILES_IMPORT_FAILED = "文件导入失败"
+private const val FILES_DEMO_UNAVAILABLE = "3D 示例，宿主未提供本地页面查看器"
+private const val FILES_IMPORT_TEST_TAG = "files-import"
 
 /** The listing: the search field above the one section (`FilesPage.swift:100`). */
 @Composable
@@ -585,12 +571,24 @@ private fun ListingBody(
     onOpenFolder: (String) -> Unit,
     onOpenFile: (WorkspaceFile) -> Unit,
     onQueryChange: (String) -> Unit,
+    onImportUnavailable: Boolean,
 ) {
     // The search field is pinned at the top; the IME must shrink the list under it
     // instead of covering the last rows, which a no-op scroll cannot lift
     // (spec §5 row `insets`: the page consumes its IME inset, not the host).
     Column(modifier = Modifier.fillMaxSize().imePadding()) {
         SearchField(query = state.query, onQueryChange = onQueryChange)
+        if (state.importReceipt != null) {
+            ImportReceiptLine(
+                when (state.importReceipt) {
+                    FilesImportReceipt.CANCELLED -> FILES_IMPORT_CANCELLED
+                    FilesImportReceipt.IMPORTED -> FILES_IMPORT_COMPLETED
+                    FilesImportReceipt.FAILED -> FILES_IMPORT_FAILED
+                },
+            )
+        } else if (onImportUnavailable) {
+            ImportReceiptLine(FILES_IMPORT_UNAVAILABLE_HINT)
+        }
         when {
             // A host that has not reported the listing: waiting, not "no files".
             state.waiting -> EmptyHint(
@@ -630,6 +628,20 @@ private fun ListingBody(
     }
 }
 
+@Composable
+private fun ImportReceiptLine(message: String) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    BasicText(
+        text = message,
+        style = type.caption.copy(color = tokens.colors.textSecondary),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = HomeMetrics.contentInset, vertical = tokens.spacing.badgeInsetV)
+            .semantics { liveRegion = LiveRegionMode.Polite },
+    )
+}
+
 /**
  * 「搜索文件」 (`FilesPage.swift:56`), drawn as the baseline's grey capsule.
  *
@@ -647,20 +659,20 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
         value = query,
         onValueChange = onQueryChange,
         singleLine = true,
-        textStyle = type.body.copy(color = tokens.colors.primary),
-        cursorBrush = SolidColor(tokens.colors.accent),
+        textStyle = type.body.copy(color = tokens.colors.textPrimary),
+        cursorBrush = SolidColor(tokens.colors.pageAccent),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         modifier = Modifier
             .fillMaxWidth()
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.contentInset,
                 vertical = tokens.spacing.badgeInsetV,
             )
-            // Shared metric: the baseline's 44 pt capsule (`ShellFilesMetrics`).
-            .clip(RoundedCornerShape(ShellFilesMetrics.searchRadius))
-            .background(tokens.colors.selector)
+            // HomeSpec search pill uses a 48pt control row and 24pt radius.
+            .clip(RoundedCornerShape(HomeMetrics.bubbleRadius))
+            .background(tokens.colors.surface)
             .padding(horizontal = tokens.spacing.cardInset)
-            .defaultMinSize(minHeight = ShellFilesMetrics.searchHeight)
+            .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
             .testTag(UiPageTags.FILES_SEARCH)
             .semantics { contentDescription = UiStrings.FILES_SEARCH },
         decorationBox = { inner ->
@@ -669,12 +681,17 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
             ) {
-                SearchGlyph()
+                PdshIconView(
+                    icon = PdshIcon.SEARCH,
+                    size = HomeMetrics.navIcon,
+                    tint = tokens.colors.textSecondary,
+                    contentDescription = null,
+                )
                 Box(modifier = Modifier.weight(1f)) {
                     if (query.isEmpty()) {
                         BasicText(
                             text = UiStrings.FILES_SEARCH,
-                            style = type.body.copy(color = tokens.colors.tertiary),
+                            style = type.body.copy(color = tokens.colors.textTertiary),
                         )
                     }
                     inner()
@@ -694,7 +711,7 @@ private fun NoFilesCard() {
             .fillMaxWidth()
             .testTag(UiPageTags.FILES_NONE)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.contentInset,
                 // `ios-files.png`: the search field ends at y 212.67 and the card's
                 // title ink starts at 269.33 — a 56.7 pt gap, which is the card's own
                 // 24 pt padding plus the list's 32 pt top inset. Android has no list
@@ -707,12 +724,12 @@ private fun NoFilesCard() {
     ) {
         BasicText(
             text = UiStrings.FILES_NONE,
-            style = type.headline.copy(color = tokens.colors.primary),
+            style = type.pageTitle.copy(color = tokens.colors.textPrimary),
         )
         BasicText(
             text = UiStrings.FILES_NONE_HINT,
-            style = type.secondary.copy(
-                color = tokens.colors.secondary,
+            style = type.listItem.copy(
+                color = tokens.colors.textSecondary,
                 textAlign = TextAlign.Center,
             ),
         )
@@ -729,26 +746,33 @@ private fun FolderRow(folder: String, onOpenFolder: (String) -> Unit) {
             .fillMaxWidth()
             .testTag(UiPageTags.FILES_FOLDER_ROW)
             .clickable(role = Role.Button, onClick = { onOpenFolder(folder) })
-            // Page-level geometry: a folder row is a page row (`minHeight: 44`, `:121`).
-            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+            // HomeSpec grouped rows use a 48pt minimum touch target.
+            .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.contentInset,
                 vertical = tokens.spacing.badgeInsetV,
             )
             .semantics(mergeDescendants = true) { contentDescription = folder },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
-        FolderGlyph()
+        PdshIconView(
+            icon = PdshIcon.FOLDER,
+            size = HomeMetrics.navIcon,
+            tint = tokens.colors.pageAccent,
+            contentDescription = null,
+        )
         BasicText(
             text = folder,
-            style = type.body.copy(color = tokens.colors.primary),
+            style = type.body.copy(color = tokens.colors.textPrimary),
             modifier = Modifier.weight(1f),
             maxLines = 1,
         )
-        BasicText(
-            text = CHEVRON,
-            style = type.caption.copy(color = tokens.colors.tertiary),
+        PdshIconView(
+            icon = PdshIcon.CHEVRON_RIGHT,
+            size = HomeMetrics.navIcon * 3 / 4,
+            tint = tokens.colors.textTertiary,
+            contentDescription = null,
         )
     }
 }
@@ -768,23 +792,29 @@ private fun FileRow(file: WorkspaceFile, onOpenFile: (WorkspaceFile) -> Unit) {
             .fillMaxWidth()
             .testTag(UiPageTags.FILES_FILE_ROW)
             .clickable(role = Role.Button, onClick = { onOpenFile(file) })
+            .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.contentInset,
                 vertical = tokens.spacing.badgeInsetV,
             )
             .semantics(mergeDescendants = true) { contentDescription = fileName(file.relativePath) },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
-        // Shared metric: `FilesPage.swift:189` reserves a 34 x 38 pt glyph slot.
+        // Reserve one 44pt touch-height icon slot in the 48pt row.
         Box(
             modifier = Modifier.size(
-                width = ShellFilesMetrics.fileRowGlyphSlotWidth,
-                height = ShellFilesMetrics.fileRowGlyphSlotHeight,
+                width = HomeMetrics.navButton,
+                height = HomeMetrics.navButton,
             ),
             contentAlignment = Alignment.Center,
         ) {
-            FileGlyph()
+            PdshIconView(
+                icon = PdshIcon.DOCUMENT,
+                size = HomeMetrics.navIcon,
+                tint = tokens.colors.textTertiary,
+                contentDescription = null,
+            )
         }
         Column(
             modifier = Modifier.weight(1f),
@@ -792,109 +822,30 @@ private fun FileRow(file: WorkspaceFile, onOpenFile: (WorkspaceFile) -> Unit) {
         ) {
             BasicText(
                 text = fileName(file.relativePath),
-                style = type.body.copy(color = tokens.colors.primary),
+                style = type.body.copy(color = tokens.colors.textPrimary),
                 maxLines = 1,
             )
             if (folder != null) {
                 BasicText(
                     text = folder,
-                    style = type.caption.copy(color = tokens.colors.secondary),
+                    style = type.listItem.copy(color = tokens.colors.textSecondary),
                     maxLines = 1,
                 )
             }
             BasicText(
                 // A measured size, or 未知: never a rounded guess.
                 text = file.size?.let { formatFileSize(it) } ?: UiStrings.UNKNOWN,
-                style = type.caption.copy(color = tokens.colors.tertiary),
+                style = type.listItem.copy(color = tokens.colors.textTertiary),
             )
         }
-        BasicText(
-            text = CHEVRON,
-            style = type.caption.copy(color = tokens.colors.tertiary),
+        PdshIconView(
+            icon = PdshIcon.CHEVRON_RIGHT,
+            size = HomeMetrics.navIcon * 3 / 4,
+            tint = tokens.colors.textTertiary,
+            contentDescription = null,
         )
     }
 }
-
-/**
- * The folder glyph (`FileTypeGlyph.folder(size: 20)` on iOS).
- *
- * `:lib` ships no image assets and no icon token, so the shape is drawn at the
- * icon-to-text gap times four (24 dp, the baseline's 20–24 pt icon) from the
- * theme's accent ink. It is the baseline's blue folder, not a platform icon font.
- */
-@Composable
-private fun FolderGlyph() {
-    val tokens = LocalUiTokens.current
-    val ink = tokens.colors.accent
-    Canvas(modifier = Modifier.size(tokens.spacing.iconText * 4)) {
-        val w = size.width
-        val h = size.height
-        val path = Path().apply {
-            moveTo(0f, h * FOLDER_BOTTOM_RATIO)
-            lineTo(0f, h * FOLDER_TAB_TOP_RATIO)
-            lineTo(w * FOLDER_TAB_WIDTH_RATIO, h * FOLDER_TAB_TOP_RATIO)
-            lineTo(w * FOLDER_TAB_SLANT_RATIO, h * FOLDER_TAB_BOTTOM_RATIO)
-            lineTo(w, h * FOLDER_TAB_BOTTOM_RATIO)
-            lineTo(w, h * FOLDER_BOTTOM_RATIO)
-            close()
-        }
-        drawPath(path = path, color = ink)
-    }
-}
-
-/**
- * The file glyph (`FileTypeGlyph.icon(for:size: 24)` on iOS).
- *
- * The baseline picks a different bundled asset per extension (DSHCodeKotlin,
- * DSHFilePDF, …). Those assets do not exist in `:lib`, so this is the generic
- * document outline: a page with a folded corner, in tertiary ink.
- */
-@Composable
-private fun FileGlyph() {
-    val tokens = LocalUiTokens.current
-    val ink = tokens.colors.tertiary
-    Canvas(modifier = Modifier.size(tokens.spacing.iconText * 4)) {
-        val w = size.width
-        val h = size.height
-        val stroke = tokens.stroke.hairline.toPx() * 3
-        val fold = w * FILE_FOLD_RATIO
-        val path = Path().apply {
-            moveTo(w * FILE_LEFT_RATIO, h * FILE_TOP_RATIO)
-            lineTo(w * FILE_FOLD_START_RATIO, h * FILE_TOP_RATIO)
-            lineTo(w - fold * FILE_FOLD_START_RATIO, h * FILE_FOLD_RATIO)
-            lineTo(w - fold * FILE_FOLD_START_RATIO, h * FILE_BOTTOM_RATIO)
-            lineTo(w * FILE_LEFT_RATIO, h * FILE_BOTTOM_RATIO)
-            close()
-        }
-        drawPath(path = path, color = ink, style = Stroke(width = stroke))
-        drawLine(
-            color = ink,
-            start = Offset(w * FILE_FOLD_START_RATIO, h * FILE_TOP_RATIO),
-            end = Offset(w * FILE_FOLD_START_RATIO, h * FILE_FOLD_RATIO),
-            strokeWidth = stroke,
-        )
-        drawLine(
-            color = ink,
-            start = Offset(w * FILE_FOLD_START_RATIO, h * FILE_FOLD_RATIO),
-            end = Offset(w - fold * FILE_FOLD_START_RATIO, h * FILE_FOLD_RATIO),
-            strokeWidth = stroke,
-        )
-    }
-}
-
-/** Folder-shape ratios: a tab on the left and a body below it. */
-private const val FOLDER_TAB_TOP_RATIO: Float = 0.24f
-private const val FOLDER_TAB_BOTTOM_RATIO: Float = 0.36f
-private const val FOLDER_TAB_WIDTH_RATIO: Float = 0.42f
-private const val FOLDER_TAB_SLANT_RATIO: Float = 0.5f
-private const val FOLDER_BOTTOM_RATIO: Float = 0.82f
-
-/** Document-shape ratios. */
-private const val FILE_LEFT_RATIO: Float = 0.22f
-private const val FILE_TOP_RATIO: Float = 0.12f
-private const val FILE_FOLD_START_RATIO: Float = 0.62f
-private const val FILE_FOLD_RATIO: Float = 0.26f
-private const val FILE_BOTTOM_RATIO: Float = 0.88f
 
 /** The last path segment (`URL.lastPathComponent`). */
 private fun fileName(relativePath: String): String =
@@ -910,45 +861,6 @@ private fun folderName(relativePath: String): String? {
     return parent.substringAfterLast('/').ifEmpty { null }
 }
 
-/** The disclosure glyph the listing's rows end with (the baseline's chevron). */
-private const val CHEVRON: String = "›"
-
-/**
- * The magnifier inside the search capsule.
- *
- * `ios-files.png` measures a 20 pt SF Symbol; there is no icon asset in `:lib` and
- * no icon-sized token, so the glyph is drawn from two primitives at half the page
- * row floor (22 dp) with the declared hairline as its stroke. Colours are the
- * theme's tertiary ink, never literals.
- */
-@Composable
-private fun SearchGlyph() {
-    val tokens = LocalUiTokens.current
-    val ink = tokens.colors.tertiary
-    Canvas(modifier = Modifier.size(tokens.geometry.pageRowMinHeight / 2)) {
-        val stroke = tokens.stroke.hairline.toPx() * 4
-        val radius = size.minDimension * MAGNIFIER_RADIUS_RATIO
-        val center = Offset(
-            size.width * MAGNIFIER_CENTER_RATIO,
-            size.height * MAGNIFIER_CENTER_RATIO,
-        )
-        drawCircle(color = ink, radius = radius, center = center, style = Stroke(width = stroke))
-        drawLine(
-            color = ink,
-            start = Offset(center.x + radius * 0.72f, center.y + radius * 0.72f),
-            end = Offset(size.width * 0.92f, size.height * 0.92f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-    }
-}
-
-/** Half the glyph box; the lens sits in the upper-left quadrant. */
-private const val MAGNIFIER_RADIUS_RATIO: Float = 0.34f
-
-/** The lens centre inside the square glyph box. */
-private const val MAGNIFIER_CENTER_RATIO: Float = 0.42f
-
 private val NUL: Byte = 0.toByte()
 
 /**
@@ -957,27 +869,17 @@ private val NUL: Byte = 0.toByte()
  */
 internal object FilesPageTokens {
     val refs: List<String> = listOf(
-        UiTokenNames.COLORS_PRIMARY,
-        UiTokenNames.COLORS_SECONDARY,
-        UiTokenNames.COLORS_TERTIARY,
-        UiTokenNames.COLORS_ACCENT,
-        UiTokenNames.COLORS_SELECTOR,
-        UiTokenNames.COLORS_INPUT,
-        UiTokenNames.TYPOGRAPHY_BODY,
-        UiTokenNames.TYPOGRAPHY_ROW_LABEL,
-        UiTokenNames.TYPOGRAPHY_SECONDARY,
-        UiTokenNames.TYPOGRAPHY_CAPTION,
-        UiTokenNames.TYPOGRAPHY_HEADLINE,
-        UiTokenNames.SPACING_ICON_TEXT,
-        UiTokenNames.SPACING_BADGE_INSET_V,
-        UiTokenNames.SPACING_CARD_INSET,
-        UiTokenNames.STROKE_HAIRLINE,
-        UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
-        UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
-        // L75: the toolbar capsule's two page-layer lengths (the pill's text inset
-        // and its shadow). The frame's white fill is `SettingsSubPageFrame`'s
-        // `pageFill`, not a read of this file.
-        UiTokenNames.GEOMETRY_PAGE_BAR_BUTTON_INSET_H,
-        UiTokenNames.GEOMETRY_PAGE_BAR_BUTTON_ELEVATION,
+        "colors.pageAccent",
+        "colors.surface",
+        "colors.textPrimary",
+        "colors.textSecondary",
+        "colors.textTertiary",
+        "spacing.badgeInsetV",
+        "spacing.cardInset",
+        "spacing.iconText",
+        "typography.body",
+        "typography.caption",
+        "typography.listItem",
+        "typography.pageTitle",
     )
 }

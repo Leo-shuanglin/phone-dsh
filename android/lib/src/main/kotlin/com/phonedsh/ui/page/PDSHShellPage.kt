@@ -73,11 +73,13 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import com.phonedsh.ui.ShellFilesMetrics
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.icon.PdshIcon
+import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
-import com.phonedsh.ui.theme.generated.UiTokenNames
+import com.phonedsh.ui.theme.UiColors
 
 /**
  * The commands page (`PDSHShellPage`), drawn as the baseline's grouped card list.
@@ -104,8 +106,10 @@ internal fun PDSHShellPage(
     onCancel: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onRunArgv: ((argv: List<String>, workingDirectory: String) -> Unit)? = null,
 ) {
     val tokens = LocalUiTokens.current
+    val argv = shellArgvFromCaps(state)
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -113,7 +117,7 @@ internal fun PDSHShellPage(
             // (#F2F2F7). `colors.selector` (#F2F3F5) is the theme's selector fill,
             // not the grouped page: using it made 54% of the frame differ by
             // (0,1,2) per pixel, which is the whole-block cause behind the 64.6%.
-            .background(tokens.colors.groupedBackground)
+            .background(tokens.colors.page)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
             .testTag(UiPageTags.SHELL_ROOT),
     ) {
@@ -167,8 +171,12 @@ internal fun PDSHShellPage(
                     onSelectCommand = onSelectCommand,
                     onWorkingDirectoryChange = onWorkingDirectoryChange,
                     onArgumentsChange = onArgumentsChange,
-                    onRun = onRun,
+                    onRun = {
+                        if (argv != null && onRunArgv != null) onRunArgv(argv, state.workingDirectory)
+                        else if (argv != null) onRun()
+                    },
                     onCancel = onCancel,
+                    canSubmitArgv = argv != null,
                 )
                 ShellOutputSection(state = state)
                 ShellLimitsSection(state = state)
@@ -194,12 +202,14 @@ private fun ShellTopBar(title: String, onBack: () -> Unit) {
             .statusBarsPadding()
             // Shared metric: `NativeHeaderStyle.barHeight = 44` (the same number the
             // page token declares), and the header's own 16 pt inset.
-            .defaultMinSize(minHeight = ShellFilesMetrics.headerHeight)
-            .padding(horizontal = ShellFilesMetrics.headerInset),
+            .defaultMinSize(minHeight = HomeMetrics.navButton)
+            .padding(horizontal = HomeMetrics.chromeInset),
     ) {
-        BasicText(
-            text = PAGE_BACK_GLYPH,
-            style = type.headline.copy(color = tokens.colors.accent),
+        PdshIconView(
+            icon = PdshIcon.CHEVRON_LEFT,
+            size = HomeMetrics.navIcon,
+            tint = tokens.colors.textPrimary,
+            contentDescription = null,
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .clickable(role = Role.Button, onClick = onBack)
@@ -208,7 +218,7 @@ private fun ShellTopBar(title: String, onBack: () -> Unit) {
         )
         BasicText(
             text = title,
-            style = type.headline.copy(color = tokens.colors.primary),
+            style = type.pageTitle.copy(color = tokens.colors.textPrimary),
             maxLines = 1,
             modifier = Modifier
                 .align(Alignment.Center)
@@ -264,9 +274,9 @@ private fun ShellSectionView(
                 // 15.3 pt — the 17 pt role — not at the 12 pt caption size, and
                 // its measured ink is #85858B: system secondary over the grouped
                 // fill, not the theme's #66666B.
-                style = type.rowLabel.copy(color = tokens.colors.systemSecondary),
+                style = type.listItem.copy(color = tokens.colors.textSecondary),
                 modifier = Modifier
-                    .padding(horizontal = tokens.geometry.pageOuterMarginH * 2)
+                    .padding(horizontal = HomeMetrics.contentInset * 2)
                     .testTag(titleTag)
                     .semantics { heading() },
             )
@@ -274,9 +284,9 @@ private fun ShellSectionView(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = tokens.geometry.pageOuterMarginH)
+                .padding(horizontal = HomeMetrics.contentInset)
                 .clip(RoundedCornerShape(tokens.radius.card))
-                .background(tokens.colors.input)
+                .background(tokens.colors.surface)
                 .then(if (cardTag != null) Modifier.testTag(cardTag) else Modifier),
         ) {
             content()
@@ -296,7 +306,7 @@ private fun ShellInfoRow(label: String, value: String, tag: String) {
             // `ios-shell.png`: hairline-to-hairline row pitch is 52.33 pt. 52 is
             // pageRowMinHeight (44) + codeToolbar (8); the 0.33 residual is below
             // one raster pixel per row. `unverified geometry` for the borrow.
-            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight + tokens.spacing.codeToolbar)
+            .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight + tokens.spacing.codeToolbar)
             .padding(
                 horizontal = tokens.spacing.cardInset,
                 vertical = tokens.spacing.badgeInsetV,
@@ -310,7 +320,7 @@ private fun ShellInfoRow(label: String, value: String, tag: String) {
             // A `LabeledContent` row in the baseline is `.body` = 17 pt:
             // `ios-shell.png` measures 状态 / 网络 / 工作区 at ink 15.3 pt, and
             // its dominant ink is #000000 (systemLabel), not #111114.
-            style = type.rowLabel.copy(color = tokens.colors.systemLabel),
+            style = type.listItem.copy(color = tokens.colors.textPrimary),
             modifier = Modifier.weight(1f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -318,7 +328,7 @@ private fun ShellInfoRow(label: String, value: String, tag: String) {
         BasicText(
             text = value,
             // Value ink measured #8A8A8E on both cards.
-            style = type.rowLabel.copy(color = tokens.colors.systemSecondary),
+            style = type.listItem.copy(color = tokens.colors.textSecondary),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -343,7 +353,7 @@ private fun ShellHairline() {
             // Same SwiftUI grouped-list separator as the settings cards: measured
             // #E8E8E8, while the theme border is #E4E4E8 (delta 4 > the 2/255
             // visibility threshold, so every hairline pixel used to count).
-            .background(tokens.colors.separator),
+            .background(tokens.colors.borderList),
     )
 }
 
@@ -364,7 +374,7 @@ private fun ShellFootnote(text: String, tag: String) {
             .fillMaxWidth()
             .testTag(tag)
             .defaultMinSize(
-                minHeight = tokens.geometry.pageRowMinHeight + tokens.spacing.codeToolbar,
+                minHeight = HomeMetrics.defaultMinListRowHeight + tokens.spacing.codeToolbar,
             )
             .padding(horizontal = tokens.spacing.cardInset),
         contentAlignment = Alignment.CenterStart,
@@ -374,7 +384,7 @@ private fun ShellFootnote(text: String, tag: String) {
             // `Text(...).font(.footnote).foregroundStyle(.secondary)` renders
             // #7F7F7F on the white card (the same construct L79 measured in the
             // settings/about footnotes), not the #8A8A8E LabeledContent value.
-            style = type.secondary.copy(color = tokens.colors.settingsFootnoteInk),
+            style = type.listItem.copy(color = tokens.colors.textSecondary),
         )
     }
 }
@@ -392,11 +402,11 @@ private fun ShellUnavailableCard() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = tokens.geometry.pageOuterMarginH)
+            .padding(horizontal = HomeMetrics.contentInset)
             // `ios-shell.png` puts 34.7 pt between the first card and this one.
             .padding(top = tokens.spacing.cardInset * 3)
             .clip(RoundedCornerShape(tokens.radius.card))
-            .background(tokens.colors.input)
+            .background(tokens.colors.surface)
             .testTag(UiPageTags.SHELL_EMPTY)
             // The baseline's ContentUnavailableView is 214.3 pt tall and is not
             // symmetric: icon top is +34.3 from the card edge, the last
@@ -404,9 +414,9 @@ private fun ShellUnavailableCard() {
             // (44) - badgeInsetV twice; the bottom keeps the 44 pt row floor.
             .padding(
                 start = tokens.spacing.cardInset * 2,
-                top = tokens.geometry.pageRowMinHeight - tokens.spacing.badgeInsetV * 2,
+                top = HomeMetrics.defaultMinListRowHeight - tokens.spacing.badgeInsetV * 2,
                 end = tokens.spacing.cardInset * 2,
-                bottom = tokens.geometry.pageRowMinHeight,
+                bottom = HomeMetrics.defaultMinListRowHeight,
             )
             .semantics(mergeDescendants = true) {},
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -416,19 +426,21 @@ private fun ShellUnavailableCard() {
         Box(
             modifier = Modifier
                 .size(
-                    width = tokens.geometry.pageRowMinHeight + tokens.spacing.cardInset,
-                    height = tokens.geometry.pageRowMinHeight,
+                    width = HomeMetrics.defaultMinListRowHeight + tokens.spacing.cardInset,
+                    height = HomeMetrics.defaultMinListRowHeight,
                 )
                 .border(
                     width = tokens.stroke.hairline * 4,
-                    color = tokens.colors.tertiary,
+                    color = tokens.colors.textTertiary,
                     shape = RoundedCornerShape(tokens.radius.card),
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            BasicText(
-                text = TERMINAL_GLYPH,
-                style = type.code.copy(color = tokens.colors.tertiary),
+            PdshIconView(
+                icon = PdshIcon.TERMINAL,
+                size = HomeMetrics.navIcon,
+                tint = tokens.colors.textTertiary,
+                contentDescription = null,
             )
         }
         Column(
@@ -444,9 +456,9 @@ private fun ShellUnavailableCard() {
                 text = UiStrings.SHELL_EMPTY,
                 // iOS draws this inside `ContentUnavailableView`, whose title is
                 // ~20 pt (ios-shell.png ink 19.7) — not a 17 pt headline.
-                style = type.emptyStateTitle.copy(
+                style = type.pageTitle.copy(
                     // Ink measured #000000 (systemLabel).
-                    color = tokens.colors.systemLabel,
+                    color = tokens.colors.textPrimary,
                     textAlign = TextAlign.Center,
                 ),
                 modifier = Modifier.fillMaxWidth(),
@@ -460,14 +472,14 @@ private fun ShellUnavailableCard() {
                 // has to be narrower than 18 cells. 32 pt a side
                 // (pageOuterMarginH 16 + cardInset 12 + jsonChevronGap 4) leaves
                 // 258 pt, so 17 cells fit and the 18th does not.
-                style = type.subheadline.copy(
-                    color = tokens.colors.systemSecondary,
+                style = type.listItem.copy(
+                    color = tokens.colors.textSecondary,
                     textAlign = TextAlign.Center,
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(
-                        horizontal = tokens.geometry.pageOuterMarginH +
+                        horizontal = HomeMetrics.contentInset +
                             tokens.spacing.cardInset +
                             tokens.spacing.jsonChevronGap,
                     ),
@@ -485,6 +497,7 @@ private fun ShellRunSection(
     onArgumentsChange: (String) -> Unit,
     onRun: () -> Unit,
     onCancel: () -> Unit,
+    canSubmitArgv: Boolean,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -502,7 +515,7 @@ private fun ShellRunSection(
                     .fillMaxWidth()
                     .testTag(UiPageTags.SHELL_COMMAND)
                     .clickable(role = Role.Button) { choicesOpen = true }
-                    .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+                    .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
                     .padding(
                         horizontal = tokens.spacing.cardInset,
                         vertical = tokens.spacing.badgeInsetV,
@@ -513,12 +526,12 @@ private fun ShellRunSection(
             ) {
                 BasicText(
                     text = UiStrings.SHELL_COMMAND,
-                    style = type.body.copy(color = tokens.colors.primary),
+                    style = type.body.copy(color = tokens.colors.textPrimary),
                     modifier = Modifier.weight(1f),
                 )
                 BasicText(
                     text = state.selectedCommand,
-                    style = type.body.copy(color = tokens.colors.secondary),
+                    style = type.body.copy(color = tokens.colors.textSecondary),
                 )
             }
             // The choices the picker opens. Their labels are the accelerator names
@@ -562,7 +575,7 @@ private fun ShellRunSection(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+                .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
                 .padding(
                     horizontal = tokens.spacing.cardInset,
                     vertical = tokens.spacing.badgeInsetV,
@@ -572,8 +585,8 @@ private fun ShellRunSection(
         ) {
             ShellAction(
                 label = UiStrings.SHELL_RUN,
-                enabled = state.canRun,
-                tone = tokens.colors.accent,
+                enabled = state.canRun && canSubmitArgv,
+                tone = tokens.colors.pageAccent,
                 tag = UiPageTags.SHELL_RUN,
                 onClick = onRun,
             )
@@ -581,7 +594,7 @@ private fun ShellRunSection(
                 ShellAction(
                     label = UiStrings.SHELL_CANCEL,
                     enabled = true,
-                    tone = tokens.colors.danger,
+                    tone = tokens.colors.pageDanger,
                     tag = UiPageTags.SHELL_CANCEL,
                     onClick = onCancel,
                 )
@@ -613,36 +626,36 @@ private fun ShellField(
     ) {
         BasicText(
             text = label,
-            style = type.caption.copy(color = tokens.colors.secondary),
+            style = type.listItem.copy(color = tokens.colors.textSecondary),
         )
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
             singleLine = !multiline,
             textStyle = if (multiline) {
-                type.code.copy(color = tokens.colors.primary)
+                type.code.copy(color = tokens.colors.textPrimary)
             } else {
-                type.body.copy(color = tokens.colors.primary)
+                type.body.copy(color = tokens.colors.textPrimary)
             },
-            cursorBrush = SolidColor(tokens.colors.accent),
+            cursorBrush = SolidColor(tokens.colors.pageAccent),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag(tag)
                 .semantics { contentDescription = label }
                 .clip(RoundedCornerShape(tokens.radius.codeBlock))
-                .background(tokens.colors.selector)
+                .background(tokens.colors.userBubble)
                 .border(
                     tokens.stroke.hairline,
-                    tokens.colors.border,
+                    tokens.colors.borderList,
                     RoundedCornerShape(tokens.radius.codeBlock),
                 )
-                .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+                .defaultMinSize(minHeight = HomeMetrics.defaultMinListRowHeight)
                 .padding(tokens.spacing.cardInset),
             decorationBox = { inner ->
                 if (value.isEmpty() && placeholder != null) {
                     BasicText(
                         text = placeholder,
-                        style = type.code.copy(color = tokens.colors.tertiary),
+                        style = type.code.copy(color = tokens.colors.textTertiary),
                     )
                 }
                 inner()
@@ -653,7 +666,7 @@ private fun ShellField(
 
 /** 输出 (`:77`–`:83`) as its own card. */
 @Composable
-private fun ShellOutputSection(state: ToolsScreenState) {
+internal fun ShellOutputSection(state: ToolsScreenState) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     ShellSectionView(title = UiStrings.SHELL_OUTPUT_TITLE, titleTag = UiPageTags.SHELL_SECTION_OUTPUT) {
@@ -661,7 +674,7 @@ private fun ShellOutputSection(state: ToolsScreenState) {
             // `:78`: the failure line above the output, in red.
             BasicText(
                 text = state.error,
-                style = type.secondary.copy(color = tokens.colors.danger),
+                style = type.listItem.copy(color = tokens.colors.pageDanger),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag(UiPageTags.SHELL_ERROR)
@@ -673,7 +686,7 @@ private fun ShellOutputSection(state: ToolsScreenState) {
         }
         BasicText(
             text = state.output.ifEmpty { UiStrings.SHELL_OUTPUT_EMPTY },
-            style = type.code.copy(color = tokens.colors.primary),
+            style = type.code.copy(color = tokens.colors.textPrimary),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag(UiPageTags.SHELL_OUTPUT)
@@ -713,8 +726,8 @@ private fun ShellAction(
     val type = LocalUiType.current
     BasicText(
         text = label,
-        style = type.secondary.copy(
-            color = if (enabled) tone else tokens.colors.tertiary,
+        style = type.listItem.copy(
+            color = if (enabled) tone else tokens.colors.textTertiary,
         ),
         maxLines = 1,
         modifier = Modifier
@@ -725,8 +738,19 @@ private fun ShellAction(
     )
 }
 
-/** The terminal prompt inside the empty-state icon (SF Symbol `terminal`). */
-private const val TERMINAL_GLYPH: String = ">_"
+/** Builds argv only from a command present in the host caps plus the user's args. */
+public fun shellArgvFromCaps(state: ToolsScreenState): List<String>? {
+    val command = state.selectedCommand
+    if (!state.canRun || command !in state.commands) return null
+    val arguments = state.arguments.lineSequence()
+        .map { line -> line.removeSuffix("\r") }
+        .filter(String::isNotEmpty)
+        .toList()
+    return listOf(command) + arguments
+}
+
+/** The canonical session colour name backed by the resolved host palette field. */
+private val UiColors.sessionSuccess get() = success
 
 /**
  * The token inventory of this page, kept next to the file it describes.
@@ -738,27 +762,27 @@ private const val TERMINAL_GLYPH: String = ">_"
  */
 internal object PDSHShellPageTokens {
     val refs: List<String> = listOf(
-        UiTokenNames.COLORS_PRIMARY,
-        UiTokenNames.COLORS_SECONDARY,
-        UiTokenNames.COLORS_TERTIARY,
-        UiTokenNames.COLORS_ACCENT,
-        UiTokenNames.COLORS_DANGER,
-        UiTokenNames.COLORS_INPUT,
-        UiTokenNames.COLORS_SELECTOR,
-        UiTokenNames.COLORS_BORDER,
-        UiTokenNames.TYPOGRAPHY_BODY,
-        UiTokenNames.TYPOGRAPHY_SECONDARY,
-        UiTokenNames.TYPOGRAPHY_CAPTION,
-        UiTokenNames.TYPOGRAPHY_CODE,
-        UiTokenNames.TYPOGRAPHY_HEADLINE,
-        UiTokenNames.SPACING_ICON_TEXT,
-        UiTokenNames.SPACING_BADGE_INSET_V,
-        UiTokenNames.SPACING_CARD_INSET,
-        UiTokenNames.STROKE_HAIRLINE,
-        UiTokenNames.RADIUS_CARD,
-        UiTokenNames.RADIUS_CODE_BLOCK,
-        UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
-        UiTokenNames.GEOMETRY_PAGE_HEADER_MIN_HEIGHT,
-        UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
+        "colors.borderList",
+        "colors.page",
+        "colors.pageAccent",
+        "colors.pageDanger",
+        "colors.surface",
+        "colors.textPrimary",
+        "colors.textSecondary",
+        "colors.textTertiary",
+        "colors.userBubble",
+        "radius.card",
+        "radius.codeBlock",
+        "spacing.badgeInsetH",
+        "spacing.badgeInsetV",
+        "spacing.cardInset",
+        "spacing.codeToolbar",
+        "spacing.iconText",
+        "spacing.jsonChevronGap",
+        "stroke.hairline",
+        "typography.body",
+        "typography.code",
+        "typography.listItem",
+        "typography.pageTitle",
     )
 }

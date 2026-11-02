@@ -141,6 +141,67 @@ class DeviceConnectorPagesTest {
     }
 
     @Test
+    fun `unreported per-device status stays unknown and host mapping is shown as a fact`() {
+        val device = DeviceConnectionEntry(DEVICE_ID, DISPLAY_NAME, Endpoint("devicews", "wss://d.invalid"))
+        val snapshot = DeviceConnectionSnapshot(
+            connectorAvailable = true,
+            connectorProtocol = "devicews",
+            status = ConnectorStatus.READY,
+            devices = listOf(device),
+            forgettableDeviceIds = setOf(DEVICE_ID),
+        )
+        var state by mutableStateOf(DeviceConnectionScreenState.from(snapshot))
+        compose.setContent {
+            PdshTheme {
+                NativeDeviceConnectionPage(
+                    state = state,
+                    onOpen = {},
+                    onForgetMapping = {},
+                    onDone = {},
+                )
+            }
+        }
+        compose.onNodeWithText("已有会话映射 · 连接状态未知").assertIsDisplayed()
+        state = DeviceConnectionScreenState.from(snapshot, deviceOnline = mapOf(DEVICE_ID to true))
+        compose.onNodeWithText("已有会话映射 · 在线").assertIsDisplayed()
+    }
+
+    @Test
+    fun `workbench segments and pending preview refresh use host callbacks`() {
+        val snapshot = WorkbenchSnapshot(
+            files = emptyList(),
+            commands = listOf(WorkbenchCommand(id = "cmd-1", command = "rg query src")),
+        )
+        var local = WorkbenchLocalState()
+        var state by mutableStateOf(WorkbenchScreenState.from(snapshot, local))
+        var refreshes = 0
+        compose.setContent {
+            PdshTheme {
+                NativeWorkbenchPage(
+                    state = state,
+                    onSelectSection = { section ->
+                        local = local.apply(WorkbenchUiEvent.SelectSection(section))
+                        state = WorkbenchScreenState.from(snapshot, local)
+                    },
+                    onOpenFile = {},
+                    onClosePreview = { local = local.apply(WorkbenchUiEvent.ClosePreview) },
+                    onDone = {},
+                    onRefreshPending = { refreshes += 1 },
+                )
+            }
+        }
+        compose.onNodeWithTag(UiPageTags.WORKBENCH_FILES_TAB).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.WORKBENCH_COMMANDS_TAB).performClick()
+        compose.onNodeWithTag(UiPageTags.WORKBENCH_COMMANDS_LIST).assertIsDisplayed()
+
+        local = WorkbenchLocalState(previewPath = "tool-output.txt")
+        state = WorkbenchScreenState.from(snapshot, local)
+        compose.onNodeWithText(UiStrings.WORKBENCH_PREVIEW_PENDING).assertIsDisplayed()
+        compose.onNodeWithText("重新检查文件").performClick()
+        assertEquals(1, refreshes)
+    }
+
+    @Test
     fun `a failed open shows its reason and the explicit way out of the mapping`() {
         var forgotten: String? = null
         val state = DeviceConnectionScreenState.from(

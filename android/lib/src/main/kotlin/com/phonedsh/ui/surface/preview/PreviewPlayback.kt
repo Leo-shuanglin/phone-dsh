@@ -36,6 +36,7 @@
 // screen; `:lib` has never carried it (L29 §10 Q4 left the choice open).
 package com.phonedsh.ui.surface.preview
 
+import com.phonedsh.ui.HomeMetrics
 import android.content.Context
 import android.graphics.SurfaceTexture
 import android.media.AudioAttributes
@@ -116,7 +117,7 @@ internal fun VideoBody(file: Path?, onFailure: (String) -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .background(tokens.colors.selector),
+                .background(tokens.colors.surface),
             contentAlignment = Alignment.Center,
         ) {
             if (session.state.isPreparing) {
@@ -164,7 +165,7 @@ internal fun AudioBody(file: Path?, fileName: String, onFailure: (String) -> Uni
         modifier = Modifier
             .fillMaxSize()
             .testTag(UiPageTags.PREVIEW_AUDIO)
-            .padding(horizontal = tokens.geometry.pageOuterMarginH),
+            .padding(horizontal = HomeMetrics.contentInset),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(
             tokens.spacing.iconText,
@@ -173,7 +174,7 @@ internal fun AudioBody(file: Path?, fileName: String, onFailure: (String) -> Uni
     ) {
         BasicText(
             text = fileName,
-            style = type.headline.copy(color = tokens.colors.primary, textAlign = TextAlign.Center),
+            style = type.pageTitle.copy(color = tokens.colors.textPrimary, textAlign = TextAlign.Center),
             modifier = Modifier.testTag(UiPageTags.PREVIEW_MEDIA_NAME),
         )
         if (session.state.isPreparing) {
@@ -182,13 +183,13 @@ internal fun AudioBody(file: Path?, fileName: String, onFailure: (String) -> Uni
                 horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
             ) {
                 CircularProgressIndicator(
-                    color = tokens.colors.tertiary,
+                    color = tokens.colors.textTertiary,
                     strokeWidth = tokens.stroke.hairline,
                     modifier = Modifier.size(tokens.geometry.composerControlSize),
                 )
                 BasicText(
                     text = UiStrings.PREVIEW_VIDEO_PREPARING,
-                    style = type.secondary.copy(color = tokens.colors.secondary),
+                    style = type.listItem.copy(color = tokens.colors.textSecondary),
                 )
             }
         } else {
@@ -196,7 +197,7 @@ internal fun AudioBody(file: Path?, fileName: String, onFailure: (String) -> Uni
                 text = session.state.durationMs?.let { duration ->
                     UiStrings.PREVIEW_MEDIA_DURATION.format(formatClock(duration))
                 } ?: UiStrings.PREVIEW_MEDIA_DURATION_UNKNOWN,
-                style = type.caption.copy(color = tokens.colors.tertiary),
+                style = type.listItem.copy(color = tokens.colors.textTertiary),
                 modifier = Modifier.testTag(UiPageTags.PREVIEW_MEDIA_DURATION),
             )
             MediaTransport(state = session.state, onToggle = session::toggle)
@@ -565,7 +566,7 @@ private fun MediaTransport(state: PreviewPlaybackState, onToggle: () -> Unit) {
     ) {
         Row(
             modifier = Modifier.padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.contentInset,
                 vertical = tokens.spacing.badgeInsetV,
             ),
             verticalAlignment = Alignment.CenterVertically,
@@ -574,7 +575,7 @@ private fun MediaTransport(state: PreviewPlaybackState, onToggle: () -> Unit) {
             PlayToggle(state = state, onToggle = onToggle)
             BasicText(
                 text = formatMediaTime(state.positionMs, state.durationMs),
-                style = type.caption.copy(color = tokens.colors.secondary),
+                style = type.listItem.copy(color = tokens.colors.textSecondary),
                 modifier = Modifier.testTag(UiPageTags.PREVIEW_MEDIA_TIME),
             )
         }
@@ -582,8 +583,8 @@ private fun MediaTransport(state: PreviewPlaybackState, onToggle: () -> Unit) {
             // The source of the pause, not a generic "paused": the user did not do it.
             BasicText(
                 text = UiStrings.PREVIEW_PLAYBACK_FOCUS_PAUSED,
-                style = type.caption.copy(
-                    color = tokens.colors.secondary,
+                style = type.listItem.copy(
+                    color = tokens.colors.textSecondary,
                     textAlign = TextAlign.Center,
                 ),
                 modifier = Modifier.testTag(UiPageTags.PREVIEW_NOTICE),
@@ -604,13 +605,13 @@ private fun PlayToggle(state: PreviewPlaybackState, onToggle: () -> Unit) {
     val label = if (state.isPlaying) UiStrings.PREVIEW_PAUSE else UiStrings.PREVIEW_PLAY
     BasicText(
         text = label,
-        style = type.secondary.copy(
-            color = if (enabled) tokens.colors.onAccent else tokens.colors.tertiary,
+        style = type.listItem.copy(
+            color = if (enabled) tokens.colors.primaryButtonInk else tokens.colors.textTertiary,
         ),
         modifier = Modifier
             .testTag(UiPageTags.PREVIEW_PLAY)
             .clip(RoundedCornerShape(tokens.radius.card))
-            .background(if (enabled) tokens.colors.accent else tokens.colors.selector)
+            .background(if (enabled) tokens.colors.pageAccent else tokens.colors.surface)
             .clickable(role = Role.Button, enabled = enabled, onClick = onToggle)
             .defaultMinSize(minHeight = tokens.geometry.primaryButtonHeight)
             .padding(

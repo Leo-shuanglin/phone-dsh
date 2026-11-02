@@ -38,7 +38,12 @@ class PDSHShellPageTest {
         ),
     )
 
-    private fun show(state: ToolsScreenState, onSelectCommand: (String) -> Unit = {}) {
+    private fun show(
+        state: ToolsScreenState,
+        onSelectCommand: (String) -> Unit = {},
+        onRunArgv: ((List<String>, String) -> Unit)? = null,
+        onRun: () -> Unit = {},
+    ) {
         compose.setContent {
             PdshTheme {
                 PDSHShellPage(
@@ -46,9 +51,10 @@ class PDSHShellPageTest {
                     onSelectCommand = onSelectCommand,
                     onWorkingDirectoryChange = {},
                     onArgumentsChange = {},
-                    onRun = {},
+                    onRun = onRun,
                     onCancel = {},
                     onBack = {},
+                    onRunArgv = onRunArgv,
                 )
             }
         }
@@ -84,5 +90,37 @@ class PDSHShellPageTest {
         compose.onNodeWithTag(UiPageTags.SHELL_SECTION_DEVICE).assertExists()
         compose.onNodeWithTag(UiPageTags.SHELL_EMPTY).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.SHELL_SECTION_RUN).assertDoesNotExist()
+    }
+
+    @Test
+    fun `run callback receives argv only from the selected capability`() {
+        var argv: List<String>? = null
+        var workingDirectory: String? = null
+        val state = ToolsScreenState.from(
+            snapshot,
+            ShellLocalState(
+                command = "jaq",
+                workingDirectory = "/dsh/workspace/src",
+                arguments = "--filter\n\nname == 'Ada'\r\n",
+            ),
+        )
+        show(state, onRunArgv = { values, cwd -> argv = values; workingDirectory = cwd })
+        compose.onNodeWithTag(UiPageTags.SHELL_RUN).performClick()
+        assertEquals(listOf("jaq", "--filter", "name == 'Ada'"), argv)
+        assertEquals("/dsh/workspace/src", workingDirectory)
+    }
+
+    @Test
+    fun `real result and error remain visible from the host snapshot`() {
+        val reported = ToolsScreenState.from(
+            snapshot.copy(run = ShellRun(output = "record one", error = "exit 2")),
+        )
+        compose.setContent {
+            PdshTheme { ShellOutputSection(reported) }
+        }
+        compose.onNodeWithTag(UiPageTags.SHELL_ERROR).assertExists()
+        compose.onNodeWithText("exit 2").assertExists()
+        compose.onNodeWithTag(UiPageTags.SHELL_OUTPUT).assertExists()
+        compose.onNodeWithText("record one").assertExists()
     }
 }

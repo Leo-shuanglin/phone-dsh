@@ -37,8 +37,10 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
+import com.phonedsh.ui.theme.UiColors
 
 /**
  * One block of a Markdown document.
@@ -337,8 +339,8 @@ public fun parseInline(text: String): List<InlineSegment> {
 /**
  * Draws a Markdown document.
  *
- * Every length is a page-level token (`geometry.pageOuterMarginH`,
- * `spacing.cardInset`, `spacing.iconText`); no colour is invented.
+ * The outer reading margin comes from HomeSpec; block spacing comes from the
+ * current UI theme. No page-only token is assumed.
  */
 @Composable
 public fun PreviewMarkdown(text: String, modifier: Modifier = Modifier) {
@@ -349,7 +351,7 @@ public fun PreviewMarkdown(text: String, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.contentInset,
                 vertical = tokens.spacing.cardInset,
             ),
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
@@ -357,17 +359,17 @@ public fun PreviewMarkdown(text: String, modifier: Modifier = Modifier) {
         blocks.forEach { block ->
             when (block) {
                 is MarkdownBlock.Heading -> BasicText(
-                    text = inline(block.text, tokens.colors.accent),
+                    text = inline(block.text, tokens.colors.textPrimary),
                     style = when (block.level) {
                         1 -> type.largeTitle
-                        2 -> type.headline
-                        else -> type.subheadline
-                    }.copy(color = tokens.colors.primary),
+                        2 -> type.pageTitle
+                        else -> type.body
+                    }.copy(color = tokens.colors.textPrimary),
                 )
 
                 is MarkdownBlock.Paragraph -> BasicText(
-                    text = inline(block.text, tokens.colors.accent),
-                    style = type.body.copy(color = tokens.colors.primary),
+                    text = inline(block.text, tokens.colors.textPrimary),
+                    style = type.body.copy(color = tokens.colors.textPrimary),
                 )
 
                 is MarkdownBlock.Code -> com.phonedsh.ui.surface.CodeBlock(
@@ -382,11 +384,11 @@ public fun PreviewMarkdown(text: String, modifier: Modifier = Modifier) {
                         Row(horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText)) {
                             BasicText(
                                 text = BULLET,
-                                style = type.body.copy(color = tokens.colors.secondary),
+                                style = type.body.copy(color = tokens.colors.textSecondary),
                             )
                             BasicText(
-                                text = inline(item, tokens.colors.accent),
-                                style = type.body.copy(color = tokens.colors.primary),
+                                text = inline(item, tokens.colors.textPrimary),
+                                style = type.body.copy(color = tokens.colors.textPrimary),
                             )
                         }
                     }
@@ -399,25 +401,25 @@ public fun PreviewMarkdown(text: String, modifier: Modifier = Modifier) {
                         Row(horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText)) {
                             BasicText(
                                 text = item.marker,
-                                style = type.body.copy(color = tokens.colors.secondary),
+                                style = type.body.copy(color = tokens.colors.textSecondary),
                             )
                             BasicText(
-                                text = inline(item.text, tokens.colors.accent),
-                                style = type.body.copy(color = tokens.colors.primary),
+                                text = inline(item.text, tokens.colors.textPrimary),
+                                style = type.body.copy(color = tokens.colors.textPrimary),
                             )
                         }
                     }
                 }
 
                 is MarkdownBlock.Quote -> BasicText(
-                    text = inline(block.text, tokens.colors.accent),
-                    style = type.secondary.copy(color = tokens.colors.secondary),
+                    text = inline(block.text, tokens.colors.textPrimary),
+                    style = type.body.copy(color = tokens.colors.textSecondary),
                     modifier = Modifier.padding(start = tokens.spacing.cardInset),
                 )
 
                 MarkdownBlock.Rule -> BasicText(
                     text = RULE,
-                    style = type.caption.copy(color = tokens.colors.border),
+                    style = type.listItem.copy(color = tokens.colors.borderList),
                 )
             }
         }
@@ -453,8 +455,8 @@ private fun inline(text: String, accent: Color): AnnotatedString {
                 }
                 is InlineSegment.Code -> withStyle(
                     SpanStyle(
-                        color = tokens.colors.primary,
-                        background = tokens.colors.code,
+                        color = tokens.colors.textPrimary,
+                        background = tokens.colors.sessionCode,
                         fontFamily = FontFamily.Monospace,
                     ),
                 ) { append(segment.text) }
@@ -463,3 +465,6 @@ private fun inline(text: String, accent: Color): AnnotatedString {
         }
     }
 }
+
+/** Canonical spec name, backed by the existing resolved code colour role. */
+private val UiColors.sessionCode: Color get() = code

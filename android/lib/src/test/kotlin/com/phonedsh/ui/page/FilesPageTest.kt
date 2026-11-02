@@ -9,6 +9,7 @@
 package com.phonedsh.ui.page
 
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -16,6 +17,9 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
@@ -47,6 +51,7 @@ class FilesPageTest {
         onNavigateUp: () -> Unit = {},
         onBack: () -> Unit = {},
         onOpenDemo: (() -> Unit)? = null,
+        onImportRequest: (() -> Unit)? = null,
     ) {
         compose.setContent {
             PdshTheme {
@@ -58,6 +63,7 @@ class FilesPageTest {
                     onNavigateUp = onNavigateUp,
                     onBack = onBack,
                     onOpenDemo = onOpenDemo,
+                    onImportRequest = onImportRequest,
                 )
             }
         }
@@ -194,11 +200,8 @@ class FilesPageTest {
         assertEquals(0, backs)
     }
 
-    // The baseline always draws the toolbar entry (`FilesPage.swift:79`), and a
-    // labelled control that the page draws only when a nullable host callback
-    // exists is *absent*, not "implemented": the page-structure gate counted the
-    // label in the source while the pixels had no cube. The entry is therefore
-    // unconditional; without a host demo the page opens its own sheet.
+    // The viewer and importer are host actions: absent callbacks remain visible
+    // but disabled, never routed to a fake sheet or a no-op.
     @Test
     fun `the demo entry is drawn even when the host offers no demo`() {
         show(FilesScreenState.from(FilesSource(files = files)))
@@ -206,12 +209,9 @@ class FilesPageTest {
     }
 
     @Test
-    fun `the demo entry opens the page's own sheet when the host offers none`() {
+    fun `the demo entry is disabled when the host offers no native viewer`() {
         show(FilesScreenState.from(FilesSource(files = files)))
-        compose.onNodeWithContentDescription(UiStrings.FILES_DEMO_OPEN).performClick()
-        compose.onNodeWithText(UiStrings.PREVIEW_REASON_MODEL).assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.FILES_DEMO_DONE).performClick()
-        compose.onNodeWithText(UiStrings.PREVIEW_REASON_MODEL).assertDoesNotExist()
+        compose.onNodeWithTag(UiPageTags.FILES_DEMO).assertIsNotEnabled()
     }
 
     @Test
@@ -220,6 +220,40 @@ class FilesPageTest {
         show(FilesScreenState.from(FilesSource(files = files)), onOpenDemo = { demos += 1 })
         compose.onNodeWithContentDescription(UiStrings.FILES_DEMO_OPEN).performClick()
         assertEquals(1, demos)
+    }
+
+    @Test
+    fun `import requests are explicit and cancellation is rendered as cancellation`() {
+        var requests = 0
+        var state by mutableStateOf(FilesScreenState.from(FilesSource(files = files)))
+        compose.setContent {
+            PdshTheme {
+                FilesPage(
+                    state = state,
+                    onOpenFolder = {},
+                    onOpenFile = {},
+                    onQueryChange = {},
+                    onNavigateUp = {},
+                    onBack = {},
+                    onImportRequest = { requests += 1 },
+                )
+            }
+        }
+        compose.onNodeWithTag("files-import").performClick()
+        assertEquals(1, requests)
+        state = FilesScreenState.from(
+            FilesSource(files = files),
+            importReceipt = FilesImportReceipt.CANCELLED,
+        )
+        compose.onNodeWithText("文件导入已取消").assertIsDisplayed()
+    }
+
+    @Test
+    fun `import button is explicitly unavailable without a host picker`() {
+        show(FilesScreenState.from(FilesSource(files = files)))
+        compose.onNodeWithTag("files-import").assertIsNotEnabled()
+        compose.onNodeWithText("当前宿主没有提供文件选择器，尚未导入文件。")
+            .assertIsDisplayed()
     }
 
     // --------------------------------------------------------------- pure facts

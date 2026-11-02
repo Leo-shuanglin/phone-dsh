@@ -39,6 +39,7 @@
 // (`PreviewTokenReferenceTest` fails the build if one appears).
 package com.phonedsh.ui.surface.preview
 
+import com.phonedsh.ui.HomeMetrics
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -317,13 +318,13 @@ private fun ReadingBody() {
         ),
     ) {
         CircularProgressIndicator(
-            color = tokens.colors.tertiary,
+            color = tokens.colors.textTertiary,
             strokeWidth = tokens.stroke.hairline,
             modifier = Modifier.size(tokens.geometry.composerControlSize),
         )
         BasicText(
             text = UiStrings.FILES_PREVIEW_LOADING,
-            style = type.secondary.copy(color = tokens.colors.secondary),
+            style = type.listItem.copy(color = tokens.colors.textSecondary),
         )
     }
 }
@@ -344,7 +345,7 @@ private fun FailureBody(reason: String, onRetry: () -> Unit) {
             .fillMaxSize()
             .testTag(UiPageTags.PREVIEW_FAILED)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.contentInset,
                 vertical = tokens.spacing.cardInset,
             )
             .semantics(mergeDescendants = false) {},
@@ -353,19 +354,19 @@ private fun FailureBody(reason: String, onRetry: () -> Unit) {
     ) {
         BasicText(
             text = UiStrings.PREVIEW_UNAVAILABLE,
-            style = type.headline.copy(color = tokens.colors.primary, textAlign = TextAlign.Center),
+            style = type.pageTitle.copy(color = tokens.colors.textPrimary, textAlign = TextAlign.Center),
         )
         BasicText(
             text = reason,
-            style = type.secondary.copy(color = tokens.colors.secondary, textAlign = TextAlign.Center),
+            style = type.listItem.copy(color = tokens.colors.textSecondary, textAlign = TextAlign.Center),
         )
         BasicText(
             text = UiStrings.RETRY,
-            style = type.secondary.copy(color = tokens.colors.accent),
+            style = type.listItem.copy(color = tokens.colors.pageAccent),
             modifier = Modifier
                 .testTag(UiPageTags.PREVIEW_RETRY)
                 .clip(shape)
-                .background(tokens.colors.selector)
+                .background(tokens.colors.surface)
                 .clickable(role = Role.Button, onClick = onRetry)
                 .defaultMinSize(minHeight = tokens.geometry.secondaryButtonHeight)
                 .padding(
@@ -396,7 +397,7 @@ private fun UnsupportedBody(state: PreviewState, onShareFile: () -> Unit) {
             .fillMaxSize()
             .testTag(UiPageTags.PREVIEW_UNSUPPORTED)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.contentInset,
                 vertical = tokens.spacing.cardInset,
             ),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -404,36 +405,36 @@ private fun UnsupportedBody(state: PreviewState, onShareFile: () -> Unit) {
     ) {
         BasicText(
             text = UiStrings.PREVIEW_UNSUPPORTED_TITLE,
-            style = type.headline.copy(color = tokens.colors.primary, textAlign = TextAlign.Center),
+            style = type.pageTitle.copy(color = tokens.colors.textPrimary, textAlign = TextAlign.Center),
         )
         BasicText(
             text = UiStrings.PREVIEW_UNSUPPORTED_HINT,
-            style = type.secondary.copy(color = tokens.colors.secondary, textAlign = TextAlign.Center),
+            style = type.listItem.copy(color = tokens.colors.textSecondary, textAlign = TextAlign.Center),
         )
         state.unsupportedReason?.let { reason ->
             BasicText(
                 text = reason,
-                style = type.caption.copy(color = tokens.colors.secondary, textAlign = TextAlign.Center),
+                style = type.listItem.copy(color = tokens.colors.textSecondary, textAlign = TextAlign.Center),
             )
         }
         BasicText(
             text = state.normalizedPath,
-            style = type.caption.copy(color = tokens.colors.tertiary, textAlign = TextAlign.Center),
+            style = type.listItem.copy(color = tokens.colors.textTertiary, textAlign = TextAlign.Center),
         )
         state.totalBytes?.let { size ->
             BasicText(
                 text = formatFileSize(size),
-                style = type.caption.copy(color = tokens.colors.tertiary),
+                style = type.listItem.copy(color = tokens.colors.textTertiary),
             )
         }
         if (state.canShare) {
             BasicText(
                 text = UiStrings.PREVIEW_SHARE_FILE,
-                style = type.secondary.copy(color = tokens.colors.onAccent),
+                style = type.listItem.copy(color = tokens.colors.primaryButtonInk),
                 modifier = Modifier
                     .testTag(UiPageTags.PREVIEW_SHARE_FILE)
                     .clip(RoundedCornerShape(tokens.radius.card))
-                    .background(tokens.colors.accent)
+                    .background(tokens.colors.pageAccent)
                     .clickable(role = Role.Button, onClick = onShareFile)
                     .defaultMinSize(minHeight = tokens.geometry.primaryButtonHeight)
                     .padding(
@@ -471,7 +472,7 @@ private fun PagedTextBody(text: String) {
             .fillMaxSize()
             .testTag(UiPageTags.PREVIEW_TEXT)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.contentInset,
                 vertical = tokens.spacing.badgeInsetV,
             ),
     ) {
@@ -479,7 +480,7 @@ private fun PagedTextBody(text: String) {
             SelectionContainer {
                 BasicText(
                     text = chunk,
-                    style = type.code.copy(color = tokens.colors.primary),
+                    style = type.code.copy(color = tokens.colors.textPrimary),
                 )
             }
         }
@@ -521,13 +522,13 @@ internal fun PreviewCenteredLine(text: String, tag: String) {
         ),
     ) {
         CircularProgressIndicator(
-            color = tokens.colors.tertiary,
+            color = tokens.colors.textTertiary,
             strokeWidth = tokens.stroke.hairline,
             modifier = Modifier.size(tokens.geometry.composerControlSize),
         )
         BasicText(
             text = text,
-            style = type.secondary.copy(color = tokens.colors.secondary),
+            style = type.listItem.copy(color = tokens.colors.textSecondary),
         )
     }
 }
@@ -541,14 +542,14 @@ private fun FooterLine(text: String, tag: String) {
     val type = LocalUiType.current
     BasicText(
         text = text,
-        style = type.caption.copy(color = tokens.colors.secondary),
+        style = type.listItem.copy(color = tokens.colors.textSecondary),
         modifier = Modifier
             .fillMaxWidth()
             .testTag(tag)
-            .background(tokens.colors.selector)
+            .background(tokens.colors.surface)
             .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.contentInset,
                 vertical = tokens.spacing.badgeInsetV,
             ),
     )
@@ -568,12 +569,12 @@ private fun LoadMoreFooter(label: String, progress: String?, onClick: () -> Unit
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(tokens.colors.selector)
+            .background(tokens.colors.surface)
             .clickable(role = Role.Button, onClick = onClick)
             .testTag(UiPageTags.PREVIEW_LOAD_MORE)
             .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
+                horizontal = HomeMetrics.contentInset,
                 vertical = tokens.spacing.badgeInsetV,
             )
             .semantics(mergeDescendants = true) { contentDescription = label },
@@ -581,12 +582,12 @@ private fun LoadMoreFooter(label: String, progress: String?, onClick: () -> Unit
     ) {
         BasicText(
             text = label,
-            style = type.secondary.copy(color = tokens.colors.accent),
+            style = type.listItem.copy(color = tokens.colors.pageAccent),
         )
         if (progress != null) {
             BasicText(
                 text = progress,
-                style = type.caption.copy(color = tokens.colors.tertiary),
+                style = type.listItem.copy(color = tokens.colors.textTertiary),
             )
         }
     }
@@ -604,7 +605,7 @@ internal fun PreviewHeaderAction(
     val type = LocalUiType.current
     BasicText(
         text = label,
-        style = type.secondary.copy(color = tokens.colors.accent),
+        style = type.listItem.copy(color = tokens.colors.pageAccent),
         maxLines = 1,
         modifier = Modifier
             .testTag(tag)
