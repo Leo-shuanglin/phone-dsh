@@ -235,6 +235,30 @@ class ChatSurfaceTest {
     }
 
     @Test
+    fun `assistant node retains full reasoning payload and reports truncation`() {
+        val event = project(
+            """{"type":"assistant/message","seq":4,"data":{"turn":1,"message":{"content":[
+                 {"type":"reasoning","text":"first thought"},{"type":"text","text":"answer"},
+                 {"type":"reasoning","text":"second thought"}]}}}""",
+        )
+        val node = requireNotNull(chatNodeOf("chat-1", "", event, 1))
+        assertEquals("first thought\nsecond thought", node.props.string("fullReasoning"))
+        assertEquals(false, (node.props["fullReasoningTruncated"] as JsonBool).value)
+    }
+
+    @Test
+    fun `assistant node marks reasoning clipped to ui state limit`() {
+        val reasoning = "r".repeat(20_001)
+        val event = project(
+            """{"type":"assistant/message","seq":5,"data":{"turn":1,"message":{"content":[
+                 {"type":"reasoning","text":"$reasoning"},{"type":"text","text":"answer"}]}}}""",
+        )
+        val node = requireNotNull(chatNodeOf("chat-1", "", event, 1))
+        assertEquals(20_000, node.props.string("fullReasoning")?.length)
+        assertEquals(true, (node.props["fullReasoningTruncated"] as JsonBool).value)
+    }
+
+    @Test
     fun `the tool result keeps the first line only`() {
         val event = project(
             """{"type":"tool/result","seq":2,"data":{"turn":1,"callId":"c","isError":false,
@@ -267,7 +291,7 @@ class ChatSurfaceTest {
 }
 
 /** The smallest `DomainStore` that behaves like the SQLite one for these tests. */
-private class MemoryDomainStore : DomainStore {
+internal class MemoryDomainStore : DomainStore {
     private val domains = LinkedHashMap<String, LinkedHashMap<String, ByteArray>>()
     private var stamp = 0L
 

@@ -28,17 +28,41 @@ internal class ProviderProbeRequest(
     val url: URL,
     val headers: Map<String, String>,
     val body: ByteArray,
+    val method: String = "POST",
 ) {
-    override fun toString(): String = "ProviderProbeRequest(POST ${url.path})"
+    override fun toString(): String = "ProviderProbeRequest($method ${url.path})"
 }
 
-internal data class ProviderProbeResponse(val statusCode: Int)
+internal data class ProviderProbeResponse(
+    val statusCode: Int,
+    val body: String = "",
+    val bodyTooLarge: Boolean = false,
+)
+
+/** A model-list result correlated to the editor request and profile that started it. */
+internal data class HostProviderModelsResult(
+    val requestId: String,
+    val profileId: String?,
+    val models: List<String>?,
+    val message: String,
+) {
+    val succeeded: Boolean get() = models != null
+}
 
 /** Typed save outcome, separating service-record persistence from a key-write failure. */
 internal data class HostProviderSaveResult(
     val recordWritten: Boolean,
     val succeeded: Boolean,
     val message: String,
+    val requestId: String = "",
+    val profileId: String? = null,
+)
+
+/** Native HTTP connection test bound to the editor request that started it. */
+internal data class HostProviderTestResult(
+    val requestId: String,
+    val profileId: String?,
+    val result: ProviderConnectionTestResult,
 )
 
 internal fun interface ProviderProbeTransport {
@@ -120,6 +144,181 @@ internal suspend fun testProviderConnection(
     )
 }
 
+/**
+ * Fetches the profile's actual `/models` catalog over native
+ * HTTP. This works before Worker startup and does not borrow a key for a new
+ * profile. The request id/profile id travel with the result so callers can ignore
+ * a late response after the editor has moved on.
+ */
+internal suspend fun testProviderConnectionBound(
+    draft: ProviderDraft,
+    requestId: String,
+    keyProvider: () -> String? = { ApiKeyStore.active()?.readKey() },
+    storedEndpointProvider: () -> String? = { ProviderConfigStore.active()?.current()?.endpoint },
+    launchEndpointProvider: () -> String? = { ProbeLaunchConfig.active().deepseekBaseUrl },
+    transport: ProviderProbeTransport = UrlConnectionProviderProbeTransport,
+): HostProviderTestResult = HostProviderTestResult(
+    requestId = requestId,
+    profileId = draft.id.takeIf { it.isNotBlank() },
+    result = testProviderConnection(draft, keyProvider, storedEndpointProvider, launchEndpointProvider, transport),
+)
+
+/** Persists one profile/key pair and returns a result bound to this save request. */
+internal suspend fun saveProviderDraft(
+    draft: ProviderDraft,
+    requestId: String,
+    store: ProviderConfigStore? = ProviderConfigStore.active(),
+    keyStore: ApiKeyStore? = ApiKeyStore.active(),
+    launch: ProbeLaunchConfig = ProbeLaunchConfig.active(),
+): HostProviderSaveResult = withContext(Dispatchers.IO) {
+    fun failed(
+        message: String,
+        written: Boolean = false,
+        profileId: String? = draft.id.takeIf { it.isNotBlank() },
+    ) = HostProviderSaveResult(written, false, message, requestId, profileId)
+
+    if (store == null) return@withContext failed("本宿主没有安装模型服务存储，本次未保存")
+    val keyReason = if (draft.apiKey.isBlank()) null else ProviderDraftRules.keyRejection(draft.apiKey)
+    if (keyReason != null) return@withContext failed(keyReason)
+    if ((draft.apiKey.isNotBlank() || draft.removeStoredKey) && keyStore == null) {
+        return@withContext failed("本宿主没有安装密钥存储，本次未保存")
+    }
+    draft.modelValidationError?.let { return@withContext failed(it) }
+
+    val previous = store.current()
+    val record = ProviderConfigStore.recordOf(draft, previous, launch.deepseekBaseUrl, launch.modelName)
+    ProviderDraftRules.endpointRejection(record.endpoint)?.let {
+        return@withContext failed(it, profileId = record.id)
+    }
+    if (record.name.isEmpty()) return@withContext failed("模型服务名不能为空，本次未保存", profileId = record.id)
+    when (val outcome = store.save(record)) {
+        ProviderWriteOutcome.Saved -> Unit
+        is ProviderWriteOutcome.Rejected -> return@withContext failed(outcome.reason, profileId = record.id)
+        else -> return@withContext failed("本机存储不可写，本次未保存", profileId = record.id)
+    }
+    val keyLine = try {
+        when {
+            draft.removeStoredKey -> {
+                keyStore?.clear()
+                if (keyStore?.read() != ApiKeyState.Absent) throw IllegalStateException("key readback failed")
+                "，密钥已删除"
+            }
+            draft.apiKey.isNotBlank() -> {
+                keyStore?.save(draft.apiKey)
+                if (keyStore?.readKey() != draft.apiKey.trim()) throw IllegalStateException("key readback failed")
+                "，密钥已保存"
+            }
+            else -> ""
+        }
+    } catch (_: IllegalArgumentException) {
+        return@withContext failed("配置已保存；密钥未通过校验，本次未保存密钥", true, record.id)
+    } catch (_: Exception) {
+        return@withContext failed("配置已保存；密钥写入失败，本次未保存密钥", true, record.id)
+    }
+    val readback = store.read() as? ProviderStoreRead.Stored
+    if (readback?.record != record) {
+        return@withContext failed("保存请求已完成，但模型服务记录没有读回；请刷新确认结果。", true, record.id)
+    }
+    HostProviderSaveResult(
+        recordWritten = true,
+        succeeded = true,
+        message = if (keyLine.isEmpty()) "已保存到本机：模型服务（下次启动 App 时生效）"
+            else "已保存到本机：模型服务$keyLine（下次启动 App 时生效；密钥即刻生效）",
+        requestId = requestId,
+        profileId = record.id,
+    )
+}
+
+internal suspend fun getProviderModels(
+    draft: ProviderDraft,
+    requestId: String,
+    keyProvider: () -> String? = { ApiKeyStore.active()?.readKey() },
+    storedEndpointProvider: () -> String? = { ProviderConfigStore.active()?.current()?.endpoint },
+    launchEndpointProvider: () -> String? = { ProbeLaunchConfig.active().deepseekBaseUrl },
+    transport: ProviderProbeTransport = UrlConnectionProviderProbeTransport,
+): HostProviderModelsResult = withContext(Dispatchers.IO) {
+    fun result(models: List<String>?, message: String) =
+        HostProviderModelsResult(requestId, draft.id.takeIf { it.isNotBlank() }, models, message)
+
+    val endpointText = draft.endpoint.trim().ifEmpty {
+        if (draft.isNew) "" else storedEndpointProvider()?.trim().orEmpty().ifEmpty {
+            launchEndpointProvider()?.trim().orEmpty()
+        }
+    }
+    val endpoint = validateProbeEndpoint(endpointText)
+        ?: return@withContext result(null, endpointFailure(endpointText))
+    if (endpoint.scheme.lowercase() != "https") {
+        return@withContext result(null, "获取模型列表必须使用 HTTPS 地址。")
+    }
+    val key = when {
+        draft.apiKey.isNotBlank() -> draft.apiKey.trim()
+        draft.isNew || draft.removeStoredKey -> ""
+        else -> try { keyProvider().orEmpty() } catch (_: Exception) { "" }
+    }
+    if (key.isEmpty()) return@withContext result(null, "还没有可用于读取模型列表的密钥。")
+    if (key.length < ApiKeyStore.MIN_KEY_LENGTH || key.any { it !in '!'..'~' }) {
+        return@withContext result(null, "密钥格式不符合要求；请检查后重试。")
+    }
+
+    val basePath = endpoint.rawPath.orEmpty().trimEnd('/')
+    val anthropic = basePath.lowercase().contains("anthropic")
+    fun request(url: URL): ProviderProbeRequest {
+        val headers = linkedMapOf("Accept" to "application/json", "Authorization" to "Bearer $key")
+        if (anthropic) {
+            headers["x-api-key"] = key
+            headers["anthropic-version"] = "2023-06-01"
+        }
+        return ProviderProbeRequest(url, headers, byteArrayOf(), method = "GET")
+    }
+    val profileURL = URL("${endpoint.scheme}://${endpoint.rawAuthority}${basePath.ifEmpty { "" }}/models")
+    val response = try {
+        var received = transport.execute(request(profileURL))
+        if (received.statusCode == 404 && anthropic) {
+            val originURL = URL("${endpoint.scheme}://${endpoint.rawAuthority}/models")
+            if (originURL.toExternalForm() != profileURL.toExternalForm()) {
+                received = transport.execute(request(originURL))
+            }
+        }
+        received
+    } catch (_: Exception) {
+        return@withContext result(null, "连不上模型服务；请检查网络和接口地址。")
+    }
+    if (response.bodyTooLarge || response.body.toByteArray(Charsets.UTF_8).size > MAX_PROVIDER_CATALOG_BYTES) {
+        return@withContext result(null, "模型列表过大，请在高级设置中手动添加。")
+    }
+    if (response.statusCode !in 200..299) {
+        val message = when (response.statusCode) {
+            401, 403 -> "密钥被服务拒绝（HTTP ${response.statusCode}）。请确认密钥与服务地址属于同一平台。"
+            in 300..399 -> "服务要求重定向（HTTP ${response.statusCode}）；为保护密钥，未跟随跳转。"
+            404, 405 -> "此地址不支持获取模型，请检查 API 地址或在高级设置中手动添加。"
+            429 -> "请求过于频繁，请稍后再试。"
+            else -> "读取模型列表失败（HTTP ${response.statusCode}）。请检查接口地址和服务兼容性。"
+        }
+        return@withContext result(null, message)
+    }
+    val models = parseProviderModelCatalog(response.body)
+        ?: return@withContext result(null, "服务返回的模型列表无法读取。")
+    if (models.isEmpty() || models.size > MAX_PROVIDER_MODEL_COUNT) {
+        return@withContext result(null, "服务未返回可用的模型列表。")
+    }
+    result(models, "已获取 ${models.size} 个模型，选择后点保存。")
+}
+
+/** Parses only the provider's catalog response; no fallback model ids. */
+private fun parseProviderModelCatalog(body: String): List<String>? {
+    return try {
+        val root = JsonValue.parse(body) as? JsonObject ?: return null
+        val rows = (root["data"] as? JsonArray)?.values ?: return null
+        val ids = rows.map { row ->
+            ((row as? JsonObject)?.get("id") as? JsonString)?.value?.trim()?.takeIf(String::isNotEmpty)
+                ?: return null
+        }
+        ids.distinct().sorted().takeIf { it.size <= MAX_PROVIDER_MODEL_COUNT }
+    } catch (_: Exception) {
+        null
+    }
+}
+
 private enum class ProviderProtocol(
     val title: String,
     val pathLabel: String,
@@ -197,14 +396,37 @@ private object UrlConnectionProviderProbeTransport : ProviderProbeTransport {
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 20_000
             connection.readTimeout = 20_000
-            connection.requestMethod = "POST"
-            connection.doOutput = true
+            connection.requestMethod = request.method
+            connection.doOutput = request.method != "GET"
             connection.setRequestProperty("Connection", "close")
             request.headers.forEach { (name, value) -> connection.setRequestProperty(name, value) }
-            connection.outputStream.use { output -> output.write(request.body) }
-            ProviderProbeResponse(connection.responseCode)
+            if (request.method != "GET") connection.outputStream.use { output -> output.write(request.body) }
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val bytes = stream?.use { readBounded(it, MAX_PROVIDER_CATALOG_BYTES + 1) } ?: byteArrayOf()
+            ProviderProbeResponse(
+                statusCode = status,
+                body = bytes.toString(Charsets.UTF_8),
+                bodyTooLarge = bytes.size > MAX_PROVIDER_CATALOG_BYTES,
+            )
         } finally {
             connection.disconnect()
         }
     }
 }
+
+private fun readBounded(stream: java.io.InputStream, maximum: Int): ByteArray {
+    val output = java.io.ByteArrayOutputStream(minOf(maximum, 8 * 1024))
+    val buffer = ByteArray(8 * 1024)
+    var remaining = maximum
+    while (remaining > 0) {
+        val count = stream.read(buffer, 0, minOf(buffer.size, remaining))
+        if (count < 0) break
+        output.write(buffer, 0, count)
+        remaining -= count
+    }
+    return output.toByteArray()
+}
+
+private const val MAX_PROVIDER_CATALOG_BYTES = 2 * 1024 * 1024
+private const val MAX_PROVIDER_MODEL_COUNT = 2_000

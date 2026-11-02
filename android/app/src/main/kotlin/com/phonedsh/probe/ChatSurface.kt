@@ -294,6 +294,11 @@ internal fun chatNodeOf(
         HostEventKind.ASSISTANT_MESSAGE -> {
             val text = assistantTextOf(event)
             if (text.isBlank()) return null
+            // The reasoning row is a real Worker payload too. Keep the complete
+            // value when it fits the ui-state text bound, and say explicitly
+            // when it does not; summary-only rendering loses the source and
+            // makes a clipped value look complete.
+            val reasoning = assistantReasoningOf(event)
             UiStateNode(
                 kind = UiStateKind.BUBBLE,
                 nodeID = nodeID("assistant-message"),
@@ -309,12 +314,8 @@ internal fun chatNodeOf(
                         "usage" to (event.data?.get("usage")
                             ?: (event.data?.get("message") as? JsonObject)?.get("usage")
                             ?: com.phonedsh.agentcore.JsonNull),
-                        "reasoning" to JsonString(
-                            ((event.data?.get("message") as? JsonObject)?.get("content") as? JsonArray)?.values.orEmpty()
-                                .mapNotNull { raw -> (raw as? JsonObject)?.let { block ->
-                                    if ((block["type"] as? JsonString)?.value == "reasoning") (block["text"] as? JsonString)?.value else null
-                                } }.joinToString("\n"),
-                        ),
+                        "fullReasoning" to JsonString(bounded(reasoning)),
+                        "fullReasoningTruncated" to JsonBool(reasoning.length > TEXT_LIMIT),
                     ),
                 ),
             )
@@ -405,6 +406,18 @@ internal fun chatNodeOf(
         else -> null
     }
 }
+
+/** Full reasoning text carried by this Worker's durable assistant payload. */
+internal fun assistantReasoningOf(event: HostEvent): String =
+    ((event.data?.get("message") as? JsonObject)?.get("content") as? JsonArray)?.values.orEmpty()
+        .mapNotNull { raw ->
+            (raw as? JsonObject)?.let { block ->
+                if ((block["type"] as? JsonString)?.value == "reasoning") {
+                    (block["text"] as? JsonString)?.value
+                } else null
+            }
+        }
+        .joinToString("\n")
 
 /**
  * The durable row that says this conversation's earlier model context is gone.

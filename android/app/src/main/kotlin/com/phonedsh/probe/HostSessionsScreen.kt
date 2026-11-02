@@ -7,12 +7,12 @@
 // leaves to the caller. The facts come from `buildSessionsFacts`; nothing here
 // reads the engine's session state, the clock or the filesystem.
 //
-// This host has no session write command (no create, switch, rename, archive or
-// workspace mutation). Every such gesture is logged with one token-free line,
-// handed off and surfaced on the shell's note bar with the same wording the
-// routed pages use; no gesture moves a fact, so the page never shows a success
-// this host did not observe. The read-only source is the journal lane, and the
-// only refresh is [ProbeEngineViewModel.refreshSessions].
+// Session rows come from the journal and the App's durable chat store. The typed
+// helpers in this file and HostWorkspaces.kt let the composition root issue
+// archive/restore/rename and workspace mutations against that store; compatibility
+// UI callbacks remain in the ViewModel until the root routes commands through the
+// new contract.
+// The session refresh itself remains [ProbeEngineViewModel.refreshSessions].
 package com.phonedsh.probe
 
 import android.util.Log
@@ -54,7 +54,43 @@ import com.phonedsh.ui.page.SessionWorkspaceView
 import com.phonedsh.ui.page.SessionsLocalState
 import com.phonedsh.ui.page.SessionsPage
 import com.phonedsh.ui.theme.PdshThemeValues
+import com.phonedsh.ui.nav.PdshActionOutcome
+import com.phonedsh.ui.nav.PdshActionReceipt
+import com.phonedsh.ui.nav.PdshUiHostCommand
 import java.time.ZoneId
+
+/**
+ * Runs a session metadata command against the same durable store used by the
+ * session list. A receipt is successful only when ChatSessionStore has committed
+ * the change and read it back; the legacy ViewModel Boolean reports enqueue/guard
+ * acceptance and is not a persistence receipt.
+ */
+internal fun applyHostSessionCommand(
+    store: ChatSessionStore,
+    command: PdshUiHostCommand,
+): PdshActionReceipt? {
+    val receipt = when (command) {
+        is PdshUiHostCommand.SessionRename -> {
+            if (command.title.isBlank()) return PdshActionReceipt(
+                command.requestId, command.sessionId, null, PdshActionOutcome.FAILED,
+            )
+            store.rename(command.sessionId, command.title, command.requestId)
+        }
+        is PdshUiHostCommand.SessionArchive -> store.setArchived(command.sessionId, true, command.requestId)
+        is PdshUiHostCommand.SessionRestore -> store.setArchived(command.sessionId, false, command.requestId)
+        else -> return null
+    }
+    return PdshActionReceipt(
+        requestId = receipt.requestId,
+        sessionId = receipt.sessionId,
+        revision = receipt.revision,
+        outcome = if (receipt.outcome is ChatWriteOutcome.Persisted) {
+            PdshActionOutcome.SUCCEEDED
+        } else {
+            PdshActionOutcome.FAILED
+        },
+    )
+}
 
 /**
  * Renders the sessions page from the host's session read.
