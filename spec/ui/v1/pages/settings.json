@@ -7,25 +7,18 @@
   "sectionNote": null,
   "title": {
     "text": "设置",
-    "provenance": "SettingsPage.swift:47",
-    "anchor": ".navigationTitle(\"设置\")"
+    "provenance": "SettingsPage.swift:148",
+    "anchor": ".navigationTitle(NativeText(\"设置\", \"Settings\"))"
   },
   "source": {
     "file": "SettingsPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/SettingsPage.swift",
-    "lines": 615,
-    "structLine": 9,
+    "lines": 417,
+    "structLine": 45,
     "renderedFrom": [
       "body",
-      "mainGroup",
-      "row",
-      "settingsRow",
-      "hairline",
-      "rowLabel",
-      "toolsGroup",
-      "groupHeader",
-      "aboutGroup",
-      "versionRow"
+      "link",
+      "deepPage"
     ],
     "sectionOrder": "declaration order inside the page struct"
   },
@@ -36,124 +29,103 @@
   },
   "sections": [
     {
-      "id": "section-70",
-      "title": null,
+      "id": "模型与智能体",
+      "title": "模型与智能体",
       "titleTemplate": null,
       "dynamicTitle": false,
       "titleExpression": null,
-      "titleSource": "absent",
+      "titleSource": "literal",
       "condition": null,
       "collection": null,
       "rows": [
-        {
-          "id": "权限",
-          "label": "权限",
-          "labelExpr": null,
-          "kind": "navigation",
-          "value": null,
-          "valueExpr": "permissionValue",
-          "clickable": true,
-          "destination": "PermissionDefaultsPage",
-          "writes": false,
-          "condition": null,
-          "provenance": "SettingsPage.swift:73",
-          "anchor": "row(\"权限\", permissionValue) { PermissionDefaultsPage() }",
-          "extraction": "syntax"
-        },
-        {
-          "id": "写之前",
-          "label": "写之前",
-          "labelExpr": null,
-          "kind": "info",
-          "value": null,
-          "valueExpr": "askValue",
-          "clickable": false,
-          "destination": null,
-          "writes": false,
-          "condition": null,
-          "provenance": "SettingsPage.swift:74",
-          "anchor": "settingsRow(rowLabel(\"写之前\", askValue, chevronSlot: true))",
-          "extraction": "syntax",
-          "template": "rowLabel"
-        },
         {
           "id": "模型服务",
           "label": "模型服务",
           "labelExpr": null,
           "kind": "navigation",
           "value": null,
-          "valueExpr": "selectedProvider?.displayName ?? \"未配置\"",
+          "valueExpr": "icon: \"cpu\"",
           "clickable": true,
           "destination": "ModelProviderSettingsPage",
           "writes": false,
           "condition": null,
-          "provenance": "SettingsPage.swift:75",
-          "anchor": "row(\"模型服务\", selectedProvider?.displayName ?? \"未配置\") { ModelProviderSettingsPage(",
+          "provenance": "SettingsPage.swift:62",
+          "anchor": "link(NativeText(\"模型服务\", \"Model providers\"), icon: \"cpu\") { ModelProviderSettings",
           "extraction": "syntax"
         },
         {
-          "id": "mcp",
-          "label": "MCP",
+          "id": "agent-预设",
+          "label": "Agent 预设",
           "labelExpr": null,
           "kind": "navigation",
           "value": null,
-          "valueExpr": "mcpSummary",
+          "valueExpr": "icon: \"person.2\"",
           "clickable": true,
-          "destination": "MCPSettingsPage",
+          "destination": "NativeAgentPresetsPage",
           "writes": false,
           "condition": null,
-          "provenance": "SettingsPage.swift:76",
-          "anchor": "row(\"MCP\", mcpSummary) { MCPSettingsPage(host: .native) }",
+          "provenance": "SettingsPage.swift:63",
+          "anchor": "link(NativeText(\"Agent 预设\", \"Agent presets\"), icon: \"person.2\") { NativeAgentPre",
           "extraction": "syntax"
         },
         {
-          "id": "后台运行",
-          "label": "后台运行",
+          "id": "插件与工具",
+          "label": "插件与工具",
           "labelExpr": null,
-          "kind": "control",
+          "kind": "navigation",
           "value": null,
-          "valueExpr": null,
+          "valueExpr": "icon: \"puzzlepiece.extension\"",
           "clickable": true,
-          "destination": null,
-          "writes": true,
+          "destination": "NativeConfigurationPage",
+          "writes": false,
           "condition": null,
-          "provenance": "SettingsPage.swift:77",
-          "anchor": "settingsRow(Toggle(\"后台运行\", isOn: $model.backgroundKeepAlive)",
+          "provenance": "SettingsPage.swift:64",
+          "anchor": "link(NativeText(\"插件与工具\", \"Plugins and tools\"), icon: \"puzzlepiece.extension\") {",
           "extraction": "syntax"
         }
       ],
-      "provenance": "SettingsPage.swift:70",
-      "anchor": "Section {",
-      "extraction": "syntax",
-      "criterion": {
-        "kind": "first-clickable-row",
-        "label": "权限",
-        "provenance": "SettingsPage.swift:73"
-      }
+      "provenance": "SettingsPage.swift:61",
+      "anchor": "Section(NativeText(\"模型与智能体\", \"Models and agents\")) {",
+      "extraction": "syntax"
     },
     {
-      "id": "工具",
-      "title": "工具",
+      "id": "权限与隐私",
+      "title": "权限与隐私",
       "titleTemplate": null,
       "dynamicTitle": false,
       "titleExpression": null,
-      "titleSource": "header",
+      "titleSource": "literal",
       "condition": null,
       "collection": null,
       "rows": [
         {
-          "id": "网页搜索",
-          "label": "网页搜索",
+          "id": "新会话默认权限",
+          "label": "新会话默认权限",
           "labelExpr": null,
           "kind": "navigation",
           "value": null,
-          "valueExpr": "searchSummary.title",
+          "valueExpr": "icon: \"lock.shield\"",
           "clickable": true,
-          "destination": "WebSearchSettingsPage",
+          "destination": "PermissionDefaultsPage",
           "writes": false,
           "condition": null,
-          "provenance": "SettingsPage.swift:88",
-          "anchor": "row(\"网页搜索\", searchSummary.title) { WebSearchSettingsPage(host: .native) }",
+          "provenance": "SettingsPage.swift:70",
+          "anchor": "link(NativeText(\"新会话默认权限\", \"Default permission\"), icon: \"lock.shield\",",
+          "extraction": "syntax"
+        },
+        {
+          "id": "手机权限",
+          "label": "手机权限",
+          "labelExpr": null,
+          "kind": "navigation",
+          "value": null,
+          "valueExpr": "icon: \"hand.raised\"",
+          "clickable": true,
+          "destination": "PhonePermissionsPage",
+          "writes": false,
+          "condition": null,
+          "provenance": "SettingsPage.swift:72",
+          "anchor": "link(NativeText(\"手机权限\", \"Phone permissions\"), icon: \"hand.raised\",",
           "extraction": "syntax"
         },
         {
@@ -162,90 +134,158 @@
           "labelExpr": null,
           "kind": "navigation",
           "value": null,
-          "valueExpr": "\"\\(egressEntries.count) 个地址\"",
+          "valueExpr": "icon: \"network\"",
           "clickable": true,
           "destination": "EgressAllowListPage",
           "writes": false,
           "condition": null,
-          "provenance": "SettingsPage.swift:89",
-          "anchor": "row(\"网络访问\", \"\\(egressEntries.count) 个地址\") { EgressAllowListPage() }",
+          "provenance": "SettingsPage.swift:74",
+          "anchor": "link(NativeText(\"网络访问\", \"Network access\"), icon: \"network\") { EgressAllowListPag",
           "extraction": "syntax"
-        },
+        }
+      ],
+      "provenance": "SettingsPage.swift:69",
+      "anchor": "Section(NativeText(\"权限与隐私\", \"Permissions and privacy\")) {",
+      "extraction": "syntax"
+    },
+    {
+      "id": "对话",
+      "title": "对话",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "literal",
+      "condition": null,
+      "collection": null,
+      "rows": [
         {
-          "id": "插件与模型",
-          "label": "插件与模型",
+          "id": "外观",
+          "label": "外观",
           "labelExpr": null,
-          "kind": "action",
-          "value": null,
+          "kind": "control",
+          "value": "跟随系统 | System | 浅色 | Light | 深色 | Dark",
           "valueExpr": null,
           "clickable": true,
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "SettingsPage.swift:91",
-          "anchor": "rowLabel(\"插件与模型\", \"\")",
+          "provenance": "SettingsPage.swift:84",
+          "anchor": "SettingsRowLabel(title: NativeText(\"外观\", \"Appearance\"), icon: \"circle.lefthalf.f",
           "extraction": "syntax"
         },
         {
-          "id": "命令",
-          "label": "命令",
+          "id": "语言",
+          "label": "语言",
+          "labelExpr": null,
+          "kind": "control",
+          "value": "跟随系统 | System | 中文 | English",
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "SettingsPage.swift:92",
+          "anchor": "SettingsRowLabel(title: NativeText(\"语言\", \"Language\"), icon: \"globe\")",
+          "extraction": "syntax"
+        },
+        {
+          "id": "字号",
+          "label": "字号",
           "labelExpr": null,
           "kind": "navigation",
           "value": null,
-          "valueExpr": "\"\"",
+          "valueExpr": "icon: \"textformat.size\"",
           "clickable": true,
-          "destination": "PDSHShellPage",
+          "destination": "FontSizeSettingsPage",
           "writes": false,
           "condition": null,
-          "provenance": "SettingsPage.swift:95",
-          "anchor": "row(\"命令\", \"\") { PDSHShellPage() }",
+          "provenance": "SettingsPage.swift:94",
+          "anchor": "link(NativeText(\"字号\", \"Text size\"), icon: \"textformat.size\",",
           "extraction": "syntax"
         },
         {
-          "id": "发送消息时",
-          "label": "发送消息时",
+          "id": "工作过程",
+          "label": "工作过程",
           "labelExpr": null,
-          "kind": "info",
+          "kind": "navigation",
           "value": null,
-          "valueExpr": null,
-          "clickable": false,
-          "destination": null,
+          "valueExpr": "icon: \"list.bullet.rectangle\"",
+          "clickable": true,
+          "destination": "ConversationSettingsPage",
           "writes": false,
           "condition": null,
           "provenance": "SettingsPage.swift:96",
-          "anchor": "settingsRow(LabeledContent(\"发送消息时\") {",
+          "anchor": "link(NativeText(\"工作过程\", \"Work details\"), icon: \"list.bullet.rectangle\") {",
           "extraction": "syntax"
         },
         {
-          "id": "control-97",
-          "label": null,
+          "id": "快捷键",
+          "label": "快捷键",
           "labelExpr": null,
-          "kind": "control",
-          "value": "排到下一轮 | 补充当前任务",
-          "valueExpr": null,
+          "kind": "navigation",
+          "value": null,
+          "valueExpr": "icon: \"command\"",
           "clickable": true,
-          "destination": null,
-          "writes": true,
+          "destination": "NativeShortcutsPage",
+          "writes": false,
           "condition": null,
-          "provenance": "SettingsPage.swift:97",
-          "anchor": "Picker(\"\", selection: $busyEnterMode) {",
-          "extraction": "manual"
+          "provenance": "SettingsPage.swift:99",
+          "anchor": "link(NativeText(\"快捷键\", \"Shortcuts\"), icon: \"command\") { NativeShortcutsPage() }",
+          "extraction": "syntax"
         }
       ],
-      "provenance": "SettingsPage.swift:105",
-      "anchor": "groupHeader(\"工具\")",
-      "extraction": "syntax",
-      "hasHeader": true,
-      "footer": {
-        "text": null,
-        "labelExpr": "line",
-        "provenance": "SettingsPage.swift:109",
-        "anchor": "Text(line)"
-      }
+      "provenance": "SettingsPage.swift:77",
+      "anchor": "Section(NativeText(\"对话\", \"Conversation\")) {",
+      "extraction": "syntax"
     },
     {
-      "id": "关于",
-      "title": "关于",
+      "id": "会话与文件",
+      "title": "会话与文件",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "literal",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "文件夹",
+          "label": "文件夹",
+          "labelExpr": null,
+          "kind": "navigation",
+          "value": null,
+          "valueExpr": "icon: \"folder\"",
+          "clickable": true,
+          "destination": "WorkspaceFoldersPage",
+          "writes": false,
+          "condition": null,
+          "provenance": "SettingsPage.swift:103",
+          "anchor": "link(NativeText(\"文件夹\", \"Folders\"), icon: \"folder\",",
+          "extraction": "syntax"
+        },
+        {
+          "id": "已归档会话",
+          "label": "已归档会话",
+          "labelExpr": null,
+          "kind": "navigation",
+          "value": null,
+          "valueExpr": "icon: \"archivebox\"",
+          "clickable": true,
+          "destination": "ArchivedSessionsPage",
+          "writes": false,
+          "condition": null,
+          "provenance": "SettingsPage.swift:107",
+          "anchor": "link(NativeText(\"已归档会话\", \"Archived sessions\"), icon: \"archivebox\",",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "SettingsPage.swift:102",
+      "anchor": "Section(NativeText(\"会话与文件\", \"Sessions and files\")) {",
+      "extraction": "syntax"
+    },
+    {
+      "id": "引擎",
+      "title": "引擎",
       "titleTemplate": null,
       "dynamicTitle": false,
       "titleExpression": null,
@@ -254,39 +294,24 @@
       "collection": null,
       "rows": [
         {
-          "id": "版本",
-          "label": "版本",
+          "id": "引擎状态",
+          "label": "引擎状态",
           "labelExpr": null,
-          "kind": "info",
+          "kind": "custom",
           "value": null,
-          "valueExpr": "versionText",
+          "valueExpr": null,
           "clickable": false,
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "SettingsPage.swift:169",
-          "anchor": "rowLabel(\"版本\", versionText, chevronSlot: true)",
+          "provenance": "SettingsPage.swift:115",
+          "anchor": "SettingsRowLabel(title: NativeText(\"引擎状态\", \"Engine\"), icon: \"bolt.horizontal\",",
           "extraction": "syntax",
-          "template": "rowLabel"
+          "template": "SettingsRowLabel"
         },
         {
-          "id": "开源许可",
-          "label": "开源许可",
-          "labelExpr": null,
-          "kind": "navigation",
-          "value": null,
-          "valueExpr": "\"\"",
-          "clickable": true,
-          "destination": "LicensesPage",
-          "writes": false,
-          "condition": null,
-          "provenance": "SettingsPage.swift:121",
-          "anchor": "row(\"开源许可\", \"\") { LicensesPage() }",
-          "extraction": "syntax"
-        },
-        {
-          "id": "导出诊断",
-          "label": "导出诊断",
+          "id": "action-119",
+          "label": null,
           "labelExpr": null,
           "kind": "action",
           "value": null,
@@ -294,33 +319,101 @@
           "clickable": true,
           "destination": null,
           "writes": true,
+          "condition": "chat.engineNeedsReset",
+          "provenance": "SettingsPage.swift:119",
+          "anchor": "Button {",
+          "extraction": "manual"
+        },
+        {
+          "id": "运行状态",
+          "label": "运行状态",
+          "labelExpr": null,
+          "kind": "navigation",
+          "value": null,
+          "valueExpr": "icon: \"waveform.path.ecg\"",
+          "clickable": true,
+          "destination": "RuntimeDetailsPage",
+          "writes": false,
           "condition": null,
-          "provenance": "SettingsPage.swift:123",
-          "anchor": "rowLabel(\"导出诊断\", \"\")",
+          "provenance": "SettingsPage.swift:126",
+          "anchor": "link(NativeText(\"运行状态\", \"Runtime details\"), icon: \"waveform.path.ecg\") {",
           "extraction": "syntax"
         }
       ],
-      "provenance": "SettingsPage.swift:128",
-      "anchor": "groupHeader(\"关于\")",
+      "provenance": "SettingsPage.swift:130",
+      "anchor": "Text(NativeText(\"引擎\", \"Engine\"))",
       "extraction": "syntax",
-      "hasHeader": true
+      "hasHeader": true,
+      "footer": {
+        "text": "上次启动失败后引擎不会自动重试。重新启动会确认这次失败并重新启动，会话数据不受影响。",
+        "labelExpr": null,
+        "provenance": "SettingsPage.swift:134",
+        "anchor": "\"上次启动失败后引擎不会自动重试。重新启动会确认这次失败并重新启动，会话数据不受影响。\","
+      }
+    },
+    {
+      "id": "关于",
+      "title": "关于",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "literal",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "关于-phone-dsh",
+          "label": "关于 Phone DSH",
+          "labelExpr": null,
+          "kind": "navigation",
+          "value": null,
+          "valueExpr": "icon: \"info.circle\"",
+          "clickable": true,
+          "destination": "SettingsAboutPage",
+          "writes": false,
+          "condition": null,
+          "provenance": "SettingsPage.swift:140",
+          "anchor": "link(NativeText(\"关于 Phone DSH\", \"About Phone DSH\"), icon: \"info.circle\") { Setti",
+          "extraction": "syntax"
+        },
+        {
+          "id": "number",
+          "label": "number",
+          "labelExpr": null,
+          "kind": "custom",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "SettingsPage.swift:141",
+          "anchor": "SettingsRowLabel(title: NativeText(\"版本\", \"Version\"), icon: \"number\",",
+          "extraction": "syntax",
+          "template": "SettingsRowLabel"
+        },
+        {
+          "id": "开源许可",
+          "label": "开源许可",
+          "labelExpr": null,
+          "kind": "navigation",
+          "value": null,
+          "valueExpr": "icon: \"doc.text\"",
+          "clickable": true,
+          "destination": "LicensesPage",
+          "writes": false,
+          "condition": null,
+          "provenance": "SettingsPage.swift:143",
+          "anchor": "link(NativeText(\"开源许可\", \"Open-source licenses\"), icon: \"doc.text\") { LicensesPag",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "SettingsPage.swift:139",
+      "anchor": "Section(NativeText(\"关于\", \"About\")) {",
+      "extraction": "syntax"
     }
   ],
   "actions": [
-    {
-      "id": "权限",
-      "label": "权限",
-      "labelExpr": null,
-      "kind": "navigation",
-      "trigger": "tap",
-      "semantic": "navigate:PermissionDefaultsPage",
-      "writes": false,
-      "destination": "PermissionDefaultsPage",
-      "condition": null,
-      "provenance": "SettingsPage.swift:73",
-      "anchor": "row(\"权限\", permissionValue) { PermissionDefaultsPage() }",
-      "extraction": "syntax"
-    },
     {
       "id": "模型服务",
       "label": "模型服务",
@@ -331,50 +424,64 @@
       "writes": false,
       "destination": "ModelProviderSettingsPage",
       "condition": null,
-      "provenance": "SettingsPage.swift:75",
-      "anchor": "row(\"模型服务\", selectedProvider?.displayName ?? \"未配置\") { ModelProviderSettingsPage(",
+      "provenance": "SettingsPage.swift:62",
+      "anchor": "link(NativeText(\"模型服务\", \"Model providers\"), icon: \"cpu\") { ModelProviderSettings",
       "extraction": "syntax"
     },
     {
-      "id": "mcp",
-      "label": "MCP",
+      "id": "agent-预设",
+      "label": "Agent 预设",
       "labelExpr": null,
       "kind": "navigation",
       "trigger": "tap",
-      "semantic": "navigate:MCPSettingsPage",
+      "semantic": "navigate:NativeAgentPresetsPage",
       "writes": false,
-      "destination": "MCPSettingsPage",
+      "destination": "NativeAgentPresetsPage",
       "condition": null,
-      "provenance": "SettingsPage.swift:76",
-      "anchor": "row(\"MCP\", mcpSummary) { MCPSettingsPage(host: .native) }",
+      "provenance": "SettingsPage.swift:63",
+      "anchor": "link(NativeText(\"Agent 预设\", \"Agent presets\"), icon: \"person.2\") { NativeAgentPre",
       "extraction": "syntax"
     },
     {
-      "id": "后台运行",
-      "label": "后台运行",
-      "labelExpr": null,
-      "kind": "toggle",
-      "trigger": "tap",
-      "semantic": null,
-      "writes": true,
-      "destination": null,
-      "condition": null,
-      "provenance": "SettingsPage.swift:77",
-      "anchor": "settingsRow(Toggle(\"后台运行\", isOn: $model.backgroundKeepAlive)",
-      "extraction": "syntax"
-    },
-    {
-      "id": "网页搜索",
-      "label": "网页搜索",
+      "id": "插件与工具",
+      "label": "插件与工具",
       "labelExpr": null,
       "kind": "navigation",
       "trigger": "tap",
-      "semantic": "navigate:WebSearchSettingsPage",
+      "semantic": "navigate:NativeConfigurationPage",
       "writes": false,
-      "destination": "WebSearchSettingsPage",
+      "destination": "NativeConfigurationPage",
       "condition": null,
-      "provenance": "SettingsPage.swift:88",
-      "anchor": "row(\"网页搜索\", searchSummary.title) { WebSearchSettingsPage(host: .native) }",
+      "provenance": "SettingsPage.swift:64",
+      "anchor": "link(NativeText(\"插件与工具\", \"Plugins and tools\"), icon: \"puzzlepiece.extension\") {",
+      "extraction": "syntax"
+    },
+    {
+      "id": "新会话默认权限",
+      "label": "新会话默认权限",
+      "labelExpr": null,
+      "kind": "navigation",
+      "trigger": "tap",
+      "semantic": "navigate:PermissionDefaultsPage",
+      "writes": false,
+      "destination": "PermissionDefaultsPage",
+      "condition": null,
+      "provenance": "SettingsPage.swift:70",
+      "anchor": "link(NativeText(\"新会话默认权限\", \"Default permission\"), icon: \"lock.shield\",",
+      "extraction": "syntax"
+    },
+    {
+      "id": "手机权限",
+      "label": "手机权限",
+      "labelExpr": null,
+      "kind": "navigation",
+      "trigger": "tap",
+      "semantic": "navigate:PhonePermissionsPage",
+      "writes": false,
+      "destination": "PhonePermissionsPage",
+      "condition": null,
+      "provenance": "SettingsPage.swift:72",
+      "anchor": "link(NativeText(\"手机权限\", \"Phone permissions\"), icon: \"hand.raised\",",
       "extraction": "syntax"
     },
     {
@@ -387,58 +494,166 @@
       "writes": false,
       "destination": "EgressAllowListPage",
       "condition": null,
-      "provenance": "SettingsPage.swift:89",
-      "anchor": "row(\"网络访问\", \"\\(egressEntries.count) 个地址\") { EgressAllowListPage() }",
+      "provenance": "SettingsPage.swift:74",
+      "anchor": "link(NativeText(\"网络访问\", \"Network access\"), icon: \"network\") { EgressAllowListPag",
       "extraction": "syntax"
     },
     {
-      "id": "插件与模型",
-      "label": "插件与模型",
-      "labelExpr": null,
-      "kind": "button",
-      "trigger": "tap",
-      "semantic": "{ showDSHConfiguration = true",
-      "writes": true,
-      "destination": null,
-      "condition": null,
-      "provenance": "SettingsPage.swift:91",
-      "anchor": "rowLabel(\"插件与模型\", \"\")",
-      "extraction": "syntax",
-      "labelAlternatives": [],
-      "presents": "sheet-55"
-    },
-    {
-      "id": "命令",
-      "label": "命令",
-      "labelExpr": null,
-      "kind": "navigation",
-      "trigger": "tap",
-      "semantic": "navigate:PDSHShellPage",
-      "writes": false,
-      "destination": "PDSHShellPage",
-      "condition": null,
-      "provenance": "SettingsPage.swift:95",
-      "anchor": "row(\"命令\", \"\") { PDSHShellPage() }",
-      "extraction": "syntax"
-    },
-    {
-      "id": "picker-97",
-      "label": null,
+      "id": "外观",
+      "label": "外观",
       "labelExpr": null,
       "kind": "picker",
       "trigger": "tap",
-      "semantic": null,
+      "semantic": "binding:Binding(get: { preferences.appearance }, set: { preferences.setAppearance($0) })",
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "SettingsPage.swift:97",
-      "anchor": "Picker(\"\", selection: $busyEnterMode) {",
-      "extraction": "manual",
+      "provenance": "SettingsPage.swift:84",
+      "anchor": "SettingsRowLabel(title: NativeText(\"外观\", \"Appearance\"), icon: \"circle.lefthalf.f",
+      "extraction": "syntax",
       "items": [
-        "排到下一轮",
-        "补充当前任务"
+        "跟随系统",
+        "System",
+        "浅色",
+        "Light",
+        "深色",
+        "Dark"
       ],
       "style": "default"
+    },
+    {
+      "id": "语言",
+      "label": "语言",
+      "labelExpr": null,
+      "kind": "picker",
+      "trigger": "tap",
+      "semantic": "binding:Binding(get: { preferences.language }, set: { preferences.setLanguage($0) })",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "SettingsPage.swift:92",
+      "anchor": "SettingsRowLabel(title: NativeText(\"语言\", \"Language\"), icon: \"globe\")",
+      "extraction": "syntax",
+      "items": [
+        "跟随系统",
+        "System",
+        "中文",
+        "English"
+      ],
+      "style": "default"
+    },
+    {
+      "id": "字号",
+      "label": "字号",
+      "labelExpr": null,
+      "kind": "navigation",
+      "trigger": "tap",
+      "semantic": "navigate:FontSizeSettingsPage",
+      "writes": false,
+      "destination": "FontSizeSettingsPage",
+      "condition": null,
+      "provenance": "SettingsPage.swift:94",
+      "anchor": "link(NativeText(\"字号\", \"Text size\"), icon: \"textformat.size\",",
+      "extraction": "syntax"
+    },
+    {
+      "id": "工作过程",
+      "label": "工作过程",
+      "labelExpr": null,
+      "kind": "navigation",
+      "trigger": "tap",
+      "semantic": "navigate:ConversationSettingsPage",
+      "writes": false,
+      "destination": "ConversationSettingsPage",
+      "condition": null,
+      "provenance": "SettingsPage.swift:96",
+      "anchor": "link(NativeText(\"工作过程\", \"Work details\"), icon: \"list.bullet.rectangle\") {",
+      "extraction": "syntax"
+    },
+    {
+      "id": "快捷键",
+      "label": "快捷键",
+      "labelExpr": null,
+      "kind": "navigation",
+      "trigger": "tap",
+      "semantic": "navigate:NativeShortcutsPage",
+      "writes": false,
+      "destination": "NativeShortcutsPage",
+      "condition": null,
+      "provenance": "SettingsPage.swift:99",
+      "anchor": "link(NativeText(\"快捷键\", \"Shortcuts\"), icon: \"command\") { NativeShortcutsPage() }",
+      "extraction": "syntax"
+    },
+    {
+      "id": "文件夹",
+      "label": "文件夹",
+      "labelExpr": null,
+      "kind": "navigation",
+      "trigger": "tap",
+      "semantic": "navigate:WorkspaceFoldersPage",
+      "writes": false,
+      "destination": "WorkspaceFoldersPage",
+      "condition": null,
+      "provenance": "SettingsPage.swift:103",
+      "anchor": "link(NativeText(\"文件夹\", \"Folders\"), icon: \"folder\",",
+      "extraction": "syntax"
+    },
+    {
+      "id": "已归档会话",
+      "label": "已归档会话",
+      "labelExpr": null,
+      "kind": "navigation",
+      "trigger": "tap",
+      "semantic": "navigate:ArchivedSessionsPage",
+      "writes": false,
+      "destination": "ArchivedSessionsPage",
+      "condition": null,
+      "provenance": "SettingsPage.swift:107",
+      "anchor": "link(NativeText(\"已归档会话\", \"Archived sessions\"), icon: \"archivebox\",",
+      "extraction": "syntax"
+    },
+    {
+      "id": "button-119",
+      "label": null,
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ Task { await chat.restartEngine() }",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "SettingsPage.swift:119",
+      "anchor": "Button {",
+      "extraction": "manual",
+      "labelAlternatives": []
+    },
+    {
+      "id": "运行状态",
+      "label": "运行状态",
+      "labelExpr": null,
+      "kind": "navigation",
+      "trigger": "tap",
+      "semantic": "navigate:RuntimeDetailsPage",
+      "writes": false,
+      "destination": "RuntimeDetailsPage",
+      "condition": null,
+      "provenance": "SettingsPage.swift:126",
+      "anchor": "link(NativeText(\"运行状态\", \"Runtime details\"), icon: \"waveform.path.ecg\") {",
+      "extraction": "syntax"
+    },
+    {
+      "id": "关于-phone-dsh",
+      "label": "关于 Phone DSH",
+      "labelExpr": null,
+      "kind": "navigation",
+      "trigger": "tap",
+      "semantic": "navigate:SettingsAboutPage",
+      "writes": false,
+      "destination": "SettingsAboutPage",
+      "condition": null,
+      "provenance": "SettingsPage.swift:140",
+      "anchor": "link(NativeText(\"关于 Phone DSH\", \"About Phone DSH\"), icon: \"info.circle\") { Setti",
+      "extraction": "syntax"
     },
     {
       "id": "开源许可",
@@ -450,25 +665,9 @@
       "writes": false,
       "destination": "LicensesPage",
       "condition": null,
-      "provenance": "SettingsPage.swift:121",
-      "anchor": "row(\"开源许可\", \"\") { LicensesPage() }",
+      "provenance": "SettingsPage.swift:143",
+      "anchor": "link(NativeText(\"开源许可\", \"Open-source licenses\"), icon: \"doc.text\") { LicensesPag",
       "extraction": "syntax"
-    },
-    {
-      "id": "导出诊断",
-      "label": "导出诊断",
-      "labelExpr": null,
-      "kind": "button",
-      "trigger": "tap",
-      "semantic": "{ showExport = true",
-      "writes": true,
-      "destination": null,
-      "condition": null,
-      "provenance": "SettingsPage.swift:123",
-      "anchor": "rowLabel(\"导出诊断\", \"\")",
-      "extraction": "syntax",
-      "labelAlternatives": [],
-      "presents": "sheet-130"
     },
     {
       "id": "完成",
@@ -480,246 +679,139 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "SettingsPage.swift:52",
-      "anchor": "Button(\"完成\") { dismiss() }.leadingBarText()",
+      "provenance": "SettingsPage.swift:152",
+      "anchor": "Button(NativeText(\"完成\", \"Done\")) { dismiss() }",
       "extraction": "syntax"
-    },
-    {
-      "id": "运行时详情",
-      "label": "运行时详情",
-      "labelExpr": null,
-      "kind": "navigation",
-      "trigger": "tap",
-      "semantic": "navigate:RuntimeDetailsPage",
-      "writes": false,
-      "destination": "RuntimeDetailsPage",
-      "condition": null,
-      "provenance": "SettingsPage.swift:287",
-      "anchor": "NavigationLink {",
-      "extraction": "manual",
-      "specRequired": true,
-      "specRef": "spec/ui/v1/README.md:63",
-      "baselineReachable": false,
-      "note": "README §1 lists RuntimeDetailsPage's entrance as `页头运行状态点、设置行`. The baseline declares this settings row only inside the never-referenced `advancedSection` (label 运行状态), so its body never renders it. §1 wins: the Android row is named after the page (运行时详情), not after the dead label."
     }
   ],
   "presentations": [
     {
-      "id": "sheet-55",
-      "kind": "sheet",
+      "id": "navigationDestination-156",
+      "kind": "navigationDestination",
       "title": null,
-      "destination": "NativeConfigurationPage",
+      "destination": "tab in deepPage(tab)",
       "triggerBindings": [
-        "showDSHConfiguration"
+        "deepLink"
       ],
       "span": [
-        55,
-        58
+        156,
+        156
       ],
-      "provenance": "SettingsPage.swift:55",
-      "anchor": ".sheet(isPresented: $showDSHConfiguration) {",
-      "triggered": true
-    },
-    {
-      "id": "sheet-130",
-      "kind": "sheet",
-      "title": null,
-      "destination": "ExportPage",
-      "triggerBindings": [
-        "showExport"
-      ],
-      "span": [
-        130,
-        130
-      ],
-      "provenance": "SettingsPage.swift:130",
-      "anchor": ".sheet(isPresented: $showExport) { ExportPage() }",
-      "triggered": true
+      "provenance": "SettingsPage.swift:156",
+      "anchor": ".navigationDestination(item: $deepLink) { tab in deepPage(tab) }",
+      "triggered": false,
+      "deadUi": true,
+      "deadUiEvidence": "the state binding deepLink is never assigned outside its declaration, so nothing opens this navigationDestination"
     }
   ],
   "states": {
     "advisory": true,
     "note": "advisory only: marker-based; row placeholders (未配置/未设置/—) are not page states, so the checker never compares this object",
     "sites": {
-      "empty": [
-        {
-          "renders": "未配置",
-          "when": null,
-          "provenance": "SettingsPage.swift:75",
-          "anchor": "row(\"模型服务\", selectedProvider?.displayName ?? \"未配置\") { ModelProviderSettingsPage("
-        },
-        {
-          "renders": "未配置",
-          "when": null,
-          "provenance": "SettingsPage.swift:142",
-          "anchor": "guard model.isStarted, !mcpRows.isEmpty else { return \"未配置\" }"
-        }
-      ],
+      "empty": [],
       "data": [
         {
-          "renders": "untitled section at 70 | 工具 | 关于",
+          "renders": "模型与智能体 | 权限与隐私 | 对话 | 会话与文件 | 引擎 | 关于",
           "when": null,
-          "provenance": "SettingsPage.swift:9",
+          "provenance": "SettingsPage.swift:45",
           "anchor": "struct SettingsPage: View {",
           "note": "structural default: the sections above, when no condition overrides them"
         }
       ],
-      "failure": [],
+      "failure": [
+        {
+          "renders": "上次启动失败后引擎不会自动重试。重新启动会确认这次失败并重新启动，会话数据不受影响。",
+          "when": "chat.engineNeedsReset",
+          "provenance": "SettingsPage.swift:134",
+          "anchor": "\"上次启动失败后引擎不会自动重试。重新启动会确认这次失败并重新启动，会话数据不受影响。\","
+        }
+      ],
       "unknown": [
         {
           "renders": "—",
           "when": null,
-          "provenance": "SettingsPage.swift:161",
-          "anchor": "Bundle.main.infoDictionary?[\"CFBundleShortVersionString\"] as? String ?? \"—\""
+          "provenance": "SettingsPage.swift:142",
+          "anchor": "value: Bundle.main.infoDictionary?[\"CFBundleShortVersionString\"] as? String ?? \""
         },
         {
           "renders": "未设置",
           "when": null,
-          "provenance": "SettingsPage.swift:240",
-          "anchor": "guard let id = NativeConfigurationModel.shared.defaultPermissionMode else { retu"
-        },
-        {
-          "renders": "未设置",
-          "when": null,
-          "provenance": "SettingsPage.swift:241",
-          "anchor": "return AccessModeWording.title(for: id) ?? \"未设置\""
-        },
-        {
-          "renders": "未设置",
-          "when": null,
-          "provenance": "SettingsPage.swift:247",
-          "anchor": "AccessModeWording.title(for: id) != nil else { return \"未设置\" }"
+          "provenance": "SettingsPage.swift:184",
+          "anchor": "guard let id = configuration.defaultPermissionMode else { return NativeText(\"未设置"
         }
       ],
       "loading": []
     },
     "absent": [
-      "failure",
+      "empty",
       "loading"
     ],
     "coverage": {
-      "empty": 2,
+      "empty": 0,
       "data": 1,
-      "failure": 0,
-      "unknown": 4,
+      "failure": 1,
+      "unknown": 2,
       "loading": 0
     }
   },
   "subpages": [
     {
-      "name": "PermissionDefaultsPage",
-      "line": 464,
+      "name": "FontSizeSettingsPage",
+      "line": 229,
       "private": true,
       "sections": [],
-      "provenance": "SettingsPage.swift:464"
+      "provenance": "SettingsPage.swift:229"
+    },
+    {
+      "name": "ConversationSettingsPage",
+      "line": 267,
+      "private": true,
+      "sections": [
+        {
+          "title": "工作步骤",
+          "provenance": "SettingsPage.swift:272"
+        },
+        {
+          "title": "发送与用量",
+          "provenance": "SettingsPage.swift:291"
+        }
+      ],
+      "provenance": "SettingsPage.swift:267"
+    },
+    {
+      "name": "ArchivedSessionsPage",
+      "line": 316,
+      "private": true,
+      "sections": [],
+      "provenance": "SettingsPage.swift:316"
+    },
+    {
+      "name": "PermissionDefaultsPage",
+      "line": 378,
+      "private": true,
+      "sections": [
+        {
+          "title": "只影响之后新开的会话，当前会话保持不变。",
+          "provenance": "SettingsPage.swift:383"
+        }
+      ],
+      "provenance": "SettingsPage.swift:378"
     },
     {
       "name": "LicensesPage",
-      "line": 500,
+      "line": 408,
       "private": true,
       "sections": [],
-      "provenance": "SettingsPage.swift:500"
-    },
-    {
-      "name": "DevelopmentToolsPage",
-      "line": 537,
-      "private": true,
-      "sections": [],
-      "provenance": "SettingsPage.swift:537"
-    },
-    {
-      "name": "DeveloperPage",
-      "line": 552,
-      "private": true,
-      "sections": [],
-      "provenance": "SettingsPage.swift:552"
+      "provenance": "SettingsPage.swift:408"
     }
   ],
-  "unreachable": [
-    {
-      "member": "runtimeSection",
-      "line": 258,
-      "endLine": 272,
-      "sections": 1,
-      "note": "view member with Section(s) that body does not reference: dead in the page"
-    },
-    {
-      "member": "advancedSection",
-      "line": 276,
-      "endLine": 293,
-      "sections": 1,
-      "note": "view member with Section(s) that body does not reference: dead in the page"
-    },
-    {
-      "member": "modelSection",
-      "line": 295,
-      "endLine": 324,
-      "sections": 1,
-      "note": "view member with Section(s) that body does not reference: dead in the page"
-    },
-    {
-      "member": "webSearchSection",
-      "line": 326,
-      "endLine": 358,
-      "sections": 1,
-      "note": "view member with Section(s) that body does not reference: dead in the page"
-    },
-    {
-      "member": "mcpSection",
-      "line": 385,
-      "endLine": 397,
-      "sections": 1,
-      "note": "view member with Section(s) that body does not reference: dead in the page"
-    },
-    {
-      "member": "networkSection",
-      "line": 401,
-      "endLine": 422,
-      "sections": 1,
-      "note": "view member with Section(s) that body does not reference: dead in the page"
-    },
-    {
-      "member": "backgroundSection",
-      "line": 430,
-      "endLine": 440,
-      "sections": 1,
-      "note": "view member with Section(s) that body does not reference: dead in the page"
-    },
-    {
-      "member": "conversationSection",
-      "line": 442,
-      "endLine": 453,
-      "sections": 1,
-      "note": "view member with Section(s) that body does not reference: dead in the page"
-    },
-    {
-      "member": "aboutSection",
-      "line": 455,
-      "endLine": 462,
-      "sections": 1,
-      "note": "view member with Section(s) that body does not reference: dead in the page"
-    },
-    {
-      "member": "developerGroup",
-      "line": 512,
-      "endLine": 522,
-      "sections": 1,
-      "note": "view member with Section(s) that body does not reference: dead in the page"
-    },
-    {
-      "member": "developerSection",
-      "line": 524,
-      "endLine": 532,
-      "sections": 1,
-      "note": "view member with Section(s) that body does not reference: dead in the page"
-    }
-  ],
+  "unreachable": [],
   "extraction": {
     "tool": "extract_ios_pages.py",
     "mode": "syntax",
-    "sectionKeywordsInPage": 3,
+    "sectionKeywordsInPage": 6,
     "regionsExtracted": 0,
-    "sectionsExtracted": 3,
+    "sectionsExtracted": 6,
     "warnings": []
   }
 }

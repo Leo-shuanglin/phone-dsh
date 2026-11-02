@@ -141,7 +141,7 @@
       "state": "user-sent",
       "collapsed": false,
       "tokens": [
-        "colors.selector",
+        "colors.bubble",
         "colors.primary",
         "typography.body",
         "radius.bubble"
@@ -178,7 +178,7 @@
       "state": "user-queued",
       "collapsed": false,
       "tokens": [
-        "colors.selector",
+        "colors.bubble",
         "typography.body",
         "typography.secondary",
         "colors.secondary"

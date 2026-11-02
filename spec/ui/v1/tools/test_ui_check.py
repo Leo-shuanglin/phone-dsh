@@ -110,7 +110,8 @@ class UiCheckTests(unittest.TestCase):
 
     def test_contrast_below_threshold_fails(self) -> None:
         document = self.tokens()
-        document["contrast"]["pairs"][0]["foreground"] = "tertiary"
+        pair = next(pair for pair in document["contrast"]["pairs"] if pair["id"] == "onInput/input")
+        pair["foreground"] = "tertiary"
         self.write_tokens(document)
         self.assert_fails(run_checker(self.root), "contrast onInput/input")
 
@@ -216,6 +217,7 @@ class UiCheckTests(unittest.TestCase):
 
     def test_page_tier_colour_without_baseline_flag_fails(self) -> None:
         document = self.tokens()
+        document["provenance"]["colors.ctaOverride"]["tier"] = "page"
         document["colors"]["ctaOverride"]["baselineInconsistency"] = False
         self.write_tokens(document)
         self.assert_fails(run_checker(self.root), "baselineInconsistency")

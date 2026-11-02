@@ -7,13 +7,13 @@
   "sectionNote": null,
   "title": {
     "text": "命令",
-    "provenance": "PDSHShellPage.swift:92",
+    "provenance": "PDSHShellPage.swift:97",
     "anchor": ".navigationTitle(\"命令\")"
   },
   "source": {
     "file": "PDSHShellPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/PDSHShellPage.swift",
-    "lines": 120,
+    "lines": 125,
     "structLine": 8,
     "renderedFrom": [
       "body"
@@ -237,23 +237,8 @@
           "extraction": "syntax"
         },
         {
-          "id": "运行",
-          "label": "运行",
-          "labelExpr": null,
-          "kind": "action",
-          "value": null,
-          "valueExpr": null,
-          "clickable": true,
-          "destination": null,
-          "writes": true,
-          "condition": null,
-          "provenance": "PDSHShellPage.swift:68",
-          "anchor": "Button(\"运行\", systemImage: \"play.fill\") { Task { await run() } }",
-          "extraction": "syntax"
-        },
-        {
-          "id": "取消",
-          "label": "取消",
+          "id": "停止运行",
+          "label": "停止运行",
           "labelExpr": null,
           "kind": "action",
           "value": null,
@@ -262,14 +247,49 @@
           "destination": null,
           "writes": true,
           "condition": "let runningID",
-          "provenance": "PDSHShellPage.swift:71",
-          "anchor": "Button(\"取消\", systemImage: \"stop.fill\", role: .destructive) {",
+          "provenance": "PDSHShellPage.swift:69",
+          "anchor": "Button(\"停止运行\", role: .destructive) {",
           "extraction": "syntax"
         }
       ],
       "provenance": "PDSHShellPage.swift:39",
       "anchor": "Section(\"运行命令\") {",
       "extraction": "syntax"
+    },
+    {
+      "id": "section-74",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "运行中",
+          "label": "运行中…",
+          "labelExpr": null,
+          "kind": "action",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "PDSHShellPage.swift:75",
+          "anchor": "Button(runningID == nil ? \"运行\" : \"运行中…\") { Task { await run() } }",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "PDSHShellPage.swift:74",
+      "anchor": "Section {",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-clickable-row",
+        "label": "运行中…",
+        "provenance": "PDSHShellPage.swift:75"
+      }
     },
     {
       "id": "输出",
@@ -282,7 +302,7 @@
       "collection": null,
       "rows": [
         {
-          "id": "text-78",
+          "id": "text-82",
           "label": null,
           "labelExpr": "error",
           "kind": "text",
@@ -292,7 +312,7 @@
           "destination": null,
           "writes": false,
           "condition": "let error",
-          "provenance": "PDSHShellPage.swift:78",
+          "provenance": "PDSHShellPage.swift:82",
           "anchor": "if let error { Text(error).foregroundStyle(.red) }",
           "extraction": "manual"
         },
@@ -307,12 +327,12 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "PDSHShellPage.swift:79",
+          "provenance": "PDSHShellPage.swift:83",
           "anchor": "Text(output.isEmpty ? \"运行结果会显示在这里。\" : output)",
           "extraction": "syntax"
         }
       ],
-      "provenance": "PDSHShellPage.swift:77",
+      "provenance": "PDSHShellPage.swift:81",
       "anchor": "Section(\"输出\") {",
       "extraction": "syntax"
     },
@@ -337,7 +357,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "PDSHShellPage.swift:85",
+          "provenance": "PDSHShellPage.swift:89",
           "anchor": "LabeledContent(\"超时\", value: \"\\(provider.limits.timeoutMilliseconds / 1000) 秒\")",
           "extraction": "syntax"
         },
@@ -352,7 +372,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "PDSHShellPage.swift:86",
+          "provenance": "PDSHShellPage.swift:90",
           "anchor": "LabeledContent(\"输出上限\", value: ByteCountFormatter.string(fromByteCount: Int64(pro",
           "extraction": "syntax"
         },
@@ -367,7 +387,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "PDSHShellPage.swift:87",
+          "provenance": "PDSHShellPage.swift:91",
           "anchor": "LabeledContent(\"文件数上限\", value: \"\\(provider.limits.maxFiles)\")",
           "extraction": "syntax"
         },
@@ -382,12 +402,12 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "PDSHShellPage.swift:88",
+          "provenance": "PDSHShellPage.swift:92",
           "anchor": "LabeledContent(\"单文件上限\", value: ByteCountFormatter.string(fromByteCount: Int64(pr",
           "extraction": "syntax"
         }
       ],
-      "provenance": "PDSHShellPage.swift:84",
+      "provenance": "PDSHShellPage.swift:88",
       "anchor": "Section(\"限制\") {",
       "extraction": "syntax"
     }
@@ -412,23 +432,8 @@
       "style": "default"
     },
     {
-      "id": "运行",
-      "label": "运行",
-      "labelExpr": null,
-      "kind": "button",
-      "trigger": "tap",
-      "semantic": "{ Task { await run() }",
-      "writes": true,
-      "destination": null,
-      "condition": null,
-      "provenance": "PDSHShellPage.swift:68",
-      "anchor": "Button(\"运行\", systemImage: \"play.fill\") { Task { await run() } }",
-      "extraction": "syntax",
-      "labelAlternatives": []
-    },
-    {
-      "id": "取消",
-      "label": "取消",
+      "id": "停止运行",
+      "label": "停止运行",
       "labelExpr": null,
       "kind": "button",
       "trigger": "tap",
@@ -436,10 +441,27 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "PDSHShellPage.swift:71",
-      "anchor": "Button(\"取消\", systemImage: \"stop.fill\", role: .destructive) {",
+      "provenance": "PDSHShellPage.swift:69",
+      "anchor": "Button(\"停止运行\", role: .destructive) {",
       "extraction": "syntax",
       "labelAlternatives": []
+    },
+    {
+      "id": "运行中",
+      "label": "运行中…",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ Task { await run() }",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "PDSHShellPage.swift:75",
+      "anchor": "Button(runningID == nil ? \"运行\" : \"运行中…\") { Task { await run() } }",
+      "extraction": "syntax",
+      "labelAlternatives": [
+        "运行"
+      ]
     }
   ],
   "presentations": [],
@@ -463,7 +485,7 @@
       ],
       "data": [
         {
-          "renders": "这台手机 | untitled section at 34 | 运行命令 | 输出 | 限制",
+          "renders": "这台手机 | untitled section at 34 | 运行命令 | untitled section at 74 | 输出 | 限制",
           "when": null,
           "provenance": "PDSHShellPage.swift:8",
           "anchor": "struct PDSHShellPage: View {",
@@ -498,9 +520,9 @@
   "extraction": {
     "tool": "extract_ios_pages.py",
     "mode": "syntax",
-    "sectionKeywordsInPage": 5,
+    "sectionKeywordsInPage": 6,
     "regionsExtracted": 0,
-    "sectionsExtracted": 5,
+    "sectionsExtracted": 6,
     "warnings": []
   }
 }

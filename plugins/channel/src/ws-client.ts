@@ -22,6 +22,17 @@
  * of unacked JOURNAL/VFS_MUT frames run with their original jseq/mseq; the
  * stuck callers reject instead of parking the agent loop.
  *
+ * Failures are scoped. A protocol violation, a peer ERROR other than
+ * `FENCE_STALE`, and `RING_TIMEOUT` are connection-scoped: they kill the
+ * current connection and reject the current `connect()` attempt, but the next
+ * attempt starts with a fresh decoder, seq space and HELLO exchange, and
+ * `connect()` retries the failure a bounded number of times. An explicit
+ * {@link WebSocketChannelClient.close} and `FENCE_STALE` are terminal: the
+ * fence is fixed for the Worker process, so a retry cannot succeed and the
+ * client stays poisoned. The distinction exists because the host restarting
+ * the Worker after an iOS freeze must not turn one stale/racing first frame
+ * into a permanently dead harness.
+ *
  * The transport is the global `WebSocket` (browsers and Node >= 22). Tests
  * inject an in-memory socket through {@link WebSocketChannelOptions.createSocket}.
  * @module @phone-dsh/dsh-channel/ws-client
@@ -96,6 +107,20 @@ export interface WebSocketChannelOptions {
    * path resends the original jseq/mseq.
    */
   readonly ackTimeoutMs?: number
+  /**
+   * How many times one {@link WebSocketChannelClient.connect} call retries a
+   * connection-scoped failure (protocol violation, peer ERROR other than
+   * `FENCE_STALE`, `RING_TIMEOUT`) before rejecting its caller. Bounded
+   * because the Worker bootstrap races a host-side HELLO timeout; 0 makes the
+   * first failure final for that call. Defaults to 2.
+   */
+  readonly connectRetries?: number
+  /**
+   * First delay between those retries in milliseconds; doubles per attempt and
+   * is capped at 250 ms. Defaults to 100 ms. A later `connect()` call starts a
+   * fresh budget, so a recovered bootstrap is never limited by a past failure.
+   */
+  readonly connectRetryDelayMs?: number
 }
 
 /** A request owner retries after this error; the connection was replaced. */
@@ -118,14 +143,37 @@ export class ChannelClosedError extends Error {
   }
 }
 
+/**
+ * How far a fatal failure reaches.
+ *
+ * - `connection`: the failure ends the current connection attempt. In-flight
+ *   work rejects, but a fresh connection starts from a clean decoder, seq
+ *   space and HELLO exchange (channel.md §9), so recovery is possible.
+ * - `terminal`: reconnecting cannot change the answer (the fence is fixed for
+ *   this Worker process, or the owner closed the channel). The client stays
+ *   poisoned for its whole lifetime.
+ */
+export type ChannelFailureScope = 'connection' | 'terminal'
+
 /** The peer rejected the connection or the flow-control window stalled. */
 export class ChannelPeerError extends Error {
   readonly code: FrameErrorCode | 'RING_TIMEOUT'
+  /**
+   * Whether a later connection can succeed: `connection` failures poison only
+   * the attempt that saw them, `terminal` failures (`FENCE_STALE`) poison the
+   * client for good and are never retried.
+   */
+  readonly scope: ChannelFailureScope
 
-  constructor(code: FrameErrorCode | 'RING_TIMEOUT', message: string) {
+  constructor(
+    code: FrameErrorCode | 'RING_TIMEOUT',
+    message: string,
+    scope: ChannelFailureScope = 'connection',
+  ) {
     super(`${code}: ${message}`)
     this.name = 'ChannelPeerError'
     this.code = code
+    this.scope = scope
   }
 }
 
@@ -142,18 +190,28 @@ interface UnackedMutation {
   seq: bigint | undefined
 }
 
+/** Retries one `connect()` call makes after a connection-scoped failure. */
+const DEFAULT_CONNECT_RETRIES = 2
+/** First delay between those retries; doubles per attempt. */
+const DEFAULT_CONNECT_RETRY_DELAY_MS = 100
+/** Ceiling for that delay: the bootstrap must stay inside the host HELLO timeout. */
+const CONNECT_RETRY_MAX_DELAY_MS = 250
+
 /**
  * Channel client over one WebSocket at a time, reconnecting with backoff.
  *
- * Protocol errors and `RING_TIMEOUT` are fatal: the connection closes and is not
- * retried. A transport loss is retried until {@link close} is called.
+ * A protocol error, a peer ERROR other than `FENCE_STALE`, and `RING_TIMEOUT`
+ * fail the current connection attempt: the connection closes, in-flight work
+ * rejects, and `connect()` retries the failure a bounded number of times
+ * before its caller sees it. `FENCE_STALE` and {@link close} are terminal and
+ * are never retried. A transport loss is retried until {@link close} is called.
  */
 export class WebSocketChannelClient implements ChannelClient {
   readonly role: ChannelRole = 'worker'
 
   private readonly options: Required<Pick<WebSocketChannelOptions,
     'backoffMinMs' | 'backoffMaxMs' | 'maxUnackedVfsBytes' | 'ringTimeoutMs' | 'ackTimeoutMs'
-    | 'caps' | 'lastMseq'>> & WebSocketChannelOptions
+    | 'connectRetries' | 'connectRetryDelayMs' | 'caps' | 'lastMseq'>> & WebSocketChannelOptions
   private readonly listeners = new Set<(frame: Frame) => void>()
   private readonly transportLostListeners = new Set<() => void>()
   private readonly hostHelloListeners = new Set<(hello: HelloHostPayload) => void>()
@@ -178,10 +236,16 @@ export class WebSocketChannelClient implements ChannelClient {
   private transportOpen = false
   private helloDone = false
   private closing = false
+  /** The error that ended the current connection attempt (or the client). */
   private fatalError: Error | undefined
+  /** How far {@link fatalError} reaches; `connection` failures are retired by the next attempt. */
+  private fatalScope: ChannelFailureScope | undefined
   private durabilityFailure: AckTimeoutError | undefined
+  /** Owns the next connection attempt: a reconnect backoff or a connect() retry. */
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined
   private reconnectAttempts = 0
+  /** Retries already spent by the pending `connect()` call. */
+  private connectRetryAttempts = 0
   private outboundSeq = 0n
   private inboundSeq = 0n
   private nextMseqValue: bigint
@@ -204,6 +268,14 @@ export class WebSocketChannelClient implements ChannelClient {
     if (!isValidFenceOwner(options.fence.owner)) {
       throw new TypeError('WebSocketChannelClient: fence.owner is invalid')
     }
+    const connectRetries = options.connectRetries ?? DEFAULT_CONNECT_RETRIES
+    if (!Number.isSafeInteger(connectRetries) || connectRetries < 0) {
+      throw new RangeError('WebSocketChannelClient: connectRetries must be a non-negative integer')
+    }
+    const connectRetryDelayMs = options.connectRetryDelayMs ?? DEFAULT_CONNECT_RETRY_DELAY_MS
+    if (!Number.isSafeInteger(connectRetryDelayMs) || connectRetryDelayMs <= 0) {
+      throw new RangeError('WebSocketChannelClient: connectRetryDelayMs must be a positive integer')
+    }
     this.options = {
       ...options,
       caps: options.caps ?? WORKER_CAPABILITIES,
@@ -213,6 +285,8 @@ export class WebSocketChannelClient implements ChannelClient {
       maxUnackedVfsBytes: options.maxUnackedVfsBytes ?? MAX_UNACKED_VFS_BYTES,
       ringTimeoutMs: options.ringTimeoutMs ?? RING_TIMEOUT_MS,
       ackTimeoutMs: resolveDurabilityAckTimeoutMs(options.ackTimeoutMs),
+      connectRetries,
+      connectRetryDelayMs,
     }
     this.vfsAcks = new AckTracker({ timeoutMs: this.options.ackTimeoutMs })
     this.journalAcks = new AckTracker({ timeoutMs: this.options.ackTimeoutMs })
@@ -220,12 +294,28 @@ export class WebSocketChannelClient implements ChannelClient {
     this.nextMseqValue = this.lastMseqValue + 1n
   }
 
-  /** Open (or re-open) the transport and resolve once the HELLO exchange is complete. */
+  /**
+   * Open (or re-open) the transport and resolve once the HELLO exchange is complete.
+   *
+   * A connection-scoped failure is retried inside this call up to
+   * `connectRetries` times (100 ms, 200 ms, … capped at 250 ms); the promise
+   * rejects with the last failure only when that spread-out budget is spent.
+   * A terminal failure (`FENCE_STALE`, {@link close}) rejects immediately and a
+   * later call rethrows it without opening anything.
+   */
   async connect(): Promise<void> {
     if (this.closing) throw new ChannelClosedError()
-    if (this.fatalError !== undefined) throw this.fatalError
+    if (this.fatalError !== undefined) {
+      // A terminal failure is final. A connection-scoped failure belonged to
+      // the attempt that died; this call is an explicit retry. While a retry is
+      // already pending, keep the error until that attempt starts so in-flight
+      // work does not believe the channel recovered early.
+      if (this.fatalScope === 'terminal') throw this.fatalError
+      if (this.connectPromise === undefined) this.retireConnectionFailure()
+    }
     if (this.helloDone) return
     if (this.connectPromise === undefined) {
+      this.connectRetryAttempts = 0
       this.connectPromise = new Promise<void>((resolve, reject) => {
         this.connectResolve = resolve
         this.connectReject = reject
@@ -303,9 +393,10 @@ export class WebSocketChannelClient implements ChannelClient {
     return this.lastMseqValue
   }
 
-  /** Effective admission: the last LIFECYCLE and FENCE admissions and no ring timeout. */
+  /** Effective admission: the last LIFECYCLE and FENCE admissions and no fatal error. */
   get admissionOpen(): boolean {
-    return this.fatalError === undefined && this.lifecycleAdmission === 'open' && this.fenceAdmission === 'open'
+    return !this.closing && this.fatalError === undefined
+      && this.lifecycleAdmission === 'open' && this.fenceAdmission === 'open'
   }
 
   async waitAck(
@@ -393,8 +484,25 @@ export class WebSocketChannelClient implements ChannelClient {
 
   // --------------------------------------------------------------- transport
 
+  /**
+   * Start one connection attempt.
+   *
+   * Every path that ends a connection lands here (first connect, reconnect
+   * backoff, connect retry). The attempt owns fresh connection state: the
+   * decoder, seq space, HELLO and host caps all start clean (channel.md §9).
+   * The previous connection-scoped failure stays current until the new
+   * transport is actually open, so admission and in-flight work keep reading
+   * the failure during the retry gap. A terminal failure stops every attempt.
+   */
   private openSocket(): void {
-    if (this.closing || this.fatalError !== undefined) return
+    if (this.closing) return
+    if (this.fatalError !== undefined && this.fatalScope === 'terminal') return
+    this.transportOpen = false
+    this.helloDone = false
+    // The caps of a dead connection are not authority for the next one: the
+    // fresh host HELLO replaces this before any frame of the new connection.
+    this.hostHelloValue = undefined
+    this.decoder = new FrameDecoder()
     let socket: WebSocketLike
     try {
       socket = (this.options.createSocket ?? defaultWebSocketFactory)(this.resolveUrl())
@@ -407,7 +515,6 @@ export class WebSocketChannelClient implements ChannelClient {
       return
     }
     this.socket = socket
-    this.decoder = new FrameDecoder()
     socket.binaryType = 'arraybuffer'
     socket.addEventListener('open', () => { this.handleOpen(socket) })
     socket.addEventListener('message', (event) => { this.handleMessage(socket, event) })
@@ -429,6 +536,10 @@ export class WebSocketChannelClient implements ChannelClient {
 
   private handleOpen(socket: WebSocketLike): void {
     if (socket !== this.socket || this.closing) return
+    // The transport survived long enough to be usable, so the failure of the
+    // previous connection no longer owns this one (channel.md §9 gives every
+    // connection a fresh seq space, HELLO and decoder).
+    this.retireConnectionFailure()
     this.transportOpen = true
     this.outboundSeq = 0n
     this.inboundSeq = 0n
@@ -455,12 +566,19 @@ export class WebSocketChannelClient implements ChannelClient {
     this.sentVfsBytes = 0
     this.vfsQueue.length = 0
     this.notifyTransportLost()
-    if (this.closing || this.fatalError !== undefined) return
+    if (this.closing) return
+    // A connection-scoped failure already owns the next attempt; a terminal one
+    // must not start another.
+    if (this.fatalError !== undefined && this.fatalScope === 'terminal') return
     this.scheduleReconnect()
   }
 
   private scheduleReconnect(): void {
-    if (this.closing || this.fatalError !== undefined || this.reconnectTimer !== undefined) return
+    if (this.closing) return
+    // A connection-scoped failure leaves fatalError set so in-flight work keeps
+    // rejecting until a fresh attempt starts, but it must not block that retry.
+    if (this.fatalError !== undefined && this.fatalScope !== 'connection') return
+    if (this.reconnectTimer !== undefined) return
     const shift = Math.min(this.reconnectAttempts, 8)
     const delay = Math.min(this.options.backoffMaxMs, this.options.backoffMinMs * 2 ** shift)
     this.reconnectAttempts += 1
@@ -595,10 +713,20 @@ export class WebSocketChannelClient implements ChannelClient {
     }
   }
 
+  /**
+   * No level-1 ack advanced the full VFS window.
+   *
+   * Connection-scoped: the unacked mutations are replayed with their original
+   * mseq after the fresh HELLO (channel.md §9), so the failure closes admission
+   * only for as long as it owns the connection state — {@link admissionOpen}
+   * reads false while {@link fatalError} is current and a successful retry
+   * clears it. The host is told with `RING_TIMEOUT` before the close.
+   */
   private ringTimeout(): void {
     if (this.closing || this.fatalError !== undefined) return
-    this.fenceAdmission = 'closed'
-    this.fatalError = new ChannelPeerError('RING_TIMEOUT', 'no level-1 acks with a full VFS window')
+    const failure = new ChannelPeerError('RING_TIMEOUT', 'no level-1 acks with a full VFS window')
+    this.fatalError = failure
+    this.fatalScope = 'connection'
     const payload = encodeUtf8(canonicalStringify({
       code: 'RING_TIMEOUT',
       message: `no level-1 ack progress for ${String(this.options.ringTimeoutMs)} ms within the 32 MiB VFS window`,
@@ -615,11 +743,12 @@ export class WebSocketChannelClient implements ChannelClient {
     this.socket = undefined
     this.transportOpen = false
     this.helloDone = false
+    this.hostHelloValue = undefined
     this.clearReconnectTimer()
     this.notifyTransportLost()
-    this.vfsAcks.rejectAll(this.fatalError)
-    this.journalAcks.rejectAll(this.fatalError)
-    this.rejectConnect(this.fatalError)
+    this.vfsAcks.rejectAll(failure)
+    this.journalAcks.rejectAll(failure)
+    this.settleConnectFailure(failure, 'connection')
   }
 
   // ------------------------------------------------------------ ack timeouts
@@ -750,6 +879,7 @@ export class WebSocketChannelClient implements ChannelClient {
     }
     this.helloDone = true
     this.reconnectAttempts = 0
+    this.connectRetryAttempts = 0
     this.clearReconnectTimer()
     // A fresh connection start: a previous ack-timeout failure no longer
     // owns the transport, and the unacked buffers below are replayed.
@@ -904,7 +1034,7 @@ export class WebSocketChannelClient implements ChannelClient {
     let message = 'peer reported an error'
     if (typeof value['code'] === 'string') code = value['code'] as FrameErrorCode
     if (typeof value['message'] === 'string') message = value['message']
-    this.failPeer(new ChannelPeerError(code, message))
+    this.failPeer(new ChannelPeerError(code, message, peerFailureScope(code)))
   }
 
   /**
@@ -1013,12 +1143,21 @@ export class WebSocketChannelClient implements ChannelClient {
     return found
   }
 
-  /** Close on a peer-sent protocol ERROR; the connection is not retried. */
+  /**
+   * Close on a peer-sent protocol ERROR and record it with its failure scope.
+   *
+   * `FENCE_STALE` is terminal: the fence is fixed for this Worker process, so
+   * a new connection would be rejected exactly the same way. Every other peer
+   * code is connection-scoped and the client may recover on a fresh HELLO.
+   */
   private failPeer(failure: ChannelPeerError): void {
     this.fatalError = failure
+    this.fatalScope = failure.scope
     const socket = this.socket
     this.transportOpen = false
     this.helloDone = false
+    // The caps of the dead connection are not authority for anything else.
+    this.hostHelloValue = undefined
     this.socket = undefined
     this.clearReconnectTimer()
     this.clearRingTimer()
@@ -1026,15 +1165,22 @@ export class WebSocketChannelClient implements ChannelClient {
       try { socket.close(1002, 'peer error') } catch { /* already closed */ }
     }
     this.notifyTransportLost()
-    this.rejectConnect(failure)
     this.vfsAcks.rejectAll(failure)
     this.journalAcks.rejectAll(failure)
+    this.settleConnectFailure(failure, failure.scope)
   }
 
+  /**
+   * A local protocol violation. Connection-scoped: the offending connection is
+   * answered with one ERROR and dropped, and a fresh connection may still
+   * complete its own HELLO exchange (channel.md §9 gives every connection a
+   * fresh seq space).
+   */
   private protocolFailure(code: FrameErrorCode, message: string, refSeq?: bigint): void {
     if (this.fatalError !== undefined) return
     const failure = new ChannelPeerError(code, message)
     this.fatalError = failure
+    this.fatalScope = 'connection'
     const payload = encodeUtf8(canonicalStringify(
       refSeq === undefined ? { code, message } : { code, message, ref_seq: refSeq },
     ))
@@ -1047,15 +1193,16 @@ export class WebSocketChannelClient implements ChannelClient {
     this.socket = undefined
     this.transportOpen = false
     this.helloDone = false
+    this.hostHelloValue = undefined
     this.clearReconnectTimer()
     this.clearRingTimer()
     if (socket !== undefined) {
       try { socket.close(1002, 'protocol error') } catch { /* already closed */ }
     }
     this.notifyTransportLost()
-    this.rejectConnect(failure)
     this.vfsAcks.rejectAll(failure)
     this.journalAcks.rejectAll(failure)
+    this.settleConnectFailure(failure, 'connection')
   }
 
   // -------------------------------------------------------------- resending
@@ -1139,6 +1286,64 @@ export class WebSocketChannelClient implements ChannelClient {
     reject?.(reason)
   }
 
+  // ----------------------------------------------------------- failure scope
+
+  /**
+   * Retire the failure of the previous attempt once a new attempt is either
+   * explicitly restarted (`connect()`) or demonstrably usable (the transport
+   * opened). Only connection-scoped failures reach this point; a terminal one
+   * stops {@link openSocket} before it is called.
+   */
+  private retireConnectionFailure(): void {
+    if (this.fatalScope !== 'connection') return
+    this.fatalError = undefined
+    this.fatalScope = undefined
+  }
+
+  /**
+   * Route a failure to whoever owns the next connection attempt.
+   *
+   * With a `connect()` pending, a connection-scoped failure is retried inside
+   * that same call while its bounded budget lasts; when the budget is spent
+   * the caller sees the failure. Without a pending `connect()` the channel was
+   * already established, so recovery belongs to the normal reconnect backoff.
+   * A terminal failure only rejects a pending `connect()` and never reconnects.
+   */
+  private settleConnectFailure(failure: Error, scope: ChannelFailureScope): void {
+    if (scope === 'terminal') {
+      this.rejectConnect(failure)
+      return
+    }
+    if (this.connectPromise !== undefined) {
+      if (this.connectRetryAttempts < this.options.connectRetries) {
+        this.scheduleConnectRetry()
+      } else {
+        this.rejectConnect(failure)
+      }
+      return
+    }
+    this.scheduleReconnect()
+  }
+
+  /**
+   * Schedule the next attempt of a pending `connect()` after a
+   * connection-scoped failure: 100 ms, 200 ms, then the 250 ms ceiling. The
+   * window is deliberately short because the Worker bootstrap races a
+   * host-side HELLO timeout.
+   */
+  private scheduleConnectRetry(): void {
+    const delay = Math.min(
+      this.options.connectRetryDelayMs * 2 ** this.connectRetryAttempts,
+      CONNECT_RETRY_MAX_DELAY_MS,
+    )
+    this.connectRetryAttempts += 1
+    this.clearReconnectTimer()
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined
+      this.openSocket()
+    }, delay)
+  }
+
   private pruneSatisfiedBarriers(): void {
     for (const [key, barrier] of [...this.pendingBarriers]) {
       if (this.ackedMseq(barrier.level) >= barrier.uptoMseq) this.pendingBarriers.delete(key)
@@ -1165,6 +1370,18 @@ function defaultWebSocketFactory(url: string): WebSocketLike {
 function asFrameError(error: unknown, fallback: FrameErrorCode): FrameError {
   if (error instanceof FrameError) return error
   return new FrameError(fallback, error instanceof Error ? error.message : String(error))
+}
+
+/**
+ * Classify a host-sent ERROR (channel.md §10).
+ *
+ * Only `FENCE_STALE` is terminal: the Worker's fence is fixed for its process,
+ * so reconnecting with the same HELLO would be rejected again. Every other
+ * peer error describes something about the connection or the frame that
+ * produced it, and a fresh connection may succeed.
+ */
+function peerFailureScope(code: FrameErrorCode | 'RING_TIMEOUT'): ChannelFailureScope {
+  return code === 'FENCE_STALE' ? 'terminal' : 'connection'
 }
 
 function maxBigInt(left: bigint, right: bigint): bigint {

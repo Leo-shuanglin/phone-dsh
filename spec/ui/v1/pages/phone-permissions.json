@@ -1,0 +1,320 @@
+{
+  "schema": "pdsh.ui.page-structure/1",
+  "page": "PhonePermissionsPage",
+  "pageId": "phone-permissions",
+  "structure": "swiftui-view",
+  "sectionModel": "section",
+  "sectionNote": null,
+  "title": {
+    "text": "手机权限",
+    "provenance": "PhonePermissionsPage.swift:29",
+    "anchor": ".navigationTitle(\"手机权限\")"
+  },
+  "source": {
+    "file": "PhonePermissionsPage.swift",
+    "path": "examples/probe-app/PhoneDSHProbe/PhonePermissionsPage.swift",
+    "lines": 272,
+    "structLine": 8,
+    "renderedFrom": [
+      "body",
+      "permissionList",
+      "capabilitySections",
+      "row",
+      "limitedManagement",
+      "auditSection"
+    ],
+    "sectionOrder": "declaration order inside the page struct"
+  },
+  "android": {
+    "screen": "PhonePermissionsPage",
+    "file": null,
+    "match": "missing"
+  },
+  "sections": [
+    {
+      "id": "section-70",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": "group.title",
+      "titleSource": "expression",
+      "condition": null,
+      "collection": "PhoneCapabilityGroup.allCases, id: \\.self",
+      "rows": [
+        {
+          "id": "dynamic-72",
+          "label": null,
+          "labelExpr": "row(capability)",
+          "kind": "dynamic",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "PhonePermissionsPage.swift:72",
+          "anchor": "row(capability)",
+          "extraction": "manual",
+          "templateLabels": [
+            "启用{capability.title}",
+            "去系统设置"
+          ],
+          "collection": "group.capabilities"
+        }
+      ],
+      "provenance": "PhonePermissionsPage.swift:70",
+      "anchor": "Section(group.title) {",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-row-expression",
+        "labelExpr": "row(capability)",
+        "provenance": "PhonePermissionsPage.swift:72"
+      }
+    },
+    {
+      "id": "最近使用审计",
+      "title": "最近使用审计",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "literal",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "暂无使用记录",
+          "label": "暂无使用记录",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "audit.isEmpty",
+          "provenance": "PhonePermissionsPage.swift:85",
+          "anchor": "Text(\"暂无使用记录\")",
+          "extraction": "syntax"
+        },
+        {
+          "id": "custom-90",
+          "label": null,
+          "labelExpr": "PhoneCapabilityAuditRow",
+          "kind": "custom",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "!(audit.isEmpty)",
+          "provenance": "PhonePermissionsPage.swift:90",
+          "anchor": "PhoneCapabilityAuditRow(record: record)",
+          "extraction": "manual",
+          "template": "PhoneCapabilityAuditRow",
+          "collection": "Array(audit.prefix(20).enumerated()), id: \\.offset"
+        }
+      ],
+      "provenance": "PhonePermissionsPage.swift:83",
+      "anchor": "Section(\"最近使用审计\") {",
+      "extraction": "syntax"
+    }
+  ],
+  "actions": [
+    {
+      "id": "完成",
+      "label": "完成",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "toolbar",
+      "semantic": "{ dismiss()",
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "PhonePermissionsPage.swift:33",
+      "anchor": "Button(\"完成\") { dismiss() }",
+      "extraction": "syntax"
+    },
+    {
+      "id": "取消",
+      "label": "取消",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ confirmation = nil",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "PhonePermissionsPage.swift:45",
+      "anchor": "Button(\"取消\", role: .cancel) { confirmation = nil }",
+      "extraction": "syntax",
+      "presents": "alert-42"
+    },
+    {
+      "id": "继续",
+      "label": "继续",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ continueRequest()",
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "PhonePermissionsPage.swift:46",
+      "anchor": "Button(\"继续\") { continueRequest() }",
+      "extraction": "syntax"
+    },
+    {
+      "id": "知道了",
+      "label": "知道了",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ disableNotice = nil",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "PhonePermissionsPage.swift:53",
+      "anchor": "Button(\"知道了\") { disableNotice = nil }",
+      "extraction": "syntax",
+      "presents": "alert-50"
+    },
+    {
+      "id": "去系统设置",
+      "label": "去系统设置",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ openSettings()",
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "PhonePermissionsPage.swift:54",
+      "anchor": "Button(\"去系统设置\") { openSettings() }",
+      "extraction": "syntax"
+    },
+    {
+      "id": "button-101",
+      "label": null,
+      "labelExpr": "capability.title",
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ activate(capability)",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "PhonePermissionsPage.swift:101",
+      "anchor": "Button {",
+      "extraction": "manual"
+    },
+    {
+      "id": "去系统设置",
+      "label": "去系统设置",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ openSettings()",
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "PhonePermissionsPage.swift:145",
+      "anchor": "Button(\"去系统设置\") { openSettings() }",
+      "extraction": "syntax"
+    },
+    {
+      "id": "管理可访问照片",
+      "label": "管理可访问照片",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ requester.presentLimitedPhotosPicker()",
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "PhonePermissionsPage.swift:159",
+      "anchor": "Button(\"管理可访问照片\") { requester.presentLimitedPhotosPicker() }",
+      "extraction": "syntax"
+    }
+  ],
+  "presentations": [
+    {
+      "id": "alert-42",
+      "kind": "alert",
+      "title": "允许使用这项能力？",
+      "destination": null,
+      "triggerBindings": [
+        "confirmation"
+      ],
+      "span": [
+        42,
+        47
+      ],
+      "provenance": "PhonePermissionsPage.swift:42",
+      "anchor": ".alert(\"允许使用这项能力？\", isPresented: Binding(",
+      "triggered": true
+    },
+    {
+      "id": "alert-50",
+      "kind": "alert",
+      "title": "已停用应用内使用",
+      "destination": null,
+      "triggerBindings": [
+        "disableNotice"
+      ],
+      "span": [
+        50,
+        55
+      ],
+      "provenance": "PhonePermissionsPage.swift:50",
+      "anchor": ".alert(\"已停用应用内使用\", isPresented: Binding(",
+      "triggered": true
+    }
+  ],
+  "states": {
+    "advisory": true,
+    "note": "advisory only: marker-based; row placeholders (未配置/未设置/—) are not page states, so the checker never compares this object",
+    "sites": {
+      "empty": [
+        {
+          "renders": "暂无使用记录",
+          "when": "audit.isEmpty",
+          "provenance": "PhonePermissionsPage.swift:85",
+          "anchor": "Text(\"暂无使用记录\")"
+        }
+      ],
+      "data": [
+        {
+          "renders": "untitled section at 70 | 最近使用审计",
+          "when": null,
+          "provenance": "PhonePermissionsPage.swift:8",
+          "anchor": "struct PhonePermissionsPage: View {",
+          "note": "structural default: the sections above, when no condition overrides them"
+        }
+      ],
+      "failure": [],
+      "unknown": [],
+      "loading": []
+    },
+    "absent": [
+      "failure",
+      "unknown",
+      "loading"
+    ],
+    "coverage": {
+      "empty": 1,
+      "data": 1,
+      "failure": 0,
+      "unknown": 0,
+      "loading": 0
+    }
+  },
+  "subpages": [],
+  "unreachable": [],
+  "extraction": {
+    "tool": "extract_ios_pages.py",
+    "mode": "syntax",
+    "sectionKeywordsInPage": 2,
+    "regionsExtracted": 0,
+    "sectionsExtracted": 2,
+    "warnings": []
+  }
+}

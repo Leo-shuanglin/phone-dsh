@@ -1,0 +1,428 @@
+{
+  "schema": "pdsh.ui.page-structure/1",
+  "page": "NativeAgentPresetsPage",
+  "pageId": "native-agent-presets",
+  "structure": "swiftui-view",
+  "sectionModel": "section",
+  "sectionNote": null,
+  "title": {
+    "text": "Agent 预设",
+    "provenance": "NativeAgentPresetsPage.swift:160",
+    "anchor": ".navigationTitle(NativeText(\"Agent 预设\", \"Agent Presets\"))"
+  },
+  "source": {
+    "file": "NativeAgentPresetsPage.swift",
+    "path": "examples/probe-app/PhoneDSHProbe/NativeAgentPresetsPage.swift",
+    "lines": 180,
+    "structLine": 99,
+    "renderedFrom": [
+      "body"
+    ],
+    "sectionOrder": "declaration order inside the page struct"
+  },
+  "android": {
+    "screen": "NativeAgentPresetsPage",
+    "file": null,
+    "match": "missing"
+  },
+  "sections": [
+    {
+      "id": "section-106",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "让-agent-创建预设",
+          "label": "让 Agent 创建预设",
+          "labelExpr": null,
+          "kind": "action",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "NativeAgentPresetsPage.swift:113",
+          "anchor": "Label(NativeText(\"让 Agent 创建预设\", \"Create a preset with Agent\"), systemImage: \"pl",
+          "extraction": "syntax"
+        },
+        {
+          "id": "进入创造模式但不自动发送任务-现有草稿会保留",
+          "label": "进入创造模式但不自动发送任务，现有草稿会保留。",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeAgentPresetsPage.swift:115",
+          "anchor": "Text(NativeText(\"进入创造模式但不自动发送任务，现有草稿会保留。\", \"Opens creator mode without sending a",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "NativeAgentPresetsPage.swift:106",
+      "anchor": "Section {",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-clickable-row",
+        "label": "让 Agent 创建预设",
+        "provenance": "NativeAgentPresetsPage.swift:113"
+      }
+    },
+    {
+      "id": "section-118",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "正在读取预设",
+          "label": "正在读取预设…",
+          "labelExpr": null,
+          "kind": "loading",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "model.isLoading && model.presets.isEmpty",
+          "provenance": "NativeAgentPresetsPage.swift:120",
+          "anchor": "ProgressView(NativeText(\"正在读取预设…\", \"Loading presets…\"))",
+          "extraction": "syntax"
+        },
+        {
+          "id": "text-125",
+          "label": null,
+          "labelExpr": "preset.title",
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeAgentPresetsPage.swift:125",
+          "anchor": "Text(preset.title).font(.system(size: HomeSpec.bodySize, weight: .semibold))",
+          "extraction": "manual",
+          "collection": "model.presets"
+        },
+        {
+          "id": "默认",
+          "label": "默认",
+          "labelExpr": null,
+          "kind": "custom",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "preset.isDefault",
+          "provenance": "NativeAgentPresetsPage.swift:127",
+          "anchor": "HomeTag(text: NativeText(\"默认\", \"Default\"))",
+          "extraction": "syntax",
+          "template": "HomeTag",
+          "collection": "model.presets"
+        },
+        {
+          "id": "自定义",
+          "label": "自定义",
+          "labelExpr": null,
+          "kind": "custom",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "preset.custom",
+          "provenance": "NativeAgentPresetsPage.swift:130",
+          "anchor": "HomeTag(text: NativeText(\"自定义\", \"Custom\"))",
+          "extraction": "syntax",
+          "template": "HomeTag",
+          "collection": "model.presets"
+        },
+        {
+          "id": "text-133",
+          "label": null,
+          "labelExpr": "preset.id",
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeAgentPresetsPage.swift:133",
+          "anchor": "Text(preset.id).font(.system(size: 13).monospaced()).foregroundStyle(.secondary)",
+          "extraction": "manual",
+          "collection": "model.presets"
+        },
+        {
+          "id": "text-135",
+          "label": null,
+          "labelExpr": "preset.detail",
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "!preset.detail.isEmpty",
+          "provenance": "NativeAgentPresetsPage.swift:135",
+          "anchor": "Text(preset.detail).font(.system(size: 13)).foregroundStyle(.secondary)",
+          "extraction": "manual",
+          "collection": "model.presets"
+        },
+        {
+          "id": "text-138",
+          "label": null,
+          "labelExpr": "broken",
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "let broken = preset.broken",
+          "provenance": "NativeAgentPresetsPage.swift:138",
+          "anchor": "Text(broken).font(.system(size: 13)).foregroundStyle(.orange)",
+          "extraction": "manual",
+          "collection": "model.presets"
+        },
+        {
+          "id": "查看配置",
+          "label": "查看配置",
+          "labelExpr": null,
+          "kind": "action",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "NativeAgentPresetsPage.swift:141",
+          "anchor": "Button(NativeText(\"查看配置\", \"View configuration\")) {",
+          "extraction": "syntax",
+          "collection": "model.presets"
+        },
+        {
+          "id": "设为默认",
+          "label": "设为默认",
+          "labelExpr": null,
+          "kind": "action",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": true,
+          "condition": null,
+          "provenance": "NativeAgentPresetsPage.swift:146",
+          "anchor": "Button(NativeText(\"设为默认\", \"Make default\")) {",
+          "extraction": "syntax",
+          "collection": "model.presets"
+        }
+      ],
+      "provenance": "NativeAgentPresetsPage.swift:118",
+      "anchor": "Section {",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-clickable-row",
+        "label": "查看配置",
+        "provenance": "NativeAgentPresetsPage.swift:141"
+      }
+    },
+    {
+      "id": "section-156",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": "let error = model.error",
+      "collection": null,
+      "rows": [
+        {
+          "id": "text-156",
+          "label": null,
+          "labelExpr": "error",
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeAgentPresetsPage.swift:156",
+          "anchor": "Section { Text(error).foregroundStyle(.red) }",
+          "extraction": "manual"
+        }
+      ],
+      "provenance": "NativeAgentPresetsPage.swift:156",
+      "anchor": "Section { Text(error).foregroundStyle(.red) }",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-row-expression",
+        "labelExpr": "error",
+        "provenance": "NativeAgentPresetsPage.swift:156"
+      }
+    }
+  ],
+  "actions": [
+    {
+      "id": "让-agent-创建预设",
+      "label": "让 Agent 创建预设",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ Task { await model.startCreator() dismiss() }",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativeAgentPresetsPage.swift:113",
+      "anchor": "Label(NativeText(\"让 Agent 创建预设\", \"Create a preset with Agent\"), systemImage: \"pl",
+      "extraction": "syntax",
+      "labelAlternatives": []
+    },
+    {
+      "id": "查看配置",
+      "label": "查看配置",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ Task { showYAML = await model.showYAML(preset) }",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativeAgentPresetsPage.swift:141",
+      "anchor": "Button(NativeText(\"查看配置\", \"View configuration\")) {",
+      "extraction": "syntax",
+      "labelAlternatives": [],
+      "presents": "sheet-164"
+    },
+    {
+      "id": "设为默认",
+      "label": "设为默认",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ Task { await model.selectDefault(preset) }",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativeAgentPresetsPage.swift:146",
+      "anchor": "Button(NativeText(\"设为默认\", \"Make default\")) {",
+      "extraction": "syntax",
+      "labelAlternatives": []
+    },
+    {
+      "id": "gesture-162",
+      "label": null,
+      "labelExpr": null,
+      "kind": "gesture",
+      "trigger": "pull-to-refresh",
+      "semantic": "refresh",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativeAgentPresetsPage.swift:162",
+      "anchor": ".refreshable { await model.refresh() }",
+      "extraction": "syntax"
+    },
+    {
+      "id": "完成",
+      "label": "完成",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "toolbar",
+      "semantic": "{ showYAML = false",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativeAgentPresetsPage.swift:174",
+      "anchor": "Button(NativeText(\"完成\", \"Done\")) { showYAML = false }",
+      "extraction": "syntax"
+    }
+  ],
+  "presentations": [
+    {
+      "id": "sheet-164",
+      "kind": "sheet",
+      "title": null,
+      "destination": "NavigationStack",
+      "triggerBindings": [
+        "showYAML"
+      ],
+      "span": [
+        164,
+        178
+      ],
+      "provenance": "NativeAgentPresetsPage.swift:164",
+      "anchor": ".sheet(isPresented: $showYAML) {",
+      "triggered": true
+    }
+  ],
+  "states": {
+    "advisory": true,
+    "note": "advisory only: marker-based; row placeholders (未配置/未设置/—) are not page states, so the checker never compares this object",
+    "sites": {
+      "empty": [],
+      "data": [
+        {
+          "renders": "untitled section at 106 | untitled section at 118 | untitled section at 156",
+          "when": null,
+          "provenance": "NativeAgentPresetsPage.swift:99",
+          "anchor": "struct NativeAgentPresetsPage: View {",
+          "note": "structural default: the sections above, when no condition overrides them"
+        }
+      ],
+      "failure": [],
+      "unknown": [],
+      "loading": [
+        {
+          "renders": "正在读取预设…",
+          "when": "model.isLoading && model.presets.isEmpty",
+          "provenance": "NativeAgentPresetsPage.swift:120",
+          "anchor": "ProgressView(NativeText(\"正在读取预设…\", \"Loading presets…\"))"
+        },
+        {
+          "renders": "ProgressView",
+          "when": "model.isLoading && model.presets.isEmpty",
+          "provenance": "NativeAgentPresetsPage.swift:120",
+          "anchor": "ProgressView(NativeText(\"正在读取预设…\", \"Loading presets…\"))"
+        }
+      ]
+    },
+    "absent": [
+      "empty",
+      "failure",
+      "unknown"
+    ],
+    "coverage": {
+      "empty": 0,
+      "data": 1,
+      "failure": 0,
+      "unknown": 0,
+      "loading": 2
+    }
+  },
+  "subpages": [],
+  "unreachable": [],
+  "extraction": {
+    "tool": "extract_ios_pages.py",
+    "mode": "syntax",
+    "sectionKeywordsInPage": 3,
+    "regionsExtracted": 0,
+    "sectionsExtracted": 3,
+    "warnings": []
+  }
+}

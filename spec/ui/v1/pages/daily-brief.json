@@ -7,13 +7,13 @@
   "sectionNote": null,
   "title": {
     "text": "每日简报",
-    "provenance": "DailyBriefPage.swift:138",
+    "provenance": "DailyBriefPage.swift:139",
     "anchor": ".navigationTitle(\"每日简报\")"
   },
   "source": {
     "file": "DailyBriefPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/DailyBriefPage.swift",
-    "lines": 235,
+    "lines": 237,
     "structLine": 8,
     "renderedFrom": [
       "body"
@@ -318,7 +318,7 @@
           "writes": false,
           "condition": null,
           "provenance": "DailyBriefPage.swift:95",
-          "anchor": "Text(source.name).font(.body)",
+          "anchor": "Text(source.name).font(.system(size: HomeSpec.bodySize))",
           "extraction": "manual",
           "collection": "model.sources"
         },
@@ -396,7 +396,7 @@
           "writes": false,
           "condition": "!issue.sourceName.isEmpty",
           "provenance": "DailyBriefPage.swift:130",
-          "anchor": "Text(issue.sourceName).font(.caption.weight(.semibold))",
+          "anchor": "Text(issue.sourceName).font(.system(size: 13, weight: .semibold))",
           "extraction": "manual",
           "collection": "Array(issues.enumerated()), id: \\.offset"
         },
@@ -412,7 +412,7 @@
           "writes": false,
           "condition": null,
           "provenance": "DailyBriefPage.swift:132",
-          "anchor": "Text(issue.message).font(.caption).foregroundStyle(.secondary)",
+          "anchor": "Text(issue.message).font(.system(size: 13)).foregroundStyle(.secondary)",
           "extraction": "manual",
           "collection": "Array(issues.enumerated()), id: \\.offset"
         }
@@ -451,10 +451,10 @@
       "anchor": "Label(\"添加 RSS / Atom 来源\", systemImage: \"plus\")",
       "extraction": "syntax",
       "labelAlternatives": [],
-      "presents": "sheet-152"
+      "presents": "sheet-153"
     },
     {
-      "id": "gesture-151",
+      "id": "gesture-152",
       "label": null,
       "labelExpr": null,
       "kind": "gesture",
@@ -463,7 +463,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "DailyBriefPage.swift:151",
+      "provenance": "DailyBriefPage.swift:152",
       "anchor": ".refreshable { await model.refresh() }",
       "extraction": "syntax"
     },
@@ -491,7 +491,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "DailyBriefPage.swift:145",
+      "provenance": "DailyBriefPage.swift:146",
       "anchor": "Label(\"刷新\", systemImage: \"arrow.clockwise\")",
       "extraction": "syntax"
     },
@@ -519,10 +519,10 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "DailyBriefPage.swift:215",
+      "provenance": "DailyBriefPage.swift:217",
       "anchor": "Button(\"取消\") { dismiss() }",
       "extraction": "syntax",
-      "presentedBy": "sheet-152"
+      "presentedBy": "sheet-153"
     },
     {
       "id": "添加",
@@ -534,15 +534,15 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "DailyBriefPage.swift:218",
+      "provenance": "DailyBriefPage.swift:220",
       "anchor": "Button(saving ? \"添加中…\" : \"添加\") {",
       "extraction": "syntax",
-      "presentedBy": "sheet-152"
+      "presentedBy": "sheet-153"
     }
   ],
   "presentations": [
     {
-      "id": "sheet-152",
+      "id": "sheet-153",
       "kind": "sheet",
       "title": null,
       "destination": "DailyBriefSourceEditor",
@@ -550,10 +550,10 @@
         "addingSource"
       ],
       "span": [
-        152,
-        156
+        153,
+        157
       ],
-      "provenance": "DailyBriefPage.swift:152",
+      "provenance": "DailyBriefPage.swift:153",
       "anchor": ".sheet(isPresented: $addingSource) {",
       "triggered": true
     }

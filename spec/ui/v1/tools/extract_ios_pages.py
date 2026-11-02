@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Extract a machine-readable page structure from the iOS baseline.
 
 Purpose: `spec/ui/v1/README.md` §1 gives each page one line of prose, so the two
@@ -916,8 +917,7 @@ class PageExtractor:
                 "the header renders a ternary; its literals are alternatives or comparison "
                 "operands (not a single rendered title), and this group's rows are already "
                 "extracted as actions")
-        if (section["title"] is None and section["titleTemplate"] is None
-                and not section.get("suppressed")):
+        if section["title"] is None and section["titleTemplate"] is None:
             section["criterion"] = self._untitled_criterion(section["rows"], prov)
         if header:
             section["hasHeader"] = True

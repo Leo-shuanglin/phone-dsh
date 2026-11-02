@@ -1,0 +1,209 @@
+{
+  "schema": "pdsh.ui.page-structure/1",
+  "page": "NativePluginInventoryPage",
+  "pageId": "native-plugin-inventory",
+  "structure": "swiftui-view",
+  "sectionModel": "section",
+  "sectionNote": null,
+  "title": {
+    "text": "已加载插件",
+    "provenance": "NativePluginInventoryPage.swift:66",
+    "anchor": ".navigationTitle(NativeText(\"已加载插件\", \"Loaded Plugins\"))"
+  },
+  "source": {
+    "file": "NativePluginInventoryPage.swift",
+    "path": "examples/probe-app/PhoneDSHProbe/NativePluginInventoryPage.swift",
+    "lines": 72,
+    "structLine": 5,
+    "renderedFrom": [
+      "body"
+    ],
+    "sectionOrder": "declaration order inside the page struct"
+  },
+  "android": {
+    "screen": "NativePluginInventoryPage",
+    "file": null,
+    "match": "missing"
+  },
+  "sections": [
+    {
+      "id": "section-18",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "loading-21",
+          "label": null,
+          "labelExpr": null,
+          "kind": "loading",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "model.isLoading && model.pluginEntries.isEmpty",
+          "provenance": "NativePluginInventoryPage.swift:21",
+          "anchor": "ProgressView().controlSize(.small)",
+          "extraction": "manual"
+        },
+        {
+          "id": "正在读取插件",
+          "label": "正在读取插件…",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "model.isLoading && model.pluginEntries.isEmpty",
+          "provenance": "NativePluginInventoryPage.swift:22",
+          "anchor": "Text(NativeText(\"正在读取插件…\", \"Loading plugins…\"))",
+          "extraction": "syntax"
+        },
+        {
+          "id": "没有匹配的插件",
+          "label": "没有匹配的插件。",
+          "labelExpr": null,
+          "kind": "text",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "filtered.isEmpty",
+          "provenance": "NativePluginInventoryPage.swift:26",
+          "anchor": "Text(NativeText(\"没有匹配的插件。\", \"No matching plugins.\"))",
+          "extraction": "syntax"
+        },
+        {
+          "id": "active",
+          "label": "active",
+          "labelExpr": null,
+          "kind": "custom",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": "!(filtered.isEmpty)",
+          "provenance": "NativePluginInventoryPage.swift:49",
+          "anchor": "HomeTag(text: plugin.enabled && plugin.phase == \"active\"",
+          "extraction": "syntax",
+          "template": "DisclosureGroup",
+          "collection": "filtered"
+        }
+      ],
+      "provenance": "NativePluginInventoryPage.swift:18",
+      "anchor": "Section {",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-row",
+        "label": "正在读取插件…",
+        "provenance": "NativePluginInventoryPage.swift:22"
+      },
+      "footer": {
+        "text": null,
+        "labelExpr": "nativeConfigurationError(error)",
+        "provenance": "NativePluginInventoryPage.swift:59",
+        "anchor": "Text(nativeConfigurationError(error)).foregroundStyle(ChatPage.danger)"
+      }
+    }
+  ],
+  "actions": [
+    {
+      "id": "搜索插件",
+      "label": "搜索插件",
+      "labelExpr": null,
+      "kind": "search",
+      "trigger": "search",
+      "semantic": null,
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativePluginInventoryPage.swift:68",
+      "anchor": ".searchable(text: $query, prompt: NativeText(\"搜索插件\", \"Search plugins\"))",
+      "extraction": "syntax"
+    },
+    {
+      "id": "gesture-69",
+      "label": null,
+      "labelExpr": null,
+      "kind": "gesture",
+      "trigger": "pull-to-refresh",
+      "semantic": "refresh",
+      "writes": true,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativePluginInventoryPage.swift:69",
+      "anchor": ".refreshable { await model.refresh() }",
+      "extraction": "syntax"
+    }
+  ],
+  "presentations": [],
+  "states": {
+    "advisory": true,
+    "note": "advisory only: marker-based; row placeholders (未配置/未设置/—) are not page states, so the checker never compares this object",
+    "sites": {
+      "empty": [
+        {
+          "renders": "没有匹配的插件。",
+          "when": "filtered.isEmpty",
+          "provenance": "NativePluginInventoryPage.swift:26",
+          "anchor": "Text(NativeText(\"没有匹配的插件。\", \"No matching plugins.\"))"
+        }
+      ],
+      "data": [
+        {
+          "renders": "untitled section at 18",
+          "when": null,
+          "provenance": "NativePluginInventoryPage.swift:5",
+          "anchor": "struct NativePluginInventoryPage: View {",
+          "note": "structural default: the sections above, when no condition overrides them"
+        }
+      ],
+      "failure": [],
+      "unknown": [],
+      "loading": [
+        {
+          "renders": "正在读取插件…",
+          "when": "model.isLoading && model.pluginEntries.isEmpty",
+          "provenance": "NativePluginInventoryPage.swift:22",
+          "anchor": "Text(NativeText(\"正在读取插件…\", \"Loading plugins…\"))"
+        },
+        {
+          "renders": "ProgressView",
+          "when": "model.isLoading && model.pluginEntries.isEmpty",
+          "provenance": "NativePluginInventoryPage.swift:21",
+          "anchor": "ProgressView().controlSize(.small)"
+        }
+      ]
+    },
+    "absent": [
+      "failure",
+      "unknown"
+    ],
+    "coverage": {
+      "empty": 1,
+      "data": 1,
+      "failure": 0,
+      "unknown": 0,
+      "loading": 2
+    }
+  },
+  "subpages": [],
+  "unreachable": [],
+  "extraction": {
+    "tool": "extract_ios_pages.py",
+    "mode": "syntax",
+    "sectionKeywordsInPage": 1,
+    "regionsExtracted": 0,
+    "sectionsExtracted": 1,
+    "warnings": []
+  }
+}

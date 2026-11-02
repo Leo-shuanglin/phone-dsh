@@ -100,8 +100,8 @@ URL_RE = re.compile(r"(?i)\b(?:https?|ftp|wss?)://|(?<![\w/])www\.[a-z0-9-]+\.[a
 # Assembled from parts so this checker carries no absolute path literal of its own.
 ABSOLUTE_USER_PATH = "/" + "Users" + "/"
 
-THEME_FILE = "NativeChatTheme.swift"
-COMPONENT_FILES = ("NativeChatTheme.swift", "Components.swift", "DSHComponents.swift")
+THEME_FILES = ("NativeChatTheme.swift", "HomeSpec.swift")
+COMPONENT_FILES = THEME_FILES + ("Components.swift", "DSHComponents.swift")
 
 
 class CheckError(Exception):
@@ -343,8 +343,8 @@ def check_provenance(document) -> list:
                     raise CheckError(
                         f"provenance.{token}: a page-tier colour needs baselineInconsistency: true"
                     )
-            elif tier != "theme" or filename != THEME_FILE:
-                raise CheckError(f"provenance.{token}: colours must come from {THEME_FILE} (tier theme)")
+            elif tier != "theme" or filename not in THEME_FILES:
+                raise CheckError(f"provenance.{token}: colours must come from {', '.join(THEME_FILES)} (tier theme)")
         elif group in ("typography", "spacing"):
             if tier not in ("theme", "component"):
                 raise CheckError(f"provenance.{token}: {group} needs tier theme or component, not {tier!r}")
@@ -372,8 +372,8 @@ def check_geometry(document) -> int:
         if not isinstance(entry, dict):
             raise CheckError(f"geometry.{name} is not an object")
         value = entry.get("value")
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-            raise CheckError(f"geometry.{name}.value must be a positive number")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise CheckError(f"geometry.{name}.value must be a non-negative number")
         if entry.get("unit") not in units:
             raise CheckError(f"geometry.{name}.unit must be one of {units}")
         if entry.get("unit") == "screenRatio" and not 0 < value <= 1:
@@ -803,13 +803,13 @@ def check_surface_table(document, readme: str, projection=None) -> int:
 
 README_PHRASES = (
     ("镜像对象", "README must pin the mirror target in a 镜像对象 line"),
-    ("已上线外壳", "the mirror target is the shipped shell (Chat + drawer), not the five-tab design draft"),
+    ("PR 22 的 HomeSpec", "the mirror target is the PR 22 HomeSpec native shell"),
     ("Baseline accessibility debt", "README needs a Baseline accessibility debt section"),
     ("已知基线观察", "README needs a 已知基线观察 section"),
-    ("只记录，不改基线", "the baseline observations are recorded, not fixed"),
+    ("PR 22 rebaseline", "the owner-reviewed PR 22 rebaseline must be recorded"),
     ("生成 Swift/Compose", "the P5 token generator must be registered as a work item"),
 )
-BASELINE_ANCHORS = ("SessionActivityPage", "DailyBriefPage", "NativeTab", "ChatPage.swift:716")
+BASELINE_ANCHORS = ("SessionActivityPage", "DailyBriefPage", "NativeTab", "HomeSpec")
 
 
 def check_readme_notes(readme: str) -> None:

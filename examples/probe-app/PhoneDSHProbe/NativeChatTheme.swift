@@ -3,9 +3,8 @@
 import SwiftUI
 import UIKit
 
-// Native equivalents of the pinned DSH light/dark design tokens.
-// NativeParityTokens is the source of truth; this facade keeps existing call
-// sites compiling while the session page migrates to the official values.
+// Shared native light/dark values. This facade keeps existing call sites
+// compiling while new home/settings views use the PR 22 HomeSpec baseline.
 enum NativeChatTheme {
     static let primary = NativeParityTokens.labelPrimary
     static let secondary = NativeParityTokens.labelSecondary
@@ -48,9 +47,8 @@ enum NativeChatTheme {
     static let messageContentMargin: CGFloat = 20
     static let messageParagraphSpacing: CGFloat = 20
     static let messageListSpacing: CGFloat = 10
-    /// Keep the message body on the official 24pt line box at every preferred
-    /// text size. A fixed 5pt is only right for the 17pt phone default; at the
-    /// 402pt baseline (14pt) it leaves a 22pt line and tool rows drift.
+    /// Keep the message body on the HomeSpec 24pt line box at every preferred
+    /// text size; the extra leading comes from the system font's real height.
     static var messageLineSpacing: CGFloat {
         let size = CGFloat(NativeChatPreferences.shared.textFontSize)
         return max(0, NativeParityTokens.bodyLineHeight - UIFont.systemFont(ofSize: size).lineHeight)

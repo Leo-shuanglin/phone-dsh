@@ -7,13 +7,13 @@
   "sectionNote": null,
   "title": {
     "text": "MCP 网络与密钥",
-    "provenance": "MCPSettingsPage.swift:124",
+    "provenance": "MCPSettingsPage.swift:99",
     "anchor": ".navigationTitle(\"MCP 网络与密钥\")"
   },
   "source": {
     "file": "MCPSettingsPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/MCPSettingsPage.swift",
-    "lines": 304,
+    "lines": 280,
     "structLine": 17,
     "renderedFrom": [
       "body",
@@ -48,7 +48,7 @@
           "destination": null,
           "writes": false,
           "condition": "!model.hostRunning",
-          "provenance": "MCPSettingsPage.swift:71",
+          "provenance": "MCPSettingsPage.swift:48",
           "anchor": "ContentUnavailableView(\"主机尚未启动\",",
           "extraction": "syntax"
         },
@@ -63,7 +63,7 @@
           "destination": null,
           "writes": false,
           "condition": "model.loading && model.rows.isEmpty",
-          "provenance": "MCPSettingsPage.swift:75",
+          "provenance": "MCPSettingsPage.swift:52",
           "anchor": "ProgressView(\"正在读取 MCP 注册表…\")",
           "extraction": "syntax"
         },
@@ -78,12 +78,12 @@
           "destination": null,
           "writes": false,
           "condition": "model.rows.isEmpty",
-          "provenance": "MCPSettingsPage.swift:77",
+          "provenance": "MCPSettingsPage.swift:54",
           "anchor": "ContentUnavailableView(\"尚未添加 MCP 服务器\",",
           "extraction": "syntax"
         },
         {
-          "id": "navigation-82",
+          "id": "navigation-59",
           "label": null,
           "labelExpr": null,
           "kind": "navigation",
@@ -93,25 +93,25 @@
           "destination": "MCPEditorPage",
           "writes": false,
           "condition": "!(model.rows.isEmpty)",
-          "provenance": "MCPSettingsPage.swift:82",
+          "provenance": "MCPSettingsPage.swift:59",
           "anchor": "NavigationLink {",
           "extraction": "manual",
           "collection": "model.rows"
         }
       ],
-      "provenance": "MCPSettingsPage.swift:90",
+      "provenance": "MCPSettingsPage.swift:67",
       "anchor": "Text(\"Streamable HTTP MCP\")",
       "extraction": "syntax",
       "hasHeader": true,
       "footer": {
         "text": "每个服务器只放行它自己的地址和端口。这里填的授权和密钥只留在本机,模型和搜索用的密钥不会拿来给服务器用。",
         "labelExpr": null,
-        "provenance": "MCPSettingsPage.swift:92",
+        "provenance": "MCPSettingsPage.swift:69",
         "anchor": "Text(\"每个服务器只放行它自己的地址和端口。这里填的授权和密钥只留在本机,模型和搜索用的密钥不会拿来给服务器用。\")"
       }
     },
     {
-      "id": "section-96",
+      "id": "section-73",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
@@ -121,7 +121,7 @@
       "collection": null,
       "rows": [
         {
-          "id": "text-97",
+          "id": "text-74",
           "label": null,
           "labelExpr": "error",
           "kind": "text",
@@ -131,22 +131,22 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "MCPSettingsPage.swift:97",
+          "provenance": "MCPSettingsPage.swift:74",
           "anchor": "Text(error).foregroundStyle(.red)",
           "extraction": "manual"
         }
       ],
-      "provenance": "MCPSettingsPage.swift:96",
+      "provenance": "MCPSettingsPage.swift:73",
       "anchor": "Section {",
       "extraction": "syntax",
       "criterion": {
         "kind": "first-row-expression",
         "labelExpr": "error",
-        "provenance": "MCPSettingsPage.swift:97"
+        "provenance": "MCPSettingsPage.swift:74"
       }
     },
     {
-      "id": "section-101",
+      "id": "section-78",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
@@ -156,7 +156,7 @@
       "collection": null,
       "rows": [
         {
-          "id": "text-102",
+          "id": "text-79",
           "label": null,
           "labelExpr": "notice",
           "kind": "text",
@@ -166,18 +166,18 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "MCPSettingsPage.swift:102",
+          "provenance": "MCPSettingsPage.swift:79",
           "anchor": "Text(notice).foregroundStyle(.green)",
           "extraction": "manual"
         }
       ],
-      "provenance": "MCPSettingsPage.swift:101",
+      "provenance": "MCPSettingsPage.swift:78",
       "anchor": "Section {",
       "extraction": "syntax",
       "criterion": {
         "kind": "first-row-expression",
         "labelExpr": "notice",
-        "provenance": "MCPSettingsPage.swift:102"
+        "provenance": "MCPSettingsPage.swift:79"
       }
     },
     {
@@ -201,7 +201,7 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "MCPSettingsPage.swift:110",
+          "provenance": "MCPSettingsPage.swift:87",
           "anchor": "Label(\"刷新注册表\", systemImage: \"arrow.clockwise\")",
           "extraction": "syntax"
         },
@@ -216,19 +216,19 @@
           "destination": "MCPEditorPage",
           "writes": false,
           "condition": null,
-          "provenance": "MCPSettingsPage.swift:116",
+          "provenance": "MCPSettingsPage.swift:93",
           "anchor": "Label(\"添加 MCP 服务器\", systemImage: \"plus.circle\")",
           "extraction": "syntax"
         }
       ],
-      "provenance": "MCPSettingsPage.swift:106",
+      "provenance": "MCPSettingsPage.swift:83",
       "anchor": "Section(\"操作\") {",
       "extraction": "syntax"
     }
   ],
   "actions": [
     {
-      "id": "navigation-82",
+      "id": "navigation-59",
       "label": null,
       "labelExpr": null,
       "kind": "navigation",
@@ -237,7 +237,7 @@
       "writes": false,
       "destination": "MCPEditorPage",
       "condition": null,
-      "provenance": "MCPSettingsPage.swift:82",
+      "provenance": "MCPSettingsPage.swift:59",
       "anchor": "NavigationLink {",
       "extraction": "manual"
     },
@@ -251,7 +251,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "MCPSettingsPage.swift:110",
+      "provenance": "MCPSettingsPage.swift:87",
       "anchor": "Label(\"刷新注册表\", systemImage: \"arrow.clockwise\")",
       "extraction": "syntax",
       "labelAlternatives": []
@@ -266,7 +266,7 @@
       "writes": false,
       "destination": "MCPEditorPage",
       "condition": null,
-      "provenance": "MCPSettingsPage.swift:116",
+      "provenance": "MCPSettingsPage.swift:93",
       "anchor": "Label(\"添加 MCP 服务器\", systemImage: \"plus.circle\")",
       "extraction": "syntax"
     }
@@ -280,19 +280,19 @@
         {
           "renders": "ContentUnavailableView",
           "when": "!model.hostRunning",
-          "provenance": "MCPSettingsPage.swift:71",
+          "provenance": "MCPSettingsPage.swift:48",
           "anchor": "ContentUnavailableView(\"主机尚未启动\","
         },
         {
           "renders": "ContentUnavailableView",
           "when": "model.rows.isEmpty",
-          "provenance": "MCPSettingsPage.swift:77",
+          "provenance": "MCPSettingsPage.swift:54",
           "anchor": "ContentUnavailableView(\"尚未添加 MCP 服务器\","
         }
       ],
       "data": [
         {
-          "renders": "Streamable HTTP MCP | untitled section at 96 | untitled section at 101 | 操作",
+          "renders": "Streamable HTTP MCP | untitled section at 73 | untitled section at 78 | 操作",
           "when": null,
           "provenance": "MCPSettingsPage.swift:17",
           "anchor": "struct MCPSettingsPage: View {",
@@ -305,13 +305,13 @@
         {
           "renders": "正在读取 MCP 注册表…",
           "when": "model.loading && model.rows.isEmpty",
-          "provenance": "MCPSettingsPage.swift:75",
+          "provenance": "MCPSettingsPage.swift:52",
           "anchor": "ProgressView(\"正在读取 MCP 注册表…\")"
         },
         {
           "renders": "ProgressView",
           "when": "model.loading && model.rows.isEmpty",
-          "provenance": "MCPSettingsPage.swift:75",
+          "provenance": "MCPSettingsPage.swift:52",
           "anchor": "ProgressView(\"正在读取 MCP 注册表…\")"
         }
       ]
@@ -331,19 +331,19 @@
   "subpages": [
     {
       "name": "MCPEditorPage",
-      "line": 188,
+      "line": 163,
       "private": true,
       "sections": [
         {
           "title": "服务器",
-          "provenance": "MCPSettingsPage.swift:211"
+          "provenance": "MCPSettingsPage.swift:186"
         },
         {
           "title": "认证头与设备密钥",
-          "provenance": "MCPSettingsPage.swift:226"
+          "provenance": "MCPSettingsPage.swift:201"
         }
       ],
-      "provenance": "MCPSettingsPage.swift:188"
+      "provenance": "MCPSettingsPage.swift:163"
     }
   ],
   "unreachable": [],

@@ -357,7 +357,7 @@
             "required": ["value", "unit", "scalesWith"],
             "additionalProperties": false,
             "properties": {
-              "value": {"type": "number", "minimum": 0.05, "maximum": 2000},
+              "value": {"type": "number", "minimum": 0, "maximum": 2000},
               "unit": {
                 "enum": ["pt", "screenRatio"]
               },

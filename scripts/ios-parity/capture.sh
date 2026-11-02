@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Capture the 402pt native session screens used by the parity review.
+# Capture the native session screens used by the PR 22 HomeSpec parity review.
+# Run it on a 430pt-wide simulator to match the design canvas.
 #
 # This is NOT an official-DSH golden: the app is the iOS implementation. It
 # gives a reproducible before/after set for the same preview and viewport.

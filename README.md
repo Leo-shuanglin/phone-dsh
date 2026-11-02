@@ -96,7 +96,7 @@ App 与 Worker 在一个源上碰面。页面和静态资源走 HTTP；副作用
 - **宿主/Worker 边界**：WebView 保不住的权威（日志、回环源、凭据、生命周期、设备映射）留在原生进程；DSH 插件树和工具执行留在 Worker，避免为手机重写一套 DSH。
 - **资源边界**：内存、热、后台排空、工具调用边界重启都由宿主状态机管理；失败是显式的，不会静默重新放行。
 - **设备边界**：连接器只发布真实状态；同一 `deviceID` 复用固定 Session，设备会话从普通会话列表过滤，只能以只读方式监视；设备上行和手机用户消息在投影层分开。
-- **平台边界**：iOS 是 Swift 基线，Android 跟随同一份 `spec/v1` 与宿主契约；两端用同名状态、同一 402×874@3 视口和同一组 layout metrics 对齐，不直接做跨平台逐像素 diff。
+- **平台边界**：iOS 是 Swift 基线，Android 跟随同一份 `spec/v1` 与宿主契约；当前原生视觉基线是 PR 22 的 HomeSpec 430×932pt 设计，两端用同名状态和同一组 layout metrics 对齐，不直接做跨平台逐像素 diff。
 
 ## xz-shell
 
@@ -215,17 +215,17 @@ bash scripts/ci/scenarios.sh --upstream real
 
 ## 平台与基线
 
-iOS 是参考实现，Android 跟随同一份 `spec/v1` 与宿主契约。两边不靠手截图对齐，基线是可复跑的脚本：
+iOS 是参考实现，Android 跟随同一份 `spec/v1` 与宿主契约。当前原生视觉基线是 PR 22 的 HomeSpec 430×932pt 设计；官方 DSH 402pt 截图保留为历史参照。两边不靠手截图对齐，基线是可复跑的脚本：
 
 ```bash
-# 官方 DSH Web UI 参照（真实 dsh web + CDP，402×874@3，9 个状态）
+# 历史参照：官方 DSH Web UI（真实 dsh web + CDP，402×874@3，9 个状态）
 scripts/ios-parity/golden/capture-official.sh
 
-# iOS 原生自检截图
+# 当前原生自检截图（使用 430pt 宽模拟器）
 scripts/ios-parity/capture.sh <simulator-udid> sample
 ```
 
-Android 用 Android 仓的工具在**同一视口、同一状态名、同一组 layout metrics**下采集和比较；跨平台不做逐像素 diff（CoreText/Android 字体栅格不同），只在各自平台内做阈值比较：
+Android 用 Android 仓的工具在**同一状态名、同一组 HomeSpec layout metrics**下采集和比较；跨平台不做逐像素 diff（CoreText/Android 字体栅格不同），只在各自平台内做阈值比较：
 
 ```bash
 android/tools/screenshot-capture.sh

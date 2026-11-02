@@ -266,10 +266,13 @@ class HygieneTests(CheckerFixture):
             }
         )
         proc = self.run_checker("hygiene", tree)
-        for line in (1, 3):
+        # `banned_words_sample()` writes the four spellings `BANNED_WORD_RE`
+        # forbids, so all four lines are findings. The two middle lines used to
+        # be asserted absent, from when the regex only carried two of them; the
+        # fixture's own docstring has said "the four spellings are exactly the
+        # set BANNED_WORD_RE forbids" since the regex grew.
+        for line in (1, 2, 3, 4):
             self.assert_finding(proc, "spec/v1/bad/words.md", line, "banned-word")
-        self.assertNotIn("spec/v1/bad/words.md:2:", proc.stdout)
-        self.assertNotIn("spec/v1/bad/words.md:4:", proc.stdout)
         self.assert_finding(proc, "spec/v1/bad/contact.txt", 1, "email")
         self.assert_finding(proc, "spec/v1/bad/paths.txt", 1, "home-path")
         self.assert_finding(proc, "spec/v1/bad/paths.txt", 2, "home-path")

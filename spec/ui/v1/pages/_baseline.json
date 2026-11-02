@@ -1,7 +1,7 @@
 {
   "schema": "pdsh.ui.page-structure-baseline/1",
-  "note": "Known page-structure divergences between the iOS contract and the Android screens. This ratchet only shrinks: fix one, delete its row. Regenerate with --write-baseline only when the change is reviewed as a ratchet move.",
-  "contracts": 24,
+  "note": "Known page-structure divergences between the iOS contract and the Android screens. The 174 entries were regenerated for the owner-reviewed PR 22 HomeSpec rebaseline; from here the ratchet only shrinks. Regenerate with --write-baseline only when a later rebaseline is explicitly reviewed.",
+  "contracts": 33,
   "divergences": [
     {
       "page": "background",
@@ -35,9 +35,75 @@
     },
     {
       "page": "chat",
+      "kind": "extra-action",
+      "name": "更多操作",
+      "reason": "known divergence on chat (extra-action); shrink only"
+    },
+    {
+      "page": "chat",
+      "kind": "extra-action",
+      "name": "本会话设置",
+      "reason": "known divergence on chat (extra-action); shrink only"
+    },
+    {
+      "page": "chat",
+      "kind": "extra-action",
+      "name": "还有 1 个待确认",
+      "reason": "known divergence on chat (extra-action); shrink only"
+    },
+    {
+      "page": "chat",
+      "kind": "missing-action",
+      "name": "产物",
+      "reason": "known divergence on chat (missing-action); shrink only"
+    },
+    {
+      "page": "chat",
+      "kind": "missing-action",
+      "name": "刷新",
+      "reason": "known divergence on chat (missing-action); shrink only"
+    },
+    {
+      "page": "chat",
       "kind": "missing-action",
       "name": "完成",
       "reason": "known divergence on chat (missing-action); shrink only"
+    },
+    {
+      "page": "chat",
+      "kind": "missing-action",
+      "name": "工作区",
+      "reason": "known divergence on chat (missing-action); shrink only"
+    },
+    {
+      "page": "chat",
+      "kind": "missing-action",
+      "name": "插件与工具",
+      "reason": "known divergence on chat (missing-action); shrink only"
+    },
+    {
+      "page": "chat",
+      "kind": "missing-action",
+      "name": "朗读最近回复",
+      "reason": "known divergence on chat (missing-action); shrink only"
+    },
+    {
+      "page": "chat",
+      "kind": "missing-action",
+      "name": "运行状态",
+      "reason": "known divergence on chat (missing-action); shrink only"
+    },
+    {
+      "page": "chat",
+      "kind": "missing-action",
+      "name": "重新启动引擎",
+      "reason": "known divergence on chat (missing-action); shrink only"
+    },
+    {
+      "page": "chat-preferences",
+      "kind": "missing-section",
+      "name": "<android-screen>",
+      "reason": "known divergence on chat-preferences (missing-section); shrink only"
     },
     {
       "page": "daily-brief",
@@ -62,6 +128,12 @@
       "kind": "extra-action",
       "name": "重试",
       "reason": "known divergence on export (extra-action); shrink only"
+    },
+    {
+      "page": "files",
+      "kind": "extra-action",
+      "name": "分享",
+      "reason": "known divergence on files (extra-action); shrink only"
     },
     {
       "page": "mcp-editor",
@@ -172,6 +244,12 @@
       "reason": "known divergence on mcp-settings (unresolved-action); shrink only"
     },
     {
+      "page": "model-provider-editor",
+      "kind": "missing-section",
+      "name": "<android-screen>",
+      "reason": "known divergence on model-provider-editor (missing-section); shrink only"
+    },
+    {
       "page": "model-provider-settings",
       "kind": "extra-action",
       "name": "添加",
@@ -192,25 +270,13 @@
     {
       "page": "model-provider-settings",
       "kind": "missing-action",
-      "name": "从剪贴板导入",
-      "reason": "known divergence on model-provider-settings (missing-action); shrink only"
-    },
-    {
-      "page": "model-provider-settings",
-      "kind": "missing-action",
-      "name": "保存",
-      "reason": "known divergence on model-provider-settings (missing-action); shrink only"
-    },
-    {
-      "page": "model-provider-settings",
-      "kind": "missing-action",
       "name": "删除",
       "reason": "known divergence on model-provider-settings (missing-action); shrink only"
     },
     {
       "page": "model-provider-settings",
       "kind": "missing-action",
-      "name": "删除已保存的密钥",
+      "name": "删除 %@",
       "reason": "known divergence on model-provider-settings (missing-action); shrink only"
     },
     {
@@ -222,19 +288,7 @@
     {
       "page": "model-provider-settings",
       "kind": "missing-action",
-      "name": "启动 Web 主机",
-      "reason": "known divergence on model-provider-settings (missing-action); shrink only"
-    },
-    {
-      "page": "model-provider-settings",
-      "kind": "missing-action",
       "name": "启动本地引擎",
-      "reason": "known divergence on model-provider-settings (missing-action); shrink only"
-    },
-    {
-      "page": "model-provider-settings",
-      "kind": "missing-action",
-      "name": "推理强度",
       "reason": "known divergence on model-provider-settings (missing-action); shrink only"
     },
     {
@@ -246,44 +300,20 @@
     {
       "page": "model-provider-settings",
       "kind": "missing-action",
-      "name": "测试",
-      "reason": "known divergence on model-provider-settings (missing-action); shrink only"
-    },
-    {
-      "page": "model-provider-settings",
-      "kind": "missing-action",
-      "name": "添加模型服务",
-      "reason": "known divergence on model-provider-settings (missing-action); shrink only"
-    },
-    {
-      "page": "model-provider-settings",
-      "kind": "missing-action",
       "name": "编辑",
       "reason": "known divergence on model-provider-settings (missing-action); shrink only"
     },
     {
       "page": "model-provider-settings",
-      "kind": "missing-action",
-      "name": "编辑默认服务",
-      "reason": "known divergence on model-provider-settings (missing-action); shrink only"
-    },
-    {
-      "page": "model-provider-settings",
-      "kind": "missing-action",
-      "name": "重启 Web 主机以应用配置",
-      "reason": "known divergence on model-provider-settings (missing-action); shrink only"
-    },
-    {
-      "page": "model-provider-settings",
       "kind": "missing-section",
-      "name": "添加模型服务",
+      "name": "启动本地引擎",
       "reason": "known divergence on model-provider-settings (missing-section); shrink only"
     },
     {
-      "page": "model-provider-settings",
+      "page": "native-agent-presets",
       "kind": "missing-section",
-      "name": "生效方式",
-      "reason": "known divergence on model-provider-settings (missing-section); shrink only"
+      "name": "<android-screen>",
+      "reason": "known divergence on native-agent-presets (missing-section); shrink only"
     },
     {
       "page": "native-automation",
@@ -384,19 +414,25 @@
     {
       "page": "native-configuration",
       "kind": "extra-action",
+      "name": "刷新",
+      "reason": "known divergence on native-configuration (extra-action); shrink only"
+    },
+    {
+      "page": "native-configuration",
+      "kind": "extra-action",
       "name": "重试",
       "reason": "known divergence on native-configuration (extra-action); shrink only"
     },
     {
       "page": "native-configuration",
       "kind": "extra-section",
-      "name": "插件说明",
+      "name": "已加载插件",
       "reason": "known divergence on native-configuration (extra-section); shrink only"
     },
     {
       "page": "native-configuration",
       "kind": "extra-section",
-      "name": "新会话默认权限",
+      "name": "插件说明",
       "reason": "known divergence on native-configuration (extra-section); shrink only"
     },
     {
@@ -408,49 +444,13 @@
     {
       "page": "native-configuration",
       "kind": "missing-action",
-      "name": "保存默认",
-      "reason": "known divergence on native-configuration (missing-action); shrink only"
-    },
-    {
-      "page": "native-configuration",
-      "kind": "missing-action",
-      "name": "安装第三方插件",
-      "reason": "known divergence on native-configuration (missing-action); shrink only"
-    },
-    {
-      "page": "native-configuration",
-      "kind": "missing-action",
       "name": "恢复默认",
       "reason": "known divergence on native-configuration (missing-action); shrink only"
     },
     {
       "page": "native-configuration",
       "kind": "missing-action",
-      "name": "插件说明",
-      "reason": "known divergence on native-configuration (missing-action); shrink only"
-    },
-    {
-      "page": "native-configuration",
-      "kind": "missing-action",
       "name": "撤销",
-      "reason": "known divergence on native-configuration (missing-action); shrink only"
-    },
-    {
-      "page": "native-configuration",
-      "kind": "missing-action",
-      "name": "添加插件",
-      "reason": "known divergence on native-configuration (missing-action); shrink only"
-    },
-    {
-      "page": "native-configuration",
-      "kind": "missing-action",
-      "name": "网页搜索与抓取",
-      "reason": "known divergence on native-configuration (missing-action); shrink only"
-    },
-    {
-      "page": "native-configuration",
-      "kind": "missing-action",
-      "name": "让 Agent 创建插件",
       "reason": "known divergence on native-configuration (missing-action); shrink only"
     },
     {
@@ -468,13 +468,13 @@
     {
       "page": "native-configuration",
       "kind": "missing-section",
-      "name": "内置插件设置",
+      "name": "工具",
       "reason": "known divergence on native-configuration (missing-section); shrink only"
     },
     {
       "page": "native-configuration",
       "kind": "missing-section",
-      "name": "插件说明",
+      "name": "暂时读不到插件状态。",
       "reason": "known divergence on native-configuration (missing-section); shrink only"
     },
     {
@@ -485,15 +485,45 @@
     },
     {
       "page": "native-configuration",
+      "kind": "missing-section",
+      "name": "正在读取插件与设置…",
+      "reason": "known divergence on native-configuration (missing-section); shrink only"
+    },
+    {
+      "page": "native-configuration",
       "kind": "unresolved-action",
       "name": "row.title",
       "reason": "known divergence on native-configuration (unresolved-action); shrink only"
     },
     {
-      "page": "native-workbench",
-      "kind": "extra-action",
-      "name": "命令",
-      "reason": "known divergence on native-workbench (extra-action); shrink only"
+      "page": "native-device-connection",
+      "kind": "missing-section",
+      "name": "<android-screen>",
+      "reason": "known divergence on native-device-connection (missing-section); shrink only"
+    },
+    {
+      "page": "native-device-session",
+      "kind": "missing-section",
+      "name": "<android-screen>",
+      "reason": "known divergence on native-device-session (missing-section); shrink only"
+    },
+    {
+      "page": "native-plugin-inventory",
+      "kind": "missing-section",
+      "name": "<android-screen>",
+      "reason": "known divergence on native-plugin-inventory (missing-section); shrink only"
+    },
+    {
+      "page": "native-settings-document",
+      "kind": "missing-section",
+      "name": "<android-screen>",
+      "reason": "known divergence on native-settings-document (missing-section); shrink only"
+    },
+    {
+      "page": "native-shortcuts",
+      "kind": "missing-section",
+      "name": "<android-screen>",
+      "reason": "known divergence on native-shortcuts (missing-section); shrink only"
     },
     {
       "page": "native-workbench",
@@ -508,16 +538,46 @@
       "reason": "known divergence on native-workbench (extra-action); shrink only"
     },
     {
-      "page": "native-workbench",
+      "page": "pdsh-shell",
+      "kind": "extra-action",
+      "name": "取消",
+      "reason": "known divergence on pdsh-shell (extra-action); shrink only"
+    },
+    {
+      "page": "pdsh-shell",
+      "kind": "extra-action",
+      "name": "运行",
+      "reason": "known divergence on pdsh-shell (extra-action); shrink only"
+    },
+    {
+      "page": "pdsh-shell",
       "kind": "missing-action",
-      "name": "工作面板",
-      "reason": "known divergence on native-workbench (missing-action); shrink only"
+      "name": "停止运行",
+      "reason": "known divergence on pdsh-shell (missing-action); shrink only"
     },
     {
       "page": "pdsh-shell",
       "kind": "missing-action",
       "name": "命令",
       "reason": "known divergence on pdsh-shell (missing-action); shrink only"
+    },
+    {
+      "page": "pdsh-shell",
+      "kind": "missing-action",
+      "name": "运行中…",
+      "reason": "known divergence on pdsh-shell (missing-action); shrink only"
+    },
+    {
+      "page": "pdsh-shell",
+      "kind": "missing-section",
+      "name": "运行中…",
+      "reason": "known divergence on pdsh-shell (missing-section); shrink only"
+    },
+    {
+      "page": "phone-permissions",
+      "kind": "missing-section",
+      "name": "<android-screen>",
+      "reason": "known divergence on phone-permissions (missing-section); shrink only"
     },
     {
       "page": "probes",
@@ -598,6 +658,12 @@
       "reason": "known divergence on runtime-details (missing-section); shrink only"
     },
     {
+      "page": "runtime-details",
+      "kind": "missing-section",
+      "name": "状态",
+      "reason": "known divergence on runtime-details (missing-section); shrink only"
+    },
+    {
       "page": "session-activity",
       "kind": "missing-action",
       "name": "中断",
@@ -670,10 +736,214 @@
       "reason": "known divergence on session-activity (unresolved-action); shrink only"
     },
     {
+      "page": "session-artifacts",
+      "kind": "missing-section",
+      "name": "<android-screen>",
+      "reason": "known divergence on session-artifacts (missing-section); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "extra-action",
+      "name": "MCP",
+      "reason": "known divergence on settings (extra-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "extra-action",
+      "name": "后台运行",
+      "reason": "known divergence on settings (extra-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "extra-action",
+      "name": "命令",
+      "reason": "known divergence on settings (extra-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "extra-action",
+      "name": "导出诊断",
+      "reason": "known divergence on settings (extra-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "extra-action",
+      "name": "插件与模型",
+      "reason": "known divergence on settings (extra-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "extra-action",
+      "name": "权限",
+      "reason": "known divergence on settings (extra-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "extra-action",
+      "name": "网页搜索",
+      "reason": "known divergence on settings (extra-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "extra-action",
+      "name": "运行时详情",
+      "reason": "known divergence on settings (extra-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "extra-section",
+      "name": "工具",
+      "reason": "known divergence on settings (extra-section); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "Agent 预设",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "关于 Phone DSH",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "外观",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "字号",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "工作过程",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "已归档会话",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "快捷键",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "手机权限",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "插件与工具",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "文件夹",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "新会话默认权限",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "语言",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "运行状态",
+      "reason": "known divergence on settings (missing-action); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-section",
+      "name": "会话与文件",
+      "reason": "known divergence on settings (missing-section); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-section",
+      "name": "对话",
+      "reason": "known divergence on settings (missing-section); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-section",
+      "name": "引擎",
+      "reason": "known divergence on settings (missing-section); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-section",
+      "name": "权限与隐私",
+      "reason": "known divergence on settings (missing-section); shrink only"
+    },
+    {
+      "page": "settings",
+      "kind": "missing-section",
+      "name": "模型与智能体",
+      "reason": "known divergence on settings (missing-section); shrink only"
+    },
+    {
+      "page": "settings-about",
+      "kind": "extra-section",
+      "name": "更多",
+      "reason": "known divergence on settings-about (extra-section); shrink only"
+    },
+    {
+      "page": "settings-about",
+      "kind": "extra-section",
+      "name": "版本",
+      "reason": "known divergence on settings-about (extra-section); shrink only"
+    },
+    {
+      "page": "settings-about",
+      "kind": "extra-section",
+      "name": "系统",
+      "reason": "known divergence on settings-about (extra-section); shrink only"
+    },
+    {
+      "page": "settings-about",
+      "kind": "missing-section",
+      "name": "Phone DSH",
+      "reason": "known divergence on settings-about (missing-section); shrink only"
+    },
+    {
+      "page": "settings-about",
+      "kind": "missing-section",
+      "name": "版本",
+      "reason": "known divergence on settings-about (missing-section); shrink only"
+    },
+    {
       "page": "settings-about",
       "kind": "unresolved-action",
       "name": "row.title",
       "reason": "known divergence on settings-about (unresolved-action); shrink only"
+    },
+    {
+      "page": "settings-about",
+      "kind": "unresolved-section",
+      "name": "section.title",
+      "reason": "known divergence on settings-about (unresolved-section); shrink only"
     },
     {
       "page": "task-screen",
@@ -737,12 +1007,6 @@
     },
     {
       "page": "web-search-settings",
-      "kind": "missing-action",
-      "name": "重启引擎,用上新设置",
-      "reason": "known divergence on web-search-settings (missing-action); shrink only"
-    },
-    {
-      "page": "web-search-settings",
       "kind": "missing-section",
       "name": "什么时候生效",
       "reason": "known divergence on web-search-settings (missing-section); shrink only"
@@ -782,30 +1046,6 @@
       "kind": "missing-section",
       "name": "需要处理",
       "reason": "known divergence on web-search-settings (missing-section); shrink only"
-    },
-    {
-      "page": "web-surface",
-      "kind": "extra-action",
-      "name": "原生恢复",
-      "reason": "known divergence on web-surface (extra-action); shrink only"
-    },
-    {
-      "page": "web-surface",
-      "kind": "extra-action",
-      "name": "模型配置",
-      "reason": "known divergence on web-surface (extra-action); shrink only"
-    },
-    {
-      "page": "web-surface",
-      "kind": "extra-action",
-      "name": "重试",
-      "reason": "known divergence on web-surface (extra-action); shrink only"
-    },
-    {
-      "page": "web-surface",
-      "kind": "unresolved-action",
-      "name": "if (state.detailsExpanded) { UiStrings.WEB_SURFACE_DETAILS_H",
-      "reason": "known divergence on web-surface (unresolved-action); shrink only"
     }
   ]
 }

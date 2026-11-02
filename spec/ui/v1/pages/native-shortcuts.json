@@ -1,0 +1,230 @@
+{
+  "schema": "pdsh.ui.page-structure/1",
+  "page": "NativeShortcutsPage",
+  "pageId": "native-shortcuts",
+  "structure": "swiftui-view",
+  "sectionModel": "section",
+  "sectionNote": null,
+  "title": {
+    "text": "快捷键",
+    "provenance": "NativeShortcutsPage.swift:30",
+    "anchor": ".navigationTitle(NativeText(\"快捷键\", \"Shortcuts\"))"
+  },
+  "source": {
+    "file": "NativeShortcutsPage.swift",
+    "path": "examples/probe-app/PhoneDSHProbe/NativeShortcutsPage.swift",
+    "lines": 95,
+    "structLine": 5,
+    "renderedFrom": [
+      "body"
+    ],
+    "sectionOrder": "declaration order inside the page struct"
+  },
+  "android": {
+    "screen": "NativeShortcutsPage",
+    "file": null,
+    "match": "missing"
+  },
+  "sections": [
+    {
+      "id": "应用命令",
+      "title": "应用命令",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "literal",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "navigation-12",
+          "label": null,
+          "labelExpr": "nativeShortcutTitle(action)",
+          "kind": "navigation",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": "NativeShortcutEditor",
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeShortcutsPage.swift:12",
+          "anchor": "NavigationLink { NativeShortcutEditor(action: action) } label: {",
+          "extraction": "manual",
+          "collection": "NativeShortcutAction.allCases, id: \\.self"
+        }
+      ],
+      "provenance": "NativeShortcutsPage.swift:10",
+      "anchor": "Section(NativeText(\"应用命令\", \"Application commands\")) {",
+      "extraction": "syntax"
+    },
+    {
+      "id": "固定输入操作-只读",
+      "title": "固定输入操作（只读）",
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "literal",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "换行",
+          "label": "换行",
+          "labelExpr": null,
+          "kind": "info",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeShortcutsPage.swift:18",
+          "anchor": "LabeledContent(NativeText(\"换行\", \"New line\"), value: \"⇧↩\")",
+          "extraction": "syntax"
+        },
+        {
+          "id": "发送",
+          "label": "发送",
+          "labelExpr": null,
+          "kind": "info",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeShortcutsPage.swift:19",
+          "anchor": "LabeledContent(NativeText(\"发送\", \"Send\"), value: \"↩\")",
+          "extraction": "syntax"
+        },
+        {
+          "id": "另一种发送行为",
+          "label": "另一种发送行为",
+          "labelExpr": null,
+          "kind": "info",
+          "value": null,
+          "valueExpr": null,
+          "clickable": false,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeShortcutsPage.swift:20",
+          "anchor": "LabeledContent(NativeText(\"另一种发送行为\", \"Alternate send\"), value: \"⌘↩\")",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "NativeShortcutsPage.swift:17",
+      "anchor": "Section(NativeText(\"固定输入操作（只读）\", \"Fixed input operations (read only)\")) {",
+      "extraction": "syntax"
+    },
+    {
+      "id": "section-22",
+      "title": null,
+      "titleTemplate": null,
+      "dynamicTitle": false,
+      "titleExpression": null,
+      "titleSource": "absent",
+      "condition": null,
+      "collection": null,
+      "rows": [
+        {
+          "id": "恢复全部默认",
+          "label": "恢复全部默认",
+          "labelExpr": null,
+          "kind": "action",
+          "value": null,
+          "valueExpr": null,
+          "clickable": true,
+          "destination": null,
+          "writes": false,
+          "condition": null,
+          "provenance": "NativeShortcutsPage.swift:23",
+          "anchor": "Button(NativeText(\"恢复全部默认\", \"Reset all\"), role: .destructive) {",
+          "extraction": "syntax"
+        }
+      ],
+      "provenance": "NativeShortcutsPage.swift:22",
+      "anchor": "Section {",
+      "extraction": "syntax",
+      "criterion": {
+        "kind": "first-clickable-row",
+        "label": "恢复全部默认",
+        "provenance": "NativeShortcutsPage.swift:23"
+      }
+    }
+  ],
+  "actions": [
+    {
+      "id": "navigation-12",
+      "label": null,
+      "labelExpr": "nativeShortcutTitle(action)",
+      "kind": "navigation",
+      "trigger": "tap",
+      "semantic": "navigate:NativeShortcutEditor",
+      "writes": false,
+      "destination": "NativeShortcutEditor",
+      "condition": null,
+      "provenance": "NativeShortcutsPage.swift:12",
+      "anchor": "NavigationLink { NativeShortcutEditor(action: action) } label: {",
+      "extraction": "manual"
+    },
+    {
+      "id": "恢复全部默认",
+      "label": "恢复全部默认",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "{ preferences.resetAllShortcuts()",
+      "writes": false,
+      "destination": null,
+      "condition": null,
+      "provenance": "NativeShortcutsPage.swift:23",
+      "anchor": "Button(NativeText(\"恢复全部默认\", \"Reset all\"), role: .destructive) {",
+      "extraction": "syntax",
+      "labelAlternatives": []
+    }
+  ],
+  "presentations": [],
+  "states": {
+    "advisory": true,
+    "note": "advisory only: marker-based; row placeholders (未配置/未设置/—) are not page states, so the checker never compares this object",
+    "sites": {
+      "empty": [],
+      "data": [
+        {
+          "renders": "应用命令 | 固定输入操作（只读） | untitled section at 22",
+          "when": null,
+          "provenance": "NativeShortcutsPage.swift:5",
+          "anchor": "struct NativeShortcutsPage: View {",
+          "note": "structural default: the sections above, when no condition overrides them"
+        }
+      ],
+      "failure": [],
+      "unknown": [],
+      "loading": []
+    },
+    "absent": [
+      "empty",
+      "failure",
+      "unknown",
+      "loading"
+    ],
+    "coverage": {
+      "empty": 0,
+      "data": 1,
+      "failure": 0,
+      "unknown": 0,
+      "loading": 0
+    }
+  },
+  "subpages": [],
+  "unreachable": [],
+  "extraction": {
+    "tool": "extract_ios_pages.py",
+    "mode": "syntax",
+    "sectionKeywordsInPage": 3,
+    "regionsExtracted": 0,
+    "sectionsExtracted": 3,
+    "warnings": []
+  }
+}

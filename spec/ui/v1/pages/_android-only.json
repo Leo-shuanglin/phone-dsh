@@ -13,6 +13,12 @@
       "file": "android/lib/src/main/kotlin/com/phonedsh/ui/page/GoalDetailPage.kt",
       "reason": "The baseline has no `struct GoalDetailPage`: the goal is a bar in ChatPage (`GoalBar`) with sheet-based detail that the probe app never split into a page. Android implemented a standalone screen.",
       "evidence": "grep -rn 'struct GoalDetailPage' examples/probe-app → no match (README §1 lists it as `later`)"
+    },
+    {
+      "screen": "WebSurfacePage",
+      "file": "android/lib/src/main/kotlin/com/phonedsh/ui/page/WebSurfacePage.kt",
+      "reason": "PR 22 has no native `struct WebSurfacePage`: the iOS probe uses the native HomeSpec shell, while Android retains this additional Web surface.",
+      "evidence": "grep -rn 'struct WebSurfacePage' examples/probe-app → no match; the stale iOS web-surface contract was removed during the PR 22 rebaseline"
     }
   ]
 }
