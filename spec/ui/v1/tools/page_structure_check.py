@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check the Android pages against the iOS page-structure contract.
 
 Purpose: `spec/ui/v1/pages/<page-id>.json` is the machine-readable structure of an
