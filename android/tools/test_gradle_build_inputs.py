@@ -125,6 +125,7 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
             child
             for child in dists.iterdir()
             if (child / "gradle-8.13" / "bin" / "gradle").is_file()
+            and (child / "gradle-8.13-bin.zip.ok").is_file()
         ] if dists.is_dir() else []
         if not seeded:
             raise AssertionError(
@@ -137,6 +138,10 @@ class GradleBuildInputTaskGraphTests(unittest.TestCase):
         env = os.environ.copy()
         env["PDSH_JAVA_HOME"] = self.java_home
         env["PDSH_ANDROID_HOME"] = self.android_home
+        # Pin the exact cache the install seeded; otherwise a worker with a
+        # pre-existing GRADLE_USER_HOME/XDG could make the wrapper resolve a
+        # different distribution and fetch Gradle again.
+        env["PDSH_GRADLE_USER_HOME"] = self.gradle_user_home
         return env
 
     def task_graph(self, tasks):

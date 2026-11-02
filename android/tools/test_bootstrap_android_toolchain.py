@@ -498,6 +498,23 @@ class BootstrapToolchainTests(unittest.TestCase):
         check = self.run_script("--check", PDSH_GRADLE_USER_HOME=str(custom))
         self.assertEqual(check.returncode, 0, self.combined(check))
         self.assertIn("GRADLE_USER_HOME={}".format(custom), self.combined(check))
+        # The wrapper must resolve the same cache the install just seeded.
+        wrapper = Path(__file__).resolve().with_name("with-android-toolchain.sh")
+        wrapped = subprocess.run(
+            ["bash", str(wrapper), "bash", "-c", 'printf "%s\\n" "$GRADLE_USER_HOME"'],
+            cwd=str(self.root),
+            env=self.environment(
+                PDSH_GRADLE_USER_HOME=str(custom),
+                PDSH_JAVA_HOME=str(self.toolchain / "jdk-17"),
+                PDSH_ANDROID_HOME=str(self.toolchain / "android-sdk"),
+            ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            check=False,
+        )
+        self.assertEqual(wrapped.returncode, 0, wrapped.stdout)
+        self.assertIn(str(custom), wrapped.stdout.splitlines())
 
     def test_seed_repairs_incomplete_unpacked_gradle(self):
         cache = self.root / "broken-gradle-home"
