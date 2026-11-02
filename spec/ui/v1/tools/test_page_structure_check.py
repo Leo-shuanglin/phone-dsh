@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Mutation tests for `page_structure_check.py`.
 
 Purpose: a gate nobody mutates is a gate nobody trusts. Each test builds a tiny

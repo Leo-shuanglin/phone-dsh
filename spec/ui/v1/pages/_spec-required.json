@@ -8,7 +8,7 @@
       "destination": "RuntimeDetailsPage",
       "provenance": "SettingsPage.swift:287",
       "anchor": "NavigationLink {",
-      "specRef": "spec/ui/v1/README.md:63",
+      "specRef": "spec/ui/v1/README.md:65",
       "reason": "README §1 lists RuntimeDetailsPage's entrance as `页头运行状态点、设置行`. The baseline declares this settings row only inside the never-referenced `advancedSection` (label 运行状态), so its body never renders it. §1 wins: the Android row is named after the page (运行时详情), not after the dead label.",
       "note": "README §1 lists RuntimeDetailsPage's entrance as `页头运行状态点、设置行`. The baseline declares this row only inside the never-referenced `advancedSection` (SettingsPage.swift:287 NavigationLink → :288 RuntimeDetailsPage, dead label `运行状态` at :290), so its body never renders it. §1 wins: the Android row is named after the page (运行时详情), not after the dead label."
     },
