@@ -82,6 +82,129 @@ class SessionPagesTest {
     }
 
     @Test
+    fun `search filters host sessions and an unmatched query shows honest no-results copy`() {
+        val matching = drawer(
+            sessions = listOf(SessionListing("s1", "项目讨论"), SessionListing("s2", "周报草稿")),
+            local = SessionsLocalState(query = "项目"),
+        )
+        val state = mutableStateOf(matching)
+        compose.setContent { PdshTheme { Drawer(state = state.value) } }
+        compose.onNodeWithTag(UiPageTags.SESSIONS_SEARCH).assertIsDisplayed()
+        compose.onNodeWithText("项目讨论").assertIsDisplayed()
+        compose.onNodeWithText("周报草稿").assertDoesNotExist()
+
+        val noMatch = drawer(
+            sessions = listOf(SessionListing("s1", "项目讨论")),
+            local = SessionsLocalState(query = "不存在的词"),
+        )
+        compose.runOnIdle { state.value = noMatch }
+        compose.onNodeWithTag(UiPageTags.SESSIONS_LIST)
+            .performScrollToNode(hasTestTag(SESSION_SEARCH_NO_RESULTS_TAG))
+        compose.onNodeWithTag(SESSION_SEARCH_NO_RESULTS_TAG).assertIsDisplayed()
+        compose.onNodeWithText("没有结果").assertIsDisplayed()
+        compose.onNodeWithText("没有找到与“不存在的词”匹配的会话。").assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.SESSIONS_SECTION_EMPTY).assertDoesNotExist()
+    }
+
+    @Test
+    fun `daily grouping and unassigned sessions remain visible with unknown folder facts`() {
+        val state = mutableStateOf(drawer(
+            sessions = listOf(
+                SessionListing("daily-1", "日常里的会话"),
+                SessionListing("loose-1", "未归属的会话"),
+            ),
+            workspaces = listOf(SessionWorkspace("daily", "workspace", listOf("daily-1"))),
+        ))
+        compose.setContent { PdshTheme { Drawer(state = state.value) } }
+        compose.onNodeWithText("日常").assertIsDisplayed()
+        compose.onNodeWithText("日常里的会话").assertIsDisplayed()
+        compose.onNodeWithText("未归属的会话").assertIsDisplayed()
+
+        val unknown = drawer(
+            sessions = listOf(SessionListing("loose-1", "未归属的会话")),
+            workspaces = null,
+        )
+        compose.runOnIdle { state.value = unknown }
+        compose.onNodeWithText("未归属的会话").assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.SESSIONS_WORKSPACE_UNKNOWN).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.SESSIONS_WORKSPACE_UNKNOWN_HINT).assertIsDisplayed()
+    }
+
+    @Test
+    fun `session mutation success and context loss require a host receipt`() {
+        val base = drawer(sessions = listOf(SessionListing("s1", "当前会话")))
+        val state = mutableStateOf(base)
+        compose.setContent { PdshTheme { Drawer(state = state.value) } }
+        compose.onNodeWithTag(PAGE_MUTATION_RECEIPT_TAG).assertDoesNotExist()
+
+        val confirmed = base.copy(
+            mutationReceipt = PageMutationReceipt(
+                operation = PageMutationOperation.SESSION_ARCHIVE,
+                outcome = PageMutationOutcome.SUCCEEDED,
+                subject = "当前会话",
+                contextLost = true,
+            ),
+        )
+        compose.runOnIdle { state.value = confirmed }
+        compose.onNodeWithTag(PAGE_MUTATION_RECEIPT_TAG).assertIsDisplayed()
+        compose.onNodeWithText("当前会话已归档；当前上下文已离开。").assertIsDisplayed()
+    }
+
+    @Test
+    fun `archive callback alone never displays a success receipt`() {
+        val base = drawer(
+            sessions = listOf(SessionListing("s1", "待归档会话")),
+            local = SessionsLocalState(sessionMenuID = "s1"),
+        )
+        val state = mutableStateOf(base)
+        var dispatched = 0
+        compose.setContent {
+            PdshTheme {
+                Drawer(
+                    state = state.value,
+                    onArchiveSession = { dispatched += 1 },
+                )
+            }
+        }
+        compose.onNodeWithTag(UiPageTags.SESSIONS_SESSION_ARCHIVE).performClick()
+        assertEquals(1, dispatched)
+        compose.onNodeWithTag(PAGE_MUTATION_RECEIPT_TAG).assertDoesNotExist()
+
+        compose.runOnIdle {
+            state.value = base.copy(
+                mutationReceipt = PageMutationReceipt(
+                    operation = PageMutationOperation.SESSION_ARCHIVE,
+                    outcome = PageMutationOutcome.SUCCEEDED,
+                    subject = "待归档会话",
+                ),
+            )
+        }
+        compose.onNodeWithText("待归档会话已归档，可在已归档会话中恢复").assertIsDisplayed()
+    }
+
+    @Test
+    fun `workspace delete receipt confirms sessions remain unfiled`() {
+        val base = drawer(
+            sessions = listOf(SessionListing("s1", "保留的会话")),
+            workspaces = listOf(SessionWorkspace("w1", "Project A", listOf("s1"))),
+        )
+        val state = mutableStateOf(base)
+        compose.setContent { PdshTheme { Drawer(state = state.value) } }
+        compose.onNodeWithTag(PAGE_MUTATION_RECEIPT_TAG).assertDoesNotExist()
+
+        compose.runOnIdle {
+            state.value = base.copy(
+                mutationReceipt = PageMutationReceipt(
+                    operation = PageMutationOperation.WORKSPACE_DELETE,
+                    outcome = PageMutationOutcome.SUCCEEDED,
+                    subject = "Project A",
+                ),
+            )
+        }
+        compose.onNodeWithText("Project A已删除；其中的会话已保留").assertIsDisplayed()
+    }
+
+    @Test
     fun `a blocked new-session row is disabled and explains why`() {
         val state = drawer(newSessionBlock = NewSessionBlock.TURN_RUNNING)
         var created = 0

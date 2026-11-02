@@ -25,6 +25,7 @@
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,6 +64,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.SessionsMetrics
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.surface.PageBarCapsule
 import com.phonedsh.ui.surface.SettingsSubPageFrame
 import com.phonedsh.ui.theme.LocalUiTokens
@@ -113,6 +115,8 @@ public data class WorkspaceFoldersSnapshot(
      * follows when it renders 未知 instead of 0.
      */
     public val writable: FactState = FactState.UNKNOWN,
+    /** Last host-confirmed workspace write, or `null` when no result was reported. */
+    public val mutationReceipt: PageMutationReceipt? = null,
 )
 
 /** The four states the page distinguishes. */
@@ -208,6 +212,7 @@ public data class WorkspaceFoldersScreenState(
     public val deleteTargetID: String?,
     public val hasUnmeasuredValues: Boolean,
     public val canWrite: Boolean = true,
+    public val mutationReceipt: PageMutationReceipt? = null,
 ) {
     /** True when the host reported an empty list. */
     public val isEmpty: Boolean get() = status == WorkspaceFoldersStatus.EMPTY
@@ -265,6 +270,7 @@ public data class WorkspaceFoldersScreenState(
                 deleteTargetID = deleteTargetID,
                 hasUnmeasuredValues = folders.any { it.sessionCount == null },
                 canWrite = snapshot.writable != FactState.NO,
+                mutationReceipt = snapshot.mutationReceipt,
             )
         }
     }
@@ -381,6 +387,7 @@ public fun WorkspaceFoldersPage(
         },
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
+            state.mutationReceipt?.let { PageMutationReceiptLine(it) }
             if (state.failure != null) {
                 SessionFailureLine(
                     message = state.failure,
@@ -605,10 +612,15 @@ private fun WorkspaceCreateDialog(
 private fun FolderRow(folder: WorkspaceFolderView, onOpenFiles: (WorkspaceFolderView) -> Unit) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
+    val rowShape = RoundedCornerShape(HomeMetrics.LIST_CARD_RADIUS_PT.dp)
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(horizontal = tokens.geometry.pageOuterMarginH)
+                .clip(rowShape)
+                .background(tokens.colors.surface, rowShape)
+                .border(1.dp, tokens.colors.borderList, rowShape)
                 .testTag(UiPageTags.WORKSPACE_ROW)
                 // Opening a folder's file list is a READ; `writable` gates creating,
                 // switching and deleting (and the host correctly reports NO for those
@@ -616,8 +628,8 @@ private fun FolderRow(folder: WorkspaceFolderView, onOpenFiles: (WorkspaceFolder
                 // host that is honest about being read-only, which is every host —
                 // the drawer row was the only way left into the Files page.
                 .clickable(role = Role.Button, onClick = { onOpenFiles(folder) })
-                // Page-level geometry: a folder row is a compact list row and uses the
-                // page margin.
+                // HomeSpec's grouped row floor is 48 pt. The host can still make the
+                // row taller when its name or metadata wraps.
                 .defaultMinSize(minHeight = tokens.geometry.pageListRowMinHeight)
                 .padding(horizontal = tokens.geometry.pageOuterMarginH)
                 .semantics(mergeDescendants = true) {},
@@ -774,7 +786,7 @@ internal fun workspaceDisplayName(raw: String): String {
     val trimmed = raw.trim()
     return when {
         trimmed.isEmpty() -> UiStrings.UNKNOWN
-        trimmed.lowercase() == DEFAULT_FOLDER_NAME -> UiStrings.WORKSPACE_DEFAULT_NAME
+        trimmed.lowercase() == DEFAULT_FOLDER_NAME -> UiStrings.DRAWER_DEFAULT_FOLDER
         else -> trimmed
     }
 }

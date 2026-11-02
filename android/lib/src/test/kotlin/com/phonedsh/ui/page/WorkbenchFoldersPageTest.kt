@@ -407,7 +407,7 @@ class WorkspaceFoldersPageTest {
         showLive(snapshot, onOpenFiles = { opened = it })
         compose.onNodeWithTag(UiPageTags.WORKSPACE_LIST).assertIsDisplayed()
         // The built-in `workspace` folder is reworded for display.
-        compose.onNodeWithText(UiStrings.WORKSPACE_DEFAULT_NAME).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.DRAWER_DEFAULT_FOLDER).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.WORKSPACE_SESSION_COUNT.format(2)).assertIsDisplayed()
         // The second folder's count was not measured: 未知 plus one explanation line.
         compose.onNodeWithText(UiStrings.UNKNOWN).assertIsDisplayed()
@@ -416,7 +416,7 @@ class WorkspaceFoldersPageTest {
         // folders are not actions in WorkspaceFoldersPage.swift.
         compose.onNodeWithTag(UiPageTags.WORKSPACE_SWITCH).assertDoesNotExist()
         compose.onNodeWithTag(UiPageTags.WORKSPACE_DELETE).assertDoesNotExist()
-        compose.onNodeWithText(UiStrings.WORKSPACE_DEFAULT_NAME).performClick()
+        compose.onNodeWithText(UiStrings.DRAWER_DEFAULT_FOLDER).performClick()
         assertEquals("w1", opened?.id)
     }
 

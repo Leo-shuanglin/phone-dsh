@@ -110,20 +110,12 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.foundation.Canvas
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -138,7 +130,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.phonedsh.ui.SessionsMetrics
+import com.phonedsh.ui.HomeMetrics
+import com.phonedsh.ui.icon.PdshIcon
+import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
@@ -163,13 +159,57 @@ public enum class SessionRunStatus {
 /** Whether the list has been read, is still waiting, or the last read failed. */
 public enum class SessionListStatus { WAITING, READY, FAILED }
 
+/** A host-confirmed mutation result. Pages never infer success from a callback returning. */
+public data class PageMutationReceipt(
+    public val operation: PageMutationOperation,
+    public val outcome: PageMutationOutcome,
+    /** The host-reported object name, when it is safe and useful to show. */
+    public val subject: String? = null,
+    /** The host's failure reason; shown only when [outcome] is [PageMutationOutcome.FAILED]. */
+    public val failureReason: String? = null,
+    /** True only when the host confirms that archiving removed the active conversation context. */
+    public val contextLost: Boolean = false,
+) {
+    /** Human-readable copy derived from the typed result, never from an action callback. */
+    public val message: String
+        get() {
+            if (outcome == PageMutationOutcome.FAILED) {
+                return failureReason?.takeIf(String::isNotBlank) ?: "操作未完成，原有内容已保留"
+            }
+            val name = subject?.takeIf(String::isNotBlank)
+            if (operation == PageMutationOperation.SESSION_ARCHIVE && contextLost) {
+                return "${name ?: "会话"}已归档；当前上下文已离开。"
+            }
+            return when (operation) {
+                PageMutationOperation.SESSION_RENAME -> "${name ?: "会话"}已重命名"
+                PageMutationOperation.SESSION_ARCHIVE -> "${name ?: "会话"}已归档，可在已归档会话中恢复"
+                PageMutationOperation.SESSION_RESTORE -> "${name ?: "会话"}已恢复"
+                PageMutationOperation.WORKSPACE_CREATE -> "${name ?: "工作文件夹"}已创建"
+                PageMutationOperation.WORKSPACE_RENAME -> "${name ?: "工作文件夹"}已重命名"
+                PageMutationOperation.WORKSPACE_DELETE -> "${name ?: "工作文件夹"}已删除；其中的会话已保留"
+            }
+        }
+}
+
+/** Operations for which a page can present a host-confirmed receipt. */
+public enum class PageMutationOperation {
+    SESSION_RENAME,
+    SESSION_ARCHIVE,
+    SESSION_RESTORE,
+    WORKSPACE_CREATE,
+    WORKSPACE_RENAME,
+    WORKSPACE_DELETE,
+}
+
+/** A success is shown only when the host supplies [SUCCEEDED]. */
+public enum class PageMutationOutcome { SUCCEEDED, FAILED }
+
 /**
  * Why the list has no visible row.
  *
- * `NO_SESSIONS` is the baseline's completely-empty drawer (no folder, no
- * ungrouped session and no archived session). The page renders that as its
- * Section 2 block. `NO_MATCHES` is only an observation for callers; the
- * baseline has no [global] no-match screen, so the page does not render one.
+ * `NO_SESSIONS` is a host-confirmed completely-empty drawer (no folder, active
+ * session or archived session). `NO_MATCHES` means real host data exists but
+ * the query filtered every session out.
  */
 public enum class SessionsEmpty {
     NONE,
@@ -389,8 +429,8 @@ public enum class SessionWorkspaceStatus {
  * @param workspaces the folder sections, in host `workspaceOrder` order.
  * @param archived the 已归档 section.
  * @param newSessionBlock why 新建会话 is disabled; `null` when it is enabled.
- * @param completelyEmpty the baseline's `isCompletelyEmpty`: the only condition
- *   under which Section 2 (and only it) replaces Sections 4 and 5.
+ * @param completelyEmpty true only when all required host lists were reported
+ *   and the unfiltered host data has no workspace, active session or archive.
  * @param renameWorkspace the open workspace rename editor.
  * @param deleteWorkspaceTargetID the workspace awaiting delete confirmation.
  * @param creatingWorkspace whether the 新建工作文件夹 dialog is open.
@@ -417,6 +457,8 @@ public data class SessionsScreenState(
     public val newWorkspaceDraft: String = "",
     /** True while a host refresh is in flight (the pull-to-refresh indicator). */
     public val refreshInFlight: Boolean = false,
+    /** A receipt from the host after it confirms a mutation; `null` means no result was reported. */
+    public val mutationReceipt: PageMutationReceipt? = null,
 ) {
     /** True while the host has not delivered a list yet. */
     public val waiting: Boolean get() = status == SessionListStatus.WAITING
@@ -465,6 +507,7 @@ public data class SessionsScreenState(
             pinnedSessionIDs: List<String>? = null,
             workspaceOrder: List<String>? = null,
             refreshing: Boolean = false,
+            mutationReceipt: PageMutationReceipt? = null,
         ): SessionsScreenState {
             val status = when {
                 failure != null -> SessionListStatus.FAILED
@@ -542,19 +585,20 @@ public data class SessionsScreenState(
                     )
                 },
             )
-            // The baseline's `isCompletelyEmpty`: every input must be known, and
-            // all three must be empty. An unreported list can never prove it.
+            // Every input must be known, and the host facts (before search
+            // filtering) must be empty. An unreported list can never prove it;
+            // a query that hides real rows is a no-match state, not an empty app.
             val completelyEmpty = status == SessionListStatus.READY &&
                 workspaces != null && workspaces.isEmpty() &&
-                ungroupedRows.isEmpty() &&
+                active.isEmpty() &&
                 archivedSessions != null && archivedSessions.isEmpty()
             val hasAnyRow = ungroupedRows.isNotEmpty() ||
                 workspaceViews.any { it.sessions.isNotEmpty() } ||
                 archived.rows.isNotEmpty()
             val empty = when {
                 status != SessionListStatus.READY -> SessionsEmpty.NONE
+                query.isNotEmpty() && !completelyEmpty && !hasAnyRow -> SessionsEmpty.NO_MATCHES
                 completelyEmpty -> SessionsEmpty.NO_SESSIONS
-                query.isNotEmpty() && !hasAnyRow -> SessionsEmpty.NO_MATCHES
                 else -> SessionsEmpty.NONE
             }
             val workspaceStatus = when {
@@ -592,6 +636,7 @@ public data class SessionsScreenState(
                 creatingWorkspace = local.creatingWorkspace,
                 newWorkspaceDraft = local.newWorkspaceDraft,
                 refreshInFlight = refreshing,
+                mutationReceipt = mutationReceipt,
             )
         }
     }
@@ -701,9 +746,9 @@ public fun SessionsPage(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                // `colors.background` is tier unmeasured; the page surface is the one
-                // token whose light value is #FFFFFF, which is what the baseline paints.
-                .background(tokens.colors.input)
+                // PR22 pages sit on HomeSpec's #F7F7F7 fill; row and search
+                // surfaces stay white inside that page layer.
+                .background(tokens.colors.page)
                 .testTag(UiPageTags.SESSIONS_ROOT)
                 .statusBarsPadding()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
@@ -726,6 +771,7 @@ public fun SessionsPage(
             // The baseline's `.searchable(navigationBarDrawer)`: a white capsule
             // pinned under the bar, above the scrolling list.
             SessionsSearchField(query = state.query, onQueryChange = onQueryChange)
+            state.mutationReceipt?.let { PageMutationReceiptLine(it) }
             // The page fills the width it is given; the 320 pt drawer is the
             // *container's* number, not this page's (`NativeShell.swift:97` frames the
             // drawer at 320, and the baseline's own `sessions` state is captured in the
@@ -852,20 +898,12 @@ private fun SessionsNavBar(onBack: (() -> Unit)?, onOpenDrawer: (() -> Unit)?) {
                     .testTag("sessions.drawer"),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                Canvas(Modifier.size(DRAWER_GLYPH_WIDTH_PT.dp, DRAWER_GLYPH_HEIGHT_PT.dp)) {
-                    val xEnd = size.width
-                    val rows = 3
-                    repeat(rows) { index ->
-                        val y = size.height * (index + 0.5f) / rows
-                        drawLine(
-                            color = tokens.colors.secondary,
-                            start = Offset.Zero.copy(y = y),
-                            end = Offset(xEnd, y),
-                            strokeWidth = DRAWER_GLYPH_STROKE_PT.dp.toPx(),
-                            cap = StrokeCap.Round,
-                        )
-                    }
-                }
+                PdshIconView(
+                    icon = PdshIcon.MENU,
+                    size = DRAWER_GLYPH_WIDTH_PT.dp,
+                    tint = tokens.colors.secondary,
+                    contentDescription = null,
+                )
             }
         }
     }
@@ -939,26 +977,73 @@ private fun SessionsSearchField(query: String, onQueryChange: (String) -> Unit) 
     }
 }
 
+/** A visible search result state; the typed query remains in the field for correction. */
+@Composable
+private fun NoSessionMatchesBlock(query: String) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(SESSION_SEARCH_NO_RESULTS_TAG)
+            .padding(
+                horizontal = tokens.geometry.pageOuterMarginH,
+                vertical = tokens.spacing.cardInset,
+            )
+            .semantics { liveRegion = LiveRegionMode.Polite },
+        verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
+    ) {
+        BasicText(
+            text = "没有结果",
+            style = type.body.copy(color = tokens.colors.textPrimary, fontWeight = FontWeight.SemiBold),
+        )
+        BasicText(
+            text = "没有找到与“${query.trim()}”匹配的会话。",
+            style = type.secondary.copy(color = tokens.colors.textSecondary),
+        )
+    }
+}
+
+/** Renders only a typed result supplied by the host; dispatching a write is not a receipt. */
+@Composable
+internal fun PageMutationReceiptLine(receipt: PageMutationReceipt) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    BasicText(
+        text = receipt.message,
+        style = type.secondary.copy(
+            color = if (receipt.outcome == PageMutationOutcome.FAILED) {
+                tokens.colors.danger
+            } else {
+                tokens.colors.textSecondary
+            },
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(PAGE_MUTATION_RECEIPT_TAG)
+            .padding(
+                horizontal = tokens.geometry.pageOuterMarginH,
+                vertical = tokens.spacing.badgeInsetV,
+            )
+            .semantics {
+                liveRegion = if (receipt.outcome == PageMutationOutcome.FAILED) {
+                    LiveRegionMode.Assertive
+                } else {
+                    LiveRegionMode.Polite
+                }
+            },
+    )
+}
+
 /** The iOS search field's 16 pt `magnifyingglass` symbol. */
 @Composable
 private fun SessionsSearchGlyph(ink: Color) {
-    Canvas(Modifier.size(SESSIONS_SEARCH_GLYPH_SIZE_PT.dp)) {
-        val radius = size.minDimension * 0.31f
-        val center = Offset(size.width * 0.39f, size.height * 0.39f)
-        val stroke = size.minDimension * 0.11f
-        drawCircle(color = ink, radius = radius, center = center, style = Stroke(width = stroke))
-        val handleStart = Offset(
-            center.x + radius * 0.7f,
-            center.y + radius * 0.7f,
-        )
-        drawLine(
-            color = ink,
-            start = handleStart,
-            end = Offset(size.width * 0.88f, size.height * 0.88f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-    }
+    PdshIconView(
+        icon = PdshIcon.SEARCH,
+        size = SESSIONS_SEARCH_GLYPH_SIZE_PT.dp,
+        tint = ink,
+        contentDescription = null,
+    )
 }
 
 /** The drawer's scrollable body, in the baseline's order. */
@@ -1040,15 +1125,21 @@ private fun SessionsList(
             )
         }
 
-        // Section 2: the completely-empty drawer. It replaces Sections 4
-        // and 5 only when the host reported all three lists and all are
-        // empty; a filter that hides every ungrouped row also counts.
-        if (state.completelyEmpty) {
+        // Section 2: the completely-empty drawer. A query that hides real host
+        // rows has its own explicit no-match item instead of claiming this app
+        // has no sessions.
+        if (state.completelyEmpty && state.empty != SessionsEmpty.NO_MATCHES) {
             item(key = "empty-drawer") {
                 CompletelyEmptyBlock(
                     onCreateWorkspace = onAddWorkspace,
                     showCreateAction = workspaceActionsAvailable,
                 )
+            }
+        }
+
+        if (state.empty == SessionsEmpty.NO_MATCHES) {
+            item(key = "search-no-matches") {
+                NoSessionMatchesBlock(query = state.query)
             }
         }
 
@@ -1109,7 +1200,7 @@ private fun SessionsList(
 
         // Section 4: add a workspace. The completely-empty block already
         // owns the entry point, so the row is hidden in that state.
-        if (!state.completelyEmpty && workspaceActionsAvailable) {
+        if ((!state.completelyEmpty || state.empty == SessionsEmpty.NO_MATCHES) && workspaceActionsAvailable) {
             item(key = "add-workspace") {
                 AddWorkspaceRow(onAddWorkspace = onAddWorkspace)
             }
@@ -1117,7 +1208,7 @@ private fun SessionsList(
 
         // Section 5: archived sessions. Hidden together with Section 4
         // while the drawer is completely empty.
-        if (!state.completelyEmpty) {
+        if (!state.completelyEmpty || state.empty == SessionsEmpty.NO_MATCHES) {
             item(key = "archived-header") {
                 ArchivedHeader(
                     state = state,
@@ -1250,8 +1341,8 @@ private fun SessionsFailureLine(
 /**
  * One session row, its long-press `DropdownMenu` and the current check mark.
  *
- * The baseline's row: `bubble.left` in a 17 pt box, the title on 17 pt, the
- * relative time and the run dot on 12 pt, a 56 pt floor, and a 288 pt hairline
+ * The baseline's row: `bubble.left` in a 17 pt box, the title on 16 pt, the
+ * relative time at HomeSpec's 14/22 metadata role, a 56 pt source row floor, and a 288 pt hairline
  * pinned to the row's leading edge as an *overlay*.
  *
  * Two things the overlay placement changes, both measured on `ios-sessions-many`:
@@ -1281,13 +1372,18 @@ private fun SessionItem(
         label = "session-row-press",
     )
     Box(modifier = Modifier.fillMaxWidth()) {
+        val rowShape = RoundedCornerShape(HomeMetrics.LIST_CARD_RADIUS_PT.dp)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(horizontal = tokens.geometry.pageOuterMarginH)
+                .clip(rowShape)
+                .background(tokens.colors.surface, rowShape)
+                .border(1.dp, tokens.colors.borderList, rowShape)
                 .testTag(UiPageTags.SESSION_ROW)
                 .background(
                     color = tokens.colors.selector.copy(alpha = pressFill),
-                    shape = RoundedCornerShape(tokens.radius.card),
+                    shape = rowShape,
                 )
                 .combinedClickable(
                     interactionSource = interaction,
@@ -1296,11 +1392,9 @@ private fun SessionItem(
                     onClick = { onSelect(row) },
                     onLongClick = { onSessionMenuToggle(row) },
                 )
-                // The baseline's row: 56 pt floor, a 16 pt inset plus an 8 pt
-                // inner pad (so the glyph lands on 24 and the title on 51), a
-                // 17 pt glyph box and a 10 pt glyph-to-text gap.
+                // Source floor is 56 pt; the 16 pt card inset plus 8 pt content
+                // inset puts the glyph at the same 24 pt baseline position.
                 .heightIn(min = SessionsMetrics.sessionRowHeight)
-                .padding(horizontal = SessionsMetrics.rowInset)
                 .padding(horizontal = SessionsMetrics.SESSION_ROW_INNER_INSET_PT.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_GLYPH_GAP_PT.dp),
@@ -1312,9 +1406,9 @@ private fun SessionItem(
             ) {
                 BasicText(
                     text = row.title,
-                    style = type.headline.copy(
+                    style = type.body.copy(
                         fontWeight = FontWeight.Normal,
-                        color = tokens.colors.primary,
+                        color = tokens.colors.textPrimary,
                         platformStyle = PlatformTextStyle(includeFontPadding = false),
                     ),
                     maxLines = 1,
@@ -1327,8 +1421,10 @@ private fun SessionItem(
                     if (row.timeLabel != null) {
                         BasicText(
                             text = row.timeLabel,
-                            style = type.caption.copy(
-                                color = tokens.colors.secondary,
+                            style = type.secondary.copy(
+                                color = tokens.colors.textSecondary,
+                                fontSize = HomeMetrics.LIST_ITEM_SIZE_PT.sp,
+                                lineHeight = HomeMetrics.LIST_ITEM_LINE_PT.sp,
                                 platformStyle = PlatformTextStyle(includeFontPadding = false),
                             ),
                         )
@@ -1339,17 +1435,25 @@ private fun SessionItem(
                     if (row.status == SessionRunStatus.RUNNING) {
                         BasicText(
                             text = SEPARATOR_GLYPH,
-                            style = type.caption.copy(color = tokens.colors.secondary),
+                            style = type.secondary.copy(
+                                color = tokens.colors.textSecondary,
+                                fontSize = HomeMetrics.LIST_ITEM_SIZE_PT.sp,
+                                lineHeight = HomeMetrics.LIST_ITEM_LINE_PT.sp,
+                            ),
                         )
                         Box(
                             modifier = Modifier
                                 .size(SessionsMetrics.SESSION_RUNNING_DOT_PT.dp)
                                 .clip(CircleShape)
-                                .background(tokens.colors.secondary),
+                            .background(tokens.colors.textSecondary),
                         )
                         BasicText(
                             text = UiStrings.RUNNING,
-                            style = type.caption.copy(color = tokens.colors.secondary),
+                            style = type.secondary.copy(
+                                color = tokens.colors.textSecondary,
+                                fontSize = HomeMetrics.LIST_ITEM_SIZE_PT.sp,
+                                lineHeight = HomeMetrics.LIST_ITEM_LINE_PT.sp,
+                            ),
                         )
                     }
                 }
@@ -1606,22 +1710,12 @@ private fun WorkspaceRow(
  */
 @Composable
 private fun WorkspaceMenuGlyph(ink: Color) {
-    Canvas(
-        modifier = Modifier.size(
-            width = WORKSPACE_MENU_GLYPH_W_PT.dp,
-            height = WORKSPACE_MENU_GLYPH_H_PT.dp,
-        ),
-    ) {
-        val radius = size.height / 2f
-        val gap = (size.width - 3 * size.height) / 2f
-        repeat(3) { index ->
-            drawCircle(
-                color = ink,
-                radius = radius,
-                center = Offset(x = radius + index * (size.height + gap), y = radius),
-            )
-        }
-    }
+    PdshIconView(
+        icon = PdshIcon.MORE,
+        size = WORKSPACE_MENU_GLYPH_W_PT.dp,
+        tint = ink,
+        contentDescription = null,
+    )
 }
 
 /** The expanded folder's empty copy; the query can empty a folder too. */
@@ -2141,7 +2235,7 @@ internal fun displayTitle(raw: String, index: Int): String = sessionTitle(raw, i
 
 /**
  * The visible workspace name, the baseline's `DrawerTitles.workspaceTitle`:
- * a default/blank name becomes 工作文件夹 (numbered from the second folder), a
+ * a default/blank name becomes 日常 (numbered from the second folder), a
  * path-like name keeps only its last segment, and an empty segment falls back
  * to 未命名文件夹.
  */
@@ -2149,9 +2243,9 @@ internal fun workspaceTitle(raw: String, index: Int): String {
     val trimmed = raw.trim()
     if (trimmed.isEmpty() || trimmed.lowercase() in DEFAULT_WORKSPACE_TITLES) {
         return if (index > 1) {
-            UiStrings.SESSIONS_WORKSPACE_INDEXED.format(index)
+            UiStrings.DRAWER_DEFAULT_FOLDER_INDEXED.format(index)
         } else {
-            UiStrings.SESSIONS_WORKSPACE_DEFAULT
+            UiStrings.DRAWER_DEFAULT_FOLDER
         }
     }
     return lastSegmentName(trimmed, UiStrings.SESSIONS_WORKSPACE_UNNAMED)
@@ -2268,91 +2362,28 @@ private const val SEPARATOR_GLYPH: String = "·"
 private const val ELLIPSIS: String = "…"
 
 /**
- * The session row's leading glyph: the baseline's `bubble.left`
- * (`SessionsPage.swift:549`: `Image(systemName: "bubble.left")` at 15 pt in a
- * 17 x 17 pt frame, secondary ink).
- *
- * It used to be the text glyph "▢", which renders as a 10.3 pt hollow square
- * sitting 5.3 pt below the row's optical centre — a different shape, size and
- * baseline from the baseline's speech balloon (`ios-sessions-many.png` measures
- * the balloon's ink at 15.3 x 15.3 pt inside the 17 pt box). `:lib` carries no
- * icon dependency (there is no `material-icons` artifact on its classpath and no
- * asset pipeline for an SF Symbol), so the balloon is drawn here as a vector
- * proportioned to the one box the metric file already owns. Replace this with a
- * real `bubble.left` asset when one lands; nothing outside this composable
- * depends on the drawing.
+ * The session row's registered `bubble.left` icon, secondary ink.
  */
 @Composable
 private fun SessionRowGlyph(ink: Color) {
-    Canvas(
-        modifier = Modifier.size(
-            width = SessionsMetrics.SESSION_GLYPH_BOX_PT.dp,
-            height = SessionsMetrics.SESSION_GLYPH_BOX_PT.dp,
-        ),
+    Box(
+        modifier = Modifier.size(SessionsMetrics.SESSION_GLYPH_BOX_PT.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        val stroke = size.minDimension * GLYPH_STROKE_RATIO
-        // The symbol's ink is 16.3 x 15.3 pt inside the 17 pt frame
-        // (`ios-sessions-many.png` row 1: x 24.3-40.3, y 353.3-368.3), so the
-        // balloon is laid out in that ink box instead of the frame: the stroke
-        // straddles the path, hence the half-stroke insets.
-        val inkWidth = size.width * (SESSION_GLYPH_INK_W_PT / SessionsMetrics.SESSION_GLYPH_BOX_PT)
-        val inkHeight = size.height * (SESSION_GLYPH_INK_H_PT / SessionsMetrics.SESSION_GLYPH_BOX_PT)
-        val left = (size.width - inkWidth) / 2f
-        val top = (size.height - inkHeight) / 2f
-        val bodyTop = top + stroke / 2f
-        val bodyBottom = top + inkHeight * GLYPH_BODY_BOTTOM_RATIO
-        val radius = size.minDimension * GLYPH_BODY_RADIUS_RATIO
-        val body = Path().apply {
-            addRoundRect(
-                RoundRect(
-                    left = left + stroke / 2f,
-                    top = bodyTop,
-                    right = left + inkWidth - stroke / 2f,
-                    bottom = bodyBottom,
-                    cornerRadius = CornerRadius(radius, radius),
-                ),
-            )
-        }
-        // The tail: down from the body's lower-left, then back up into it. A
-        // separate stroke, so the two shapes read as one balloon at this size.
-        val tail = Path().apply {
-            moveTo(left + inkWidth * 0.22f, bodyBottom - stroke / 2f)
-            lineTo(left + inkWidth * 0.17f, top + inkHeight - stroke / 2f)
-            lineTo(left + inkWidth * 0.46f, bodyBottom - stroke / 2f)
-        }
-        drawPath(body, color = ink, style = Stroke(width = stroke))
-        // A round join, not the default miter: the tail's V is acute, and a miter
-        // would push the corner ~1 pt below the ink box (measured 16.3 pt tall
-        // against the symbol's 15.3).
-        drawPath(
-            tail,
-            color = ink,
-            style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round),
+        PdshIconView(
+            icon = PdshIcon.CHAT_BUBBLE,
+            size = 24.dp,
+            tint = ink,
+            contentDescription = null,
         )
     }
 }
-
-/** Balloon outline width as a fraction of the 17 pt box (`bubble.left` at 15 pt ≈ 1.5 pt). */
-private const val GLYPH_STROKE_RATIO: Float = 0.085f
-
-/** The balloon's ink width inside the 17 pt frame, measured on `ios-sessions-many.png`. */
-private const val SESSION_GLYPH_INK_W_PT: Float = 16.3f
-
-/** The balloon's ink height inside the 17 pt frame, measured on `ios-sessions-many.png`. */
-private const val SESSION_GLYPH_INK_H_PT: Float = 15.3f
-
-/** The balloon body's bottom edge as a fraction of its ink box (the tail hangs below). */
-private const val GLYPH_BODY_BOTTOM_RATIO: Float = 0.72f
-
-/** The balloon body's corner radius as a fraction of the 17 pt box. */
-private const val GLYPH_BODY_RADIUS_RATIO: Float = 0.22f
 
 /**
  * The ellipsis ink: three 4 pt dots 18.3 pt end to end
  * (`SessionsPage.swift:452-453`, measured on `ios-sessions-empty.png`).
  */
 private const val WORKSPACE_MENU_GLYPH_W_PT: Float = 18.3f
-private const val WORKSPACE_MENU_GLYPH_H_PT: Float = 4f
 
 /** The baseline's row gap before the check mark: `Spacer(minLength: 4)` (`:572`). */
 private const val SESSIONS_CHECK_GAP_PT: Int = 4
@@ -2374,9 +2405,9 @@ private const val WORKSPACE_SESSIONS_EMPTY_TOP_PT: Float = 61.3f
 private const val SESSIONS_ADD_WORKSPACE_INSET_PT: Float = 32.7f
 private const val SESSIONS_SEARCH_GLYPH_SIZE_PT: Float = 16f
 private const val SESSIONS_SEARCH_GLYPH_GAP_PT: Float = 6.4f
+internal const val SESSION_SEARCH_NO_RESULTS_TAG: String = "pdsh.sessions.search.no-results"
+internal const val PAGE_MUTATION_RECEIPT_TAG: String = "pdsh.page.mutation-receipt"
 private const val DRAWER_GLYPH_WIDTH_PT: Int = 20
-private const val DRAWER_GLYPH_HEIGHT_PT: Int = 16
-private const val DRAWER_GLYPH_STROKE_PT: Float = 1.7f
 
 /** The row's pressed fill: `.easeIn(duration: 0.15)` (`SessionsPage.swift:652`). */
 private const val ROW_PRESS_MS: Int = 150
