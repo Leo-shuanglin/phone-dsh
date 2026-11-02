@@ -111,7 +111,7 @@ DIVERGENCE_CLASSES = ("os-forced", "hardware-absent", "policy-forbidden", "copy-
 | **产物预览** | 真 `ACTION_SEND` → 设备上弹出系统 chooser（`ChooserActivityLauncher`，带真实文件名与 MIME） |
 | **文件预览面** | 路径解析器 + 512 KiB 分页 + 五类渲染器（文本 / Markdown / 图片 / PDF / 音视频）+ `FileProvider` 分享 + 有界重试 + 首帧 `正在读取…` |
 | **Settings 五分页** | `通用 / 模型 / 插件 / 手机权限 / 预设`，主入口达可比级 |
-| **抽屉 8 行** | `Files` 页首次可从 App 进入（设备证据：抽屉 → 手机工作区 → `notes.txt` → 预览） |
+| **抽屉** | **L72 起 = 会话列表主体 + `定时任务` + `设置`，与 iOS `SessionsDrawer` 逐行一致**（此前那 8 行导航表已移除，见「抽屉回到 iOS 基线（L72）」）。`Files` 页现在从 设置 → 开发者工具 → 工作文件夹 → 文件夹行进入 |
 
 ### 路径解析器的安全边界（逐条对齐，不简化）
 
@@ -1336,11 +1336,86 @@ $ bash ../scripts/ci/check.sh --only phone-android-structure,phone-android-tests
 `popToHome()` 落回它——launch 面、返回面、popToHome 面是同一个函数。
 
 **探针挪到抽屉第 8 行「引擎探针」**，退回来先回产品首页。
+（**L72 已推翻这一条**：抽屉不再有该行，探针只留 `--ez pdsh.face.probe true` 这个开发者入口，
+见下一节。）
 
 **空态文案全部是 `UiStrings` 现有 iOS 原句，一个常量都没新增。**
 
 **无 key 时不是空白也不是崩溃**：顶部一张引导卡（`还差一步:配好模型服务` → 去配置模型服务），
 引擎照常启动（`PDSH_MODEL_KEY_STATE=absent`、`XL_DSH_READY`），保存后卡片自动消失。
+
+### 抽屉回到 iOS 基线（L72）
+
+**判据是 iOS 的抽屉本身**：`SessionsDrawer`（`NativeShell.swift:276`–`:316`）= `SessionsPage`
+（会话列表，占满）+ `Divider` + `定时任务` + `设置`，两行都是 `DrawerRow`（高 48、图标槽 22、
+箭头 12，`:411`–`:438`）。Android 之前是 **10 行导航表**（对话 / 会话 / 工作文件夹 / 文件 / 命令 /
+设备连接 / DSH 页面 / 引擎探针 + 两行家具），其中 **8 行 iOS 抽屉里没有**。
+
+**iOS 的触点路径（生产，逐跳）**
+
+```
+PhoneDSHProbeApp.swift:30 → RootView.swift:10 → NativeShell.swift:121
+根页就是 ChatPage（对话）
+  ☰（ChatPage.swift:218–224）→ 抽屉面板（NativeShell.swift:114）
+    · 会话行（SessionsPage.swift:542–545；open():627）→ 抽屉关闭（NativeShell.swift:288–291）→ 停在 ChatPage，只是换了会话
+    · 新建会话 :140 ／ 文件夹行展开收起 :418–471 ／ ⋯ :440–457 ／ 添加工作文件夹 :268 ／ 已归档 :305 ／ 搜索 :324
+  · 页头设备图标（ChatPage.swift:236–241）→ sheet :468 → NativeDeviceConnectionPage →（NativeDeviceConnectionPage.swift:125）NativeDeviceSessionPage
+  · 页头 ⋯（:243–291）：子智能体 :244→:423 ／ 后台任务 :250→:445 ／ 定时任务 :255→:453 ／ 产物 :260→:461（→ 预览 :101）
+    ／ **右侧边栏 :263–:266→:385 NativeWorkbenchPage → 文件段 FilesPage（NativeWorkbenchPage.swift:24）、命令段 PDSHShellPage（:26）**
+    ／ 运行状态 :273→:422 ／ 本会话设置 :274→:407 ／ 导出对话记录 :268–272（ShareLink）／ 折叠时机 :281（Picker）
+  · 工具写出的文件路径（:2532 openWorkspaceResult）→ 全屏 PreviewSurface（:389）
+  · /命令 结算（:2510–2529）→ sheet :415 CommandExecutionResultPage
+  · 设置内：通用 tab（SettingsPage.swift:84）→ 权限 :101 ／ 快捷键 :145 ／ 开源许可 :165；插件 tab :86 → NativePluginInventoryPage →（:19）NativeConfigurationPage
+抽屉底行：定时任务（NativeShell.swift:298）→ navigationDestination :313 NativeAutomationPage →（NativeAutomationPage.swift:47）ScheduleDetailPage
+         设置（:301）→ sheet :309 SettingsPage
+```
+
+iOS 生产**没有**入口的页面（只走 DEBUG 的 `-uiPreview`，`NativeShell.swift:727`–`:909`）：
+`WorkspaceFoldersPage`（`.workspace`，:822）、独立 `FilesPage`（`.workspaceFiles`，:823）、
+独立 `PDSHShellPage`（`.configuration`，:824）。**整个 `PreviewScreen` 是 DEBUG 的截图路由，
+不是用户导航**。另外 `NativeTab` 四 tab 枚举是死代码（§1.1 已记）。
+
+**那 8 项逐项判定**
+
+| Android 旧抽屉行 | iOS 生产入口 | L72 之后 Android 从哪进 |
+|---|---|---|
+| 对话 | 没有这一行；ChatPage 是根面，靠会话行进 | 抽屉主体（会话列表）→ 行 / 新建会话 → `PdshRoute.Chat`（L69 的 `onOpenChat`）**设备已验证** |
+| 会话 | **抽屉主体就是它** | 抽屉主体（同一个 `HostSessionsScreen`，无返回箭头）**设备已验证** |
+| 工作文件夹 | 不存在（仅 `-uiPreview workspace`） | 设置 → 通用 → **开发者工具 → 工作文件夹**（渲染真页面）**设备已验证** |
+| 文件 | 对话页 ⋯ → 右侧边栏 → 工作面板「文件」段 | 同上 → 文件夹行 → `OpenWorkspaceFiles` → `PdshRoute.Files`（手机工作区）**设备已验证**；iOS 那条边仍待 L69 接 |
+| 命令 | 对话页 ⋯ → 右侧边栏 → 工作面板「命令」段 | 开发者工具 → **命令**（真页面，`运行` 走 `RunShellCommand` handoff）**设备已验证** |
+| 设备连接 | 对话页头设备图标（`ChatPage.swift:236`）→ sheet | **本轮无触点入口**：Android 的对话页头没有设备控件（`ChatPage.kt` 是 L69 的文件）。登记为缺口 |
+| DSH 页面 | **iOS 已删除**（PR 495da9b5） | `--ez pdsh.face.web true`（开发者开关）**设备已验证** |
+| 引擎探针 | iOS 不存在（L62 自加） | `--ez pdsh.face.probe true`（开发者开关）**设备已验证**；不出现在产品抽屉 |
+
+**改前 / 改后（`HostShell.kt` 的 `DRAWER_ENTRIES` → `PdshDrawer` 的 `body` 槽）**
+
+```
+改前  entries:  对话 | 会话 | 工作文件夹 | 文件 | 命令 | 设备连接 | DSH 页面 | 引擎探针
+      footer:   定时任务 | 设置
+改后  body:     会话列表（HostSessionsScreen：搜索 / 新建会话 / 工作文件夹 / 添加工作文件夹 / 已归档）
+      footer:   定时任务 | 设置
+```
+
+`PdshDrawer` 新增 `body: (@Composable () -> Unit)?`：给了 body 就是 iOS 形状（body 占满、
+下面 `Divider` + 家具行 + 16 底距），不给仍是纯导航表（`:lib` 的 JVM 抽屉测试走这条）。
+
+**设备 dump（AVD `l72-drawer`，android-35，端口 5740，用完已删）**
+
+`uiautomator dump` 的抽屉节点，与 iOS `SessionsDrawer` 逐行：
+
+| iOS 行（`NativeShell.swift`） | Android dump（1080×2400 @2.625） | 对齐 |
+|---|---|---|
+| `SessionsPage`（列表，`:288`） | `搜索会话` [74,175]-[766,239]、`新建会话` [93,375]-[798,439]、工作文件夹块、`添加工作文件夹`、`已归档` | ✅ 同一页、同一读法、无标题栏（`onBack = null`） |
+| `Divider`（`:293`） | 家具行上方 0.5 dp 分隔线（`DrawerDivider`） | ✅ |
+| `DrawerRow("定时任务")`（`:298`） | `content-desc=定时任务` [0,2043]-[840,2169] = **126 px = 48.0 dp** | ✅ 行高 48 |
+| `DrawerRow("设置")`（`:301`） | `content-desc=设置` [0,2169]-[840,2295] = **48.0 dp** | ✅ |
+| 面板宽 320（`:97`） | 面板右缘 **840 px = 320.0 dp** | ✅ |
+| `padding(.bottom, bottomInset + 16)`（`:306`） | 行底 2295 → 42 px(16 dp) → 导航条 63 px | ✅ |
+| 定时任务计数 badge（`:298`，`scheduleRecords` 非空才显示） | 无 badge | ⚠️ 本宿主对定时任务**没有读数**（`AutomationFacts()`），无数字可显示；不伪造 |
+
+**抽屉里的行：改前 10 行（`对话 会话 工作文件夹 文件 命令 设备连接 DSH 页面 引擎探针 定时任务 设置`）
+→ 改后 `定时任务 设置` 两行 + 会话列表主体**，与 iOS 的 `SessionsDrawer` 逐行一致。
 
 ### 我补的三处（都是另外两条车道报的）
 
@@ -1359,6 +1434,7 @@ LaunchState: COLD   TotalTime: 879
       Phone DSH | 运行在手机端的 DeepSeek Harness | 还没有会话 | 新建会话后显示在这里
 
 抽屉  对话 | 会话 | 工作文件夹 | 文件 | 命令 | 设备连接 | DSH 页面 | 引擎探针 | 定时任务 | 设置
+      ← L62 当时的形状；L72 起抽屉 = 会话列表 + 定时任务 | 设置（见下节）
 
 探针  PDSH 引擎探针 | 宿主状态 运行中 | D14 Running · admission open | HELLO 摘要
 

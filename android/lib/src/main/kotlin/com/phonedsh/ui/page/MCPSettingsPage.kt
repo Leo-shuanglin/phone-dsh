@@ -259,7 +259,9 @@ public fun MCPSettingsPage(
 ) {
     SettingsSubPageFrame(
         backGlyph = SETTINGS_CLOSE_GLYPH,
-        largeTitle = UiStrings.MCP_TITLE,
+        // The baseline's heading (`MCPSettingsPage.swift:101`), not the drawer
+        // row's word: iOS titles this sheet "MCP 网络与密钥".
+        largeTitle = UiStrings.MCP_NETWORK_TITLE,
         onBack = onBack,
         rootTag = UiPageTags.MCP_ROOT,
         modifier = modifier,

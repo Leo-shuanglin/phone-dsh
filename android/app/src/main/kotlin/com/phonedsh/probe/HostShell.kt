@@ -27,10 +27,12 @@
 //
 // L62 moved the launch face off the probe. [PdshRoute.Home] now renders the
 // product home (`HostHomeScreen`: the session list, the drawer entry and the
-// model-service onboarding), and `ProbeScreen` — the D3 diagnostic console —
-// renders at that same address only while the person opened it from the
-// drawer's 引擎探针 row. A debug panel as the first screen of an installable app
-// was the L62 brief's defect; the probe itself is unchanged and still reachable.
+// model-service onboarding). L72 took the probe *out of the drawer*: on iOS the
+// drawer is the session list plus 定时任务 / 设置 (`NativeShell.swift:288`–`:307`),
+// so a diagnostic console has no row there. `ProbeScreen` — the D3 console —
+// renders at the home address only for a launch that asks for it
+// (`--ez pdsh.face.probe true`), which is the developer entry the device scripts
+// already pass. The product drawer is exactly the baseline's.
 package com.phonedsh.probe
 
 import com.phonedsh.dsh.localexec.UbuntuApproval
@@ -140,6 +142,8 @@ internal fun HostShell(
     onRunTurn: () -> Unit,
     onPhonePermissionRequest: (PhoneCapability) -> Unit = {},
     onPhonePermissionSettings: (PhoneCapability) -> Unit = {},
+    onPickFiles: () -> Unit = {},
+    onPickImages: () -> Unit = {},
 ) {
     // The facts are one host walk per lifecycle/HELLO/turn change: a page never
     // asks the host for anything itself. `backgroundRevision` is the one key that
@@ -153,6 +157,9 @@ internal fun HostShell(
     // The store is the view model's; this shell never reads the file itself.
     val preferences by engine.preferenceState.collectAsState()
     val systemDark = isSystemInDarkTheme()
+    // L69: the chat page's one state. Collected here so a Worker event rebuilds the
+    // page on the next frame; the view model is its only writer.
+    val chatUi by engine.chat.collectAsState()
     val facts: PdshNavFacts = remember(
         state,
         handshake,
@@ -173,13 +180,13 @@ internal fun HostShell(
     var drawerOpen by remember { mutableStateOf(false) }
     var webFaceOpened by remember { mutableStateOf(false) }
     // L62: the probe is no longer the home face; it is the host's own surface
-    // *at* the home address, opened from the drawer's 引擎探针 row. Keeping it in
-    // the `home` slot (instead of a new route) is deliberate: `PdshRoute` lives in
-    // `:lib` and this lane may not extend it, and the probe was always the host's
-    // own face rather than a page of §1. The default value is `false`, which is
-    // what makes the product home — the session list — the launch face; a launch
-    // that passes `pdsh.face.probe` starts on the probe instead, which is what the
-    // device scripts that tap 跑一轮 straight after launch ask for.
+    // *at* the home address. Keeping it in the `home` slot (instead of a new
+    // route) is deliberate: `PdshRoute` lives in `:lib` and this lane may not
+    // extend it, and the probe was always the host's own face rather than a page
+    // of §1. The default value is `false`, which is what makes the product home —
+    // the session list — the launch face. L72 removed its drawer row (iOS has no
+    // such row), so the only entry left is the launch the device scripts already
+    // use: `--ez pdsh.face.probe true`.
     var probeOpen by remember { mutableStateOf(engine.probeFaceOnLaunch()) }
     val webFaceOnLaunch = remember { engine.webFaceOnLaunch() }
     // The one fact the home's onboarding card is drawn from. Re-read when this
@@ -274,13 +281,25 @@ internal fun HostShell(
                             nav = nav.popToHome()
                         },
                         onHostAction = { action ->
-                            val feedback = handleHostAction(
-                                action = action,
-                                onStart = onStart,
-                                onStop = onStop,
-                                onSettingsChanged = { settingsRevision++ },
-                            )
-                            if (feedback != null) notice = feedback
+                            // L72: one action is a navigation edge, not a handoff —
+                            // `OpenWorkspaceFiles` is the documented "this folder
+                            // asked for its file listing" gesture, and the page it
+                            // names is a route this host already renders. It is
+                            // dispatched by the 开发者工具 index's 工作文件夹 row, so
+                            // the person lands on the files page with one back to
+                            // the index (the drawer no longer carries either page).
+                            if (action is PdshHostAction.OpenWorkspaceFiles) {
+                                notice = null
+                                nav = nav.push(PdshRoute.Files(action.id.ifBlank { null }))
+                            } else {
+                                val feedback = handleHostAction(
+                                    action = action,
+                                    onStart = onStart,
+                                    onStop = onStop,
+                                    onSettingsChanged = { settingsRevision++ },
+                                )
+                                if (feedback != null) notice = feedback
+                            }
                         },
                         // The settings index's writes reach the one preference store.
                         // 后台运行 and 繁忙时的发送行为 have typed handoffs; 新会话默认权限
@@ -341,8 +360,8 @@ internal fun HostShell(
                         // L62: the home face is the product home — the session list
                         // (option (a): the list is rendered *in* the home slot, so
                         // `popToHome()` and the launch face are the same screen). The
-                        // probe is the host's own face at this address, reachable from
-                        // the drawer's 引擎探针 row and never the launch face.
+                        // probe is the host's own face at this address, reached only by
+                        // a launch that asks for it (`--ez pdsh.face.probe true`).
                         home = {
                             if (probeOpen) {
                                 ProbeScreen(
@@ -374,6 +393,7 @@ internal fun HostShell(
                                     onHostNotice = { notice = it },
                                     onOpenDrawer = { drawerOpen = true },
                                     onOpenModelProvider = { nav = nav.push(PdshRoute.ModelProvider) },
+                                    onOpenChat = { nav = nav.push(PdshRoute.Chat) },
                                 )
                             }
                         },
@@ -388,11 +408,29 @@ internal fun HostShell(
                                 turn = turn,
                                 onBack = { nav = nav.pop() },
                                 onHostNotice = { notice = it },
+                                // L69: selecting a row (or 新建会话) opens the chat at
+                                // that conversation. The list stays the drawer's
+                                // 会话 page; the person lands on the transcript they
+                                // chose instead of an empty one.
+                                onOpenChat = { nav = nav.push(PdshRoute.Chat) },
                             )
                         },
                         // The chain's middle level: what the top route can still go
                         // back to inside itself.
                         backLevel = backLevel,
+                        // L69: the chat page's host half. `chatSurfaceState()` folds the
+                        // Worker's projected events into the page's state; the seven
+                        // callbacks are the App's own commands, not handoffs.
+                        chat = engine.chatSurfaceState(),
+                        chatTitle = chatUi.title,
+                        onChatDraftChange = engine::chatDraftChanged,
+                        onChatSend = engine::sendChat,
+                        onChatStop = engine::stopChat,
+                        onChatRename = { title -> engine.renameCurrentChat(title) },
+                        onChatAddFiles = onPickFiles,
+                        onChatAddImages = onPickImages,
+                        onChatRemoveAttachment = engine::removeChatAttachment,
+                        onChatDismissNotice = engine::dismissChatNotice,
                     )
                 }
             }
@@ -409,26 +447,44 @@ internal fun HostShell(
             }
             if (drawerOpen) {
                 PdshDrawer(
-                    entries = DRAWER_ENTRIES,
+                    // L72: the drawer is the iOS `SessionsDrawer` — the session list
+                    // as its body, then the two furniture rows. It carries no app
+                    // map: every row that used to be here has an entry of its own on
+                    // iOS (see the lane's report), and the pages this host cannot
+                    // reach that way are in 设置 → 开发者工具, never in the drawer.
+                    entries = emptyList(),
                     footerEntries = DRAWER_FOOTER_ENTRIES,
+                    body = {
+                        // The drawer's body is the same list the 会话 route renders
+                        // (`NativeShell.swift:288`), with no back arrow: the drawer
+                        // is the root of that read, not a page pushed on top of it.
+                        HostSessionsScreen(
+                            engine = engine,
+                            state = state,
+                            turn = turn,
+                            onBack = null,
+                            onHostNotice = { notice = it },
+                            // Picking a conversation closes the drawer and lands on
+                            // it — the baseline's 选中会话即关闭抽屉
+                            // (`NativeShell.swift:288`–`:291`); on iOS the chat page
+                            // is the face behind the drawer.
+                            onOpenChat = {
+                                drawerOpen = false
+                                notice = null
+                                nav = nav.push(PdshRoute.Chat)
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    },
                     onSelect = { route ->
                         // A line from a routed page is not about the next one.
                         notice = null
                         drawerOpen = false
-                        if (route == PdshRoute.Home) {
-                            // The 引擎探针 row. `PdshRoute.Home` is the one route
-                            // this host renders itself, so it is the row's token:
-                            // the drawer only knows routes, and the probe's
-                            // address has always been the home slot.
-                            probeOpen = true
-                            nav = nav.popToHome()
-                        } else {
-                            // Any other row is a page of §1: the probe is not
-                            // behind it, so the next 返回 lands on the product
-                            // home rather than on a diagnostic console.
-                            probeOpen = false
-                            nav = nav.push(route)
-                        }
+                        // 定时任务 / 设置 are pages of §1: the probe is not behind
+                        // them, so the next 返回 lands on the product home rather
+                        // than on a diagnostic console.
+                        probeOpen = false
+                        nav = nav.push(route)
                     },
                     onDismiss = { drawerOpen = false },
                 )
@@ -739,11 +795,10 @@ private fun hostRouteNote(route: PdshRoute): String? = when (route) {
     // second, weaker version of the page's own disclosure.
     is PdshRoute.Preview -> null
 
-    // 对话 is the one session surface whose data this host still cannot read
-    // (`PdshNavFacts` carries no transcript), so the page renders its own empty
-    // session and the note says why instead of looking broken.
-    PdshRoute.Chat ->
-        "只读：本宿主未接入会话记录的读取"
+    // 对话 is live now (L69): the transcript comes from the Worker's own events,
+    // the composer sends a real prompt and 停止 cancels the turn, so there is
+    // nothing read-only to disclose.
+    PdshRoute.Chat -> null
 
     // 会话 has a real host read (`HostSessionsScreen`), handed to the route through
     // `PdshNavHost(sessions = …)`: no disclosure is needed, and a read-only line
@@ -912,68 +967,34 @@ private fun EngineUnavailableNotice(title: String, reason: String?, detail: Stri
 }
 
 /**
- * The drawer's app map, in the order a user scans it: conversation, sessions,
- * folders, files, commands, devices, the Web face — then the two furniture rows the
- * iOS drawer pins to its bottom (定时任务, 设置).
+ * The two rows the iOS drawer pins below its session list.
  *
- * The iOS baseline reaches 对话 as the shell's root face and 会话 as the drawer
- * body; this host has neither (its root face is the engine probe, and its drawer
- * body is this list), so each destination needs a row of its own. Without them
- * the pages are routing-reachable but not touch-reachable — the L1/L2/L5 report.
+ * That is the whole drawer (`NativeShell.swift:288`–`:307`: `SessionsPage`, a
+ * divider, 定时任务, 设置). It carried eight more rows until L72 — 对话, 会话,
+ * 工作文件夹, 文件, 命令, 设备连接, DSH 页面, 引擎探针 — and every one of them was
+ * a second entrance for a page the baseline reaches somewhere else:
+ *
+ *   * 对话 / 会话 — the baseline's chat face and this drawer's own body;
+ *   * 文件 / 命令 — the chat page's ⋯ → 右侧边栏 → 工作面板 (its 文件 / 命令
+ *     segment), which this host's chat page does not draw yet;
+ *   * 设备连接 — the chat page head's device icon, likewise not drawn yet;
+ *   * 工作文件夹 — no product entry at all on iOS (only `-uiPreview workspace`);
+ *     it lives in 设置 → 开发者工具 on this host;
+ *   * DSH 页面 — deleted from iOS (PR 495da9b5); this host's own Web face, reached
+ *     with `--ez pdsh.face.web true`;
+ *   * 引擎探针 — this host's diagnostic console, reached with
+ *     `--ez pdsh.face.probe true`.
+ *
+ * The drawer is not an app map on either platform: it is the session list plus
+ * these two rows (`NativeShell.swift:296`).
  */
-private val DRAWER_ENTRIES: List<PdshDrawerEntry> = listOf(
-    // No UiStrings constant for the baseline's tab title 对话.
-    PdshDrawerEntry("对话", PdshDrawerIcon.CHAT, PdshRoute.Chat),
-    // UiStrings.SESSIONS is 会话列表 (the page name); the drawer's word is 会话.
-    PdshDrawerEntry("会话", PdshDrawerIcon.SESSIONS, PdshRoute.Sessions),
-    PdshDrawerEntry(UiStrings.WORKSPACE_FOLDERS, PdshDrawerIcon.FOLDER, PdshRoute.WorkspaceFolders),
-    // 文件: the files page (its own title is 手机工作区). §1's entry for that page is
-    // a folder row or the chat's workbench, and this host has the folder row; but
-    // the folder page's row is drawn disabled while that page is read-only (a page
-    // decision this shell cannot override), so the listing keeps one entry that
-    // depends on no other page's writable flag. It opens the same single workspace
-    // the folder row names; the route's `folderId` stays null because a drawer row
-    // has no folder to name, and the page reads the host's one materialized tree.
-    // No UiStrings constant names this entry: WORKBENCH_FILES is the workbench
-    // segment's label, a different surface whose wording can move independently.
-    PdshDrawerEntry("文件", PdshDrawerIcon.FOLDER, PdshRoute.Files()),
-    PdshDrawerEntry(UiStrings.TOOLS, PdshDrawerIcon.TERMINAL, PdshRoute.Tools),
-    // The device family's page title is 设备连接; UiStrings has no constant for
-    // the drawer's short name (its DEVICE_TITLE is the page's "Device" string).
-    PdshDrawerEntry(DEVICE_CONNECTION_LABEL, PdshDrawerIcon.DEVICE, PdshRoute.DeviceConnection),
-    PdshDrawerEntry(UiStrings.WEB_SURFACE_TITLE, PdshDrawerIcon.WEB, PdshRoute.WebSurface),
-    // L62: the D3 diagnostic console, moved off the home face. Its product home
-    // would be 设置 → 通用 → 开发者工具 (`SettingsSurfaces.kt`'s DevTool index,
-    // where L55 already put MemoryPage / ProbesPage / …), but that index is
-    // `:lib` code and cannot render a `:app` composable: `DeveloperToolsSurface`
-    // is called by `PdshNavHost` with fixed arguments and this lane may edit
-    // neither that call site nor a new parameter on it. So the app-side entry is
-    // a drawer row — reachable, labelled and dumpable — and the surface itself
-    // is unchanged. The row targets [PdshRoute.Home], the one route whose body
-    // this host supplies (see the `probeOpen` branch in the `home` slot above).
-    PdshDrawerEntry(ENGINE_PROBE_LABEL, PdshDrawerIcon.TERMINAL, PdshRoute.Home),
-)
-
-/** The two rows the iOS drawer pins below its session list (`NativeShell.swift:296`). */
 private val DRAWER_FOOTER_ENTRIES: List<PdshDrawerEntry> = listOf(
     PdshDrawerEntry(UiStrings.AUTOMATION_TITLE, PdshDrawerIcon.CLOCK, PdshRoute.Automation),
     PdshDrawerEntry(UiStrings.SETTINGS, PdshDrawerIcon.SETTINGS, PdshRoute.Settings),
 )
 
 /** The host's navigation log tag; only stable action labels are written to it. */
-private const val TAG_NAV = "PDSHNav"
-
-/** The drawer's short name for the device family; the page title is 设备连接. */
-private const val DEVICE_CONNECTION_LABEL: String = "设备连接"
-
-/**
- * The drawer row that opens the engine probe (L62).
- *
- * The probe's own header calls the surface 「PDSH 引擎探针」; the drawer row uses the
- * short half, because every other row in this list is a destination name and
- * 「PDSH」 would read as part of one. The word is the one the L62 brief uses.
- */
-private const val ENGINE_PROBE_LABEL: String = "引擎探针"
+private const val TAG_NAV: String = "PDSHNav"
 
 /** How long a gesture's outcome line stays on screen (four seconds). */
 private const val NOTICE_MILLIS: Long = 4_000L

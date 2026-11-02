@@ -286,7 +286,8 @@ public data class WebSearchLocalState(public val fold: FoldState = FoldState()) 
  * @param onBack leave the page.
  * @param onRetry retry a failed read (the failure line's leading glyph; the
  *   contract declares no retry label for this page).
- * @param onModeChange the user picked which search to follow.
+ * @param onModeChange the user picked which search to follow; `null` disables the
+ *   mode group (the host declared it writable but handed no write).
  * @param onCommitAddress the user committed the address (回车 / 保存 / leaving).
  *   The page passes the trimmed text; it never reads a stored URL back.
  * @param onCommitKey the user pressed 保存 with a pasted key; the page passes the
@@ -305,14 +306,27 @@ public fun WebSearchSettingsPage(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onRetry: (() -> Unit)? = null,
-    onModeChange: (WebSearchMode) -> Unit = {},
-    onCommitAddress: (String) -> Unit = {},
-    onCommitKey: (String) -> Unit = {},
-    onClearKey: () -> Unit = {},
-    onRemoveConfiguration: () -> Unit = {},
+    onModeChange: ((WebSearchMode) -> Unit)? = null,
+    onCommitAddress: ((String) -> Unit)? = null,
+    onCommitKey: ((String) -> Unit)? = null,
+    onClearKey: (() -> Unit)? = null,
+    onRemoveConfiguration: (() -> Unit)? = null,
     onStartEngine: () -> Unit = {},
     onStopEngine: () -> Unit = {},
 ) {
+    // A write control is armed only when the host declared this page writable
+    // **and** the caller handed the write for that control. The host's answer
+    // alone is not enough: `PdshNavHost`'s WebSearchRoute never passes these five,
+    // so a host that reported `writable = YES` would paint five enabled controls
+    // whose taps land in a `{}` default — the exact fake the callback defaults used
+    // to hide. With this gate the control is disabled instead, and the page's own
+    // reason line (or the baseline's silence) is the visible answer.
+    val writable = state.canWrite
+    val modeWritable = writable && onModeChange != null
+    val addressWritable = writable && onCommitAddress != null
+    val keyWritable = writable && onCommitKey != null
+    val clearWritable = writable && onClearKey != null
+    val removeWritable = writable && onRemoveConfiguration != null
     var address by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var feedback by remember { mutableStateOf<String?>(null) }
@@ -345,7 +359,11 @@ public fun WebSearchSettingsPage(
                         .testTag(UiPageTags.WEB_SEARCH_LIST),
                     verticalArrangement = Arrangement.Top,
                 ) {
-                    modeGroup(state = state, enabled = state.canWrite, onModeChange = onModeChange)
+                    modeGroup(
+                        state = state,
+                        enabled = modeWritable,
+                        onModeChange = { onModeChange?.invoke(it) },
+                    )
                     // The host's own reason, right under the controls it disabled:
                     // "why can this page not be written" is a host fact, and a
                     // bare 只读 would leave the person unable to tell a product
@@ -359,7 +377,7 @@ public fun WebSearchSettingsPage(
                     if (state.isSearchApi) {
                         addressGroup(
                             address = address,
-                            enabled = state.canWrite,
+                            enabled = addressWritable,
                             feedback = feedback,
                             onAddressChange = {
                                 address = it
@@ -367,12 +385,12 @@ public fun WebSearchSettingsPage(
                             },
                             onCommit = {
                                 feedback = null
-                                onCommitAddress(address.trim())
+                                onCommitAddress?.invoke(address.trim())
                             },
                         )
                         keyGroup(
                             state = state,
-                            enabled = state.canWrite,
+                            enabled = keyWritable,
                             apiKey = apiKey,
                             feedback = feedback,
                             onKeyChange = {
@@ -381,13 +399,13 @@ public fun WebSearchSettingsPage(
                             },
                             onCommit = {
                                 feedback = null
-                                onCommitKey(apiKey.trim())
+                                onCommitKey?.invoke(apiKey.trim())
                             },
-                            onClear = { pendingClearKey = true },
+                            onClear = { if (clearWritable) pendingClearKey = true },
                         )
                         deleteGroup(
-                            enabled = state.canWrite,
-                            onDelete = { pendingRemove = true },
+                            enabled = removeWritable,
+                            onDelete = { if (removeWritable) pendingRemove = true },
                         )
                     }
                     applyGroup(state = state, onStart = onStartEngine, onStop = onStopEngine)
@@ -412,7 +430,7 @@ public fun WebSearchSettingsPage(
                     TextButton(
                         onClick = {
                             pendingClearKey = false
-                            onClearKey()
+                            onClearKey?.invoke()
                         },
                     ) {
                         Text(UiStrings.WEB_SEARCH_CLEAR)
@@ -434,7 +452,7 @@ public fun WebSearchSettingsPage(
                     TextButton(
                         onClick = {
                             pendingRemove = false
-                            onRemoveConfiguration()
+                            onRemoveConfiguration?.invoke()
                         },
                     ) {
                         Text(UiStrings.WEB_SEARCH_DELETE)

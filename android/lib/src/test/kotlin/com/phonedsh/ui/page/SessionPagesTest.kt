@@ -7,6 +7,8 @@
 package com.phonedsh.ui.page
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -30,6 +32,7 @@ import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.state.GoalBarState
 import com.phonedsh.ui.theme.PdshTheme
+import com.phonedsh.ui.theme.PdshThemeValues
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -107,6 +110,60 @@ class SessionPagesTest {
         compose.onNodeWithText(UiStrings.RETRY).performClick()
         assertEquals(1, retried)
         compose.onNodeWithText("项目讨论").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the failure line is the baseline's message plus 重试 and has no dismiss glyph`() {
+        // `SessionsPage.swift:176-197`: the row is Text(errorText) + Button("重试").
+        // Android used to add a ✕ that the baseline never draws, so a reader could
+        // hide a failure the baseline keeps until the read succeeds.
+        val state = drawer(failure = UiStrings.SESSION_LOAD_FAILED)
+        compose.setContent { PdshTheme { Drawer(state = state, onRetry = {}) } }
+        compose.onNodeWithTag(UiPageTags.SESSIONS_FAILURE).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.DISMISS).assertDoesNotExist()
+        compose.onNodeWithContentDescription(UiStrings.DISMISS).assertDoesNotExist()
+    }
+
+    @Test
+    fun `the bar band belongs to the page whether or not the host routes it`() {
+        // `SessionsPage.swift:137-322` draws an empty navigation bar and the search
+        // field below it; the back control is Android's addition for a routed page.
+        // So the search field must not move when the host passes (or omits) onBack —
+        // only the glyph appears — and `null` must draw no back control at all
+        // (`ios-sessions-*.png` shows none).
+        val state = drawer(sessions = listOf(SessionListing("s1", "项目讨论")))
+        var back = 0
+        val onBack = mutableStateOf<(() -> Unit)?>(null)
+        // The reserved band is a token, not a measurement: Robolectric's font
+        // metrics are fake, so the row's exact height is not an oracle here — that
+        // the band exists at all is.
+        var reserved = 0.dp
+        compose.setContent {
+            PdshTheme {
+                reserved = PdshThemeValues.tokens.geometry.pageHeaderMinHeight +
+                    PdshThemeValues.tokens.geometry.cardOuterMarginV
+                Drawer(state = state, onBack = onBack.value)
+            }
+        }
+        val withoutBack = compose.onNodeWithTag(UiPageTags.SESSIONS_SEARCH)
+            .getUnclippedBoundsInRoot()
+        assertTrue(
+            "no back control must still leave the baseline's empty bar above the search " +
+                "(top=${withoutBack.top})",
+            withoutBack.top >= reserved,
+        )
+        compose.onNodeWithContentDescription(UiStrings.BACK).assertDoesNotExist()
+
+        compose.runOnIdle { onBack.value = { back += 1 } }
+        val withBack = compose.onNodeWithTag(UiPageTags.SESSIONS_SEARCH)
+            .getUnclippedBoundsInRoot()
+        assertTrue(
+            "the routed page must not lose the band it already had " +
+                "(${withoutBack.top} -> ${withBack.top})",
+            withBack.top >= withoutBack.top,
+        )
+        compose.onNodeWithContentDescription(UiStrings.BACK).performClick()
+        assertEquals(1, back)
     }
 
     @Test
@@ -486,6 +543,7 @@ class SessionPagesTest {
     @Composable
     private fun Drawer(
         state: SessionsScreenState,
+        onBack: (() -> Unit)? = null,
         onSelect: (SessionRowView) -> Unit = {},
         onQueryChange: (String) -> Unit = {},
         onNewSession: () -> Unit = {},
@@ -521,6 +579,7 @@ class SessionPagesTest {
             onRenameCancel = onRenameCancel,
             onNewSession = onNewSession,
             onRetry = onRetry,
+            onBack = onBack,
             onToggleWorkspace = onToggleWorkspace,
             onWorkspaceMenuToggle = onWorkspaceMenuToggle,
             onNewSessionInWorkspace = onNewSessionInWorkspace,

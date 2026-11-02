@@ -52,6 +52,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
@@ -524,11 +525,15 @@ private fun ChatHeader(
     // button groups' widths on the baseline device, not a design value, so the
     // layout derives them here: one Row, the title takes the remaining weight and
     // centres itself inside it. No literal is repeated.
+    // iOS `chatHeader` is `NativeParityTokens.headerHeight` = 50 pt with a 0.5 pt
+    // `borderL3` hairline under it (`ChatPage.swift:196-204`), not the 44 pt
+    // settings bar: the measured baseline puts the header in y 62..112 pt.
+    Column(modifier = Modifier.fillMaxWidth()) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
+            .height(UiMetrics.headerHeight)
             .padding(horizontal = tokens.geometry.pageOuterMarginH),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -656,10 +661,17 @@ private fun ChatHeader(
             }
         }
     }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(tokens.stroke.hairline)
+            .background(tokens.colors.border),
+    )
+    }
 }
 
 /**
- * One header control: its glyph, a 44 pt floor and its accessibility label.
+ * One header control: its glyph, the header's 50 pt floor and its accessibility label.
  *
  * The drawer has no word on the baseline page (`accessibilityLabel` only), so the
  * control's name lives in `description`.
@@ -675,7 +687,7 @@ private fun HeaderAction(
     val type = LocalUiType.current
     Box(
         modifier = modifier
-            .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
+            .defaultMinSize(minHeight = UiMetrics.headerHeight)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = description }
             .padding(horizontal = tokens.spacing.iconText),
@@ -712,7 +724,7 @@ private fun HeaderMenuAction(
     val type = LocalUiType.current
     Box(
         modifier = modifier
-            .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
+            .defaultMinSize(minHeight = UiMetrics.headerHeight)
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = tokens.spacing.iconText),
         contentAlignment = Alignment.Center,
@@ -748,7 +760,7 @@ private fun RunStatusDot(
         modifier = modifier
             .clickable(role = Role.Button, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = label }
-            .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
+            .defaultMinSize(minHeight = UiMetrics.headerHeight)
             .padding(horizontal = tokens.spacing.iconText),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
@@ -1406,19 +1418,33 @@ private fun EmptyTimeline(
 ) {
     val tokens = LocalUiTokens.current
     when (state.empty) {
-        // iOS pads the first two states 88 pt from the top instead of centring.
-        // unverified geometry: 88 pt is expressed as two declared lengths
-        // (primaryButtonHeight + composerTrailingReserve); no single token is 88.
-        ChatEmpty.ENGINE_NOT_STARTED -> EngineNotStartedState(
-            busy = state.starting,
-            onStartEngine = onStartEngine,
-            modifier = Modifier.padding(top = tokens.geometry.primaryButtonHeight + tokens.geometry.composerTrailingReserve),
-        )
+        // The iOS empty block lives inside the transcript's ScrollView, whose
+        // `defaultScrollAnchor(.bottom)` puts a short block against the dock
+        // (`ChatPage.swift:1186`, `:1310-1322`): ios-chat-draft.png's title ink
+        // starts at y 261.3 pt with the composer top at 438, i.e. 61 pt above the
+        // dock — not directly under the header, which is where a top-anchored
+        // Column used to put it (y 137). The block keeps the dock's 48 pt bottom
+        // inset (`transcript`'s `.padding(.bottom, 48)`).
+        ChatEmpty.ENGINE_NOT_STARTED -> Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            EngineNotStartedState(
+                busy = state.starting,
+                onStartEngine = onStartEngine,
+                modifier = Modifier.padding(bottom = tokens.geometry.primaryButtonHeight),
+            )
+        }
 
-        ChatEmpty.PROVIDER_SETUP -> ProviderSetupState(
-            onConfigureProvider = onConfigureProvider,
-            modifier = Modifier.padding(top = tokens.geometry.primaryButtonHeight + tokens.geometry.composerTrailingReserve),
-        )
+        ChatEmpty.PROVIDER_SETUP -> Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            ProviderSetupState(
+                onConfigureProvider = onConfigureProvider,
+                modifier = Modifier.padding(bottom = tokens.geometry.primaryButtonHeight),
+            )
+        }
 
         ChatEmpty.READY -> ReadyState()
     }
@@ -1604,7 +1630,10 @@ private fun ComposerDock(
                 .fillMaxWidth()
                 .padding(horizontal = tokens.geometry.composerOuterMarginH)
                 .padding(top = tokens.geometry.composerOuterMarginTop),
-            verticalArrangement = Arrangement.spacedBy(tokens.geometry.composerTrailingReserve),
+            // iOS stacks the dock's rows with `NativeParityTokens.flowGap` = 6 pt
+            // (`ChatPage.swift:1795`); the old 40 pt was the trailing *reserve*
+            // for the send key, which pushed the queue strip 28 pt too high.
+            verticalArrangement = Arrangement.spacedBy(UiMetrics.flowGap),
         ) {
             val goal = state.goal
             if (goal is GoalBarState.Visible) {

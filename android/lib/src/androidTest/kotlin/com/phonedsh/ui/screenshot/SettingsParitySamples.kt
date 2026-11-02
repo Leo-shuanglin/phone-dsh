@@ -41,7 +41,6 @@ import com.phonedsh.ui.page.FactState
 import com.phonedsh.ui.page.PerformanceUsage
 import com.phonedsh.ui.page.ModelProviderFacts
 import com.phonedsh.ui.page.ModelProviderScreenState
-import com.phonedsh.ui.page.PlatformInfo
 import com.phonedsh.ui.page.ProviderKeyFact
 import com.phonedsh.ui.page.ProviderKeyStatus
 import com.phonedsh.ui.page.ProviderProfile
@@ -125,19 +124,17 @@ object SettingsParitySamples {
         ),
     )
 
-    /** `page-settings-about`: 版本 0.1.0 plus the Android device facts. */
+    /**
+     * `page-settings-about`: **版本 0.1.0 and the one sentence, nothing else.**
+     *
+     * L79 removed the Android-only platform appendix (系统 card) and the 构建号
+     * row: `settings-about.json` describes iOS's page as one `版本` row plus the
+     * `会话记录和文件都保存在这台手机上。` sentence, and `NativeShell.swift:897-908`
+     * is exactly that. Passing the platform facts made the Android panel draw a
+     * second 262 pt card the baseline does not have (27.6 % of the frame).
+     */
     fun aboutState(): AboutScreenState = AboutScreenState.from(
-        AboutFacts(
-            version = VERSION,
-            build = "1",
-            platform = PlatformInfo(
-                sdkInt = 35,
-                release = "15",
-                abi = "arm64-v8a",
-                deviceModel = "sdk_gphone64_arm64",
-                webViewVersion = "131.0.6778.200",
-            ),
-        ),
+        AboutFacts(version = VERSION),
     )
 
     /** `page-settings-model`: one selected service whose key the host cannot read. */
@@ -207,6 +204,12 @@ object SettingsParitySamples {
                     ConfigurationPermissionMode(id = "danger-full-access", name = "完全权限"),
                 ),
                 defaultPermissionModeId = "workspace-write",
+                // The iOS shot's host is NOT connected: its page draws the orange
+                // warning `请先启动 DSH 主机，再读取插件和设置。` above the groups
+                // (`NativeConfigurationPage.swift:15-20`) while the group rows stay.
+                // Without this line the Android side of the pair cannot show the
+                // warning line at all, and the pair would compare two host states.
+                settingsFailure = "请先启动 DSH 主机，再读取插件和设置。",
             ),
         ),
     )

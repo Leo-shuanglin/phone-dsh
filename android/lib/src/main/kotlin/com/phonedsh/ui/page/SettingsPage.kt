@@ -70,6 +70,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -90,8 +91,12 @@ import com.phonedsh.ui.surface.SettingsFootnoteRow
 import com.phonedsh.ui.surface.SettingsGroupCard
 import com.phonedsh.ui.surface.SettingsGroupedRow
 import com.phonedsh.ui.surface.SettingsHairline
+import com.phonedsh.ui.surface.settingsSystemInk
+import com.phonedsh.ui.surface.LocalSettingsRowInk
 import com.phonedsh.ui.surface.SettingsListTopInset
 import com.phonedsh.ui.surface.SettingsMenuChevron
+import com.phonedsh.ui.surface.SettingsMenuChevronSlot
+import com.phonedsh.ui.surface.SettingsMenuTrailingInset
 import com.phonedsh.ui.surface.SettingsNavBar
 import com.phonedsh.ui.surface.SettingsRowFrame
 import com.phonedsh.ui.surface.SettingsRowLabel
@@ -951,58 +956,95 @@ public fun SettingsPage(
     tabContent: (@Composable (SettingsTab) -> Unit)? = null,
 ) {
     val tokens = LocalUiTokens.current
-    // The 通用 tab is iOS's inset-grouped list: a grey page under white cards
-    // (`settings-chat.png` page #F2F2F7, card #FFFFFF). The four page tabs paint
-    // their own background (plain white), so the shell only paints the grey one.
-    val surface = Modifier.background(
-        if (tab == SettingsTab.GENERAL) tokens.colors.selector else tokens.colors.input,
-    )
+    // iOS's sheet chrome is **white** from the screen's top edge down to the list's
+    // first row: the inline bar (`settings-chat.png` y 0..106 pt) and the strip
+    // that holds the segmented track (track 126..158, list starts 167.3) are
+    // `#FFFFFF`, and only the inset-grouped list below them is the grey page
+    // (`colors.groupedBackground`, #F2F2F7). The four page tabs paint their own
+    // white page, so the shell paints white and the 通用 body paints the grey one.
+    val surface = Modifier.background(tokens.colors.input)
     Column(
         modifier = modifier
             .fillMaxSize()
             .then(surface)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
     ) {
-        // The baseline's bar: the tab's inline title (通用设置) and 完成 trailing
-        // (`SettingsPage.swift:75-79`). The other four tabs draw their own 34 pt
-        // title inside their content, so the bar is empty for them.
-        SettingsNavBar(
-            title = tab.barTitle,
-            trailing = {
-                SettingsBarAction(
-                    label = UiStrings.SETTINGS_DONE,
-                    onClick = onBack,
-                    modifier = Modifier.testTag(UiPageTags.SETTINGS_DONE),
-                )
-            },
-        )
-        // The segmented picker is outside the tab body on purpose: it is the one
-        // control that must survive a tab switch (`SettingsPage.swift:64-72`).
-        SettingsSegmentedPicker(
-            labels = SettingsTab.order.map { it.shortTitle },
-            selected = SettingsTab.order.indexOf(tab),
-            onSelect = { index -> SettingsTab.order.getOrNull(index)?.let(onSelectTab) },
-            modifier = Modifier.padding(
-                top = SettingsSegmentTopGap,
-                bottom = SettingsSegmentPaddingV,
-            ),
-            tag = SETTINGS_TAB_TAG_PREFIX + tab.id,
-        )
-        if (tab == SettingsTab.GENERAL) {
-            GeneralTabBody(
-                state = state,
-                onNavigate = onNavigate,
-                onToggleBackgroundKeepAlive = onToggleBackgroundKeepAlive,
-                onSelectBusyEnterMode = onSelectBusyEnterMode,
-                onSelectPreference = onSelectPreference,
-                onToggleDeveloperTools = onToggleDeveloperTools,
+        // The baseline's bar: the sheet's own name 设置 (`SettingsPage.swift:59`)
+        // and 完成 trailing (`:75-79`). The 通用 tab is the exception: that page
+        // carries a navigationTitle of its own, 通用设置 (`:168`), and it is the
+        // title the iOS capture of this screen shows — so the bar draws the page
+        // title there and the sheet name everywhere else. Before L74 the bar was
+        // blank on the other four tabs: a settings sheet whose only chrome was a
+        // 完成 button named nothing at all, which the title gate rightly refused to
+        // compare (`unresolved-title`, `tab.barTitle`).
+        // The bar, the picker and the 通用 body are iOS `List` chrome, so they draw
+        // the system inks (`colors.systemLabel` / `systemSecondary`); the tab bodies
+        // of the other four tabs are pages in their own right and keep their own
+        // tokens, which is why the provider stops at the 通用 branch.
+        CompositionLocalProvider(LocalSettingsRowInk provides settingsSystemInk()) {
+            SettingsNavBar(
+                title = if (tab == SettingsTab.GENERAL) {
+                    UiStrings.SETTINGS_GENERAL_TITLE
+                } else {
+                    UiStrings.SETTINGS
+                },
+                trailing = {
+                    SettingsBarAction(
+                        label = UiStrings.SETTINGS_DONE,
+                        onClick = onBack,
+                        modifier = Modifier.testTag(UiPageTags.SETTINGS_DONE),
+                    )
+                },
             )
+            // The segmented picker is outside the tab body on purpose: it is the one
+            // control that must survive a tab switch (`SettingsPage.swift:64-72`).
+            SettingsSegmentedPicker(
+                labels = SettingsTab.order.map { it.shortTitle },
+                selected = SettingsTab.order.indexOf(tab),
+                onSelect = { index -> SettingsTab.order.getOrNull(index)?.let(onSelectTab) },
+                modifier = Modifier.padding(
+                    top = SettingsSegmentTopGap,
+                    bottom = SettingsSegmentPaddingV,
+                ),
+                tag = SETTINGS_TAB_TAG_PREFIX + tab.id,
+            )
+        }
+        if (tab == SettingsTab.GENERAL) {
+            CompositionLocalProvider(LocalSettingsRowInk provides settingsSystemInk()) {
+                GeneralTabBody(
+                    modifier = Modifier.background(tokens.colors.groupedBackground),
+                    state = state,
+                    onNavigate = onNavigate,
+                    onToggleBackgroundKeepAlive = onToggleBackgroundKeepAlive,
+                    onSelectBusyEnterMode = onSelectBusyEnterMode,
+                    onSelectPreference = onSelectPreference,
+                    onToggleDeveloperTools = onToggleDeveloperTools,
+                )
+            }
         } else if (tabContent != null) {
             tabContent(tab)
         } else {
             SettingsTabUnavailable(tab = tab)
         }
     }
+}
+
+
+/**
+ * A row value's ink on this page.
+ *
+ * iOS draws every value in the system secondary (#8A8A8E), including the "unset"
+ * wording (未设置); the theme's `tertiary` (#9A9AA2) that the tone mapping used to
+ * pick is three steps lighter than the baseline. The tone still chooses when no
+ * override is provided (the other settings pages).
+ */
+@Composable
+private fun settingsPageValueInk(tone: PageTone): Color {
+    // A block body, not `= expr`: `page_structure_check.py` delimits a function by
+    // its braces, and an expression body made it swallow the next declarations
+    // (the gate then read 完成's `text = label` as an unresolved action).
+    val ink = LocalSettingsRowInk.current
+    return ink?.value ?: tone.settingsInk(LocalUiTokens.current)
 }
 
 /** The Android side's stable tag prefix for the segmented picker. */
@@ -1115,7 +1157,7 @@ private fun SettingsCardRow(
 ) {
     val tags = Modifier.testTag(UiPageTags.SETTINGS_ROW_PREFIX + row.id)
     when (row.kind) {
-        SettingsRowKind.FOOTNOTE -> SettingsFootnoteRow(text = row.text ?: "", modifier = tags)
+        SettingsRowKind.FOOTNOTE -> SettingsFootnoteRow(text = row.text ?: "", modifier = tags, centre = true)
 
         SettingsRowKind.TOGGLE -> SettingsSwitchCardRow(
             row = row,
@@ -1143,7 +1185,7 @@ private fun SettingsCardRow(
             title = row.title,
             modifier = tags,
             value = row.value,
-            valueInk = row.tone.settingsInk(LocalUiTokens.current),
+            valueInk = settingsPageValueInk(row.tone),
             subtitle = row.subtitle,
             dividerBelow = row.dividerBelow,
         )
@@ -1152,7 +1194,7 @@ private fun SettingsCardRow(
             title = row.title,
             modifier = tags,
             value = row.value,
-            valueInk = row.tone.settingsInk(LocalUiTokens.current),
+            valueInk = settingsPageValueInk(row.tone),
             subtitle = row.subtitle,
             chevron = true,
             dividerBelow = row.dividerBelow,
@@ -1205,15 +1247,20 @@ private fun SettingsMenuCardRow(
     Column(modifier = modifier) {
         SettingsRowFrame(
             dividerBelow = row.dividerBelow && !expanded,
+            // A menu row's value + up-down chevron sit 17.6 pt from the card edge,
+            // not the navigation row's 39.33: see SettingsMetrics.MENU_*.
+            trailingInset = SettingsMenuTrailingInset,
             onClick = { expanded = !expanded },
         ) {
             SettingsRowLabel(text = row.title, modifier = Modifier.weight(1f))
             SettingsRowValue(
                 text = row.value ?: UiStrings.UNKNOWN,
-                ink = if (unknown) tokens.colors.tertiary else tokens.colors.secondary,
+                ink = settingsPageValueInk(if (unknown) PageTone.UNKNOWN else PageTone.NORMAL),
             )
-            SettingsTrailingSlot {
-                SettingsMenuChevron(ink = if (unknown) tokens.colors.tertiary else tokens.colors.secondary)
+            SettingsTrailingSlot(width = SettingsMenuChevronSlot) {
+                SettingsMenuChevron(
+                    ink = settingsPageValueInk(if (unknown) PageTone.UNKNOWN else PageTone.NORMAL),
+                )
             }
         }
         if (expanded) {
@@ -1392,9 +1439,9 @@ private const val NOTE_FONT_SCOPE: String = "仅影响会话内容、代码和�
 internal object SettingsPageTokens {
     val refs: List<String> = listOf(
         UiTokenNames.COLORS_ACCENT,
+        UiTokenNames.COLORS_GROUPED_BACKGROUND,
         UiTokenNames.COLORS_INPUT,
         UiTokenNames.COLORS_PRIMARY,
-        UiTokenNames.COLORS_SELECTOR,
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_SUCCESS,
         UiTokenNames.COLORS_TERTIARY,

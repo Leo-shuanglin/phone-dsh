@@ -42,7 +42,9 @@
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -58,6 +60,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
@@ -80,12 +83,6 @@ import com.phonedsh.ui.surface.SettingsSubPageFrame
 import com.phonedsh.ui.surface.SettingsFormRow
 import com.phonedsh.ui.surface.SettingsSectionHeader
 import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
-import com.phonedsh.ui.surface.SettingsDotsHeight
-import com.phonedsh.ui.surface.SettingsDotsWidth
-import androidx.compose.foundation.layout.size
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
 import com.phonedsh.ui.surface.settingsFootnoteStyle
 
 // ---------------------------------------------------------------------------
@@ -655,10 +652,32 @@ private fun AllowAllBlock(
                     .weight(1f)
                     .testTag(UiPageTags.EGRESS_ALLOW_ALL_TOGGLE),
             )
+            // Every colour this switch draws is named here, from the page's own
+            // token table. Left to `SwitchDefaults`, the unchecked track is the
+            // Material baseline's `surfaceVariant` = #E6E0E9 — the stray colour
+            // the parity measurement found on this page (8 584 px of it), which no
+            // token in `spec/ui/v1/tokens.json` owns. The green on-state is
+            // `colors.switchOn` (#34C759, the UIKit `systemGreen` the baseline's
+            // untinted `Toggle` uses); the off-state track is the same
+            // `colors.borderLight` the settings index's own switch draws.
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
                 enabled = canWrite,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = tokens.colors.input,
+                    checkedTrackColor = tokens.colors.switchOn,
+                    checkedBorderColor = tokens.colors.switchOn,
+                    uncheckedThumbColor = tokens.colors.input,
+                    uncheckedTrackColor = tokens.colors.borderLight,
+                    uncheckedBorderColor = tokens.colors.borderLight,
+                    disabledCheckedThumbColor = tokens.colors.input,
+                    disabledCheckedTrackColor = tokens.colors.border,
+                    disabledCheckedBorderColor = tokens.colors.border,
+                    disabledUncheckedThumbColor = tokens.colors.input,
+                    disabledUncheckedTrackColor = tokens.colors.border,
+                    disabledUncheckedBorderColor = tokens.colors.border,
+                ),
                 modifier = Modifier.testTag(UiPageTags.EGRESS_ALLOW_ALL_TOGGLE + ".switch"),
             )
         }
@@ -686,6 +705,7 @@ private fun AllowAllBlock(
  * first line already says and the row would stop matching the baseline, so it is
  * also exactly the case where the classification tells the user something new.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EgressRuleRow(
     rule: EgressRuleView,
@@ -695,7 +715,23 @@ private fun EgressRuleRow(
     val tokens = LocalUiTokens.current
     SettingsFormRow(
         title = rule.form,
-        modifier = Modifier.testTag(UiPageTags.EGRESS_RULE),
+        // The baseline's address row carries no visible control: deleting one
+        // address is the row's `contextMenu` (`NativeShell.swift:495`), i.e. a
+        // long press, and the confirmation dialog is what performs it. Android's
+        // extra `⋯` was the one control on this page iOS does not draw, so it is
+        // gone; the row itself is the target, and it opens the same confirmation
+        // the context menu does (a tap costs one 取消, never a write).
+        modifier = Modifier
+            .testTag(UiPageTags.EGRESS_RULE)
+            .combinedClickable(
+                // Not gated on `canWrite`: opening the confirmation is interaction,
+                // not a write. The confirm button is what the host's answer
+                // disables, and it says why inside the dialog.
+                role = Role.Button,
+                onLongClickLabel = UiStrings.EGRESS_DELETE_ADDRESS,
+                onLongClick = { onDeleteRequest(rule) },
+                onClick = { onDeleteRequest(rule) },
+            ),
         subtitleContent = {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
@@ -709,25 +745,6 @@ private fun EgressRuleRow(
                     style = settingsFootnoteStyle().copy(color = tokens.colors.tertiary),
                 )
             }
-        },
-        trailing = {
-            // Drawn, not typed: a text glyph in the row would contribute its font's
-            // line box and push the measured 52.33 pt row to 58.3 pt (measured on
-            // this page's first capture). The dots are a shape, so a Canvas keeps
-            // the row at the baseline's pitch.
-            //
-            // The control is *on screen* even when the host cannot write — an
-            // affordance that silently disappears reads as "deleting is not a
-            // thing this page does". Tapping it still asks: opening the
-            // confirmation is interaction, not a write, so the confirm button is
-            // what the host's answer disables.
-            DeleteDots(
-                ink = if (canWrite) tokens.colors.secondary else tokens.colors.tertiary,
-                modifier = Modifier
-                    .testTag(UiPageTags.EGRESS_RULE_DELETE)
-                    .clickable(role = Role.Button) { onDeleteRequest(rule) }
-                    .padding(start = tokens.spacing.iconText),
-            )
         },
     )
 }
@@ -955,9 +972,6 @@ private fun EgressFailureBlock(
     }
 }
 
-/** The trailing glyph of a rule row; the delete verb is in the dialog. */
-private const val DELETE_GLYPH: String = "⋯"
-
 /** The scrim of the add overlay: the page ink at a fixed opacity, as in ChatPage. */
 private const val SCRIM_ALPHA: Float = 0.32f
 
@@ -976,7 +990,10 @@ private val GRAMMAR_LINES: List<String> = listOf(
 internal object EgressAllowListTokens {
     val refs: List<String> = listOf(
         "colors.accent",
+        "colors.border",
+        "colors.borderLight",
         "colors.input",
+        "colors.switchOn",
         "colors.primary",
         "colors.secondary",
         "colors.tertiary",
@@ -995,24 +1012,4 @@ internal object EgressAllowListTokens {
         "typography.secondary",
 
     )
-}
-
-/**
- * The delete affordance's three dots, drawn at the 17 pt row's optical size.
- *
- * unverified geometry: iOS's network row has no such control (deletion lives in
- * the page's own actions), so the size is this page's: a 16 x 4 pt trio on the
- * text baseline of a 17 pt line.
- */
-@Composable
-private fun DeleteDots(ink: Color, modifier: Modifier = Modifier) {
-    androidx.compose.foundation.Canvas(
-        modifier = modifier.size(width = SettingsDotsWidth, height = SettingsDotsHeight),
-    ) {
-        val radius = size.height / 2f
-        val gap = size.width / 5f
-        listOf(1f, 3f, 5f).forEach { slot ->
-            drawCircle(color = ink, radius = radius, center = Offset(gap * slot, size.height / 2f))
-        }
-    }
 }

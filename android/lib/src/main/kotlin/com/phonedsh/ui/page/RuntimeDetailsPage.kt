@@ -323,12 +323,18 @@ public data class RuntimeSectionView(
  * @param actionLabel the action's copy, or `null` when [action] is [NONE].
  * @param stopConfirmationOpen true while the inline stop confirmation is open.
  * @param sections the visible groups; empty unless [status] is READY. The order is
- *   the superset's: 本次运行 (when it is not a measured, idle run) and 最近出错
- *   first, then the five Android diagnostics groups.
+ *   the baseline's, with the Android-only diagnostics after it: 引擎 (the single
+ *   状态 row), 本次运行 (when it is not a measured, idle run), 最近出错, then
+ *   WebView / 内存 / 电源与散热 / 前台服务.
  * @param failure the host's failure message, re-shown by the page.
  * @param notes cross-cutting degradation lines.
  * @param hasUnmeasuredValues true when a visible row is 未知, so the page can
  *   explain the word once.
+ * @param unmeasuredGroups the titles of the groups that contain an 未知 row, in
+ *   block order. The page prints them in ONE line above the blocks: this is the
+ *   whole explanation the page gives for an unmeasured value, and every row's
+ *   own repeated sentence was removed in favour of it (L76). Empty unless a row
+ *   is unmeasured.
  */
 @Immutable
 public data class RuntimeDetailsScreenState(
@@ -343,6 +349,7 @@ public data class RuntimeDetailsScreenState(
     public val failure: String?,
     public val notes: List<PageNote>,
     public val hasUnmeasuredValues: Boolean,
+    public val unmeasuredGroups: List<String> = emptyList(),
 ) {
     /** True when the host reported no snapshot at all. */
     public val isUnknown: Boolean get() = status == RuntimeStatus.UNKNOWN
@@ -447,33 +454,30 @@ public data class RuntimeDetailsScreenState(
                 ),
             )
             val errorRows = listOf(lastErrorRow(measured.lastError))
+            // iOS renders ONE `状态` line above 本次运行 (`ChatPage.swift:4183-4186`)
+            // and folds the uptime into its value (`statusValue`, `:4168-4176`):
+            // `"运行中 · 已运行2 分钟"`, or a bare `已停止` when the engine is down.
+            // The page used to split that line into `状态` + `已运行` rows; the split
+            // is gone, and the counters lose the per-row 读取不到 explanation too
+            // (see [RuntimeDetailsScreenState.unmeasuredGroups]).
             val engineRows = listOf(
                 RuntimeRowView(
                     id = "runtime.engine.status",
-        title = UiStrings.RUNTIME_STATUS,
-                    value = engineText(engine),
+                    title = UiStrings.RUNTIME_STATUS,
+                    value = statusValue(engine, uptimeValue),
                     tone = engineTone(engine),
-                    subtitle = if (engine == FactState.UNKNOWN) {
-                        UiStrings.SETTINGS_UNKNOWN_HINT
-                    } else {
-                        null
-                    },
-                ),
-                RuntimeRowView(
-                    id = "runtime.engine.uptime",
-                    title = UiStrings.RUNTIME_UPTIME,
-                    value = uptimeValue ?: UiStrings.UNKNOWN,
-                    tone = if (uptimeValue == null) PageTone.UNKNOWN else PageTone.NORMAL,
-                    subtitle = if (uptimeValue == null) UiStrings.SETTINGS_UNKNOWN_HINT else null,
                 ),
             )
+            // Every row below carries its own explanation only when the value was
+            // MEASURED (the baseline's own hints). An unmeasured row says 未知 and
+            // nothing else: one page-level line names the groups the host did not
+            // report, which is where the six repeated 读取不到 sentences went.
             val webViewRows = listOf(
                 RuntimeRowView(
                     id = "runtime.webview.provider",
                     title = UiStrings.RUNTIME_WEBVIEW_PROVIDER,
                     value = webView?.provider ?: UiStrings.UNKNOWN,
                     tone = if (webView?.provider == null) PageTone.UNKNOWN else PageTone.NORMAL,
-                    subtitle = if (webView?.provider == null) UiStrings.SETTINGS_UNKNOWN_HINT else null,
                 ),
                 RuntimeRowView(
                     id = "runtime.webview.version",
@@ -481,7 +485,7 @@ public data class RuntimeDetailsScreenState(
                     value = webView?.version ?: UiStrings.UNKNOWN,
                     tone = if (webView?.version == null) PageTone.UNKNOWN else PageTone.NORMAL,
                     subtitle = if (webView?.version == null) {
-                        UiStrings.SETTINGS_UNKNOWN_HINT
+                        null
                     } else {
                         UiStrings.RUNTIME_WEBVIEW_VERSION_HINT
                     },
@@ -503,7 +507,7 @@ public data class RuntimeDetailsScreenState(
                         FactState.YES -> UiStrings.RUNTIME_WEBVIEW_FEATURE_HINT
                         FactState.NO -> webView?.featureGateDetail
                             ?: UiStrings.RUNTIME_WEBVIEW_GATE_MISSING
-                        FactState.UNKNOWN -> UiStrings.SETTINGS_UNKNOWN_HINT
+                        FactState.UNKNOWN -> null
                     },
                 ),
             )
@@ -514,7 +518,7 @@ public data class RuntimeDetailsScreenState(
                     value = memory?.tier ?: UiStrings.UNKNOWN,
                     tone = if (memory?.tier == null) PageTone.UNKNOWN else PageTone.NORMAL,
                     subtitle = if (memory?.tier == null) {
-                        UiStrings.SETTINGS_UNKNOWN_HINT
+                        null
                     } else {
                         UiStrings.RUNTIME_MEMORY_TIER_HINT
                     },
@@ -524,7 +528,6 @@ public data class RuntimeDetailsScreenState(
                     title = UiStrings.RUNTIME_MEMORY_BUDGET,
                     value = budget?.let(::formatByteSize) ?: UiStrings.UNKNOWN,
                     tone = if (budget == null) PageTone.UNKNOWN else PageTone.NORMAL,
-                    subtitle = if (budget == null) UiStrings.SETTINGS_UNKNOWN_HINT else null,
                 ),
                 RuntimeRowView(
                     id = "runtime.memory.used",
@@ -535,7 +538,6 @@ public data class RuntimeDetailsScreenState(
                         used == null -> PageTone.UNKNOWN
                         else -> PageTone.NORMAL
                     },
-                    subtitle = if (used == null) UiStrings.SETTINGS_UNKNOWN_HINT else null,
                 ),
             )
             val powerRows = listOf(
@@ -549,7 +551,7 @@ public data class RuntimeDetailsScreenState(
                         else -> PageTone.NORMAL
                     },
                     subtitle = if (thermal == null) {
-                        UiStrings.SETTINGS_UNKNOWN_HINT
+                        null
                     } else {
                         UiStrings.RUNTIME_THERMAL_HINT
                     },
@@ -560,7 +562,6 @@ public data class RuntimeDetailsScreenState(
                     value = batteryPercent?.let { UiStrings.RUNTIME_BATTERY_PERCENT.format(it) }
                         ?: UiStrings.UNKNOWN,
                     tone = if (batteryPercent == null) PageTone.UNKNOWN else PageTone.NORMAL,
-                    subtitle = if (batteryPercent == null) UiStrings.SETTINGS_UNKNOWN_HINT else null,
                 ),
                 RuntimeRowView(
                     id = "runtime.power.charging",
@@ -571,11 +572,6 @@ public data class RuntimeDetailsScreenState(
                     } else {
                         PageTone.NORMAL
                     },
-                    subtitle = if ((power?.charging ?: FactState.UNKNOWN) == FactState.UNKNOWN) {
-                        UiStrings.SETTINGS_UNKNOWN_HINT
-                    } else {
-                        null
-                    },
                 ),
                 RuntimeRowView(
                     id = "runtime.power.saver",
@@ -585,11 +581,6 @@ public data class RuntimeDetailsScreenState(
                         PageTone.UNKNOWN
                     } else {
                         PageTone.NORMAL
-                    },
-                    subtitle = if ((power?.batterySaver ?: FactState.UNKNOWN) == FactState.UNKNOWN) {
-                        UiStrings.SETTINGS_UNKNOWN_HINT
-                    } else {
-                        null
                     },
                 ),
             )
@@ -611,15 +602,27 @@ public data class RuntimeDetailsScreenState(
                         FactState.YES -> UiStrings.RUNTIME_FGS_AVAILABLE_HINT
                         FactState.NO -> measured.foregroundServiceReason
                             ?: UiStrings.RUNTIME_FGS_UNAVAILABLE_HINT
-                        FactState.UNKNOWN -> UiStrings.SETTINGS_UNKNOWN_HINT
+                        FactState.UNKNOWN -> null
                     },
                 ),
             )
-            // The baseline hides 本次运行 when it has no counts. A measured, all-zero
-            // run is that same "no activity" answer; an unread counter is not, so the
-            // group stays and its rows say 未知.
+            // The baseline's block order, with the Android-only diagnostics after
+            // the blocks it does draw: 状态 (`:4183`), 本次运行 (`:4194`), 最近出错
+            // (`:4208`), the stop/start action (`:4211-4231`) and its footer
+            // (`:4232`), then WebView / 内存 / 电源与散热 / 前台服务 — the four
+            // `androidOnly` groups `spec/ui/v1/pages/_android-only-items.json`
+            // registers. 本次运行 still hides itself when the baseline's
+            // `hasCounts` is false (a measured, all-zero run).
             val runVisible = measured.run?.isIdle != true
             val sections = buildList {
+                add(
+                    RuntimeSectionView(
+                        ENGINE_SECTION_ID,
+                        UiStrings.RUNTIME_SECTION_ENGINE,
+                        engineRows,
+                        true,
+                    ),
+                )
                 if (runVisible) {
                     add(
                         RuntimeSectionView(
@@ -638,7 +641,6 @@ public data class RuntimeDetailsScreenState(
                         true,
                     ),
                 )
-                add(RuntimeSectionView(ENGINE_SECTION_ID, UiStrings.RUNTIME_SECTION_ENGINE, engineRows, true))
                 add(RuntimeSectionView(WEBVIEW_SECTION_ID, UiStrings.RUNTIME_SECTION_WEBVIEW, webViewRows, true))
                 add(RuntimeSectionView(MEMORY_SECTION_ID, UiStrings.RUNTIME_SECTION_MEMORY, memoryRows, true))
                 add(RuntimeSectionView(POWER_SECTION_ID, UiStrings.RUNTIME_SECTION_POWER, powerRows, true))
@@ -689,9 +691,14 @@ public data class RuntimeDetailsScreenState(
                     )
                 }
             }
-            val hasUnmeasuredValues = sections.any { section ->
-                section.rows.any { row -> row.tone == PageTone.UNKNOWN }
-            }
+            // ONE answer for every unmeasured value (L76): the groups whose rows
+            // are 未知, in block order. The page renders this list once, above the
+            // blocks; no row repeats the sentence. The baseline has no such line —
+            // it is the Android replacement for a read the baseline performs
+            // in-process, and it is the only place that says it.
+            val unmeasuredGroups = sections
+                .filter { section -> section.rows.any { row -> row.tone == PageTone.UNKNOWN } }
+                .map { section -> section.title }
             return RuntimeDetailsScreenState(
                 status = RuntimeStatus.READY,
                 engine = engine,
@@ -707,7 +714,8 @@ public data class RuntimeDetailsScreenState(
                 sections = sections,
                 failure = null,
                 notes = notes,
-                hasUnmeasuredValues = hasUnmeasuredValues,
+                hasUnmeasuredValues = unmeasuredGroups.isNotEmpty(),
+                unmeasuredGroups = unmeasuredGroups,
             )
         }
 
@@ -717,14 +725,29 @@ public data class RuntimeDetailsScreenState(
             FactState.UNKNOWN -> UiStrings.UNKNOWN
         }
 
-        /** One counter: a measured number, or 未知 with the shared explanation. */
+        /**
+         * The baseline's one `状态` line (`ChatPage.swift:4168-4176`, `:4183-4186`).
+         *
+         * `statusValue` is `"\(displayStatus) · 已运行\(elapsed)"` and needs a
+         * `startedAt`; when the model has none it falls back to the bare
+         * `displayStatus`. Android's equivalent is "engine started + a measured
+         * uptime": no uptime means the bare word, a stopped engine means 已停止,
+         * and an unread engine means 未知 — never an invented duration.
+         */
+        private fun statusValue(state: FactState, uptime: String?): String = when {
+            state == FactState.UNKNOWN -> UiStrings.UNKNOWN
+            state == FactState.NO -> UiStrings.RUNTIME_STOPPED
+            uptime == null -> UiStrings.RUNNING
+            else -> UiStrings.RUNTIME_STATUS_UPTIME_FORMAT.format(UiStrings.RUNNING, uptime)
+        }
+
+        /** One counter: a measured number, or a bare 未知 (the page explains it once). */
         private fun countRow(id: String, title: String, value: Long?): RuntimeRowView =
             RuntimeRowView(
                 id = id,
                 title = title,
                 value = value?.toString() ?: UiStrings.UNKNOWN,
                 tone = if (value == null) PageTone.UNKNOWN else PageTone.NORMAL,
-                subtitle = if (value == null) UiStrings.SETTINGS_UNKNOWN_HINT else null,
             )
 
         /**
@@ -744,7 +767,6 @@ public data class RuntimeDetailsScreenState(
                     title = UiStrings.RUNTIME_ERROR_UNREAD,
                     value = null,
                     tone = PageTone.UNKNOWN,
-                    subtitle = UiStrings.SETTINGS_UNKNOWN_HINT,
                     kind = RuntimeRowKind.TEXT,
                 )
                 message == null -> RuntimeRowView(
@@ -938,21 +960,38 @@ private fun RuntimeContent(
         verticalArrangement = Arrangement.Top,
     ) {
         if (state.hasUnmeasuredValues) {
+            // The page's ONE explanation for every unmeasured value. The baseline
+            // has no such sentence (its model is in-process), so this is where the
+            // Android read has to say what it could not get — once, and with the
+            // group names, instead of the same 读取不到 sentence under 16 rows
+            // (6 of them fit on one screen; L64 counted those).
             item(key = "runtime.unmeasured") {
-                RuntimeNoteRow(
-                    text = UiStrings.RUNTIME_UNMEASURED_HINT,
-                    tone = PageTone.UNKNOWN,
-                    tag = UiPageTags.RUNTIME_UNMEASURED,
-                )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    RuntimeNoteRow(
+                        text = UiStrings.RUNTIME_UNMEASURED_GROUPS.format(
+                            state.unmeasuredGroups.joinToString(
+                                UiStrings.RUNTIME_UNMEASURED_GROUPS_SEPARATOR,
+                            ),
+                        ),
+                        tone = PageTone.UNKNOWN,
+                        tag = UiPageTags.RUNTIME_UNMEASURED,
+                    )
+                    RuntimeNoteRow(
+                        text = UiStrings.RUNTIME_UNMEASURED_HINT,
+                        tone = PageTone.UNKNOWN,
+                    )
+                }
             }
         }
         state.sections.forEach { section ->
             item(key = "header-${section.id}") {
+                // The baseline's `groupHeader` is a bare title (`ChatPage.swift:4150-4160`):
+                // no count, no trailing slot. The count Android used to add here was
+                // the only "N 项" the baseline page never shows.
                 SettingsSectionHeader(
                     title = section.title,
                     expanded = section.expanded,
                     onToggle = { onToggleSection(section.id) },
-                    trailing = UiStrings.ROW_COUNT.format(section.rows.size),
                     tag = UiPageTags.RUNTIME_SECTION_PREFIX + section.id,
                 )
             }
@@ -970,20 +1009,26 @@ private fun RuntimeContent(
                     }
                 }
             }
+            // The baseline's stop/start section sits directly under 最近出错
+            // (`ChatPage.swift:4211-4231`), before anything else. On Android the
+            // four diagnostics-only groups follow it, which is the same relative
+            // place the baseline gives the action.
+            if (section.id == RuntimeDetailsScreenState.ERROR_SECTION_ID) {
+                item(key = "runtime.action") {
+                    RuntimeActionBlock(
+                        state = state,
+                        onRequestStop = onRequestStop,
+                        onCancelStop = onCancelStop,
+                        onConfirmStop = onConfirmStop,
+                        onRestart = onRestart,
+                    )
+                }
+            }
         }
         state.notes.forEach { note ->
             item(key = "note-${note.id}") {
                 RuntimeNoteRow(text = note.text, tone = note.tone)
             }
-        }
-        item(key = "runtime.action") {
-            RuntimeActionBlock(
-                state = state,
-                onRequestStop = onRequestStop,
-                onCancelStop = onCancelStop,
-                onConfirmStop = onConfirmStop,
-                onRestart = onRestart,
-            )
         }
     }
 }
@@ -1085,15 +1130,12 @@ private fun RuntimeActionBlock(
         return
     }
     when (state.action) {
-        RuntimeAction.STOP -> {
-            RuntimeActionRow(
-                label = UiStrings.RUNTIME_STOP,
-                tag = UiPageTags.RUNTIME_STOP,
-                danger = true,
-                onClick = onRequestStop,
-            )
-            RuntimeNoteRow(text = UiStrings.RUNTIME_STOP_FOOTER, tone = PageTone.NORMAL)
-        }
+        RuntimeAction.STOP -> RuntimeActionRow(
+            label = UiStrings.RUNTIME_STOP,
+            tag = UiPageTags.RUNTIME_STOP,
+            danger = true,
+            onClick = onRequestStop,
+        )
 
         RuntimeAction.START -> RuntimeActionRow(
             label = UiStrings.RUNTIME_START,
@@ -1103,6 +1145,11 @@ private fun RuntimeActionBlock(
         )
 
         RuntimeAction.NONE -> Unit
+    }
+    // The baseline's footer belongs to the action's Section, not to the stop
+    // branch: it renders under 启动本地引擎 too (`ChatPage.swift:4231-4234`).
+    if (state.action != RuntimeAction.NONE) {
+        RuntimeNoteRow(text = UiStrings.RUNTIME_STOP_FOOTER, tone = PageTone.NORMAL)
     }
 }
 

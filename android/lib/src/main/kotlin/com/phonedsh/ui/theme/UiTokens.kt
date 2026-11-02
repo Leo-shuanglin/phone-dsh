@@ -52,6 +52,66 @@ public data class UiColors(
     public val systemLabel: Color,
     /** System `.secondary` (secondaryLabel): the ink iOS gives page captions. */
     public val systemSecondary: Color,
+    /**
+     * The page fill (`NativePagePalette.page`): white in light, black in dark.
+     *
+     * L75: the pages iOS paints with `.background(NativePagePalette.page)` — files,
+     * workspace-folders and the preview — are white, while `colors.background` is
+     * unmeasured (a dynamic system colour). Reading that unresolved token leaves
+     * the Material surface (#F2F3F5) showing through, one grey step off the
+     * baseline. Appended last so no positional construction shifts.
+     */
+    public val page: Color,
+    /**
+     * The task screen's pure black (`TaskScreenPage.swift:66`).
+     *
+     * L75: the screen is defined as "pure black, low brightness" and the engine's
+     * `PhoneDSH.Background.TaskScreen` does not read the theme, so this is black in
+     * both appearances. No other token is black in light mode, which is why the
+     * page cannot borrow one.
+     */
+    public val taskScreen: Color,
+    /**
+     * L80: the grouped-list page fill (`UIColor.systemGroupedBackground`), #F2F2F7
+     * in light. `page-shell` used `selector` (#F2F3F5) for the whole frame; a
+     * three-channel delta of (0,1,2) turned 54% of the frame into "different".
+     * Appended, never inserted.
+     */
+    public val groupedBackground: Color,
+    /**
+     * L79: the settings segmented picker's capsule track, #EEEEEF in light
+     * (`ios-settings.png` 71,563 px). `selector` (#F2F3F5) is the app's own
+     * segmented fill and is 4-6/255 away, which covers the whole 370x32 pt track.
+     * Appended, never inserted.
+     */
+    public val segmentTrack: Color,
+    /**
+     * L79: the ink `.font(.footnote).foregroundStyle(.secondary)` actually
+     * renders, #7F7F7F — measured on the same two PNGs as [systemSecondary], which
+     * the `LabeledContent` values use (#8A8A8E). Appended, never inserted.
+     */
+    public val settingsFootnoteInk: Color,
+    /**
+     * L78: the user bubble's fill (`NativeChatTheme.bubble` →
+     * `NativeParityTokens.userBubble`), #EDF3FE in light — measured on
+     * `ios-chat-assistant.png`. `selector` (#F2F3F5) is the app's control fill and
+     * is grey, not blue. Appended, never inserted.
+     */
+    public val userBubble: Color,
+    /**
+     * L78: the approval card's fill (`NativeChatTheme.selector` =
+     * `NativeParityTokens.selector`), #F5F6F7 in light — `ios-chat-permission.png`
+     * samples it. `selector` (#F2F3F5) is the app's segmented control fill and is
+     * 3/255 off in the green channel, which covers the card's whole area. Appended,
+     * never inserted.
+     */
+    public val approvalCard: Color,
+    /**
+     * L79: a grouped card's row separator, #E8E8E8 in light — every hairline in
+     * `ios-settings.png` is that value, while `border` (#E4E4E8) is 4/255 away and
+     * turned every separator row into "different". Appended, never inserted.
+     */
+    public val separator: Color,
 ) {
     /** True when the spec could not measure `colors.background` (it never could: a dynamic system colour). */
     public val backgroundUnmeasured: Boolean get() = background == Color.Unspecified
@@ -69,6 +129,13 @@ public data class UiSpacing(
     public val codeExpandInset: Dp,
     public val jsonStack: Dp,
     public val jsonChevronGap: Dp,
+    // L80: the DSSCodeBlock chrome lengths, each pointed at a Components.swift line.
+    public val codeHeaderHeight: Dp,
+    public val codeLineSpacing: Dp,
+    public val codeWrapButton: Dp,
+    public val codeCopyMinWidth: Dp,
+    public val codeExpandHeight: Dp,
+    public val codeBlockOuterInsetV: Dp,
 )
 
 /** Radius tokens, in dp. */
@@ -188,6 +255,11 @@ public data class UiGeometry(
     public val pageRowMinHeight: Dp,
     public val pageListRowMinHeight: Dp,
     public val statusDotDiameter: Dp,
+    // L75: the iOS 26 toolbar capsule (完成 / 添加 / the files cube). Two page
+    // users each — `FilesPage` and `WorkspaceFoldersPage` — which is what
+    // `PageGeometryTokenTest` asks of a page-layer length.
+    public val pageBarButtonInsetH: Dp,
+    public val pageBarButtonElevation: Dp,
 )
 
 /** The complete resolved token set for one theme mode. */
@@ -228,6 +300,14 @@ public data class UiTokens(
                 switchOn = UiTokenData.colorSwitchOn.color(dark),
                 systemLabel = UiTokenData.colorSystemLabel.color(dark),
                 systemSecondary = UiTokenData.colorSystemSecondary.color(dark),
+                page = UiTokenData.colorPage.color(dark),
+                taskScreen = UiTokenData.colorTaskScreen.color(dark),
+                groupedBackground = UiTokenData.colorGroupedBackground.color(dark),
+                segmentTrack = UiTokenData.colorSegmentTrack.color(dark),
+                settingsFootnoteInk = UiTokenData.colorSettingsFootnoteInk.color(dark),
+                separator = UiTokenData.colorSeparator.color(dark),
+                userBubble = UiTokenData.colorUserBubble.color(dark),
+                approvalCard = UiTokenData.colorApprovalCard.color(dark),
             ),
             spacing = UiSpacing(
                 iconText = UiTokenData.spacingIconText.dp(),
@@ -239,6 +319,12 @@ public data class UiTokens(
                 codeExpandInset = UiTokenData.spacingCodeExpandInset.dp(),
                 jsonStack = UiTokenData.spacingJsonStack.dp(),
                 jsonChevronGap = UiTokenData.spacingJsonChevronGap.dp(),
+                codeHeaderHeight = UiTokenData.spacingCodeHeaderHeight.dp(),
+                codeLineSpacing = UiTokenData.spacingCodeLineSpacing.dp(),
+                codeWrapButton = UiTokenData.spacingCodeWrapButton.dp(),
+                codeCopyMinWidth = UiTokenData.spacingCodeCopyMinWidth.dp(),
+                codeExpandHeight = UiTokenData.spacingCodeExpandHeight.dp(),
+                codeBlockOuterInsetV = UiTokenData.spacingCodeBlockOuterInsetV.dp(),
             ),
             radius = UiRadius(
                 card = UiTokenData.radiusCard.dp(),
@@ -304,6 +390,8 @@ public data class UiTokens(
                 pageRowMinHeight = UiTokenData.geometryPageRowMinHeight.dp(),
                 pageListRowMinHeight = UiTokenData.geometryPageListRowMinHeight.dp(),
                 statusDotDiameter = UiTokenData.geometryStatusDotDiameter.dp(),
+                pageBarButtonInsetH = UiTokenData.geometryPageBarButtonInsetH.dp(),
+                pageBarButtonElevation = UiTokenData.geometryPageBarButtonElevation.dp(),
             ),
         )
     }

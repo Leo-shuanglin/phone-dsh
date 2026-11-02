@@ -437,20 +437,24 @@ class ModelProviderSettingsPageTest {
         assertEquals(states, replayed)
     }
 
+    /**
+     * L74: the 服务 header is a plain label, and the rows below it are always
+     * drawn.
+     *
+     * The baseline's header is `Text("服务")` on a Section with no disclosure
+     * (`ModelProviderSettingsPage.swift:85-86`), and its row list is not foldable.
+     * The Android page used to draw `⌄ 服务 … 1 项`, which is a control iOS does
+     * not have — so the header must not react to a tap and the row must stay.
+     */
     @Test
-    fun `the live fold hides rows and brings them back`() {
+    fun `the services header is a plain label and never folds the rows away`() {
         showLive(ModelProviderFacts(profiles = listOf(deepSeek)))
         compose.onNodeWithText("DeepSeek").assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.PROVIDER_SERVICES_SECTION).performClick()
-        compose.onNodeWithText("DeepSeek").assertDoesNotExist()
-        // The contract's groups below the fold stay reachable.
+        compose.onNodeWithText("DeepSeek").assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
             .performScrollToNode(hasText(UiStrings.PROVIDER_SECTION_APPLY))
         compose.onNodeWithText(UiStrings.PROVIDER_SECTION_APPLY).assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
-            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_SERVICES_SECTION))
-        compose.onNodeWithTag(UiPageTags.PROVIDER_SERVICES_SECTION).performClick()
-        compose.onNodeWithText("DeepSeek").assertIsDisplayed()
     }
 
     private fun decoy(): ProviderProfile = ProviderProfile(

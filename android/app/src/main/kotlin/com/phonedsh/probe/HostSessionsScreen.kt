@@ -88,11 +88,13 @@ internal fun HostSessionsScreen(
     turn: AppTurnState,
     onBack: (() -> Unit)? = null,
     onHostNotice: (String) -> Unit,
+    onOpenChat: () -> Unit = {},
     refreshOnEnter: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
-    // Every write gesture is handed off, never applied: the line is the same
-    // wording the routed pages' host actions use, so one app has one style.
+    // The gestures this host does not own (workspaces, archiving) are handed off;
+    // the three that make up the main flow — new, select, rename — are performed
+    // by the view model's session store and then land on the conversation.
     val handOff: (String) -> Unit = sessionHandOff(onHostNotice)
     val sessionSnapshot by engine.sessions.collectAsState()
     // The first visit asks for a read; a later one is already fresh from the
@@ -115,25 +117,31 @@ internal fun HostSessionsScreen(
         modifier = modifier,
         onRefresh = { engine.refreshSessions() },
         onSelect = { row ->
-            // The host has no switch command. The local selection can only show
-            // when the host has no current session, because the page's current
-            // session wins; the gesture is still handed off, not swallowed.
+            // L69: switching opens that conversation. The view model paints the
+            // stored transcript; the page's own selection is only the row highlight.
             local = local.copy(selectedID = row.id)
-            handOff("select")
+            engine.openChatSession(row.id)
+            onOpenChat()
         },
         onQueryChange = { query -> local = local.copy(query = query) },
         onRenameStart = { row ->
             local = local.copy(renameTargetID = row.id, renameDraft = row.title)
         },
         onRenameDraftChange = { draft -> local = local.copy(renameDraft = draft) },
-        onRenameCommit = { _ ->
-            // No session write exists; closing the editor is the only outcome
-            // this host can honestly show. The title keeps its fact value.
+        onRenameCommit = { row ->
+            // The typed name goes to the chat record; the row below re-reads it from
+            // the same snapshot, so the page can only show a title that landed.
+            val title = local.renameDraft
             local = local.copy(renameTargetID = null, renameDraft = "")
-            handOff("rename")
+            if (!engine.renameChatSession(row.id, title)) {
+                onHostNotice("会话名不能为空，本次未保存")
+            }
         },
         onRenameCancel = { local = local.copy(renameTargetID = null, renameDraft = "") },
-        onNewSession = { handOff("new") },
+        onNewSession = {
+            engine.newChatSession()
+            onOpenChat()
+        },
         onRetry = { engine.refreshSessions() },
         onDismissFailure = { engine.clearSessionsFailure() },
         onBack = onBack,
@@ -241,6 +249,7 @@ internal fun HostHomeScreen(
     onHostNotice: (String) -> Unit,
     onOpenDrawer: () -> Unit,
     onOpenModelProvider: () -> Unit,
+    onOpenChat: () -> Unit = {},
 ) {
     val tokens = PdshThemeValues.tokens
     val sessionSnapshot by engine.sessions.collectAsState()
@@ -273,13 +282,17 @@ internal fun HostHomeScreen(
                     turn = turn,
                     onBack = null,
                     onHostNotice = onHostNotice,
+                    onOpenChat = onOpenChat,
                     refreshOnEnter = false,
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
                 HomeEmptyState(
                     providerConfigured = providerConfigured,
-                    onNewSession = { handOff("new") },
+                    onNewSession = {
+                        engine.newChatSession()
+                        onOpenChat()
+                    },
                 )
             }
         }

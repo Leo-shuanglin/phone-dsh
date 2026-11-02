@@ -25,6 +25,12 @@
 // geometry (row pitch, insets, x positions), not absolute y.
 package com.phonedsh.ui.screenshot
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
@@ -58,8 +64,20 @@ class SessionsParityScreenshotTest : ScreenshotTestBase() {
         )
     }
 
+    /**
+     * `ios-sessions-default.png`: the page in the **full 402 pt window**.
+     *
+     * The iOS baseline's `.sessions` route mounts `SessionsPage` directly in the
+     * app window (`NativeShell.swift:842`), so its empty block centres on 201 and
+     * its CTA runs 16 → 385.7. Every other sessions state is captured inside
+     * `DrawerPreview` (`NativeShell.swift:872-879`, `.frame(width: 320)`), which is
+     * why `page-sessions-nothing` is the same page at 320. Until L73 the Android
+     * page clamped its own list to 320, so the two states rendered identical PNGs;
+     * the page now fills its container and the two captures differ exactly where
+     * the two iOS shots do (74,939 px, y 223.7–398.3 pt).
+     */
     @Test
-    fun pageSessionsDefault() = captureSessions(ParityState.PAGE_SESSIONS_DEFAULT) {
+    fun pageSessionsDefault() = captureSessions(ParityState.PAGE_SESSIONS_DEFAULT, drawer = false) {
         ScreenshotSamples.sessionsNothing()
     }
 
@@ -150,8 +168,18 @@ class SessionsParityScreenshotTest : ScreenshotTestBase() {
         compose.onNodeWithTag(UiPageTags.SESSIONS_NEW_SESSION_ROW).assertIsDisplayed()
     }
 
+    /**
+     * Captures one sessions state in the container its iOS baseline used.
+     *
+     * @param drawer `true` mounts the page in the baseline's 320 pt drawer
+     *   (`DrawerPreview`), `false` in the full 402 pt window (the `.sessions`
+     *   route). The captured frame stays the profile's 1206 × 2622 either way — the
+     *   drawer is a column at the top-leading corner, exactly like iOS's
+     *   `.frame(width: 320)` + `.frame(maxWidth: .infinity, alignment: .topLeading)`.
+     */
     private fun captureSessions(
         state: ParityState,
+        drawer: Boolean = true,
         build: () -> SessionsScreenState,
     ) {
         check(state.status == ParityStatus.CAPTURED) {
@@ -159,24 +187,41 @@ class SessionsParityScreenshotTest : ScreenshotTestBase() {
         }
         val screenState = build()
         setCapturedContent {
-            SessionsPage(
-                state = screenState,
-                onSelect = {},
-                onQueryChange = {},
-                onRenameStart = {},
-                onRenameDraftChange = {},
-                onRenameCommit = {},
-                onRenameCancel = {},
-                onDeleteRequest = {},
-                onDeleteConfirm = {},
-                onDeleteCancel = {},
-                onNewSession = {},
-                // The baseline's failed-read state shows 重试; a null receiver would
-                // hide the control and make the capture a different state.
-                onRetry = if (screenState.failure != null) ({}) else null,
-                onBack = {},
-            )
+            Box(
+                modifier = if (drawer) {
+                    Modifier.width(DRAWER_WIDTH_DP.dp).fillMaxHeight()
+                } else {
+                    Modifier.fillMaxSize()
+                },
+            ) {
+                SessionsPage(
+                    state = screenState,
+                    onSelect = {},
+                    onQueryChange = {},
+                    onRenameStart = {},
+                    onRenameDraftChange = {},
+                    onRenameCommit = {},
+                    onRenameCancel = {},
+                    onDeleteRequest = {},
+                    onDeleteConfirm = {},
+                    onDeleteCancel = {},
+                    onNewSession = {},
+                    // The baseline's failed-read state shows 重试; a null receiver would
+                    // hide the control and make the capture a different state.
+                    onRetry = if (screenState.failure != null) ({}) else null,
+                    // The baseline's bar is empty in every one of the seven states
+                    // (`SessionsPage.swift:137-322`: no title, no toolbar item), so no
+                    // back control is passed: a route would be the only caller that
+                    // has one.
+                    onBack = null,
+                )
+            }
         }
         capture(state.androidName)
+    }
+
+    private companion object {
+        /** `NativeShell.swift:97` / `:875`: the drawer column the baseline preview uses. */
+        const val DRAWER_WIDTH_DP: Int = 320
     }
 }

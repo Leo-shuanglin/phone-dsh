@@ -14,8 +14,17 @@
 // failure names the state instead of the whole suite.
 package com.phonedsh.ui.screenshot
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.phonedsh.ui.SettingsMetrics
+import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.page.AboutPage
 import com.phonedsh.ui.page.ChatPage
 import com.phonedsh.ui.page.EgressAllowListPage
@@ -199,6 +208,45 @@ class ParityScreenshotTest : ScreenshotTestBase() {
         captureParity(ParityState.PAGE_SETTINGS_SEARCH)
     }
 
+    /**
+     * One state inside the iOS frame's safe-area band.
+     *
+     * The iOS baselines are **device screenshots**: they include a 62 pt status bar
+     * above the app's own content (`ios-settings.png`: white 0..62 pt, the inline
+     * title's ink centre pins the 44 pt bar to 62..106). The Compose harness hides
+     * the Android system bars (a *capture* condition, see [ScreenshotTestBase]), so
+     * `statusBarsPadding()` inside the pages collapses to 0 and every page would
+     * sit one safe area higher than the panel it is laid beside — the sheets put
+     * both panels at the same absolute y, so that is a whole-block offset, not a
+     * page bug.
+     *
+     * [SettingsMetrics.PARITY_SAFE_AREA_TOP_PT] is the measured delta (61.33 pt, not
+     * the nominal 62: 2 px would re-rasterise every glyph). It is applied here, in
+     * the capture frame, and **not** in the pages: on a device that shows the bars
+     * the page already gets that band from the platform, and a page-level inset
+     * would double it.
+     *
+     * @param background the colour the iOS status band shows behind the clock: the
+     *   page's own top fill (white for the settings sheet, the grouped background
+     *   for 关于), so the band joins the page without a seam.
+     */
+    @Composable
+    private fun parityFrame(background: Color, content: @Composable () -> Unit) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(background),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = SettingsMetrics.PARITY_SAFE_AREA_TOP_PT.dp),
+            ) {
+                content()
+            }
+        }
+    }
+
     private fun captureParity(state: ParityState): Unit {
         check(state.status == ParityStatus.CAPTURED) {
             "${state.androidName} is registered but not captured yet (owner: ${state.owner})"
@@ -216,78 +264,105 @@ class ParityScreenshotTest : ScreenshotTestBase() {
     @Composable
     private fun parityContent(state: ParityState) {
         when (state) {
-            ParityState.PAGE_CHAT_DEFAULT -> ChatPage(
-                state = ScreenshotSamples.chatState(),
-                onDraftChange = {},
-                onSend = {},
-                onStop = {},
-                onToggleRow = {},
-                onApprove = {},
-                onDeny = {},
-                onDismissBanner = {},
-                onRetry = {},
-                onOpenSessions = {},
-                title = "像素基线复盘",
-            )
+            // `ios-chat-default` is the **live host's** transcript (the registry
+            // note and `INDEX.md`: it differs run to run), so no sample reproduces
+            // it; the registered state stays the gate's settled turn and the sheet
+            // compares chrome/geometry, not transcript words. What this capture
+            // does fix is the frame: the page now sits in the same 62/42 pt safe
+            // area as the iOS panel instead of 62 pt higher.
+            ParityState.PAGE_CHAT_DEFAULT -> ChatParityFrame {
+                ChatPage(
+                    state = ScreenshotSamples.chatState(),
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    onToggleRow = {},
+                    onApprove = {},
+                    onDeny = {},
+                    onDismissBanner = {},
+                    onRetry = {},
+                    onOpenSessions = {},
+                    title = "像素基线复盘",
+                )
+            }
 
-            ParityState.PAGE_CHAT_FAILED -> ChatPage(
-                // The parity sample sets `userFacingError`, which is what the page's
-                // top-banner clause keys on. The gate sample (`chatStateWithBanner`)
-                // predates that clause and renders no banner at HEAD, so it is not
-                // reused here.
-                state = ScreenshotSamples.chatStateWithTopError(),
-                onDraftChange = {},
-                onSend = {},
-                onStop = {},
-                onToggleRow = {},
-                onApprove = {},
-                onDeny = {},
-                onDismissBanner = {},
-                onRetry = {},
-                onOpenSessions = {},
-                title = "像素基线复盘",
-            )
+            // `ios-chat-failed`: two bubbles and the red 没发出去 line under the
+            // last one — **no** top banner. `ScreenshotSamples.chatStateWithTopError`
+            // is the *gate* sample for `page-chat-banner` (a different state with a
+            // different conversation); using it here put an orange banner on a
+            // baseline that has none and swapped every word on screen.
+            ParityState.PAGE_CHAT_FAILED -> ChatParityFrame {
+                ChatPage(
+                    state = ChatParitySamples.chatFailed(),
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    onToggleRow = {},
+                    onApprove = {},
+                    onDeny = {},
+                    onDismissBanner = {},
+                    onRetry = {},
+                    onOpenSessions = {},
+                    title = "像素基线复盘",
+                )
+            }
 
-            ParityState.PAGE_CHAT_LONG -> ChatPage(
-                state = ScreenshotSamples.chatStateLongThread(),
-                onDraftChange = {},
-                onSend = {},
-                onStop = {},
-                onToggleRow = {},
-                onApprove = {},
-                onDeny = {},
-                onDismissBanner = {},
-                onRetry = {},
-                onOpenSessions = {},
-                title = "像素基线复盘",
-            )
+            // `ios-chat-long` is the 5000-character message + long answer **scrolled
+            // to the tail**; this harness captures no scroll position (the registry
+            // note says so), so a faithful row list would show the top of the huge
+            // bubble instead of the tail the baseline shows. The registered density
+            // sample stays; the sheet compares row density, not the viewport.
+            ParityState.PAGE_CHAT_LONG -> ChatParityFrame {
+                ChatPage(
+                    state = ScreenshotSamples.chatStateLongThread(),
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    onToggleRow = {},
+                    onApprove = {},
+                    onDeny = {},
+                    onDismissBanner = {},
+                    onRetry = {},
+                    onOpenSessions = {},
+                    title = "像素基线复盘",
+                )
+            }
 
-            ParityState.PAGE_CHAT_DRAFT -> ChatPage(
-                state = ScreenshotSamples.chatStateWithLongDraft(),
-                onDraftChange = {},
-                onSend = {},
-                onStop = {},
-                onToggleRow = {},
-                onApprove = {},
-                onDeny = {},
-                onDismissBanner = {},
-                onRetry = {},
-                onOpenSessions = {},
-                title = "像素基线复盘",
-            )
+            // `ios-chat-draft`: empty host + the 5000-character draft. The gate
+            // sample (`chatStateWithLongDraft`) carries `chatState`'s tool rows,
+            // stats and a different draft text, so it was never this state.
+            ParityState.PAGE_CHAT_DRAFT -> ChatParityFrame {
+                ChatPage(
+                    state = ChatParitySamples.chatDraft(),
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    onToggleRow = {},
+                    onApprove = {},
+                    onDeny = {},
+                    onDismissBanner = {},
+                    onRetry = {},
+                    onOpenSessions = {},
+                    title = "像素基线复盘",
+                )
+            }
 
             // `PAGE_SESSIONS_DEFAULT` is captured by
             // `SessionsParityScreenshotTest#pageSessionsDefault` (the owning lane).
 
             // The 通用 tab: the shell (bar + five-segment picker) over its six cards.
-            ParityState.PAGE_SETTINGS_DEFAULT -> SettingsPage(
-                state = SettingsParitySamples.indexState(),
-                onNavigate = {},
-                onToggleBackgroundKeepAlive = {},
-                onSelectBusyEnterMode = {},
-                onBack = {},
-                tab = SettingsTab.GENERAL,
-            )
+            // L79: the two grouped settings states are captured inside the iOS
+            // frame's safe-area band; see [parityFrame].
+            ParityState.PAGE_SETTINGS_DEFAULT -> parityFrame(background = LocalUiTokens.current.colors.input) {
+                SettingsPage(
+                    state = SettingsParitySamples.indexState(),
+                    onNavigate = {},
+                    onToggleBackgroundKeepAlive = {},
+                    onSelectBusyEnterMode = {},
+                    onBack = {},
+                    tab = SettingsTab.GENERAL,
+                )
+            }
 
             // The 模型 tab: iOS's `ModelProviderSettingsPage` *is* this tab's body, so
             // the capture is the shell with that page embedded (no second bar).
@@ -315,11 +390,15 @@ class ParityScreenshotTest : ScreenshotTestBase() {
             // PR #13 no settings tab has a row that opens them, on either platform.
             // The Android capture is therefore the page itself, which is the same
             // thing the iOS baseline photographed.
-            ParityState.PAGE_SETTINGS_ABOUT -> AboutPage(
-                state = SettingsParitySamples.aboutState(),
-                onToggleSection = {},
-                onBack = {},
-            )
+            ParityState.PAGE_SETTINGS_ABOUT -> parityFrame(
+                background = LocalUiTokens.current.colors.groupedBackground,
+            ) {
+                AboutPage(
+                    state = SettingsParitySamples.aboutState(),
+                    onToggleSection = {},
+                    onBack = {},
+                )
+            }
 
             ParityState.PAGE_SETTINGS_MODEL -> ModelProviderSettingsPage(
                 state = SettingsParitySamples.modelProviderState(),

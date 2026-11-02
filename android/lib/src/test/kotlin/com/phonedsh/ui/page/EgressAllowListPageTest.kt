@@ -215,8 +215,8 @@ class EgressAllowListPageTest {
         // again after the scroll to 添加地址. Scrolling back is the artifact's fix;
         // the assertion (the row's affordance is on screen and disabled) stands.
         compose.onNodeWithTag(UiPageTags.EGRESS_LIST)
-            .performScrollToNode(hasTestTag(UiPageTags.EGRESS_RULE_DELETE))
-        compose.onAllNodesWithTag(UiPageTags.EGRESS_RULE_DELETE)[0].performClick()
+            .performScrollToNode(hasTestTag(UiPageTags.EGRESS_RULE))
+        compose.onAllNodesWithTag(UiPageTags.EGRESS_RULE)[0].performClick()
         compose.onNodeWithTag(UiPageTags.EGRESS_DELETE_DIALOG).assertIsDisplayed()
         // The page's line and the dialog's copy: the reason travels with the verb.
         compose.onAllNodesWithText(UiStrings.HOST_READ_ONLY_HINT).assertCountEquals(2)
@@ -262,8 +262,8 @@ class EgressAllowListPageTest {
         // again after the scroll to 添加地址. Scrolling back is the artifact's fix;
         // the assertion (the row's affordance is on screen and disabled) stands.
         compose.onNodeWithTag(UiPageTags.EGRESS_LIST)
-            .performScrollToNode(hasTestTag(UiPageTags.EGRESS_RULE_DELETE))
-        compose.onAllNodesWithTag(UiPageTags.EGRESS_RULE_DELETE)[0].performClick()
+            .performScrollToNode(hasTestTag(UiPageTags.EGRESS_RULE))
+        compose.onAllNodesWithTag(UiPageTags.EGRESS_RULE)[0].performClick()
         compose.onNodeWithTag(UiPageTags.EGRESS_DELETE_DIALOG).assertIsDisplayed()
         compose.onNode(isDialog()).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.EGRESS_DELETE_CONFIRM).assertIsDisplayed()
@@ -277,8 +277,8 @@ class EgressAllowListPageTest {
         // again after the scroll to 添加地址. Scrolling back is the artifact's fix;
         // the assertion (the row's affordance is on screen and disabled) stands.
         compose.onNodeWithTag(UiPageTags.EGRESS_LIST)
-            .performScrollToNode(hasTestTag(UiPageTags.EGRESS_RULE_DELETE))
-        compose.onAllNodesWithTag(UiPageTags.EGRESS_RULE_DELETE)[0].performClick()
+            .performScrollToNode(hasTestTag(UiPageTags.EGRESS_RULE))
+        compose.onAllNodesWithTag(UiPageTags.EGRESS_RULE)[0].performClick()
         compose.onNodeWithText(UiStrings.EGRESS_DELETE_ADDRESS).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.EGRESS_DELETE_CONFIRM).performClick()
         assertEquals(listOf("r1"), removed.map { it.id })

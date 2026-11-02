@@ -58,6 +58,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -67,6 +68,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -123,6 +126,15 @@ public val SettingsCardGap: Dp get() = SettingsMetrics.SECTION_GAP_PT.dp
 /** The 34.67 pt from the list's top edge to the first card (y=502→606 px). */
 public val SettingsListTopInset: Dp get() = SettingsMetrics.FIRST_CARD_TOP_INSET_PT.dp
 
+/**
+ * The 45.0 pt from a grouped *sub-page's* bar bottom to its first card.
+ *
+ * `ios-settings-about.png`: bar ends 106 pt, card top 151 pt. A pushed page's
+ * `List` starts under the bar and keeps the whole navigation content inset,
+ * unlike the general tab whose list starts below the picker.
+ */
+public val SettingsSubPageGroupedTopInset: Dp get() = SettingsMetrics.SUB_PAGE_GROUPED_TOP_INSET_PT.dp
+
 /** The 39.33 pt from a card's trailing edge to a row value's right edge. */
 public val SettingsValueTrailingInset: Dp get() = SettingsMetrics.VALUE_TRAILING_INSET_PT.dp
 
@@ -131,6 +143,19 @@ public val SettingsSwitchTrailingInset: Dp get() = SettingsMetrics.SWITCH_TRAILI
 
 /** The 20.67 pt slot between a value's right edge and the chevron's right edge. */
 public val SettingsChevronSlotWidth: Dp get() = SettingsMetrics.VALUE_CHEVRON_SLOT_PT.dp
+
+/**
+ * A *menu* row's trailing insets, measured separately from a navigation row's.
+ *
+ * `ios-settings.png` 语言: the value's ink ends at 351.7 pt and the
+ * `chevron.up.chevron.down` at 367.7 pt, i.e. 17.6 pt from the card's trailing
+ * edge (385.3) with a 16.0 pt glyph slot. A navigation row (`权限`) instead puts
+ * the value at 346.3 and a 6.33 pt `chevron.right` at 367 — the 20.67 + 39.33
+ * pair this file already had. Using the navigation geometry for both left every
+ * menu value 20 pt short of its baseline position.
+ */
+public val SettingsMenuTrailingInset: Dp get() = SettingsMetrics.MENU_TRAILING_INSET_PT.dp
+public val SettingsMenuChevronSlot: Dp get() = SettingsMetrics.MENU_CHEVRON_SLOT_PT.dp
 
 /** The segmented track: 32 pt tall, 16 pt inset, capsule (r = height / 2). */
 public val SettingsSegmentHeight: Dp get() = SettingsMetrics.segmentedHeight
@@ -147,6 +172,81 @@ public val SettingsSegmentTopGap: Dp get() = SettingsMetrics.SEGMENTED_TOP_GAP_P
  * the navigation content inset `SettingsMetrics.SEGMENTED_TOP_GAP_PT` splits.
  */
 public val SettingsSegmentPaddingV: Dp get() = SettingsMetrics.SEGMENTED_PADDING_V_PT.dp
+
+// ---------------------------------------------------------------------------
+// Ink: system .label / .secondary / the footnote's measured grey
+// ---------------------------------------------------------------------------
+
+/**
+ * The ink a grouped page's rows draw, when the page has the iOS system inks.
+ *
+ * iOS's settings rows are `List` rows, so their text is the *system* inks
+ * (`UIColor.label` #000000, `secondaryLabel` #8A8A8E) while the app's own theme
+ * paints `colors.primary` (#111114) and `colors.secondary` (#66666B). The
+ * footnote is a third colour again: `.foregroundStyle(.secondary)` on a
+ * `.footnote` renders #7F7F7F, not #8A8A8E (`colors.settingsFootnoteInk`).
+ *
+ * The two L79 pages provide this; every other settings page keeps the theme
+ * inks it was measured with, so the default (null) is the previous behaviour.
+ *
+ * @param label the row title ink (`colors.systemLabel`).
+ * @param value the row value / caption ink (`colors.systemSecondary`).
+ * @param footnote the 13 pt footnote ink (`colors.settingsFootnoteInk`).
+ */
+@Immutable
+public data class SettingsRowInk(
+    public val label: Color,
+    public val value: Color,
+    public val footnote: Color,
+)
+
+/** `null` = draw with the theme tokens (the pre-L79 behaviour). */
+public val LocalSettingsRowInk: androidx.compose.runtime.ProvidableCompositionLocal<SettingsRowInk?> =
+    compositionLocalOf { null }
+
+/** The row-label ink: the page's override, else the theme's primary. */
+@Composable
+public fun settingsLabelInk(): Color =
+    LocalSettingsRowInk.current?.label ?: LocalUiTokens.current.colors.primary
+
+/** The row-value ink: the page's override, else the theme's secondary. */
+@Composable
+public fun settingsValueInk(): Color =
+    LocalSettingsRowInk.current?.value ?: LocalUiTokens.current.colors.secondary
+
+/** The footnote ink: the page's override, else the theme's secondary. */
+@Composable
+public fun settingsFootnoteInk(): Color =
+    LocalSettingsRowInk.current?.footnote ?: LocalUiTokens.current.colors.secondary
+
+/**
+ * The 17 pt row text's 1 pt optical lift ([SettingsMetrics.ROW_TEXT_OPTICAL_OFFSET_PT]).
+ *
+ * Applied to labels and values only: it is a draw offset, so the row's height and
+ * its trailing controls do not move.
+ */
+@Composable
+public fun settingsRowTextLift(): Modifier =
+    Modifier.offset(y = SettingsMetrics.ROW_TEXT_OPTICAL_OFFSET_PT.dp)
+
+/**
+ * The iOS system inks a settings `List` draws its rows with.
+ *
+ * `colors.systemLabel` (#000000) and `colors.systemSecondary` (#8A8A8E) are the
+ * measured iOS values; `colors.settingsFootnoteInk` (#7F7F7F) is what
+ * `.font(.footnote).foregroundStyle(.secondary)` actually renders. The app's own
+ * theme inks are #111114 / #66666B, which is a visible mismatch on every glyph of
+ * a pixel comparison, so the two grouped pages that have an iOS baseline supply
+ * the system three through [LocalSettingsRowInk].
+ */
+@Composable
+public fun settingsSystemInk(): SettingsRowInk = LocalUiTokens.current.let { tokens ->
+    SettingsRowInk(
+        label = tokens.colors.systemLabel,
+        value = tokens.colors.systemSecondary,
+        footnote = tokens.colors.settingsFootnoteInk,
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Sub-page geometry: measured on the six `ios-settings-*.png` sub-page shots
@@ -359,7 +459,10 @@ public fun SettingsNavBar(
         if (title != null) {
             BasicText(
                 text = title,
-                style = type.headline.copy(color = tokens.colors.primary),
+                // An inline navigation title is UIKit's .label, i.e. #000000; the
+                // theme's #111114 leaves a 17/255 delta on every glyph core. Measured
+                // on `ios-settings.png` 通用设置 (2,101 px of #000000).
+                style = type.headline.copy(color = tokens.colors.systemLabel),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
@@ -426,7 +529,7 @@ public fun SettingsSegmentedPicker(
             .padding(horizontal = SettingsSegmentInset)
             .height(SettingsSegmentHeight)
             .clip(RoundedCornerShape(SettingsSegmentRadius))
-            .background(tokens.colors.selector)
+            .background(tokens.colors.segmentTrack)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .semantics(mergeDescendants = false) {},
         verticalAlignment = Alignment.CenterVertically,
@@ -455,8 +558,14 @@ public fun SettingsSegmentedPicker(
             ) {
                 BasicText(
                     text = label,
-                    style = settingsLabelStyle().copy(
-                        color = if (isSelected) tokens.colors.primary else tokens.colors.secondary,
+                    // UISegmentedControl's label is 13 pt, not the 17 pt row label:
+                    // the baseline's 通用 ink box is 11.33 pt tall (13 pt CJK), and
+                    // a 17 pt label measures 15.3-16.0 pt in the same track.
+                    style = settingsFootnoteStyle().copy(
+                        // UISegmentedControl draws *every* label in .label, selected
+                        // or not: the baseline's 模型/插件/手机权限/预设 are black, not
+                        // the secondary grey the previous mapping used.
+                        color = settingsLabelInk(),
                     ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -552,17 +661,18 @@ public fun SettingsGroupedRow(
                         color = when {
                             !enabled -> tokens.colors.tertiary
                             accentTitle -> tokens.colors.accent
-                            else -> tokens.colors.primary
+                            else -> settingsLabelInk()
                         },
                     ),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).then(settingsRowTextLift()),
                 )
                 if (value != null) {
                     BasicText(
                         text = value,
-                        style = settingsValueStyle().copy(color = valueInk ?: tokens.colors.secondary),
+                        style = settingsValueStyle().copy(color = valueInk ?: settingsValueInk()),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = settingsRowTextLift(),
                     )
                 }
                 if (trailing != null) {
@@ -574,7 +684,7 @@ public fun SettingsGroupedRow(
             if (subtitle != null) {
                 BasicText(
                     text = subtitle,
-                    style = settingsFootnoteStyle().copy(color = tokens.colors.secondary),
+                    style = settingsFootnoteStyle().copy(color = settingsFootnoteInk()),
                 )
             }
         }
@@ -629,21 +739,29 @@ public fun SettingsBodyRow(
     }
 }
 
-/** One footnote row inside a card: 13 pt secondary ink, same 52.33 pt pitch. */
+/**
+ * One footnote row inside a card: 13 pt secondary ink, same 52.33 pt pitch.
+ *
+ * @param centre centre the line inside the row. The grouped pages' footnotes are
+ *   centred in the baseline (`ios-settings.png` 权限 footnote ink 274.67..286.0 in
+ *   a row that spans 254.33..306.67); the default keeps the previous top-aligned
+ *   box, which the settings sub-pages' wrapped footnotes rely on (their tests pin
+ *   that layout), so the centring is opt-in.
+ */
 @Composable
 public fun SettingsFootnoteRow(
     text: String,
     modifier: Modifier = Modifier,
     dividerBelow: Boolean = false,
+    centre: Boolean = false,
 ) {
     val tokens = LocalUiTokens.current
-    Box(modifier = modifier.fillMaxWidth()) {
+    val body: @Composable () -> Unit = {
         BasicText(
             text = text,
-            style = settingsFootnoteStyle().copy(color = tokens.colors.secondary),
+            style = settingsFootnoteStyle().copy(color = settingsFootnoteInk()),
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = SettingsGroupedRowHeight)
                 .padding(
                     start = SettingsMetrics.ROW_CONTENT_INSET_PT.dp,
                     end = SettingsMetrics.ROW_CONTENT_INSET_PT.dp,
@@ -651,6 +769,16 @@ public fun SettingsFootnoteRow(
                     bottom = tokens.spacing.iconText,
                 ),
         )
+    }
+    Box(modifier = modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = SettingsGroupedRowHeight),
+            contentAlignment = if (centre) Alignment.CenterStart else Alignment.TopStart,
+        ) {
+            body()
+        }
         if (dividerBelow) {
             SettingsHairline(
                 modifier = Modifier
@@ -776,10 +904,10 @@ public fun SettingsFormRow(
                         color = when {
                             !enabled -> tokens.colors.tertiary
                             accentTitle -> tokens.colors.accent
-                            else -> tokens.colors.primary
+                            else -> settingsLabelInk()
                         },
                     ),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).then(settingsRowTextLift()),
                 )
                 if (value != null) {
                     BasicText(
@@ -789,6 +917,7 @@ public fun SettingsFormRow(
                         ),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = settingsRowTextLift(),
                     )
                 }
                 if (trailing != null) {
@@ -800,7 +929,7 @@ public fun SettingsFormRow(
             if (subtitle != null) {
                 BasicText(
                     text = subtitle,
-                    style = settingsFootnoteStyle().copy(color = tokens.colors.secondary),
+                    style = settingsFootnoteStyle().copy(color = settingsFootnoteInk()),
                 )
             }
             subtitleContent?.invoke()
@@ -821,7 +950,7 @@ public fun SettingsSubPageFootnote(text: String, modifier: Modifier = Modifier) 
     val tokens = LocalUiTokens.current
     BasicText(
         text = text,
-        style = settingsFootnoteStyle().copy(color = tokens.colors.secondary),
+        style = settingsFootnoteStyle().copy(color = settingsFootnoteInk()),
         modifier = modifier
             .fillMaxWidth()
             .padding(
@@ -844,9 +973,18 @@ public fun SettingsSubPageFootnote(text: String, modifier: Modifier = Modifier) 
  *  * [grouped] = `true` — iOS's inset-grouped list: a grey page with white
  *    cards. `-about` and the general tab are this mode.
  *
+ * A third mode came with L75's files/workspace-folders pages: [pageFill] paints the
+ * frame with `colors.page` (`NativePagePalette.page`, #FFFFFF light / #000000 dark),
+ * which is the fill those two baselines set explicitly with
+ * `.background(NativePagePalette.page)` (`FilesPage.swift:55`,
+ * `NativeShell.swift:...`). It is not `grouped` (there are no cards) and not the
+ * default either (that resolves to `colors.input`, #242426 in dark, i.e. a lighter
+ * page than the baseline's black).
+ *
  * @param title the inline (centred) title; the six sub-pages set it on the two
  *   that live behind a modal sheet without a large title (`关于`, `网络访问`).
  * @param largeTitle the 34 pt heading drawn in the content instead of the bar.
+ * @param pageFill paint the frame with `colors.page` instead of `colors.input`.
  * @param onBack the leading affordance (the baseline's ✕ on a sheet, ‹ on a
  *   pushed page).
  * @param rootTag an optional stable test tag for the page root.
@@ -860,6 +998,7 @@ public fun SettingsSubPageFrame(
     backGlyph: String = SETTINGS_CLOSE_GLYPH,
     backTag: String? = null,
     grouped: Boolean = false,
+    pageFill: Boolean = false,
     rootTag: String? = null,
     embedded: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
@@ -867,7 +1006,8 @@ public fun SettingsSubPageFrame(
 ) {
     val tokens = LocalUiTokens.current
     val background = when {
-        grouped -> tokens.colors.selector
+        grouped -> tokens.colors.groupedBackground
+        pageFill -> tokens.colors.page
         tokens.colors.background.isSpecified -> tokens.colors.background
         else -> tokens.colors.input
     }
@@ -1098,9 +1238,9 @@ public fun SettingsRowLabel(text: String, enabled: Boolean = true, modifier: Mod
     BasicText(
         text = text,
         style = settingsLabelStyle().copy(
-            color = if (enabled) tokens.colors.primary else tokens.colors.tertiary,
+            color = if (enabled) settingsLabelInk() else tokens.colors.tertiary,
         ),
-        modifier = modifier,
+        modifier = modifier.then(settingsRowTextLift()),
     )
 }
 
@@ -1115,10 +1255,10 @@ public fun SettingsRowValue(
     val tokens = LocalUiTokens.current
     BasicText(
         text = text,
-        style = (style ?: settingsValueStyle()).copy(color = ink ?: tokens.colors.secondary),
+        style = (style ?: settingsValueStyle()).copy(color = ink ?: settingsValueInk()),
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = modifier,
+        modifier = modifier.then(settingsRowTextLift()),
     )
 }
 
@@ -1169,9 +1309,12 @@ private val chevronInk: Color
  * trailing glyph aligned with the rows above it.
  */
 @Composable
-public fun SettingsTrailingSlot(content: @Composable () -> Unit) {
+public fun SettingsTrailingSlot(
+    width: Dp = SettingsChevronSlotWidth,
+    content: @Composable () -> Unit,
+) {
     Box(
-        modifier = Modifier.width(SettingsChevronSlotWidth),
+        modifier = Modifier.width(width),
         contentAlignment = Alignment.CenterEnd,
     ) {
         content()
@@ -1194,7 +1337,7 @@ public fun SettingsMenuChevron(ink: Color) {
     }
 }
 
-/** The baseline's separator: `colors.border`, 1.0 pt thick (3 px @3x). */
+/** The baseline's separator: `colors.separator` (#E8E8E8), 1.0 pt thick (3 px @3x). */
 @Composable
 public fun SettingsHairline(modifier: Modifier = Modifier) {
     val tokens = LocalUiTokens.current
@@ -1202,7 +1345,7 @@ public fun SettingsHairline(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .height(SettingsSeparatorThickness)
-            .background(tokens.colors.border),
+            .background(tokens.colors.separator),
     )
 }
 

@@ -15,7 +15,29 @@ What is compared
 * **actions**: the contract's labelled actions (buttons, navigation rows, menus,
   pickers, toggles, search, toolbar, gestures) against the labels the Android page
   declares. Actions whose label only exists as an expression are `unresolved`, never
-  silently equal.
+  silently equal. The summary row counts the **labelled** actions and the unique
+  wordings they compare on (`labelled 36 of 67 actions (27 unlabelled, 4
+  dynamicLabel) = 24 comparable keys` / `android 29 labels (24 keys)`), never "all
+  actions" next to "Android labels": the 67 included 27 icon-only controls and 4
+  data-driven labels, so printing 67 beside 29 read as 38 missing controls when
+  both sides compared the same 24 keys.
+* **titles**: the baseline's `.navigationTitle` against the title the Android page
+  passes to its frame (`PageFrame(title = …)`, `SettingsSubPageFrame(title/largeTitle
+  = …)`, `SettingsNavBar(title = …)`, and page-local `*Frame` / `*Bar` shells such as
+  `AutomationFrame` / `ShellTopBar`). A title that differs is `title-mismatch`; a
+  title only known at runtime is `unresolved-title`, never silently equal. A title
+  the baseline itself renders through a condition (`directory.isEmpty ? … : …`) is
+  data-driven on both sides and is not compared.
+* **conditional controls**: a label (action or section title) inside `if (callback
+  != null) { … }` or `callback?.let { … }`, where `callback` is a nullable
+  parameter, exists only when the host supplies the callback. It is reported as
+  `conditional-action` / `conditional-section` — never silently as present. This is
+  the hole `files`'s `3D 示例` fell through: `FilesPage.kt:478` carried the label
+  under `if (onOpenDemo != null)` while `PdshNavHost` never passed the callback, so
+  the gate counted a control the pixels never showed. When the baseline guards the
+  same item (its `condition`, or the Swift `if`/`else` around its provenance line),
+  the guard is expected and the occurrence is listed, not failed; only an item the
+  baseline always draws is a `conditional-*` divergence.
 * **presentations**: a sheet/alert/destination is linked to the action that opens it
   (`presents`); one whose binding is never assigned is an `orphan-presentation` (the
   baseline's own dead UI, e.g. ChatPage's `showActivity`).
@@ -34,6 +56,20 @@ sections   `SessionSectionLabel(<title>)`, `SectionHeader(title = <title>)`,
 actions    `SessionTextAction(label = <label>)`, `InfoRow(title = <label>, ..., onClick = ...)`
            (only when the row is interactive), `SessionFailureLine(..., retryLabel = <label>)`.
            A group header's fold (`SectionHeader`) is chrome, not an action.
+titles     `PageFrame(title = …)`, `SettingsSubPageFrame(title = … | largeTitle = …)`,
+           `SettingsNavBar(title = …)`, plus page-local shells ending in `Frame`/`Bar`
+           (`AutomationFrame(largeTitle = …)`, `ShellTopBar(title = …)`). The frame is
+           looked up inside the mapped screen composable, so a subpage frame declared in
+           the same file is not mistaken for the page's own title.
+
+guards     `if (<param> != null) { … }`, `if (<param> == null) { … } else { … }` and
+           `<param>?.let { … }` where `<param>` is a **nullable parameter of the enclosing
+           composable**. A section title or action label inside such a block is
+           conditionally present: it is reported as `conditional-section` /
+           `conditional-action` (or listed as expected when the baseline guards the same
+           item) and the summary row separates unconditional from conditional
+           occurrences.
+
 `<label>` resolves when it is a string literal or a `UiStrings.NAME` constant; any other
 expression is reported as `unresolved` rather than guessed. The idioms are documented in
 `spec/ui/v1/README.md` §1 so the Android lane knows what the gate reads.
@@ -129,7 +165,13 @@ KINDS = (
     "unmapped-android-screen",
     "spec-baseline-mismatch",
     "android-only-stale",
+    "title-mismatch",
+    "missing-title",
+    "unresolved-title",
+    "conditional-action",
+    "conditional-section",
 )
+TITLE_KINDS = ("title-mismatch", "missing-title", "unresolved-title")
 ANDROID_ONLY_REL = PAGES_REL / "_android-only.json"
 UNRECOGNIZED_REL = PAGES_REL / "_unrecognized.json"
 UNRECOGNIZED_SCHEMA = "pdsh.ui.page-structure-unrecognized/1"
@@ -158,6 +200,15 @@ EXPLICIT_ACTION_IDIOMS = frozenset({
 })
 CHIP_CONTROLS = ("SegmentedButton", "FilterChip", "AssistChip", "InputChip")
 TOGGLE_CONTROLS = ("Switch", "Checkbox")
+#: Named arguments that carry the page title, in priority order (a frame that has
+#: both draws `title` in its bar and `largeTitle` in the body; they are one title).
+TITLE_KEYS = ("title", "largeTitle", "barTitle")
+TITLE_CALL_RE = re.compile(r"\b([A-Z]\w*)[ \t]*\(")
+#: A `.navigationTitle` that is itself an expression: the baseline does not fix one
+#: title, so a data-driven Android title on that page is not a divergence.
+CONTRACT_DYNAMIC_TITLE_RE = re.compile(r"\bnil\b|\bif\b|\bswitch\b|\?\?|\s\?\s|\.isEmpty\b")
+TITLE_TOKEN_RE = re.compile(
+    r'UiStrings\.([A-Z][A-Z0-9_]*)|"((?:[^"\\]|\\.)*)"|([A-Z][A-Z0-9_]+)')
 FUN_DECL_RE = re.compile(r"\bfun\s+(\w+)\s*\(")
 SIDES = {"ios-only", "android-only"}
 PROVENANCE_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*\.swift):([0-9]+)$")
@@ -771,6 +822,89 @@ def check_provenance(root: Path, contract: dict, stale: list) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The baseline's own conditions (Swift source).
+# ---------------------------------------------------------------------------
+
+#: `if` is the only conditional shape the Android-side comparison needs: an action
+#: the baseline draws inside `if let errorText { … }` is already conditional, so the
+#: Android page guarding the same control on its callback is not a divergence.
+SWIFT_IF_RE = re.compile(r"\bif[ \t]+")
+SWIFT_ELSE_RE = re.compile(r"\belse\b")
+
+
+def swift_conditional_scopes(text: str) -> list:
+    """(body_start, body_end, condition text) for every `if`/`else` body in Swift.
+
+    Comments and string bodies are blanked with `mask_kotlin`: Swift and Kotlin
+    share the `//`, `/* */`, `"…"` and `\"\"\"…\"\"\"` shapes the masker understands,
+    and a brace inside a string must not close an `if` body. `switch`/`guard` are
+    deliberately not modelled; a contract action only needs *a* known condition for
+    the Android guard to be acceptable, and both of those are rarer than `if let`.
+    """
+    masked = mask_kotlin(text)
+    scopes = []
+    for m in SWIFT_IF_RE.finditer(masked):
+        brace = masked.find("{", m.end())
+        if brace < 0:
+            continue
+        close = match_delim(masked, brace, "{", "}")
+        if close < 0:
+            continue
+        condition = collapse(text[m.start():brace])
+        scopes.append((brace, close, condition))
+        k = close + 1
+        while k < len(masked) and masked[k] in " \t\r\n":
+            k += 1
+        if not SWIFT_ELSE_RE.match(masked, k):
+            continue
+        else_brace = masked.find("{", k)
+        if else_brace < 0:
+            continue
+        else_close = match_delim(masked, else_brace, "{", "}")
+        if else_close > 0:
+            scopes.append((else_brace, else_close, f"else of `{condition}`"))
+    return scopes
+
+
+def baseline_conditional_actions(root: Path, contract: dict) -> dict:
+    """Action id -> the baseline `if` that guards it, read from the Swift source.
+
+    The contract's `condition` field is only filled for manually annotated actions:
+    syntax extraction leaves it `null` even for `Button("重试")` inside `if let
+    loadError { … }`. Using `condition` alone would therefore fail a correct Android
+    guard (the platform says "draw the retry only when the host offers one", which
+    matches the baseline's "only on error"). The baseline source is the truth; this
+    reads the file `check_provenance` already mapped to this contract.
+    """
+    source = contract.get("source") or {}
+    path = root / source["path"] if source.get("path") else None
+    if path is None or not path.is_file():
+        return {}
+    text = read_text(path)
+    scopes = swift_conditional_scopes(text)
+    if not scopes:
+        return {}
+    offsets, pos = [], 0
+    for line in text.splitlines(keepends=True):
+        offsets.append((pos, pos + len(line)))
+        pos += len(line)
+    out = {}
+    for action in contract.get("actions", []):
+        match = PROVENANCE_RE.match(action.get("provenance") or "")
+        if not match or match.group(1) != source.get("file"):
+            continue
+        line_no = int(match.group(2))
+        if not (1 <= line_no <= len(offsets)):
+            continue
+        line_start, line_end = offsets[line_no - 1]
+        for body_start, body_end, condition in scopes:
+            if body_start < line_end and body_end > line_start:
+                out[action.get("id")] = condition
+                break
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Android extraction.
 # ---------------------------------------------------------------------------
 
@@ -914,7 +1048,13 @@ def call_at(masked: str, start: int) -> dict:
 
 
 def function_spans(masked: str) -> list:
-    """(name, params, body_start, body_end) for every function declaration."""
+    """(name, params, nullable params, body_start, body_end) per function declaration.
+
+    `nullable` is the subset of parameters whose type ends in `?` (`onRetry: (() ->
+    Unit)? = null`). It is what tells a *host-supplied* callback from a plain value:
+    only a nullable parameter can be `null` at runtime, so only its `if (x != null)`
+    guard makes the UI conditional.
+    """
     out = []
     for m in FUN_DECL_RE.finditer(masked):
         open_paren = m.end() - 1
@@ -927,14 +1067,85 @@ def function_spans(masked: str) -> list:
         close_brace = match_delim(masked, brace, "{", "}")
         if close_brace < 0:
             continue
-        params = []
+        params, nullable = [], set()
         for a, b in split_args(masked, open_paren + 1, close):
             nm = re.match(r"\s*([a-z][A-Za-z0-9_]*)\s*:", masked[a:b])
             if nm:
                 params.append(nm.group(1))
-        out.append({"name": m.group(1), "params": params,
+                if "?" in masked[a:b]:
+                    nullable.add(nm.group(1))
+        out.append({"name": m.group(1), "params": params, "nullable": nullable,
                     "body_start": brace, "body_end": close_brace})
     return out
+
+
+#: A nullable callback guarding a block: `if (onX != null) { … }` / `if (null != onX)`.
+NULL_GUARD_IF_RE = re.compile(
+    r"\bif\s*\(\s*(?:null\s*!=\s*([A-Za-z_]\w*)|([A-Za-z_]\w*)\s*!=\s*null)\s*\)\s*\{")
+#: The same guard seen from the other side: `if (onX == null) { … } else { <UI> }`.
+NULL_GUARD_NULL_RE = re.compile(
+    r"\bif\s*\(\s*(?:null\s*==\s*([A-Za-z_]\w*)|([A-Za-z_]\w*)\s*==\s*null)\s*\)\s*\{")
+#: `onX?.let { … }`: the block only runs when the callback is non-null.
+NULL_GUARD_LET_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\?\.\s*(?:let|run|also|apply)\s*\{")
+
+
+def null_guards(masked: str, spans: list) -> list:
+    """(block_start, block_end, parameter, snippet) for every nullable-callback guard.
+
+    Only a parameter declared `?` counts. A local `val onX: (() -> Unit)?` or a
+    nullable field is not host wiring this gate can judge, and a non-nullable
+    parameter can never be null, so its `if (x != null)` is not a condition.
+    """
+    out = []
+
+    def add(name: str, block_start: int, block_end: int, snippet: str) -> None:
+        span = enclosing_function(spans, block_start)
+        if span is None or name not in span["nullable"]:
+            return
+        if block_end > block_start:
+            out.append((block_start, block_end, name, snippet))
+
+    for m in NULL_GUARD_IF_RE.finditer(masked):
+        name = m.group(1) or m.group(2)
+        brace = m.end() - 1
+        close = match_delim(masked, brace, "{", "}")
+        if close > 0:
+            add(name, brace, close, f"if ({name} != null)")
+    for m in NULL_GUARD_LET_RE.finditer(masked):
+        name = m.group(1)
+        brace = m.end() - 1
+        close = match_delim(masked, brace, "{", "}")
+        if close > 0:
+            add(name, brace, close, f"{name}?.let")
+    for m in NULL_GUARD_NULL_RE.finditer(masked):
+        name = m.group(1) or m.group(2)
+        brace = m.end() - 1
+        close = match_delim(masked, brace, "{", "}")
+        if close < 0:
+            continue
+        k = close + 1
+        while k < len(masked) and masked[k] in " \t\r\n":
+            k += 1
+        if not masked.startswith("else", k):
+            continue
+        else_brace = masked.find("{", k)
+        if else_brace < 0:
+            continue
+        else_close = match_delim(masked, else_brace, "{", "}")
+        if else_close > 0:
+            add(name, else_brace, else_close, f"if ({name} == null) … else")
+    return out
+
+
+def null_guard_at(guards: list, pos: int) -> str | None:
+    """The innermost nullable-callback guard whose block contains `pos`, if any."""
+    hits = [guard for guard in guards if guard[0] < pos < guard[1]]
+    if not hits:
+        return None
+    hits.sort(key=lambda guard: guard[1] - guard[0])
+    # A control can sit behind two guards (`if (onShow != null) { if (onRetry !=
+    # null) { … } }`); name both so the report is not half the wiring.
+    return " inside ".join(dict.fromkeys(guard[3] for guard in hits))
 
 
 def enclosing_function(spans: list, pos: int) -> dict | None:
@@ -1055,9 +1266,16 @@ def load_page_wrappers(root: Path) -> set:
 
 def android_actions(text: str, masked: str, strings: dict, consts: dict,
                     stats: dict | None = None, wrappers: frozenset | None = None,
-                    positions: list | None = None, fold_labels: frozenset | None = None) -> tuple:
-    """(labelled action labels, unresolved expressions)."""
-    labels, unresolved = [], []
+                    positions: list | None = None,
+                    fold_labels: frozenset | None = None) -> tuple:
+    """(labelled action labels, unresolved expressions, (label, pos) occurrences).
+
+    The third value is every resolved label with its source position, independent of
+    `positions` (which only feeds the untitled-group criterion). The caller maps a
+    position to a nullable-callback guard, so a label that exists only under
+    `if (hostCallback != null)` is not reported as present.
+    """
+    labels, unresolved, found = [], [], []
     for m in SECTION_CALL_RE.finditer(masked):
         callee = m.group(1)
         if callee not in ("SessionTextAction", "InfoRow", "SessionFailureLine"):
@@ -1097,6 +1315,7 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             unresolved.append(strip_kotlin_comments(collapse(text[span[0]:span[1]]))[:DYN_EXPR_MAX])
         elif value and value.strip():
             labels.append(value)
+            found.append((value, m.start()))
             if positions is not None:
                 # The untitled-group criterion check locates a contract row by its
                 # position in the page. Without this, a row drawn by one of these
@@ -1131,6 +1350,7 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             unresolved.append(expr[:DYN_EXPR_MAX])
         elif value and value.strip():
             labels.append(value)
+            found.append((value, m.start()))
     # `Row(modifier = Modifier.clickable(...)) { BasicText(text = UiStrings.NEW) }`:
     # the label is a child, the tap target is the container. Take the first
     # non-glyph text child; a dynamic first child means the row's name comes from
@@ -1171,6 +1391,7 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             break
         if label and label.strip():
             labels.append(label)
+            found.append((label, m.start()))
     # A search field is the contract's `search` action: `ImeAction.Search` marks it,
     # and the label is the placeholder (or its accessibility description).
     for m in SECTION_CALL_RE.finditer(masked):
@@ -1201,6 +1422,7 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
                     break
         if label:
             labels.append(label)
+            found.append((label, m.start()))
     # -- standard Compose controls (the label is visible in the source) --------
     spans = function_spans(masked)
     wrappers = set(wrappers or ()) | button_wrappers(masked, spans)
@@ -1212,6 +1434,7 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
                 stats[idiom + ".unresolved"] = stats.get(idiom + ".unresolved", 0) + 1
         elif value and value.strip():
             labels.append(value)
+            found.append((value, pos))
             if positions is not None:
                 positions.append((value, pos))
             if stats is not None:
@@ -1320,11 +1543,137 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             continue
         if normalize(value) in fold_labels:
             labels.append(value)
+            found.append((value, m.start()))
     # `%d 项需要处理` is rendered data, not a fixed action label: templates never
     # participate in missing/extra comparison (section titles keep them — the
     # contract's `titleTemplate` is exactly this shape).
     labels = [label for label in labels if not is_template_label(label)]
-    return labels, unresolved
+    found = [(label, pos) for label, pos in found if not is_template_label(label)]
+    return labels, unresolved, found
+
+
+# ---------------------------------------------------------------------------
+# Page title.
+# ---------------------------------------------------------------------------
+
+
+def title_literals(expr: str, strings: dict, consts: dict) -> list:
+    """Every literal an Android title expression can render, in source order.
+
+    A dynamic title is not automatically incomparable: `preview?.artifact?.name ?:
+    UiStrings.ARTIFACTS_TITLE` has a literal fallback, and `when { editing == null ->
+    UiStrings.MODEL_PROVIDER_TITLE … }` has a literal branch per mode. Resolving the
+    literals lets the check accept a page whose *one* mode renders the contract title
+    while still catching a fallback that says something else.
+    """
+    out = []
+    for m in TITLE_TOKEN_RE.finditer(expr):
+        if m.group(1):
+            value = strings.get(m.group(1))
+        elif m.group(2) is not None:
+            value = m.group(2).replace('\\"', '"').replace("\\n", "\n")
+        else:
+            value = consts.get(m.group(3))
+        if value and value.strip() and value not in out:
+            out.append(value)
+    return out
+
+
+def android_page_title(text: str, masked: str, spans: list, screen: str | None,
+                       strings: dict, consts: dict) -> dict | None:
+    """The title the mapped screen passes to its own frame, or None.
+
+    The scan is scoped to the screen composable: `MCPSettingsPage.kt` also declares
+    the editor's `PageFrame`, and reading the file's first title would compare the
+    list page against the editor's heading. The frame name is matched by suffix
+    (`PageFrame`, `SettingsSubPageFrame`, `SettingsNavBar`, `AutomationFrame`,
+    `ShellTopBar`) so a page-local shell is read instead of reported as untitled.
+    """
+    span = next((item for item in spans if item["name"] == screen), None)
+    if span is None:
+        return None
+    for m in TITLE_CALL_RE.finditer(masked, span["body_start"], span["body_end"]):
+        callee = m.group(1)
+        if not callee.endswith(("Frame", "Bar")):
+            continue
+        if is_declaration(masked, m.start()):
+            continue
+        call = call_at(masked, m.start())
+        if not call:
+            continue
+        key = next((name for name in TITLE_KEYS if name in call["named"]), None)
+        if key is None:
+            continue
+        start, end = call["named"][key]
+        expr = collapse(text[start:end])
+        value, dynamic = resolve_kotlin_expr(expr, strings, consts)
+        return {
+            "callee": callee,
+            "key": key,
+            "expr": expr,
+            "value": None if dynamic else value,
+            "dynamic": dynamic,
+            "line": text.count("\n", 0, m.start()) + 1,
+        }
+    return None
+
+
+def compare_title(contract: dict, report: "Report", android_file: str, text: str,
+                  masked: str, spans: list, strings: dict, consts: dict) -> dict:
+    """Compare the contract's `.navigationTitle` with the Android frame's title."""
+    page_id = contract["pageId"]
+    title = contract.get("title") or {}
+    expected = title.get("text")
+    summary = {"contract": expected, "android": None, "status": "none"}
+    if not expected:
+        return summary  # the baseline declares no page title (chat, sessions, …)
+    got = android_page_title(text, masked, spans, contract["android"].get("screen"),
+                             strings, consts)
+    if got is None:
+        summary["status"] = "missing"
+        report.add(page_id, "missing-title", expected,
+                   f"the baseline titles this page {expected!r} ({title.get('provenance')}); "
+                   f"the Android page declares no `*Frame` / `*Bar` title the gate can read")
+        return summary
+    summary["dynamic"] = got["dynamic"]
+    summary["android"] = (got["value"] if not got["dynamic"]
+                          else got["expr"][:DYN_EXPR_MAX])
+    if not got["dynamic"]:
+        if normalize(got["value"]) == normalize(expected):
+            summary["status"] = "match"
+            return summary
+        summary["status"] = "mismatch"
+        report.add(page_id, "title-mismatch", expected,
+                   f"the Android page titles itself {got['value']!r} "
+                   f"({android_file}:{got['line']}, {got['callee']}.{got['key']}); the "
+                   f"baseline's .navigationTitle is {expected!r} ({title.get('provenance')})")
+        return summary
+    literals = title_literals(got["expr"], strings, consts)
+    if any(normalize(value) == normalize(expected) for value in literals):
+        # One page with several headings (list / empty state / editor): the contract's
+        # title is one of them, so the page does render it. A *different* fixed title
+        # is the finding; a mode-specific one is not.
+        summary["status"] = "dynamic-branch"
+        return summary
+    if CONTRACT_DYNAMIC_TITLE_RE.search(title.get("anchor") or ""):
+        # The baseline itself computes its title (`directory.isEmpty ? … : …`), so
+        # neither side fixes one string: nothing to compare, and saying so is better
+        # than guessing a branch.
+        summary["status"] = "dynamic-both"
+        return summary
+    if not literals:
+        summary["status"] = "unresolved"
+        report.add(page_id, "unresolved-title", got["expr"][:DYN_EXPR_MAX],
+                   f"the Android title is an expression ({got['expr']!r}) that names no "
+                   f"literal, so it cannot be compared with the contract's {expected!r}; "
+                   f"give the frame a `UiStrings` title or a literal fallback")
+        return summary
+    summary["status"] = "mismatch"
+    report.add(page_id, "title-mismatch", expected,
+               f"the Android title is dynamic ({got['expr']!r}); it can render "
+               + " / ".join(f"`{value}`" for value in literals)
+               + f", none of which is the contract's {expected!r}")
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -1394,6 +1743,11 @@ class Report:
         self.dead_actions = []      # (page_id, action)
         self.subpages = []          # (page_id, subpage entries)
         self.dead_decls = []        # (page_id, unreachable member)
+        # (page_id, kind, label, guard, contract condition, divergent): a section
+        # title or action label that only renders behind a nullable-callback guard.
+        # Divergent entries also produce a `conditional-section` /
+        # `conditional-action` finding; the others match the baseline's own condition.
+        self.conditional = []
         self._keys = set()
 
     def add(self, page_id: str, kind: str, name: str, detail: str = "") -> None:
@@ -1537,7 +1891,17 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
     page_id = contract["pageId"]
     android = contract["android"]
     summary = {"page": page_id, "screen": contract["page"], "android": android.get("file"),
-               "sections": {"contract": 0, "titled": 0, "android": 0}, "actions": {"contract": 0, "android": 0},
+               "sections": {"contract": 0, "titled": 0, "android": 0},
+               # `contract` is the whole action inventory; `labelled` is what the gate
+               # actually compares, and `keys` the unique wordings after normalisation.
+               # Printing the inventory next to the Android label count read as "38
+               # controls are missing" on chat (67 vs 29) when both sides compared the
+               # same 24 wordings (36 labelled actions collapse to 24 by wording).
+               "actions": {"contract": 0, "labelled": 0, "keys": 0, "unlabelled": 0,
+                           "dynamic": 0, "dead": 0, "androidOnly": 0, "android": 0,
+                           "android_keys": 0, "conditional": 0},
+               "title": {"contract": None, "android": None, "status": "none",
+                         "dynamic": False},
                "findings": 0}
     contract_sections = contract["sections"]
     suppressed = [s for s in contract_sections if s.get("suppressed")]
@@ -1568,11 +1932,21 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
     # correctly (the confirm key reads `删除 DeepSeek`) could never satisfy it.
     # A label is not always one string: the contract records the other wording of a
     # ternary/`if` label in `labelAlternatives`, so the comparison runs on the set.
+    without_wording = [a for a in live_actions if not action_wording(a)]
+    dynamic_labels = [a for a in live_actions
+                      if action_wording(a) and a.get("dynamicLabel")]
     labelled = [a for a in live_actions
                 if action_wording(a) and not a.get("dynamicLabel")]
     android_only_actions = [a for a in labelled if a.get("androidOnly")]
     labelled = [a for a in labelled if not a.get("androidOnly")]
-    summary["actions"]["contract"] = len(contract_actions)
+    summary["actions"].update({
+        "contract": len(contract_actions),
+        "labelled": len(labelled),
+        "unlabelled": len(without_wording),
+        "dynamic": len(dynamic_labels),
+        "dead": len(dead_actions),
+        "androidOnly": len(android_only_actions),
+    })
 
     path = root / android["file"] if android.get("file") else None
     if path is None or not path.is_file():
@@ -1598,12 +1972,48 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
     fold_labels = frozenset(normalize(value) for a in labelled for value in action_wording(a))
     android_titles, unresolved_titles = android_sections(text, masked, strings, consts,
                                                         positions=section_positions)
-    android_labels, unresolved_labels = android_actions(text, masked, strings, consts,
-                                                        wrappers=wrappers, positions=action_positions,
-                                                        fold_labels=fold_labels)
+    android_labels, unresolved_labels, action_occurrences = android_actions(
+        text, masked, strings, consts, wrappers=wrappers, positions=action_positions,
+        fold_labels=fold_labels)
     android_labels = [label for label in android_labels if not is_chrome_label(label)]
+    action_occurrences = [(label, pos) for label, pos in action_occurrences
+                          if not is_chrome_label(label)]
+    # A label under `if (hostCallback != null)` / `callback?.let { … }` is present in
+    # the source but not guaranteed on screen. Keep the two sets apart: only the
+    # unconditional occurrences satisfy the contract, the conditional ones are
+    # reported (`conditional-action`) instead of silently counting as present.
+    spans = function_spans(masked)
+    guards = null_guards(masked, spans)
+    conditional_guard, unconditional_keys = {}, set()
+    for label, pos in action_occurrences:
+        key = normalize(label)
+        guard = null_guard_at(guards, pos)
+        if guard is None:
+            unconditional_keys.add(key)
+        else:
+            conditional_guard.setdefault(key, guard)
+    conditional_keys = set(conditional_guard) - unconditional_keys
+    # Section labels can be guarded the same way (`if (onShow != null) {
+    # SessionSectionLabel(...) }`); the hole is about any labelled UI, not only
+    # buttons. The contract records a section's `condition` from syntax extraction,
+    # unlike an action's, so accepting a baseline-conditional section is direct.
+    section_conditional_guard, section_unconditional = {}, set()
+    for title, pos in section_positions:
+        key = normalize(title)
+        guard = null_guard_at(guards, pos)
+        if guard is None:
+            section_unconditional.add(key)
+        else:
+            section_conditional_guard.setdefault(key, guard)
+    section_conditional_only = set(section_conditional_guard) - section_unconditional
+    # The baseline's own `if` guards. A contract action the baseline also renders
+    # conditionally is allowed to be conditional on Android; only an action the
+    # baseline always draws is a divergence when Android only draws it behind a
+    # nullable callback.
+    baseline_conditions = baseline_conditional_actions(root, contract)
     summary["sections"]["android"] = len(android_titles)
     summary["actions"]["android"] = len(android_labels)
+    summary["actions"]["conditional"] = len(conditional_keys)
     section_model = contract.get("sectionModel", "section")
     summary["sectionModel"] = section_model
 
@@ -1661,14 +2071,33 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
             report.add(page_id, "extra-section", title,
                        "the Android page renders a source expression (interpolation inside a "
                        "string literal); render the value instead")
+        by_key = {section_key(section): section for section in titled}
         for key, title in expected_titles.items():
             if key not in actual_titles:
                 report.add(page_id, "missing-section", title,
                            "contract section title absent from the Android page")
+                continue
+            if key not in section_conditional_only:
+                continue
+            section = by_key[key]
+            guard = section_conditional_guard[key]
+            if section.get("condition"):
+                report.conditional.append(
+                    (page_id, "section", title, guard, section["condition"], False))
+            else:
+                report.conditional.append((page_id, "section", title, guard, None, True))
+                report.add(page_id, "conditional-section", title,
+                           f"only rendered behind `{guard}`; the contract declares the "
+                           f"section unconditionally, so it exists only when the host "
+                           f"passes that callback")
         for key, title in actual_titles.items():
             if key not in expected_titles and key not in android_only_titles \
                     and key not in subpage_titles:
-                report.add(page_id, "extra-section", title, "Android section title absent from the contract")
+                detail = "Android section title absent from the contract"
+                guard = section_conditional_guard.get(key)
+                if guard:
+                    detail += f" (rendered only behind `{guard}`)"
+                report.add(page_id, "extra-section", title, detail)
         for expr in sorted(set(unresolved_titles)):
             report.add(page_id, "unresolved-section", expr,
                        "section title is an expression, so it cannot be compared to the contract")
@@ -1682,10 +2111,16 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
     # Display wording -> every key that satisfies it. `保存并连接` with the
     # alternative `保存修改并重连` is satisfied by either string on Android; when
     # neither appears the finding names the primary wording and lists the rest.
-    expected_labels = [(wordings, [normalize(value) for value in wordings])
-                       for wordings in (action_wording(a) for a in labelled) if wordings]
-    expected_keys = {key for _wordings, keys in expected_labels for key in keys}
+    expected_labels = []
+    for action in labelled:
+        wordings = action_wording(action)
+        if wordings:
+            expected_labels.append((action, wordings,
+                                    [normalize(value) for value in wordings]))
+    expected_keys = {key for _action, _wordings, keys in expected_labels for key in keys}
     actual_labels = {normalize(l): l for l in android_labels}
+    summary["actions"]["keys"] = len(expected_keys)
+    summary["actions"]["android_keys"] = len(actual_labels)
     for action in android_only_actions:
         if normalize(action["label"]) in actual_labels:
             report.android_only.append((page_id, "action", action["label"], action["androidOnly"]))
@@ -1726,7 +2161,7 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
                  if key not in expected_keys and key not in android_only_label_keys
                  and key not in dead_action_keys and key not in picker_option_keys}
     paired = {}
-    for wordings, keys in expected_labels:
+    for _action, wordings, keys in expected_labels:
         if all(key in picker_label_keys or key in picker_option_keys for key in keys):
             continue
         if any(key in actual_labels for key in keys):
@@ -1737,10 +2172,28 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
             if shortened_copy(unclaimed[key], wordings) is not None:
                 paired[key] = wordings[0]
                 break
-    for wordings, keys in expected_labels:
+    for action, wordings, keys in expected_labels:
         if all(key in picker_label_keys or key in picker_option_keys for key in keys):
             continue
         if any(key in actual_labels for key in keys):
+            # Present, but is it present unconditionally? A label the page only draws
+            # under `if (onOpenDemo != null)` is not the control the contract declares:
+            # the host may never pass the callback, and then the source has a label the
+            # pixels do not. `files`'s `3D 示例` passed the gate exactly this way.
+            if any(key in unconditional_keys for key in keys):
+                continue
+            guard = next(conditional_guard[key] for key in keys if key in conditional_guard)
+            label = action.get("label") or wordings[0]
+            baseline_condition = baseline_conditions.get(action.get("id")) or action.get("condition")
+            if baseline_condition:
+                report.conditional.append(
+                    (page_id, "action", label, guard, baseline_condition, False))
+            else:
+                report.conditional.append((page_id, "action", label, guard, None, True))
+                report.add(page_id, "conditional-action", wordings[0],
+                           f"only rendered behind `{guard}`; the contract declares it "
+                           f"unconditionally, so it exists only when the host passes that "
+                           f"callback — a host that never does leaves a dead label in the source")
             continue
         detail = "contract action label absent from the Android page"
         if len(wordings) > 1:
@@ -1758,10 +2211,18 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
             continue
         if key not in expected_keys and key not in android_only_label_keys \
                 and key not in dead_action_keys and key not in picker_option_keys:
-            report.add(page_id, "extra-action", label, "Android action label absent from the contract")
+            detail = "Android action label absent from the contract"
+            guard = conditional_guard.get(key)
+            if guard:
+                detail += f" (rendered only behind `{guard}`)"
+            report.add(page_id, "extra-action", label, detail)
     for expr in sorted(set(unresolved_labels)):
         report.add(page_id, "unresolved-action", expr,
                    "action label is an expression, so it cannot be compared to the contract")
+
+    # The page title: the contract's `.navigationTitle` vs the Android frame's title.
+    summary["title"] = compare_title(contract, report, Path(android["file"]).name,
+                                     text, masked, spans, strings, consts)
 
     summary["findings"] = len(report.for_page(page_id))
     return summary
@@ -1883,9 +2344,28 @@ def run(root: Path, strict: bool, baseline_path: Path | None, write_baseline: Pa
         else:
             print(f"  sections  not compared: the baseline page has no Section tree "
                   f"(sectionModel={model}); android declares {summary['sections']['android']}")
-        print(f"  actions   contract {summary['actions']['contract']} labelled   "
-              f"android {summary['actions']['android']}   "
+        actions = summary["actions"]
+        basis = [f"{actions['unlabelled']} unlabelled", f"{actions['dynamic']} dynamicLabel"]
+        if actions["dead"]:
+            basis.append(f"{actions['dead']} in dead UI")
+        if actions["androidOnly"]:
+            basis.append(f"{actions['androidOnly']} androidOnly")
+        conditional = actions["conditional"]
+        print(f"  actions   labelled {actions['labelled']} of {actions['contract']} actions "
+              f"({', '.join(basis)}) = {actions['keys']} comparable keys   "
+              f"android {actions['android']} labels "
+              f"({actions['android_keys']} keys: "
+              f"{actions['android_keys'] - conditional} unconditional, "
+              f"{conditional} conditional)   "
               f"divergences {len([f for f in findings if f[1].endswith('action')])}")
+        title = summary.get("title") or {}
+        if title.get("contract") is None:
+            print("  title     contract (none: the baseline declares no page title)")
+        else:
+            dynamic = " (dynamic)" if title.get("dynamic") else ""
+            print(f"  title     contract {title['contract']!r}   "
+                  f"android {title.get('android')!r}{dynamic}   "
+                  f"divergences {len([f for f in findings if f[1] in TITLE_KINDS])}")
         for finding in (page_new if baseline_path is not None and not verbose else findings):
             _, kind, name, detail = finding
             print(f"    - {kind:<19} {name!r}  {detail}")
@@ -1904,7 +2384,8 @@ def run(root: Path, strict: bool, baseline_path: Path | None, write_baseline: Pa
 
     # Summary table: the workload list.
     print("\n== divergences by page (contract vs Android) ==")
-    print(f"{'page':<24} {'sections -/+':>14} {'actions -/+':>14} {'unresolved':>11}")
+    print(f"{'page':<24} {'sections -/+':>14} {'actions -/+':>14} {'cond':>5} "
+          f"{'unresolved':>11} {'title':>6}")
     for summary in summaries:
         page_id = summary["page"]
         findings = [f for f in report.findings if f[0] == page_id]
@@ -1912,10 +2393,14 @@ def run(root: Path, strict: bool, baseline_path: Path | None, write_baseline: Pa
         xs = len([f for f in findings if f[1] == "extra-section"])
         ma = len([f for f in findings if f[1] == "missing-action"])
         xa = len([f for f in findings if f[1] == "extra-action"])
-        un = len([f for f in findings if f[1].startswith("unresolved")])
+        cd = len([f for f in findings if f[1].startswith("conditional-")])
+        un = len([f for f in findings if f[1].startswith("unresolved")
+                  and f[1] not in TITLE_KINDS])
+        ti = len([f for f in findings if f[1] in TITLE_KINDS])
         flag = "" if not findings else ("  <- new" if baseline_path is not None and any(
             f in new_findings for f in findings) else "")
-        print(f"{page_id:<24} {f'{ms}/{xs}':>14} {f'{ma}/{xa}':>14} {un:>11}{flag}")
+        print(f"{page_id:<24} {f'{ms}/{xs}':>14} {f'{ma}/{xa}':>14} {cd:>5} "
+              f"{un:>11} {ti:>6}{flag}")
 
     total = len(report.findings)
     if report.android_only:
@@ -1942,6 +2427,16 @@ def run(root: Path, strict: bool, baseline_path: Path | None, write_baseline: Pa
             end = dead.get("endLine")
             span = f"{provenance}-{end}" if end else provenance
             print(f"  {page_id} {dead.get('member')}  {span}  ({dead.get('sections')} Section(s))")
+    if report.conditional:
+        print("\nconditionally present (the label is in the source, but the item renders "
+              "only when the host passes the callback):")
+        for page_id, kind, label, guard, condition, divergent in sorted(
+                report.conditional, key=lambda item: (item[0], item[1], item[2])):
+            if divergent:
+                verdict = "divergence: the contract declares it unconditionally"
+            else:
+                verdict = f"matches the contract's own condition ({condition})"
+            print(f"  {page_id} {kind} {label!r}  behind `{guard}`  — {verdict}")
     if report.registered:
         print("\nregistered (explicitly not statically comparable):")
         for (page_id, kind, name, _detail), entry in sorted(report.registered):

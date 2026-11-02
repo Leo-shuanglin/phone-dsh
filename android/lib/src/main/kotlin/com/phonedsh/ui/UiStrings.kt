@@ -369,7 +369,7 @@ public object UiStrings {
     // ---------------------------------------------------------------------
 
     // NativeWorkbenchPage: the turn's written files and the commands it ran.
-    public const val WORKBENCH_TITLE: String = "工作面板"
+    public const val WORKBENCH_TITLE: String = "工作区"
     public const val WORKBENCH_DONE: String = "完成"
     public const val WORKBENCH_FILES: String = "文件"
     public const val WORKBENCH_COMMANDS: String = "命令"
@@ -607,6 +607,30 @@ public object UiStrings {
     public const val RUNTIME_NO_ERROR: String = "最近没有出错"
     public const val RUNTIME_ERROR_UNREAD: String = "读取不到最近一次出错"
 
+    // L76: the two sentences the runtime page says ONCE instead of under every row.
+    /**
+     * The iOS status line, folded the way the baseline folds it.
+     *
+     * `ChatPage.swift:4168-4176` builds `statusValue` as
+     * `"\(model.displayStatus) · 已运行\(elapsed)"` and `:4183-4186` prints it in
+     * one `状态` row; Android used to split that row into 状态 + 已运行. `%s` is
+     * the engine word (`运行中`) and the second one the formatted duration.
+     */
+    public const val RUNTIME_STATUS_UPTIME_FORMAT: String = "%s · 已运行%s"
+
+    /**
+     * The page's single explanation for unmeasured values: which groups the host
+     * did not report.
+     *
+     * L64 counted six copies of `SETTINGS_UNKNOWN_HINT` on one screen (16 in the
+     * whole page). The baseline has no such sentence at all, so the Android read
+     * says it once, with the group names, and the rows say only 未知.
+     */
+    public const val RUNTIME_UNMEASURED_GROUPS: String = "这台宿主没有报告这些状态：%s"
+
+    /** The separator between group names in [RUNTIME_UNMEASURED_GROUPS]. */
+    public const val RUNTIME_UNMEASURED_GROUPS_SEPARATOR: String = "、"
+
     // EgressAllowListPage: the effective rules, the deny-all empty table and
     // the matching form each entry stands for.
     /**
@@ -843,7 +867,15 @@ public object UiStrings {
     public const val NO: String = "否"
 
     // ProbesPage: the environment reads, the run actions and the G0 report.
-    public const val PROBES_TITLE: String = "设备探针"
+    //
+    // L75: the page title is the baseline's own word, not a translation of it.
+    // `ProbesPage.swift:38` is `.navigationTitle("Probes")` — an English title on
+    // an English-only probe page, exactly like `MEMORY_PROBE_TITLE` below
+    // (`MemoryPage.swift:40`). The previous 设备探针 was the one string on the
+    // screen that existed nowhere in the baseline (page_structure_check
+    // `title-mismatch`), and the page's own sections and actions were already
+    // English, so the Chinese title was also the only non-English control on it.
+    public const val PROBES_TITLE: String = "Probes"
     public const val PROBES_SECTION_ENVIRONMENT: String = "运行环境"
     public const val PROBES_ENVIRONMENT: String = "环境"
     public const val PROBES_OS: String = "系统"
@@ -882,7 +914,13 @@ public object UiStrings {
     public const val PROBES_UNMEASURED_HINT: String = "未测量的值显示为未知，不会当成 0"
 
     // BackgroundPage: the matrix cell being run, its observation and the log.
-    public const val BACKGROUND_TITLE: String = "后台保活"
+    //
+    // L75: `BackgroundPage.swift:171` is `.navigationTitle("Background")`, and the
+    // page's sections and actions are English too (`Start cell`, `Cancel`,
+    // `Scenario`), so 后台保活 was a translation the baseline never had. The
+    // dev-tools index row that opens this page shows this same constant, so the
+    // row a person taps and the header they land on stay the same word.
+    public const val BACKGROUND_TITLE: String = "Background"
     public const val BACKGROUND_SECTION_RUN: String = "运行"
     public const val BACKGROUND_SECTION_OBSERVATION: String = "观测"
     public const val BACKGROUND_SECTION_CELLS: String = "矩阵结果"
@@ -923,7 +961,12 @@ public object UiStrings {
         "未测量的值显示为未知，不会当成 0 或未运行"
 
     // TaskScreenPage: the status line, the best-effort dimming and its report.
-    public const val TASK_SCREEN_TITLE: String = "任务屏"
+    //
+    // L75: `TaskScreenPage.swift:60` is `.navigationTitle("Screen")` — the page is
+    // the probe app's "Screen" page, not a 任务屏 in the product's vocabulary. The
+    // in-page section label keeps `TASK_SCREEN_SECTION_EN` ("Task screen", the
+    // baseline's `PageSection` title); only the bar title takes the baseline word.
+    public const val TASK_SCREEN_TITLE: String = "Screen"
     public const val TASK_SCREEN_SECTION: String = "任务屏"
     public const val TASK_SCREEN_DESCRIPTION: String =
         "纯黑低亮度屏：没有计时器，没有动画，只有状态行会随调用方重建而改变。"
@@ -950,7 +993,7 @@ public object UiStrings {
         "未测量的值显示为未知，不会当成 0 或未显示"
 
     // ExportPage: the report facts, the written file and its preview.
-    public const val EXPORT_TITLE: String = "导出诊断包"
+    public const val EXPORT_TITLE: String = "导出诊断"
     public const val EXPORT_SECTION_REPORT: String = "报告"
     public const val EXPORT_STATUS: String = "状态"
     public const val EXPORT_ENVIRONMENT: String = "环境"
@@ -1388,6 +1431,13 @@ public object UiStrings {
     // Message actions (NativeMessageActions.swift) and attachments.
     public const val MESSAGE_COPY: String = "复制"
     public const val MESSAGE_COPIED: String = "已复制"
+
+    // Code block chrome (`Components.swift:151-225`).
+    public const val CODE_COPY_ACTION: String = "拷贝代码"
+    public const val CODE_WRAP_OFF: String = "关闭自动换行"
+    public const val CODE_WRAP_ON: String = "自动换行"
+    public const val CODE_EXPAND_ALL: String = "展开全部 %d 行"
+    public const val CODE_COLLAPSE: String = "收起"
 
     // Pending cards.
     public const val WAITING_AUTHORIZATION: String = "等待授权"
@@ -2125,4 +2175,32 @@ public object UiStrings {
     /** L33 / `WEB_MEDIA` × `.ogv`: `Theora` has no decoder in the platform. */
     public const val PREVIEW_REASON_WEB_MEDIA_OGV: String =
         "本机没有 OGV（Theora）解码器。"
+
+    // -----------------------------------------------------------------------
+    // Appended by the L74 lane: two page titles the settings family was
+    // rendering with another page's words. Appended only — nothing above is
+    // rewritten.
+    // -----------------------------------------------------------------------
+
+    /**
+     * 通用设置 — the 通用 tab's own navigation title.
+     *
+     * `SettingsPage.swift:14` (`NativeSettingsTab.general.title`) and the page's
+     * `.navigationTitle` at `:168`. The shell's bar draws the active tab's title,
+     * so this is the one tab whose bar title is not the sheet's own 设置.
+     */
+    public const val SETTINGS_GENERAL_TITLE: String = "通用设置"
+
+    /**
+     * The MCP list page's title. `MCPSettingsPage.swift:101`
+     * (`.navigationTitle("MCP 网络与密钥")`); `MCP_TITLE` above ("MCP 服务器") is
+     * the drawer row's word and is not this page's heading.
+     */
+    public const val MCP_NETWORK_TITLE: String = "MCP 网络与密钥"
+
+    /**
+     * The 关于 card's one footnote, verbatim from `NativeShell.swift:902`
+     * (`Text("会话记录和文件都保存在这台手机上。")`).
+     */
+    public const val ABOUT_LOCAL_NOTE: String = "会话记录和文件都保存在这台手机上。"
 }

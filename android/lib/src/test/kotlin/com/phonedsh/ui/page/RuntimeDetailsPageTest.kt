@@ -165,8 +165,11 @@ class RuntimeDetailsPageTest {
         compose.onNodeWithText(UiStrings.RUNTIME_SECTION_ERROR).assertIsDisplayed()
         compose.onNodeWithText(UiStrings.RUNTIME_NO_ERROR).assertIsDisplayed()
 
-        compose.onNodeWithText(UiStrings.RUNNING).assertIsDisplayed()
-        compose.onNodeWithText("2 分钟").assertIsDisplayed()
+        // iOS folds the duration into the one 状态 line (`statusValue`,
+        // ChatPage.swift:4168-4176) instead of printing a second 已运行 row.
+        compose.onNodeWithText(
+            UiStrings.RUNTIME_STATUS_UPTIME_FORMAT.format(UiStrings.RUNNING, "2 分钟"),
+        ).assertIsDisplayed()
         compose.onNodeWithText("com.google.android.webview").assertIsDisplayed()
         compose.onNodeWithText("124.0.6367.82").assertIsDisplayed()
         compose.onNodeWithText(UiStrings.RUNTIME_FEATURE_SUPPORTED).assertIsDisplayed()
@@ -344,13 +347,13 @@ class RuntimeDetailsPageTest {
     }
 
     @Test
-    fun `the iOS runtime-status trio sits on top of the Android diagnostics`() {
+    fun `the baseline block order leads, the Android diagnostics follow`() {
         val state = RuntimeDetailsScreenState.from(fullFacts())
         assertEquals(
             listOf(
+                RuntimeDetailsScreenState.ENGINE_SECTION_ID,
                 RuntimeDetailsScreenState.RUN_SECTION_ID,
                 RuntimeDetailsScreenState.ERROR_SECTION_ID,
-                RuntimeDetailsScreenState.ENGINE_SECTION_ID,
                 RuntimeDetailsScreenState.WEBVIEW_SECTION_ID,
                 RuntimeDetailsScreenState.MEMORY_SECTION_ID,
                 RuntimeDetailsScreenState.POWER_SECTION_ID,
@@ -360,9 +363,9 @@ class RuntimeDetailsPageTest {
         )
         assertEquals(
             listOf(
+                UiStrings.RUNTIME_SECTION_ENGINE,
                 UiStrings.RUNTIME_SECTION_RUN,
                 UiStrings.RUNTIME_SECTION_ERROR,
-                UiStrings.RUNTIME_SECTION_ENGINE,
                 UiStrings.RUNTIME_SECTION_WEBVIEW,
                 UiStrings.RUNTIME_SECTION_MEMORY,
                 UiStrings.RUNTIME_SECTION_POWER,
@@ -385,7 +388,10 @@ class RuntimeDetailsPageTest {
             run.rows.map { it.value },
         )
         assertTrue(run.rows.all { it.tone == PageTone.UNKNOWN })
-        assertTrue(run.rows.all { it.subtitle == UiStrings.SETTINGS_UNKNOWN_HINT })
+        // L76: the repeated 读取不到 sentence is gone from the rows; the page says
+        // it ONCE, with the group names (`RuntimeDetailsScreenState.unmeasuredGroups`).
+        assertTrue(run.rows.all { it.subtitle == null })
+        assertTrue(state.unmeasuredGroups.contains(UiStrings.RUNTIME_SECTION_RUN))
         val error = state.sections.first { it.id == RuntimeDetailsScreenState.ERROR_SECTION_ID }
         val sentence = error.rows.single()
         assertEquals(UiStrings.RUNTIME_ERROR_UNREAD, sentence.title)
@@ -409,7 +415,7 @@ class RuntimeDetailsPageTest {
             ),
         )
         val state = RuntimeDetailsScreenState.from(idle)
-        assertEquals(RuntimeDetailsScreenState.ERROR_SECTION_ID, state.sections.first().id)
+        assertEquals(RuntimeDetailsScreenState.ENGINE_SECTION_ID, state.sections.first().id)
         assertTrue(state.sections.none { it.id == RuntimeDetailsScreenState.RUN_SECTION_ID })
         assertFalse(state.hasUnmeasuredValues)
         show(state)
@@ -444,5 +450,67 @@ class RuntimeDetailsPageTest {
         assertEquals(UiStrings.RUNTIME_UPTIME_MINUTES.format(59), formatUptime(3_599_000))
         assertEquals(UiStrings.RUNTIME_UPTIME_HOURS.format(1), formatUptime(3_600_000))
         assertEquals(UiStrings.RUNTIME_UPTIME_HOURS_MINUTES.format(1, 5), formatUptime(3_900_000))
+    }
+    @Test
+    fun `the page explains unmeasured values once, with the group names`() {
+        val state = RuntimeDetailsScreenState.from(partialFacts())
+        assertTrue(state.unmeasuredGroups.isNotEmpty())
+        assertTrue(state.unmeasuredGroups.contains(UiStrings.RUNTIME_SECTION_MEMORY))
+        show(state)
+        val sentence = UiStrings.RUNTIME_UNMEASURED_GROUPS.format(
+            state.unmeasuredGroups.joinToString(UiStrings.RUNTIME_UNMEASURED_GROUPS_SEPARATOR),
+        )
+        // One node, one sentence: the six copies L64 counted on one screen (16 in
+        // the whole page) are gone, and no row repeats the explanation.
+        assertEquals(
+            1,
+            compose.onAllNodesWithText(sentence).fetchSemanticsNodes().size,
+        )
+        assertEquals(
+            0,
+            compose.onAllNodesWithText(UiStrings.SETTINGS_UNKNOWN_HINT).fetchSemanticsNodes().size,
+        )
+        compose.onNodeWithText(UiStrings.RUNTIME_UNMEASURED_HINT).assertIsDisplayed()
+    }
+
+    @Test
+    fun `one 状态 row carries the baseline's folded statusValue`() {
+        fun engineRow(facts: RuntimeFacts): RuntimeRowView =
+            RuntimeDetailsScreenState.from(facts).sections
+                .first { it.id == RuntimeDetailsScreenState.ENGINE_SECTION_ID }
+                .rows
+                .single()
+
+        // Started + measured duration: the duration rides in the value.
+        assertEquals(UiStrings.RUNTIME_STATUS, engineRow(fullFacts()).title)
+        assertEquals(
+            UiStrings.RUNTIME_STATUS_UPTIME_FORMAT.format(UiStrings.RUNNING, "2 分钟"),
+            engineRow(fullFacts()).value,
+        )
+        // Stopped: the baseline prints 已停止 with no duration (ChatPage.swift:4183).
+        assertEquals(
+            UiStrings.RUNTIME_STOPPED,
+            engineRow(RuntimeFacts(snapshot = RuntimeSnapshot(engine = FactState.NO))).value,
+        )
+        // Started but no measured duration: the bare word, never an invented one.
+        assertEquals(
+            UiStrings.RUNNING,
+            engineRow(RuntimeFacts(snapshot = RuntimeSnapshot(engine = FactState.YES))).value,
+        )
+        // Unread engine: 未知, and the page's engine note carries the reason.
+        assertEquals(
+            UiStrings.UNKNOWN,
+            engineRow(RuntimeFacts(snapshot = RuntimeSnapshot(foregroundService = FactState.NO))).value,
+        )
+    }
+
+    @Test
+    fun `a section header never carries a row count`() {
+        show(RuntimeDetailsScreenState.from(fullFacts()))
+        // `groupHeader` is a bare title (`ChatPage.swift:4150-4160`); the count
+        // Android used to append is not in the baseline.
+        compose.onNodeWithText(UiStrings.ROW_COUNT.format(1)).assertDoesNotExist()
+        compose.onNodeWithText(UiStrings.ROW_COUNT.format(3)).assertDoesNotExist()
+        compose.onNodeWithText(UiStrings.ROW_COUNT.format(4)).assertDoesNotExist()
     }
 }

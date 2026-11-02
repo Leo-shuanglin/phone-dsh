@@ -1,13 +1,20 @@
 // The shell's drawer: the one map of the app a user can actually tap.
 // SPDX-License-Identifier: MIT
 //
-// Spec: `spec/ui/v1/README.md` §1's 入口 column. That column names three routes
-// (工作文件夹, 定时任务, 设置) and leaves the rest to page-local entries. On the
-// iOS baseline the drawer is the session list with two furniture rows at the
-// bottom (`NativeShell.swift:276`–`:317`: SessionsDrawer = SessionsPage +
-// 定时任务 + 设置), so a page that has no other entry inside the app has no
-// touch path at all. This host has no tab bar and no session-list drawer body,
-// so the drawer is a plain navigation list: every row a user needs is here.
+// Spec: `spec/ui/v1/README.md` §1's 入口 column. On the iOS baseline the drawer
+// is the session list with two furniture rows at the bottom
+// (`NativeShell.swift:276`–`:316`: `SessionsDrawer` = `SessionsPage` +
+// 定时任务 + 设置). That shape is the baseline, so it is this file's default:
+//
+//     [ 会话列表（主体，占满剩余高度） ]
+//     ──────────────────────────────  Divider
+//     定时任务
+//     设置
+//
+// The [body] slot is that session list. A host with no session-list body of its
+// own (a demo that only routes pages) passes [entries] instead and gets a plain
+// navigation list; the two shapes are exclusive and the `require` below keeps a
+// caller from drawing half of each.
 //
 // Geometry is the iOS drawer's, not an Android invention:
 //
@@ -54,6 +61,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -140,11 +148,17 @@ public object PdshDrawerTags {
 /**
  * The drawer overlay.
  *
- * @param entries the app-map rows, top to bottom.
+ * @param entries the app-map rows, top to bottom; empty when [body] supplies the
+ *   drawer's own content (the baseline shape).
  * @param footerEntries the furniture rows pinned to the bottom (定时任务, 设置
  *   in the baseline); an empty list drops the divider and the bottom group.
  * @param onSelect the route whose row was tapped.
  * @param onDismiss close without navigating (the scrim strip).
+ * @param body the session list, filling the panel above the divider exactly like
+ *   `SessionsPage` does inside `SessionsDrawer` (`NativeShell.swift:288`). The
+ *   shell's safe-drawing insets are already consumed by the panel, so the page
+ *   must not add them a second time — a `windowInsetsPadding` on this panel
+ *   consumes what it applies.
  */
 @Composable
 public fun PdshDrawer(
@@ -153,7 +167,11 @@ public fun PdshDrawer(
     onSelect: (PdshRoute) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    body: (@Composable () -> Unit)? = null,
 ) {
+    require(body == null || entries.isEmpty()) {
+        "the drawer is either the app-map list or the session-list body, never both"
+    }
     val tokens = LocalUiTokens.current
     BoxWithConstraints(modifier = modifier.fillMaxSize().testTag(PdshDrawerTags.ROOT)) {
         // iOS is 320 on every phone it ships on; a narrower window (a split
@@ -174,11 +192,28 @@ public fun PdshDrawer(
                     .windowInsetsPadding(WindowInsets.safeDrawing)
                     .testTag(PdshDrawerTags.PANEL),
             ) {
-                Spacer(Modifier.height(PANEL_TOP_INSET))
-                entries.forEach { entry ->
-                    PdshDrawerRow(entry = entry, onClick = { onSelect(entry.route) })
+                if (body != null) {
+                    // The baseline's drawer body starts at the safe-area top and
+                    // owns every point down to the divider; the rows below it are
+                    // the app's furniture, not a list item.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            // The body is a page laid out for a 320 panel; on a
+                            // narrower window its fixed 320 column must not bleed
+                            // over the scrim strip.
+                            .clipToBounds(),
+                    ) {
+                        body()
+                    }
+                } else {
+                    Spacer(Modifier.height(PANEL_TOP_INSET))
+                    entries.forEach { entry ->
+                        PdshDrawerRow(entry = entry, onClick = { onSelect(entry.route) })
+                    }
+                    Spacer(Modifier.weight(1f))
                 }
-                Spacer(Modifier.weight(1f))
                 if (footerEntries.isNotEmpty()) {
                     DrawerDivider()
                     footerEntries.forEach { entry ->

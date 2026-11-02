@@ -50,6 +50,8 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import com.phonedsh.ui.UiMetrics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.state.ChatRow
@@ -82,7 +84,6 @@ internal object ChatRowsTokens {
         UiTokenNames.COLORS_WARNING,
         UiTokenNames.GEOMETRY_BANNER_GAP,
         UiTokenNames.GEOMETRY_COMPOSER_CONTROL_SIZE,
-        UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_STAT_PILL_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_SUMMARY_DOT_DIAMETER,
@@ -190,8 +191,12 @@ internal fun ChatRowItem(
     onOpenFile: (String) -> Unit = {},
 ) {
     val tokens = LocalUiTokens.current
-    // Page-level geometry: the chat list uses the page margin, not the composer's.
-    val horizontal = tokens.geometry.pageOuterMarginH
+    // The transcript column, not the page margin: iOS insets the message column by
+    // `NativeParityTokens.transcriptSide` = 32 pt (`ChatPage.swift:1172`), which is
+    // the official 338 pt content column (`UiMetrics.CONTENT_COLUMN_INSET_PT`).
+    // ios-chat-assistant.png: assistant prose ink starts at x 33.7, the tool-row
+    // icon at x 32.7, and the user bubble's right edge is 369.7 = 402 - 32.3.
+    val horizontal = UiMetrics.CONTENT_COLUMN_INSET_PT.dp
     when (row) {
         is ChatRow.User -> Column(
             modifier = modifier
@@ -247,8 +252,10 @@ internal fun ChatRowItem(
                     }
                 }
             }
-            // iOS attaches the turn-wide actions to the closing assistant row only.
-            if (row.closing) MessageActions(text = row.text)
+            // iOS attaches visible message actions to *user* rows only; the
+            // assistant body carries a context menu instead (`ChatPage.swift`
+            // `case .assistant: assistantBody.contextMenu`), so no action row is
+            // drawn here. The old row was 28 pt of content iOS never renders.
         }
 
         is ChatRow.Thinking -> Box(

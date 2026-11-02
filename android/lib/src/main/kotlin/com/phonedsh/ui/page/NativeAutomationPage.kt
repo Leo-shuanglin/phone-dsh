@@ -999,16 +999,20 @@ public fun NativeAutomationPage(
                     }
                 }
             },
-            trailing = if (onNewSchedule == null) {
-                null
-            } else {
-                {
-                    AutomationBarAction(
-                        label = UiStrings.AUTOMATION_NEW_SHORT,
-                        onClick = onNewSchedule,
-                        tag = UiPageTags.AUTOMATION_NEW,
-                    )
-                }
+            // L75: iOS draws 新建 as an unconditional toolbar item
+            // (`NativeAutomationPage.swift:83`). Before this it was a `trailing`
+            // slot only when the host passed `onNewSchedule`; `page_structure_check`
+            // now reports that shape as `conditional-action`, because a label behind
+            // `if (cb != null)` is a control that may never render. A host that cannot
+            // create one leaves the verb disabled instead, in the place the baseline
+            // puts it.
+            trailing = {
+                AutomationBarAction(
+                    label = UiStrings.AUTOMATION_NEW_SHORT,
+                    onClick = { onNewSchedule?.invoke() },
+                    tag = UiPageTags.AUTOMATION_NEW,
+                    enabled = onNewSchedule != null,
+                )
             },
             rootTag = UiPageTags.AUTOMATION_ROOT,
             modifier = modifier,
@@ -1692,16 +1696,25 @@ private fun AutomationFailureSection(
  * @param label the visible verb.
  * @param onClick the control's action.
  * @param tag the stable test tag.
+ * @param enabled `false` dims the verb and drops the click; the control keeps its
+ *   place in the bar because the baseline draws it unconditionally.
  */
 @Composable
-private fun AutomationBarAction(label: String, onClick: () -> Unit, tag: String) {
+private fun AutomationBarAction(
+    label: String,
+    onClick: () -> Unit,
+    tag: String,
+    enabled: Boolean = true,
+) {
     val tokens = LocalUiTokens.current
     BasicText(
         text = label,
-        style = settingsLabelStyle().copy(color = tokens.colors.accent),
+        style = settingsLabelStyle().copy(
+            color = if (enabled) tokens.colors.accent else tokens.colors.tertiary,
+        ),
         modifier = Modifier
             .testTag(tag)
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(vertical = tokens.spacing.iconText, horizontal = tokens.spacing.iconText),
     )
 }

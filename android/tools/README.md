@@ -344,3 +344,24 @@ than 2/255; an image fails above 0.1 % differing pixels; a size mismatch always
 fails. The rationale lives in
 [`androidTest/README.md`](../lib/src/androidTest/README.md). It is used **only**
 inside Android's own golden — never between Android and iOS.
+
+## The product-flow acceptance run (`acceptance/`)
+
+`bash android/tools/acceptance/run-product-flow.sh` drives the seven product
+steps a person performs — save a key in 设置 → 模型服务 → 编辑 → 保存, create a
+session, get a streamed answer, pick a CSV into the workspace, have the model
+process it, preview/share the artifact, and survive a force-stop — and prints
+one `PASS/FAIL 步骤N:` line per step, writing `acceptance-report.md` under
+`$TMPDIR/pdsh-acceptance/`. Each step also runs alone (`--step 3`), and every
+assertion reads evidence rather than the tap: the provider record and key
+ciphertext on the device, `uiautomator dump` samples that show the answer text
+growing while it streams, the file the App kept inside `materialized/workspace`
+with the fixture's byte count, the amount total the fixture computed from the
+tool result, the system chooser in front after 分享, and a different `pidof`
+after the cold start. The model is the fixture in
+`acceptance/fixtures/scripted-acceptance-upstream.py` (a script, not an
+inference call) and `acceptance/fixtures/orders.csv` is the demo input; the
+run's device is the dedicated AVD on port 5738 and the key it types is generated
+per run, so no credential is ever written to this tree. A red step is the
+deliverable: the line names the assertion, the measured value and the logcat
+line that explains it.

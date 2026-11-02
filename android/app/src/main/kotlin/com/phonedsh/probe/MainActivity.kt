@@ -121,6 +121,37 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * 添加文件: the platform document picker (`ACTION_OPEN_DOCUMENT`).
+     *
+     * The Activity owns the picker because a system UI is Activity-scoped; the file
+     * itself is imported by the view model into the workspace through the WAL. The
+     * picker's answer is the URI the person chose — a cancelled pick is logged as a
+     * cancellation, never as an import.
+     */
+    private val openChatFile = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) {
+            Log.i(TAG, "CHAT_PICK_CANCELLED kind=file")
+        } else {
+            Log.i(TAG, "CHAT_PICK kind=file uri_type=${contentResolver.getType(uri) ?: "-"}")
+            engine.importIntoWorkspace(uri, image = false)
+        }
+    }
+
+    /** 添加图片: the same picker restricted to images. */
+    private val openChatImage = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) {
+            Log.i(TAG, "CHAT_PICK_CANCELLED kind=image")
+        } else {
+            Log.i(TAG, "CHAT_PICK kind=image uri_type=${contentResolver.getType(uri) ?: "-"}")
+            engine.importIntoWorkspace(uri, image = true)
+        }
+    }
+
+    /**
      * The multi-permission form, used where Android requires one prompt for a pair —
      * precise and approximate location must be requested together from API 31, or the
      * platform drops the request instead of showing a dialog.
@@ -211,6 +242,10 @@ class MainActivity : ComponentActivity() {
                 onRunTurn = ::runTurnOrAskForNotifications,
                 onPhonePermissionRequest = ::requestPhonePermission,
                 onPhonePermissionSettings = ::openPhonePermissionSettings,
+                // L69: the chat composer's two pickers. Their bytes go into the
+                // workspace (WAL mutation), not into a private copy beside the stores.
+                onPickFiles = { openChatFile.launch(arrayOf("*/*")) },
+                onPickImages = { openChatImage.launch(arrayOf("image/*")) },
             )
             UbuntuApprovalDialog(
                 pending = ubuntuApproval,

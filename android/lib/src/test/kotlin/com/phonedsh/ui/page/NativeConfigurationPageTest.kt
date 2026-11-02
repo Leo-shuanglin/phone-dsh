@@ -12,6 +12,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -121,6 +123,7 @@ class NativeConfigurationPageTest {
     private fun show(
         state: ConfigurationScreenState,
         onDone: () -> Unit = {},
+        onRefresh: (() -> Unit)? = null,
         onOpenWebSearch: (() -> Unit)? = null,
         onRetry: (() -> Unit)? = null,
         onDismissFailure: (() -> Unit)? = null,
@@ -136,6 +139,7 @@ class NativeConfigurationPageTest {
                 NativeConfigurationPage(
                     state = state,
                     onDone = onDone,
+                    onRefresh = onRefresh,
                     onToggleSection = {},
                     onOpenWebSearch = onOpenWebSearch,
                     onRetry = onRetry,
@@ -551,5 +555,55 @@ class NativeConfigurationPageTest {
         )
         // Replaying the same script yields exactly the same sequence (purity).
         assertEquals(states.map { it.signature() }, run().map { it.signature() })
+    }
+    // ------------------------------------------------------------------ pills
+
+    @Test
+    fun `the three glass pills are drawn, and 刷新 arms only with a host command`() {
+        val state = ConfigurationScreenState.from(fullFacts())
+        show(state)
+        // 插件说明 / 刷新 / 添加插件: one HStack in the baseline
+        // (`NativeConfigurationPage.swift:67-95`), three pills here.
+        compose.onNodeWithText(UiStrings.CONFIGURATION_PLUGIN_INFO).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CONFIGURATION_REFRESH).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CONFIGURATION_ADD_DISABLED).assertIsDisplayed()
+        // A host with no re-read command still sees the control, disabled — it
+        // says "this host cannot", it does not vanish.
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_REFRESH).assertIsNotEnabled()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_PLUGIN_INFO_ACTION).assertIsEnabled()
+        // 添加插件 is disabled on every phone (`NativeConfigurationPage.swift:93`),
+        // and its tap prints the measured reason instead of doing nothing.
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_ADD_PLUGIN).performClick()
+        compose.onNodeWithText(UiStrings.CONFIGURATION_INSTALL_THIRD_PARTY).assertIsDisplayed()
+    }
+
+    @Test
+    fun `the 刷新 pill re-reads the snapshot when the host handed a command`() {
+        var refreshes = 0
+        show(
+            ConfigurationScreenState.from(fullFacts()),
+            onRefresh = { refreshes += 1 },
+        )
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_REFRESH).assertIsEnabled()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_REFRESH).performClick()
+        assertEquals(1, refreshes)
+    }
+
+    @Test
+    fun `a partial host failure draws the orange warning line`() {
+        val facts = fullFacts()
+        val partial = facts.copy(
+            snapshot = facts.snapshot!!.copy(
+                settingsFailure = "请先启动 DSH 主机，再读取插件和设置。",
+            ),
+        )
+        val state = ConfigurationScreenState.from(partial)
+        assertEquals(1, state.notes.size)
+        val sentence = UiStrings.CONFIGURATION_PARTIAL_FAILURE_FORMAT
+            .format("请先启动 DSH 主机，再读取插件和设置。")
+        show(state)
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.CONFIGURATION_NOTE_PREFIX + state.notes.single().id))
+        compose.onNodeWithText(sentence).assertIsDisplayed()
     }
 }

@@ -21,11 +21,15 @@
 
 package com.phonedsh.dsh.host
 
+import com.phonedsh.log.MseqAllocator
 import com.phonedsh.log.MutationBody
 import com.phonedsh.log.RecoveryOutcome
 import com.phonedsh.log.WalRecord
+import com.phonedsh.log.WorkerLaneAppend
 import com.phonedsh.log.WorkspaceLog
 import com.phonedsh.platform.DurabilityLevel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 /**
  * The WAL operations a host HELLO and the VFS sink need.
@@ -69,12 +73,42 @@ interface HostWal {
     fun appliedMseq(): Long
 
     /**
-     * Appends one structurally validated mutation at the next D17 mseq and
+     * The **live** mseq allocator (`wal.md` §7.2, D17): `next_mseq` is
+     * `max(last_mseq, WAL tail) + 1` and `lastMseq` is the effective tail.
+     *
+     * Never cached: the HELLO's `next_mseq`/`acked_mseq` and the VFS sink's
+     * expected mseq are read from here at the moment they are needed. A boot-time
+     * snapshot of the same numbers is the L77 defect — an App-side workspace
+     * write advances the allocator, the Worker's HELLO and the sink both keep the
+     * old value, and the next `VFS_MUT` is answered `WAL allocated mseq N+1 for
+     * the worker's N`.
+     */
+    fun allocator(): MseqAllocator
+
+    /**
+     * The App-lane workspace writes of this log (an attachment import through
+     * `WorkspaceLog.appendMutation`), as the mseq each one consumed.
+     *
+     * The host listens so it can re-establish the invariant `wal.md` line 3
+     * states — the Worker's in-memory VFS is the single authority while it runs —
+     * by restarting the Worker instead of letting its next mutation collide with
+     * a number the App took. Empty for a fake or a log with no App lane.
+     */
+    val hostLaneAppends: Flow<Long> get() = emptyFlow()
+
+    /**
+     * Appends one structurally validated mutation **at the Worker's mseq** and
      * materializes it (`wal.md` §5, D8).
+     *
+     * The decision is taken against the live allocator under the log's own lock,
+     * so it cannot race the App lane: the answer is either "this was the next
+     * mseq and here is its record", "this mseq is already behind the tail" or
+     * "this mseq is ahead of the allocator". Nothing is appended for the last
+     * two, which is what keeps a stale frame from spending a new mseq.
      *
      * @throws Exception when the WAL refuses the write or has failed.
      */
-    suspend fun append(body: MutationBody): WalAppend
+    suspend fun appendWorker(body: MutationBody, mseq: Long): WalWorkerAppend
 
     /**
      * Closes the current epoch in the D18 order.
@@ -100,6 +134,23 @@ data class WalAppend(
     val materializedUptoMseq: Long,
     val resyncPath: String? = null,
 )
+
+/**
+ * The VFS sink's answer to one `VFS_MUT`, decided against the live allocator.
+ *
+ * This is the dsh projection of `:core`'s `WorkerLaneAppend`; it exists so the
+ * sink never names `:core`'s log types directly.
+ */
+sealed interface WalWorkerAppend {
+    /** The mseq was the live next one and the record is in the WAL. */
+    data class Appended(val append: WalAppend) : WalWorkerAppend
+
+    /** The mseq is at or below the WAL tail: nothing was appended. */
+    data class Behind(val lastMseq: Long) : WalWorkerAppend
+
+    /** The mseq is ahead of the live allocator: nothing was appended. */
+    data class Ahead(val nextMseq: Long) : WalWorkerAppend
+}
 
 /**
  * The level-2 watermark an epoch close established.
@@ -178,14 +229,24 @@ private class WorkspaceLogHostWal(
 
     override fun appliedMseq(): Long = log.materializedUptoMseq
 
-    override suspend fun append(body: MutationBody): WalAppend {
-        val ack = log.appendMutation(body)
-        return WalAppend(
-            mseq = ack.mseq,
-            materializedUptoMseq = ack.materializedUptoMseq,
-            resyncPath = ack.resync?.path,
-        )
-    }
+    override fun allocator(): MseqAllocator = log.allocator()
+
+    override val hostLaneAppends: Flow<Long> get() = log.hostLaneAppends
+
+    override suspend fun appendWorker(body: MutationBody, mseq: Long): WalWorkerAppend =
+        when (val outcome = log.appendWorkerMutation(body, mseq)) {
+            is WorkerLaneAppend.Appended -> WalWorkerAppend.Appended(
+                WalAppend(
+                    mseq = outcome.ack.mseq,
+                    materializedUptoMseq = outcome.ack.materializedUptoMseq,
+                    resyncPath = outcome.ack.resync?.path,
+                ),
+            )
+
+            is WorkerLaneAppend.Behind -> WalWorkerAppend.Behind(outcome.lastMseq)
+
+            is WorkerLaneAppend.Ahead -> WalWorkerAppend.Ahead(outcome.nextMseq)
+        }
 
     override suspend fun closeEpoch(): WalClose = WalClose(log.closeEpoch().durableUpto)
 

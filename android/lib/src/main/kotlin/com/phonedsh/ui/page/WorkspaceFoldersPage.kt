@@ -58,6 +58,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.surface.PageBarCapsule
+import com.phonedsh.ui.surface.SettingsSubPageFrame
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
@@ -343,32 +345,33 @@ public fun WorkspaceFoldersPage(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    PageFrame(
-        title = UiStrings.WORKSPACE_FOLDERS,
+    // The baseline is a **large-title** page: `.navigationTitle("工作文件夹")` +
+    // `.navigationBarTitleDisplayMode(.large)` (`NativeShell.swift:372`–`:373`),
+    // measured on `ios-workspace-folders.png` at 34 pt, ink y 125.33–155.33, leading
+    // inset 17.33. It also paints its own page fill (`.background(Color.white)`,
+    // `:378`), so the frame's `pageFill` mode is what puts the same white behind the
+    // rows instead of the Material surface.
+    SettingsSubPageFrame(
+        largeTitle = UiStrings.WORKSPACE_FOLDERS,
         onBack = onBack,
+        backGlyph = PAGE_BACK_GLYPH,
+        pageFill = true,
         rootTag = UiPageTags.WORKSPACE_ROOT,
         modifier = modifier,
-        actions = {
-            // `NativeShell.swift:376`: the baseline's toolbar verb is 添加, drawn as
-            // a 17 pt semibold accent label. `SessionTextAction` would render 13 pt,
-            // so the header action is its own label; the empty state carries the
-            // longer 添加工作文件夹 call to action below.
-            BasicText(
-                text = UiStrings.WORKSPACE_ADD,
-                style = type.headline.copy(
-                    color = if (state.canWrite) tokens.colors.accent else tokens.colors.tertiary,
-                ),
-                maxLines = 1,
-                modifier = Modifier
-                    .testTag(UiPageTags.WORKSPACE_NEW)
-                    .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-                    .clickable(
-                        enabled = state.canWrite,
-                        role = Role.Button,
-                        onClick = onBeginCreate,
-                    )
-                    .semantics { contentDescription = UiStrings.WORKSPACE_ADD }
-                    .padding(tokens.spacing.iconText),
+        trailing = {
+            // `NativeShell.swift:376`–`:379`: `Button("添加")` with a 17 pt accent
+            // title. On iOS 26 a bar button floats in a white capsule over the page
+            // (`ios-workspace-folders.png`: pill ≈ x 309.0–386.7, y ≈ 69.7–113.3, the
+            // white fill visible only through its shadow; title ink #2F5BFF =
+            // `colors.pageAccent`). The empty state below carries the longer
+            // 添加工作文件夹 call to action.
+            PageBarCapsule(
+                description = UiStrings.WORKSPACE_ADD,
+                onClick = onBeginCreate,
+                insetH = tokens.geometry.pageBarButtonInsetH,
+                elevation = tokens.geometry.pageBarButtonElevation,
+                enabled = state.canWrite,
+                tag = UiPageTags.WORKSPACE_NEW,
             )
         },
     ) {
@@ -902,5 +905,9 @@ internal object WorkspaceFoldersPageTokens {
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_PAGE_LIST_ROW_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_STATUS_DOT_DIAMETER,
+        // L75: the toolbar capsule's two page-layer lengths. The white page fill and
+        // the 34 pt title are the frame's (`pageFill` / `largeTitle`).
+        UiTokenNames.GEOMETRY_PAGE_BAR_BUTTON_INSET_H,
+        UiTokenNames.GEOMETRY_PAGE_BAR_BUTTON_ELEVATION,
     )
 }

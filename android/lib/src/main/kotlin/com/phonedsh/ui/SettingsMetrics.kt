@@ -63,8 +63,18 @@ public object SettingsMetrics {
     /** Segmented control side inset. Source: `SettingsPage.swift:69` (`.padding(.horizontal, 16)`); PNG check: track x=48..1157 px → 16.0..385.7 pt. Confidence: exact. */
     public const val SEGMENTED_INSET_H_PT: Int = 16
 
-    /** Segmented control vertical padding. Source: `SettingsPage.swift:70` (`.padding(.vertical, 10)`). Confidence: exact. */
-    public const val SEGMENTED_PADDING_V_PT: Int = 10
+    /**
+     * Segmented control vertical padding, bottom half.
+     *
+     * Source: `SettingsPage.swift:70` (`.padding(.vertical, 10)`) — but the
+     * *rendered* list starts at y=502 px = 167.33 pt, i.e. 9.33 pt below the
+     * track's bottom edge at 158.0, and [FIRST_CARD_TOP_INSET_PT] is measured from
+     * that edge. The baseline wins over the source literal by 2 px: with 10 the
+     * whole sheet below the picker sits 2 px low once the iOS safe area is
+     * applied, and a 2 px offset re-rasterises every glyph in the comparison.
+     * Confidence: measured (list background edge), not source.
+     */
+    public const val SEGMENTED_PADDING_V_PT: Float = 9.33f
 
     /** Segmented control track corner radius. The track is a capsule; PNG corner fit at the top edge is consistent with half the 32 pt height. Source: `settings-chat.png` (top-edge corner fit). Confidence: inferred (capsule = height / 2). */
     public const val SEGMENTED_RADIUS_PT: Int = 16
@@ -109,6 +119,55 @@ public object SettingsMetrics {
     public const val FIRST_CARD_TOP_INSET_PT: Float = 34.67f
 
     /**
+     * Top inset from a *grouped sub-page's* bar bottom to its first card: 45.0 pt.
+     *
+     * Source: `ios-settings-about.png` — the inline bar ends at the safe top 62 +
+     * 44 = 106 pt and the single card's top edge is y=453 px = 151.0 pt, so the
+     * gap is 45.0 pt. It is larger than [FIRST_CARD_TOP_INSET_PT] (34.67) because
+     * the general tab's list starts *below its segmented picker*, where SwiftUI
+     * has already consumed part of the navigation content inset; a pushed page's
+     * `List` starts directly under the bar and keeps the whole inset.
+     * Confidence: measured (one page, one card, 135 px).
+     */
+    public const val SUB_PAGE_GROUPED_TOP_INSET_PT: Float = 45f
+
+    /**
+     * The row text's optical offset: 1 pt up, for labels and values only.
+     *
+     * iOS `List` rows and Compose rows both centre a 20.33 pt line box inside the
+     * 52.33 pt row, but the CJK ink does not land in the same place: at 17 pt the
+     * iOS ink box is 15.0 pt tall and centred (e.g. 权限 220.67..235.67 in a row
+     * that ends at 254.33), while the Android ink is 15.67-16.0 pt and its centre
+     * sits 1.0 pt lower (221.33..237.0). Measured on six rows of
+     * `ios-settings.png`; the value ink sits 0.84 pt lower, so one offset serves
+     * both. Controls are *not* shifted: the switch (iOS 703.0..730.7, Android
+     * 702.0..731.3) and the chevrons are already centred.
+     *
+     * It is an optical correction, not a layout length: it does not change the
+     * row's height or its neighbours, which is why it is applied as a draw offset.
+     * Confidence: measured (ink boxes), and it buys the glyph overlap that a
+     * pixel comparison needs.
+     */
+    public const val ROW_TEXT_OPTICAL_OFFSET_PT: Float = -1f
+
+    /**
+     * The iOS screen's safe-area top: 62.0 pt.
+     *
+     * Source: the calibration above pins the inline bar to 62..106 pt (the title's
+     * ink centre at 84.35 pt against a 44 pt bar), and the card tops corroborate
+     * it once the picker's bottom padding is the rendered 9.33 rather than the
+     * source's 10: 62 + 44 + 20 + 32 + 9.33 + 34.67 = 202.0 exactly.
+     *
+     * L79 uses it only in the parity capture harness: the harness hides the
+     * Android system bars (a capture condition), so `statusBarsPadding()` inside
+     * the pages collapses to 0 and every page sits one safe-area higher than the
+     * device screenshot it is laid beside. The harness reserves this band so both
+     * panels share an absolute y. It is **not** a page inset: on a device that
+     * shows the system bars the page gets the band from the platform.
+     */
+    public const val PARITY_SAFE_AREA_TOP_PT: Float = 62f
+
+    /**
      * One grouped row's rendered height.
      *
      * Source: PNG check separators in `settings-chat.png` at y=1179, 1336, 1493, 1912,
@@ -150,6 +209,11 @@ public object SettingsMetrics {
 
     /** Distance from the card's trailing edge to the value's right edge: 18.67 + 20.67. Source: arithmetic on the two measured edges; PNG check 1157-1039 = 118 px = 39.3 pt. Confidence: measured. */
     public const val VALUE_TRAILING_INSET_PT: Float = 39.33f
+    /** A *menu* row's trailing inset: 17.6 pt from the card edge to the up-down chevron's right edge (`ios-settings.png` 语言 chevron ink 359.3..367.7, card right 385.3). Confidence: measured. */
+    public const val MENU_TRAILING_INSET_PT: Float = 17.6f
+
+    /** A *menu* row's glyph slot: 16.0 pt between the value's right edge (351.7) and the chevron's (367.7). Confidence: measured. */
+    public const val MENU_CHEVRON_SLOT_PT: Float = 16f
 
     /** Switch width. Source: PNG check green track x=927..1115 px → 189 px = 63.0 pt. Confidence: measured. */
     public const val SWITCH_WIDTH_PT: Int = 63

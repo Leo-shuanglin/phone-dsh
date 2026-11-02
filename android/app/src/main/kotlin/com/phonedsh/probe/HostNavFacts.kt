@@ -422,10 +422,14 @@ private fun workspaceFoldersFact(present: Boolean): WorkspaceFoldersSnapshot =
  * @param id the session id exactly as the store recovered it.
  * @param lastActivityMs the wall-clock reading of the last observed activity, or
  *   `null` when the host has no timestamp for this session.
+ * @param title the conversation's name from the chat records (`ChatSessionStore`),
+ *   or empty for a journal row this App never opened — the page's own untitled
+ *   policy then applies. The journal itself has no title member.
  */
 internal data class HostSessionRecord(
     val id: String,
     val lastActivityMs: Long?,
+    val title: String = "",
 )
 
 /**
@@ -512,7 +516,7 @@ internal fun buildSessionsFacts(
     sessions = snapshot.sessions.map { record ->
         SessionListing(
             id = record.id,
-            title = "",
+            title = record.title,
             updatedAtMs = record.lastActivityMs,
             status = SessionRunStatus.IDLE,
         )

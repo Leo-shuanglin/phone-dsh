@@ -312,10 +312,15 @@ object ScreenshotSamples {
      * `ios-sessions-default.png` and `ios-sessions-nothing.png`: no folder, no
      * session, no archive, engine off — the drawer's big empty block.
      *
-     * The two iOS shots are the same drawer in two containers (`.sessions` renders
-     * the page directly, `sessions.nothing` wraps it in `DrawerPreview`), which is
-     * why one shows the 会话 section label and the other does not; the Android page
-     * always renders the label, so both captures are the same frame.
+     * The two iOS shots are the same *state* in two containers: `.sessions`
+     * renders `SessionsPage` directly in the 402 pt window and `sessions.nothing`
+     * wraps it in `DrawerPreview` at 320 pt (`NativeShell.swift:842`, `:872-879`).
+     * Measured, they differ by 74,939 px in y 223.7–398.3 pt: the empty block's
+     * centre (201 vs 159.7), its hint, the CTA width (370 vs 288) and the
+     * new-session separator (57 → 345 vs 16 → 304). No section label differs —
+     * neither shot draws one. Since L73 the page fills its container, so the two
+     * Android captures differ the same way; see
+     * `SessionsParityScreenshotTest.captureSessions(drawer = …)`.
      */
     fun sessionsNothing(): SessionsScreenState = sessionState(sessionCount = 0, workspaceCount = 0)
 

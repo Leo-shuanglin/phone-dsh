@@ -15,12 +15,22 @@
 //
 // What a parity capture proves: the page composition in the iOS frame. It never
 // proves cross-platform glyph raster equality (Minikin/HarfBuzz vs CoreText).
+//
+// The page is drawn inside [ChatParityFrame]: the iOS baseline is a device
+// screenshot whose page lives in the 62/42 pt safe area, while this harness hides
+// the Android bars, so the band has to come from the capture frame (see the KDoc
+// there). Without it the whole page is offset by 62 pt against the panel it is
+// compared to, which is a capture artefact and not a layout difference.
 package com.phonedsh.ui.screenshot
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -30,7 +40,9 @@ import com.phonedsh.ui.nav.PdshNavFacts
 import com.phonedsh.ui.nav.PdshNavHost
 import com.phonedsh.ui.nav.PdshNavState
 import com.phonedsh.ui.nav.PdshRoute
+import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.page.ChatPage
+import com.phonedsh.ui.surface.ApprovalCard
 import com.phonedsh.ui.surface.CodeBlock
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,35 +58,74 @@ class ChatParityScreenshotTest : ScreenshotTestBase() {
     @Test
     fun pageChatAssistant() {
         val state = ParityState.PAGE_CHAT_ASSISTANT
-        setCapturedContent { chatPage(ChatParitySamples.chatAssistant()) }
+        setCapturedContent { ChatParityFrame { chatPage(ChatParitySamples.chatAssistant()) } }
         capture(state.androidName)
     }
 
     @Test
     fun pageChatOfficial() {
         val state = ParityState.PAGE_CHAT_OFFICIAL
-        setCapturedContent { chatPage(ChatParitySamples.chatOfficial()) }
+        setCapturedContent { ChatParityFrame { chatPage(ChatParitySamples.chatOfficial()) } }
         capture(state.androidName)
     }
 
     @Test
     fun pageChatQueued() {
         val state = ParityState.PAGE_CHAT_QUEUED
-        setCapturedContent { chatPage(ChatParitySamples.chatQueued()) }
-        capture(state.androidName)
-    }
-
-    @Test
-    fun pageChatPermission() {
-        val state = ParityState.PAGE_CHAT_PERMISSION
-        setCapturedContent { chatPage(ChatParitySamples.chatPermission()) }
+        setCapturedContent { ChatParityFrame { chatPage(ChatParitySamples.chatQueued()) } }
         capture(state.androidName)
     }
 
     /**
+     * `ios-chat-permission.png` is **not a page**: `NativeShell.swift:848-861`
+     * renders `-uiPreview chat.permission` as two `PermissionCardView`s inside a
+     * `VStack { Color.white; card; card; Color.white }` — no header, no composer,
+     * the two cards centred in the safe area. The full `ChatPage` cannot be laid
+     * beside that shot (its header and dock are 100% of the iOS panel's missing
+     * chrome), so this capture photographs the subject the baseline photographs:
+     * the card pair, at the same width and vertical centre. The page-level
+     * rendering of the same state stays covered by the page's own tests.
+     */
+    @Test
+    fun pageChatPermission() {
+        val state = ParityState.PAGE_CHAT_PERMISSION
+        setCapturedContent { ChatParityFrame { permissionCardPair() } }
+        capture(state.androidName)
+    }
+
+    /** The two pending cards, centred, exactly as the iOS `chat.permission` preview draws them. */
+    @Composable
+    private fun permissionCardPair() {
+        val pending = ChatParitySamples.chatPermission().pending
+        val asks = listOfNotNull(pending.primary) + pending.folded
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                asks.forEach { ask ->
+                    ApprovalCard(
+                        title = ask.title,
+                        subtitle = ask.subtitle,
+                        primaryLabel = UiStrings.ALLOW_ONCE,
+                        onPrimary = {},
+                        secondaryLabel = UiStrings.DENY,
+                        onSecondary = {},
+                    )
+                }
+            }
+        }
+    }
+
+    /**
      * `ios-code-block.png` is a component swatch, not a page: the iOS shot has no
-     * header and no composer, only the card at the top of the 402 pt frame. The
-     * capture therefore draws the surface alone in the page-width column.
+     * header and no composer, only the card at y = 104 pt in the 402 pt frame.
+     *
+     * That 104 is the preview route's own layout, not the component's: iOS is
+     * `NativeShell.swift:864-868` — `ScrollView { DSSCodeBlock(…).padding(.horizontal,
+     * 16).padding(.top, 40) }` — inside a frame whose status bar is 62 pt, plus
+     * `DSSCodeBlock`'s own `.padding(.vertical, 2)` (`Components.swift:224`):
+     * 62 + 40 + 2 = 104. The Android harness hides the system bars, so the same
+     * card origin has to be typed into the sample; the component must not grow a
+     * 104 pt top margin for a page that does not have one. Card body and chrome
+     * are compared from that common origin.
      */
     @Test
     fun surfaceCodeBlock() {
@@ -86,7 +137,13 @@ class ChatParityScreenshotTest : ScreenshotTestBase() {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = PAGE_MARGIN_PT.dp)
+                    .padding(
+                        start = PAGE_MARGIN_PT.dp,
+                        // 102 so the component's own 2 pt outer inset lands the
+                        // card surface at 104 — the iOS frame coordinate.
+                        top = CODE_SWATCH_TOP_PT.dp,
+                        end = PAGE_MARGIN_PT.dp,
+                    )
                     .testTag(CODE_SWATCH_TAG),
             ) {
                 CodeBlock(
@@ -149,6 +206,12 @@ class ChatParityScreenshotTest : ScreenshotTestBase() {
 
         /** The swatch frame's tag (the capture reads it back). */
         const val CODE_SWATCH_TAG: String = "pdsh.chat-parity.code-swatch"
+
+        /**
+         * `ios-code-block.png` card origin: 62 pt status bar + 40 pt preview top
+         * padding, minus the 2 pt outer inset [CodeBlock] applies itself.
+         */
+        const val CODE_SWATCH_TOP_PT: Int = 102
 
         /** The routing receipt's PNG name; not a parity baseline. */
         const val ROUTE_CAPTURE_NAME: String = "page-chat-route"

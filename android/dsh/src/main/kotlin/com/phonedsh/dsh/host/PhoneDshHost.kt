@@ -92,6 +92,7 @@ import com.phonedsh.platform.EngineHostState
 import com.phonedsh.platform.LifecycleSignal
 import com.phonedsh.platform.LifecycleSnapshot
 import com.phonedsh.platform.LifecycleSignals
+import com.phonedsh.platform.NetworkPath
 import com.phonedsh.platform.Notifier
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicBoolean
@@ -349,7 +350,40 @@ class DefaultPhoneDshHost(
         exec = execCapability,
     )
 
-    override val hello: HostHello get() = helloState
+    /**
+     * The HELLO value, with the WAL numbers read from the live allocator.
+     *
+     * [helloState] is the boot-time value (recovery's report); this getter
+     * refreshes its watermark on every read, and [HostChannel] reads it once per
+     * HELLO send. `channel.md` §4.1 derives `next_mseq` from the WAL tail and
+     * §9.2 makes the Worker adopt it per connection, so a cached pair is wrong
+     * the moment anything else writes the log \u2014 which the App's import lane
+     * does. The refresh is skipped (keeping the previous, legal value) when the
+     * live pair would violate §4.1, e.g. before recovery has run.
+     */
+    override val hello: HostHello get() = liveHello()
+
+    private fun liveHello(): HostHello {
+        val current = helloState
+        val up = current.wal as? WalUplink.Up ?: return current
+        val seam = wal ?: return current
+        val allocator = seam.allocator()
+        val durable = minOf(vfsSink?.durableWatermark ?: 0L, allocator.lastMseq)
+        val observed = MseqWatermark.Observed(
+            nextMseq = allocator.nextMseq,
+            ackedMseq = allocator.lastMseq,
+            durableMseq = durable,
+        )
+        if (!observed.satisfiesHelloRules) {
+            logger.warn(
+                "live mseq watermark would violate channel.md §4.1 " +
+                    "(next_mseq=${observed.nextMseq}, acked_mseq=${observed.ackedMseq}, " +
+                    "durable_mseq=${observed.durableMseq}); keeping the boot-time value",
+            )
+            return current
+        }
+        return current.copy(wal = up.refreshed(observed))
+    }
 
     private val readyState = MutableStateFlow(false)
 
@@ -532,6 +566,21 @@ class DefaultPhoneDshHost(
     @Volatile
     private var foreground: Boolean = true
 
+    /**
+     * The last network-path reading the OS reported, or `null` before any.
+     *
+     * `budgets.md` §2's `Backoff -> Running` guard needs a *satisfied network
+     * path*: a fact about now, not a change event. `Running -> Backoff` clears the
+     * machine's flag to force a fresh fact, and for a path-driven entry the event
+     * that caused it is that fact's successor. For the **upstream 429/5xx** entry
+     * the path never changed, so nothing would ever arrive to satisfy the guard
+     * and admission stayed closed for the life of the process (every `EXEC_REQ`
+     * answered `admission_closed` while the chat kept working). This field lets
+     * the facade hand the machine the observation it already has.
+     */
+    @Volatile
+    private var lastPathStatus: NetworkPathStatus? = null
+
     override fun start() {
         if (!started.compareAndSet(false, true)) {
             logger.info("start ignored: the host facade is already started")
@@ -562,6 +611,16 @@ class DefaultPhoneDshHost(
             if (!current(generation)) return@launch
             val engineJob = launch { engine.state.collect { onEngineState(it) } }
             val signalsJob = launch { signals.events.collect { onLifecycleSignal(it) } }
+            // The App's own workspace writes (an attachment import) are
+            // host-lane mutations: `wal.md` line 3 makes the Worker's in-memory
+            // VFS the authority while it runs, so a live Worker cannot see them
+            // and its next mseq is one the log already spent. The collector
+            // re-establishes the invariant by restarting the Worker at the next
+            // boundary (the D14 planned-restart row), which re-anchors its
+            // numbering on a live HELLO and re-reads the overlay (wal.md §8).
+            val hostLaneJob = launch {
+                wal?.hostLaneAppends?.collect { mseq -> onHostLaneAppend(mseq) }
+            }
             if (!current(generation)) {
                 engineJob.cancel()
                 signalsJob.cancel()
@@ -570,6 +629,7 @@ class DefaultPhoneDshHost(
             synchronized(jobsLock) {
                 jobs += engineJob
                 jobs += signalsJob
+                jobs += hostLaneJob
             }
             engine.start()
             if (!current(generation)) {
@@ -667,6 +727,13 @@ class DefaultPhoneDshHost(
             foreground = signal.foreground
             logger.debug("app foreground: ${signal.foreground}")
             return
+        }
+        if (signal is NetworkPath) {
+            lastPathStatus = if (signal.available) {
+                NetworkPathStatus.SATISFIED
+            } else {
+                NetworkPathStatus.UNSATISFIED
+            }
         }
         val mapped = HostSignalMapping.from(signal) ?: return
         logger.debug("lifecycle signal: ${mapped.label}")
@@ -865,6 +932,20 @@ class DefaultPhoneDshHost(
         // this value — the D14 signal was the one fed above.
         if (signal is ControllerSignal.NetworkPathChanged && controller.state == HostState.BACKOFF) {
             retry.onNetworkPath(signal.status == NetworkPathStatus.SATISFIED)
+            return
+        }
+        // An entry into `Backoff` that did not come from the path (an upstream
+        // 429/5xx) has no path event behind the guard. `budgets.md` §2's guard is
+        // about the path *now*, and the last reading is the host's observation of
+        // it, so feed that one instead of waiting for a change that will not
+        // come. Only a SATISFIED reading reopens anything: an unsatisfied one has
+        // nothing to add, and `null` (never observed) stays unknown.
+        if (controller.state == HostState.BACKOFF && lastPathStatus == NetworkPathStatus.SATISFIED) {
+            logger.info(
+                "Backoff guard: the last observed network path is satisfied; " +
+                    "recording that observation so the retry probe can run",
+            )
+            handle(ControllerSignal.NetworkPathChanged(NetworkPathStatus.SATISFIED))
         }
     }
 
@@ -907,10 +988,13 @@ class DefaultPhoneDshHost(
                 if (ControllerEffect.ARM_DRAIN_DEADLINE in record.effects) {
                     drain.arm(controller.drainDeadlineAtMillis)
                 }
-                if (
-                    ControllerEffect.START_WORKER in record.effects ||
-                    ControllerEffect.RESTART_WORKER in record.effects
-                ) {
+                if (ControllerEffect.RESTART_WORKER in record.effects) {
+                    // A restart must stop the page it is replacing; `startWorker`
+                    // alone is a no-op while the engine is Running, which is why
+                    // the planned-restart row used to leave the old Worker (and
+                    // its stale VFS) in place.
+                    restartWorker(record.signal)
+                } else if (ControllerEffect.START_WORKER in record.effects) {
                     startWorker(record.signal)
                 }
                 if (record.from == HostState.BACKOFF && record.to != HostState.BACKOFF) {
@@ -1014,6 +1098,42 @@ class DefaultPhoneDshHost(
     }
 
     /**
+     * One App-lane workspace write: the Worker's VFS is now behind the WAL.
+     *
+     * `wal.md` line 3 is the rule: "the in-memory VFS of the worker is the single
+     * authority while it runs". A host-lane write is therefore only representable
+     * when no Worker holds the VFS — so a live one is restarted, which is the D14
+     * `PlannedRestartRequested` row (`Running -> Recovering`, "close admission,
+     * close the epoch, restart WebContent at a tool-call boundary"). The fresh
+     * Worker boots from the re-packed overlay (so it sees the imported file) and
+     * adopts the live `next_mseq` from its HELLO (`channel.md` §9.2), which is
+     * what stops the next `VFS_MUT` from colliding with the mseq the App took.
+     *
+     * Outside `Running` there is nothing to re-anchor: `Parked` has no Worker,
+     * `Recovering` is about to boot one (its HELLO is live), and `Backoff` /
+     * `Failed` / `Remote` do not run tool work.
+     */
+    internal fun onHostLaneAppend(mseq: Long) {
+        val state = controller.state
+        logger.info(
+            "host-lane workspace write at mseq $mseq (the App's own VFS lane); " +
+                "worker state=${state.wireName}",
+        )
+        if (state != HostState.RUNNING) {
+            logger.info(
+                "no live Worker to re-anchor for mseq $mseq " +
+                    "(next Worker boot adopts the live allocator from its HELLO)",
+            )
+            return
+        }
+        logger.info(
+            "planned restart: a host-lane write left the live Worker's VFS and numbering stale, " +
+                "so the Worker is restarted at this boundary (budgets.md §2 planned-restart row)",
+        )
+        handle(ControllerSignal.PlannedRestartRequested)
+    }
+
+    /**
      * Performs `PERSIST_HOST_STATE` (budgets.md §2's Actions column, emitted on
      * every transition and on the boot mapping).
      *
@@ -1060,6 +1180,61 @@ class DefaultPhoneDshHost(
                 logger.info("worker start requested by '$reason' from ${describe(current)}")
                 engine.start()
             }
+        }
+    }
+
+    /**
+     * Stops a live Worker and boots a fresh one (the `RESTART_WORKER` effect).
+     *
+     * Runs on the facade's scope because the stop is asynchronous: the engine
+     * must report `Stopped` before `start()` is meaningful (`EngineHost.start()`
+     * ignores a start while the previous page is still shutting down). The epoch
+     * is closed in between, which is the row's `CLOSE_EPOCH` action and what
+     * makes the imported bytes durable before the new Worker reads the overlay.
+     */
+    private fun restartWorker(reason: String) {
+        scope.launch {
+            val current = engine.state.value
+            val live = current is EngineHostState.Running ||
+                current is EngineHostState.Starting ||
+                current === EngineHostState.Recovering
+            if (live) {
+                logger.info("planned restart ($reason): stopping the live Worker")
+                engine.stop()
+                if (!awaitWorkerStopped()) {
+                    logger.warn(
+                        "planned restart ($reason): the Worker did not report stopped within " +
+                            "$WORKER_STOP_BOUND_MILLIS ms; the fresh start follows anyway",
+                    )
+                }
+            }
+            closeEpochForRestart(reason)
+            if (controller.state == HostState.RECOVERING) {
+                startWorker("planned restart ($reason)")
+            } else {
+                logger.info(
+                    "planned restart ($reason): the host is ${controller.state.wireName}, " +
+                        "so the Worker is not started from here",
+                )
+            }
+        }
+    }
+
+    /** The row's `CLOSE_EPOCH`: reported, never fatal to the restart itself. */
+    private suspend fun closeEpochForRestart(reason: String) {
+        val sink = vfsSink ?: return
+        try {
+            sink.closeEpoch()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            // VfsSink already reported it through the write-failure lane when the
+            // code was attributable (D14 failure); the restart still proceeds so
+            // the host does not stay in Recovering behind a bad epoch.
+            logger.warn(
+                "planned restart ($reason): the epoch close failed " +
+                    "(${failure.javaClass.simpleName}); continuing with the restart",
+            )
         }
     }
 

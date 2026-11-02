@@ -37,6 +37,7 @@
 // `geometry.pageRowMinHeight`); the list gap is the shared `pageListGap`.
 package com.phonedsh.ui.page
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +50,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -71,7 +73,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -81,7 +86,6 @@ import androidx.compose.ui.semantics.stateDescription
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
 import com.phonedsh.ui.surface.SettingsHairline
-import com.phonedsh.ui.surface.SettingsSectionHeader
 import com.phonedsh.ui.surface.SettingsSectionLabel
 import com.phonedsh.ui.surface.SettingsSubPageFrame
 import com.phonedsh.ui.surface.settingsFootnoteStyle
@@ -600,8 +604,9 @@ public data class ModelProviderLocalState(public val fold: FoldState = FoldState
  * @param state the pure screen state ([ModelProviderScreenState.from]).
  * @param onAdd the editor was opened for a new service; the host may take over.
  * @param onEdit the editor was opened for an existing service, by id.
- * @param onToggleSection the 服务 header was tapped; the host applies
- *   `ModelProviderUiEvent.ToggleSection` and re-projects.
+ * @param onToggleSection kept for the settings sheet's call site. The baseline's
+ *   服务 header is a plain label with no disclosure
+ *   (`ModelProviderSettingsPage.swift:85-86`), so this page draws no fold.
  * @param onBack leave the page.
  * @param onRetry retry a failed read (the failure line's leading glyph; the
  *   contract declares no retry *label* for this page).
@@ -610,6 +615,7 @@ public data class ModelProviderLocalState(public val fold: FoldState = FoldState
  * @param onTest the editor's 测试 was tapped.
  * @param onDelete a service was confirmed for deletion, by id.
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 public fun ModelProviderSettingsPage(
     state: ModelProviderScreenState,
@@ -680,7 +686,6 @@ public fun ModelProviderSettingsPage(
                 ) {
                     serviceGroup(
                         state = state,
-                        onToggleSection = onToggleSection,
                         onStartEngine = onStartEngine,
                         onOpenNew = {
                             draft = ProviderDraft.new()
@@ -729,22 +734,23 @@ public fun ModelProviderSettingsPage(
  */
 private fun LazyListScope.serviceGroup(
     state: ModelProviderScreenState,
-    onToggleSection: (String) -> Unit,
     onStartEngine: () -> Unit,
     onOpenNew: () -> Unit,
     onOpen: (ProviderRowView) -> Unit,
     onDeleteRequest: (ProviderRowView) -> Unit,
 ) {
     item(key = "header.services") {
-        SettingsSectionHeader(
+        // The baseline's header is a plain `Text("服务")` on a Section
+        // (`ModelProviderSettingsPage.swift:85-86`): no disclosure, no count. The
+        // Android fold and its `1 项` were the extra control the parity sheet
+        // flagged, so the header is a label now — and because there is no fold,
+        // the rows below are always drawn.
+        SettingsSectionLabel(
             title = UiStrings.PROVIDER_SERVICES,
-            expanded = state.servicesExpanded,
-            onToggle = { onToggleSection(ModelProviderScreenState.SERVICES_SECTION_ID) },
-            trailing = UiStrings.ROW_COUNT.format(state.rows.size),
-            tag = UiPageTags.PROVIDER_SERVICES_SECTION,
+            modifier = Modifier.testTag(UiPageTags.PROVIDER_SERVICES_SECTION),
         )
     }
-    if (state.servicesExpanded) {
+    run {
         if (state.rows.isEmpty()) {
             item(key = "services.empty") {
                 EmptyHint(
@@ -854,6 +860,13 @@ private fun ProviderServiceRow(
                 text = row.keyValue,
                 style = settingsFootnoteStyle().copy(color = row.keyTone.ink(tokens)),
             )
+            // The baseline marks the engine's service with `checkmark.circle.fill`
+            // tinted with the accent (`ModelProviderSettingsPage.swift:129-132`) —
+            // a filled circle with a check in it, not a word. It is drawn rather
+            // than typed so the mark cannot contribute a font line box to the row.
+            if (row.selected) {
+                SelectedServiceMark()
+            }
         }
         row.modelLabel?.let { label -> ProviderFooterLine(text = label) }
         row.endpointLabel?.let { label -> ProviderFooterLine(text = label) }
@@ -878,6 +891,42 @@ private fun ProviderServiceRow(
         }
     }
 }
+
+/**
+ * The 默认 service's mark: an accent-filled circle with a white check, sized from
+ * the row label's own font so no bare length enters this file.
+ *
+ * `ModelProviderSettingsPage.swift:129-132`:
+ * `Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint)`.
+ */
+@Composable
+private fun SelectedServiceMark() {
+    val tokens = LocalUiTokens.current
+    val diameter = with(LocalDensity.current) { settingsLabelStyle().fontSize.toDp() }
+    Canvas(modifier = Modifier.size(diameter)) {
+        drawCircle(color = tokens.colors.accent)
+        // The glyph's two strokes, in the circle's own coordinate space: a check
+        // from the left third down to the bottom third, then up to the right.
+        val strokeWidth = size.minDimension * CHECK_STROKE_RATIO
+        drawLine(
+            color = tokens.colors.input,
+            start = Offset(size.width * 0.28f, size.height * 0.52f),
+            end = Offset(size.width * 0.44f, size.height * 0.68f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = tokens.colors.input,
+            start = Offset(size.width * 0.44f, size.height * 0.68f),
+            end = Offset(size.width * 0.72f, size.height * 0.36f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+/** The check's stroke, as a fraction of the mark's diameter. */
+private const val CHECK_STROKE_RATIO: Float = 0.11f
 
 /** A 13 pt secondary line in the sub-page's footnote rhythm. */
 @Composable
@@ -1264,6 +1313,9 @@ private const val RETRY_GLYPH: String = "↻"
 internal object ModelProviderSettingsPageTokens {
     val refs: List<String> = listOf(
         UiTokenNames.COLORS_ACCENT,
+        // The 默认 mark's check is drawn in the card's own ground colour, so the
+        // circle reads as a filled accent disc with the page's white through it.
+        UiTokenNames.COLORS_INPUT,
         UiTokenNames.COLORS_PRIMARY,
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_SUCCESS,

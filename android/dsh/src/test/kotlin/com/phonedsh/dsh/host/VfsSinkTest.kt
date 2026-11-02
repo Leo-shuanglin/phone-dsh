@@ -312,6 +312,150 @@ class VfsSinkTest {
         }
     }
 
+    // ---- 7. L77: the App lane and the Worker lane share one allocator -------
+
+    /**
+     * The product flow that died at step 5: the App writes the workspace, then
+     * the Worker writes again.
+     *
+     * An attachment import is a **host-lane** WAL append
+     * (`WorkspaceLog.appendMutation`, the App's own VFS lane), so it consumes an
+     * mseq. The Worker never saw it: `wal.md` line 3 makes the Worker's in-memory
+     * VFS the single authority while it runs, so its own counter still holds the
+     * number the App just took.
+     *
+     * Before L77 the sink compared that frame against a **boot-time snapshot** of
+     * the allocator, accepted it, let the log allocate the *next* number, and
+     * threw `IllegalStateException("WAL allocated mseq N+1 for the worker's N")`
+     * out of the channel handler. The device then closed the ordered channel,
+     * reloaded the page, replayed the same mutation and threw again: 600 records
+     * in the wrong mseqs in ~10 s, and every turn failed (`channel_lost`).
+     *
+     * After L77 there are exactly three answers, and this test pins all of them:
+     * the stale frame is **not** appended (no mseq is spent, no WAL record), it is
+     * answered `BAD_MSEQ` (§8's own refusal) instead of crashing the handler, and
+     * the next connection's HELLO carries the **live** numbers so the Worker
+     * re-anchors (§9.2) and its following mutation is accepted.
+     *
+     * Reverse validation: seed the sink from a cached counter instead of
+     * [HostWal.allocator] and this test throws on the stale frame, with
+     * `log.nextMseq` already at 4.
+     */
+    @Test
+    fun anAppLaneWriteDoesNotSpendTheWorkersMseqAndTheNextHelloReanchorsIt() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val connection = connect(host)
+                send(host, connection, mutFrame(mseq = 1, path = "/dsh/workspace/notes.txt", text = "worker"))
+                assertEquals(2L, log.nextMseq)
+
+                // The App's import lane: the same call `importIntoWorkspace`
+                // makes, on the same log, from another coroutine.
+                val imported = runBlocking {
+                    log.appendMutation(
+                        com.phonedsh.log.MutationBody(
+                            op = com.phonedsh.log.VfsOp.WRITE,
+                            mode = 420,
+                            path = "/dsh/workspace/orders.csv",
+                            data = "a,b\n1,2\n".toByteArray(Charsets.UTF_8),
+                        ),
+                    )
+                }
+                assertEquals("the import takes the mseq the Worker will use next", 2L, imported.mseq)
+                assertEquals(3L, log.nextMseq)
+
+                // The Worker's own numbering is still at 2. It must not crash the
+                // handler and must not spend a third mseq.
+                val thrown = runCatching {
+                    send(
+                        host,
+                        connection,
+                        mutFrame(mseq = 2, path = "/dsh/workspace/summary.md", text = "worker", seq = 3),
+                    )
+                }.exceptionOrNull()
+                assertEquals("the stale frame must not throw out of the channel", null, thrown)
+                assertEquals(
+                    "nothing is appended for a frame whose mseq the host lane took",
+                    3L,
+                    log.nextMseq,
+                )
+                val errors = errorFields(connection)
+                assertEquals(1, errors.size)
+                assertEquals("BAD_MSEQ", errors.single().getString("code"))
+                assertEquals(listOf("BAD_MSEQ"), connection.closes.map { it.second })
+
+                // The reconnect: a fresh connection gets a live HELLO, which is
+                // what `channel.md` §9.2 relies on to re-anchor the Worker.
+                val second = connect(host)
+                val hello = JSONObject(WireCodec.decode(second.sent.single { HostFrame.isHello(it) }))
+                assertEquals("next_mseq is the live allocator, not the boot snapshot", 3L, hello.getLong("next_mseq"))
+                assertEquals("acked_mseq covers the App's import", 2L, hello.getLong("acked_mseq"))
+
+                // The Worker adopts it and writes at 3: accepted, acked, durable.
+                send(host, second, mutFrame(mseq = 3, path = "/dsh/workspace/summary.md", text = "worker", seq = 2))
+                val acks = ackFields(second).filter { it.getInt("level") == 1 }
+                assertEquals(3L, acks.single().getLong("upto_mseq"))
+                assertEquals(4L, log.nextMseq)
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    /**
+     * A host-lane write while the Worker is live restarts the Worker instead of
+     * leaving a stale VFS in place (the D14 planned-restart row).
+     *
+     * The import is exactly the moment `wal.md` line 3 stops being true for the
+     * running Worker, and the spec's answer is a Worker boot: the page is
+     * re-packed from the materialized tree (so the imported file is visible,
+     * wal.md §8) and the HELLO hands over the live allocator.
+     *
+     * Reverse validation: drop the `onHostLaneAppend` collector and the host
+     * stays RUNNING with the same engine, i.e. with the stale Worker this test
+     * asserts was replaced.
+     */
+    @Test
+    fun aHostLaneWriteRestartsALiveWorkerSoItReanchorsAndSeesTheFile() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val connection = connect(host)
+                send(host, connection, mutFrame(mseq = 1, path = "/dsh/workspace/a.txt", text = "a"))
+                assertEquals(HostState.RUNNING, host.controller.state)
+
+                runBlocking {
+                    log.appendMutation(
+                        com.phonedsh.log.MutationBody(
+                            op = com.phonedsh.log.VfsOp.WRITE,
+                            mode = 420,
+                            path = "/dsh/workspace/import.csv",
+                            data = "x".toByteArray(Charsets.UTF_8),
+                        ),
+                    )
+                }
+
+                // The planned-restart row closes admission and replaces the page.
+                assertEquals(HostState.RECOVERING, host.controller.state)
+                assertEquals(Admission.CLOSED, host.controller.admission)
+                assertEquals(EngineHostState.Stopped, platform.engine.state.value)
+                // The fresh page comes up; its HELLO carries the live numbers.
+                platform.engine.setState(EngineHostState.Running("http://127.0.0.1:41234", 41234))
+                runBlocking { withTimeout(5_000) { host.state.first { it == HostState.RUNNING } } }
+                assertEquals(Admission.OPEN, host.controller.admission)
+                assertEquals(3L, host.hello.watermark.nextMseq)
+                assertEquals(2L, host.hello.watermark.ackedMseq)
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private fun newLog(platform: FakePlatform): WorkspaceLog = WorkspaceLog(

@@ -20,13 +20,24 @@
 //     这个分组没有设置项. Inside the plugin inventory the same split holds for
 //     the plugin list and the experimental-plugin list.
 //
-// Geometry: page-level tokens only (`geometry.pageOuterMarginH`); the header,
-// section header and InfoRow floors live in `PageScaffold.kt`, and the list gap
-// comes from `pageListGap`. No signature-surface geometry is reused, so no
-// `unverified geometry` marker applies.
+// The baseline's page header is not a toolbar row: it is one `Section` holding
+// the intro sentence and an `HStack(spacing: 10)` of three glass pills —
+// 插件说明 / 刷新 / 添加插件 (`NativeConfigurationPage.swift:61-103`). The toolbar
+// itself carries only 完成 (`:30-34`). L74 had put 刷新 in the toolbar to un-hide
+// the contract's control; the source disagrees, so the pill row is where it now
+// lives (still unconditional, still disabled when the host hands no re-read).
+// The pills, their glyphs, the orange warning line and the globe glyph live in
+// `ui/surface/GlassPill.kt` and `ui/surface/WarningRow.kt`, once, with the
+// measurements that justify their shape.
+//
+// Geometry: page-level tokens only (`geometry.pageOuterMarginH`,
+// `spacing.badgeInsetH` for the pill gap the baseline spells as `spacing: 10`).
+// The header, section header and InfoRow floors live in `PageScaffold.kt`, and
+// the list gap comes from `pageListGap`. No signature-surface geometry is reused
+// in this file, so no `unverified geometry` marker applies here (the pill's own
+// borrowed insets are marked in `GlassPill.kt`).
 package com.phonedsh.ui.page
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,14 +59,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
+import com.phonedsh.ui.surface.GlassPill
+import com.phonedsh.ui.surface.GlobeGlyph
+import com.phonedsh.ui.surface.InfoCircleGlyph
+import com.phonedsh.ui.surface.PlusGlyph
+import com.phonedsh.ui.surface.RefreshGlyph
 import com.phonedsh.ui.surface.SettingsSubPageFrame
 import com.phonedsh.ui.surface.SettingsFormRow
 import com.phonedsh.ui.surface.SettingsSectionHeader
 import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
+import com.phonedsh.ui.surface.WarningLine
 
 // ---------------------------------------------------------------------------
 // Facts
@@ -684,18 +700,19 @@ public data class ConfigurationLocalState(
 /**
  * The session-configuration sheet.
  *
- * The control set is the baseline's (`NativeConfigurationPage.swift`): the
- * 插件说明/添加插件 header verbs, the 内置插件设置 master fold over the host's
- * groups, the new-session permission block, and the two 插件说明 sections. The
- * write verbs exist even when this host cannot perform a write; the host's
- * measured `settingsWritable` (and a `null` callback) disables them rather than
- * hiding a control the contract declares.
+ * The control set is the baseline's (`NativeConfigurationPage.swift`): the three
+ * 插件说明/刷新/添加插件 glass pills (`:67-95`), the 内置插件设置 master fold over
+ * the host's groups, the new-session permission block, and the two 插件说明
+ * sections. The write verbs exist even when this host cannot perform a write; the
+ * host's measured `settingsWritable` (and a `null` callback) disables them rather
+ * than hiding a control the contract declares.
  *
  * @param state the pure screen state (`ConfigurationScreenState.from`).
  * @param onDone close the sheet (the baseline's `完成`).
  * @param onToggleSection a group header was tapped; the host applies
  *   `ConfigurationUiEvent.ToggleSection` and re-projects.
- * @param onRefresh re-read the snapshot; `null` hides the header action.
+ * @param onRefresh re-read the snapshot; `null` renders 刷新 disabled (the
+ *   baseline always draws the pill, so this page never hides it).
  * @param onOpenWebSearch open the web-search page; `null` makes the row read-only.
  * @param onRetry retry the failed read; `null` renders no retry row.
  * @param onDismissFailure dismiss the failure line; `null` renders no dismiss row.
@@ -735,22 +752,18 @@ public fun NativeConfigurationPage(
         largeTitle = UiStrings.CONFIGURATION_TITLE,
         modifier = modifier,
         rootTag = UiPageTags.CONFIGURATION_ROOT,
+        // The baseline's toolbar carries ONE item, 完成 (`NativeConfigurationPage.swift:30-34`).
+        // L74 had put 刷新 here to make the contract's control visible; the source
+        // says otherwise: 刷新 is the middle glass pill in the page header
+        // (`:76-82`), so it moved there — still unconditional
+        // (`enabled = onRefresh != null`), still the same 刷新 the contract names.
         trailing = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (onRefresh != null) {
-                    SessionTextAction(
-                        label = UiStrings.CONFIGURATION_REFRESH,
-                        onClick = onRefresh,
-                        tone = SessionActionTone.SECONDARY,
-                    )
-                }
-                SessionTextAction(
-                    label = UiStrings.CONFIGURATION_DONE,
-                    onClick = onDone,
-                    tone = SessionActionTone.ACCENT,
-                    modifier = Modifier.testTag(UiPageTags.CONFIGURATION_DONE),
-                )
-            }
+            SessionTextAction(
+                label = UiStrings.CONFIGURATION_DONE,
+                onClick = onDone,
+                tone = SessionActionTone.ACCENT,
+                modifier = Modifier.testTag(UiPageTags.CONFIGURATION_DONE),
+            )
         },
     ) {
         when (state.status) {
@@ -770,6 +783,7 @@ public fun NativeConfigurationPage(
 
             ConfigurationStatus.READY -> ConfigurationContent(
                 state = state,
+                onRefresh = onRefresh,
                 onToggleSection = onToggleSection,
                 onOpenWebSearch = onOpenWebSearch,
                 onSaveGroup = onSaveGroup,
@@ -819,6 +833,7 @@ private fun ConfigurationUnknownList() {
 @Composable
 private fun ConfigurationContent(
     state: ConfigurationScreenState,
+    onRefresh: (() -> Unit)?,
     onToggleSection: (String) -> Unit,
     onOpenWebSearch: (() -> Unit)?,
     onSaveGroup: ((String) -> Unit)?,
@@ -844,31 +859,43 @@ private fun ConfigurationContent(
         }
         item(key = "config.actions") {
             Column(modifier = Modifier.fillMaxWidth()) {
+                // The baseline's three glass pills, in one `HStack(spacing: 10)`
+                // (`NativeConfigurationPage.swift:67-95`): 插件说明 (bordered),
+                // 刷新 (bordered, disabled while loading or while drafts are dirty)
+                // and 添加插件 (borderedProminent, always disabled on a phone).
+                // Android cannot know `isLoading`/`hasDrafts` — its snapshot carries
+                // no loading fact — so 刷新 is disabled when the host handed no
+                // re-read command, and prints the host's own answer otherwise.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = tokens.geometry.pageOuterMarginH),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetH),
                 ) {
-                    BasicText(
-                        text = UiStrings.CONFIGURATION_PLUGIN_INFO,
-                        style = type.secondary.copy(color = tokens.colors.secondary),
-                        modifier = Modifier
-                            .testTag(UiPageTags.CONFIGURATION_PLUGIN_INFO_ACTION)
-                            .clickable(role = Role.Button) {
-                                onToggleSection(ConfigurationScreenState.INFO_SECTION_ID)
-                            }
-                            .padding(
-                                horizontal = tokens.spacing.badgeInsetV,
-                                vertical = tokens.spacing.badgeInsetV,
-                            ),
+                    GlassPill(
+                        label = UiStrings.CONFIGURATION_PLUGIN_INFO,
+                        onClick = {
+                            onToggleSection(ConfigurationScreenState.INFO_SECTION_ID)
+                        },
+                        glyph = { tint -> InfoCircleGlyph(tint) },
+                        tag = UiPageTags.CONFIGURATION_PLUGIN_INFO_ACTION,
+                        accessibilityLabel = UiStrings.CONFIGURATION_PLUGIN_INFO_HINT,
+                    )
+                    GlassPill(
+                        label = UiStrings.CONFIGURATION_REFRESH,
+                        onClick = { onRefresh?.invoke() },
+                        glyph = { tint -> RefreshGlyph(tint) },
+                        enabled = onRefresh != null,
+                        tag = UiPageTags.CONFIGURATION_REFRESH,
                     )
                     Box {
-                        SessionTextAction(
+                        GlassPill(
                             label = UiStrings.CONFIGURATION_ADD_DISABLED,
                             onClick = { addMenuOpen = true },
-                            tone = SessionActionTone.SECONDARY,
-                            modifier = Modifier.testTag(UiPageTags.CONFIGURATION_ADD_PLUGIN),
+                            glyph = { tint -> PlusGlyph(tint) },
+                            tag = UiPageTags.CONFIGURATION_ADD_PLUGIN,
+                            accessibilityLabel = UiStrings.CONFIGURATION_ADD_DISABLED_HINT,
                         )
                         DropdownMenu(
                             expanded = addMenuOpen,
@@ -937,8 +964,13 @@ private fun ConfigurationContent(
         }
         state.notes.forEach { note ->
             item(key = "config.note.${note.id}") {
-                SessionFailureLine(
-                    message = note.text,
+                // The baseline's orange warning line (`NativeConfigurationPage.swift:15-20`):
+                // `Label(…, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)`.
+                // It is one sentence for `model.error`; Android's host reports up to
+                // three partial-read failures, so each draws its own line with the
+                // host's own wording under the format's prefix.
+                WarningLine(
+                    text = note.text,
                     tag = UiPageTags.CONFIGURATION_NOTE_PREFIX + note.id,
                 )
             }
@@ -959,13 +991,30 @@ private fun ConfigurationContent(
                     // and matches the baseline better, but it is the family's
                     // *display* row: the gate would read every display row as an
                     // action, so an action row has to use `InfoRow` here.
-                    InfoRow(
-                        title = UiStrings.CONFIGURATION_WEB_SEARCH,
-                        value = null,
-                        subtitle = row.subtitle,
-                        onClick = onOpenWebSearch,
-                        modifier = Modifier.testTag(UiPageTags.CONFIGURATION_WEB_SEARCH),
-                    )
+                    //
+                    // The baseline's row is `Label(…, systemImage: "globe")`
+                    // (`NativeConfigurationPage.swift:134`), and `InfoRow` has no
+                    // leading slot, so the glyph is drawn beside the row instead of
+                    // inside it. The glyph's tint is the system blue the shot
+                    // measures; it borrows `colors.accent` (see `GlassPill.kt`).
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = tokens.geometry.pageOuterMarginH),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+                    ) {
+                        GlobeGlyph(tint = tokens.colors.accent)
+                        InfoRow(
+                            title = UiStrings.CONFIGURATION_WEB_SEARCH,
+                            value = null,
+                            subtitle = row.subtitle,
+                            onClick = onOpenWebSearch,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag(UiPageTags.CONFIGURATION_WEB_SEARCH),
+                        )
+                    }
                 }
             }
             state.sections
@@ -1310,10 +1359,13 @@ private fun ConfigurationFailureBlock(
 /** Every token this file reads; kept equal to the source by `PageTokenReferenceTest`. */
 internal object NativeConfigurationPageTokens {
     val refs: List<String> = listOf(
+        "colors.accent",
         "colors.secondary",
         "colors.tertiary",
         "geometry.pageOuterMarginH",
+        "spacing.badgeInsetH",
         "spacing.badgeInsetV",
+        "spacing.iconText",
         "typography.caption",
         "typography.secondary",
     )

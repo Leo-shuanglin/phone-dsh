@@ -5,7 +5,9 @@
 package com.phonedsh.probe
 
 import android.app.Application
+import android.net.Uri
 import android.os.PowerManager
+import android.provider.OpenableColumns
 import android.util.Log
 import android.view.View
 import android.webkit.WebView
@@ -64,8 +66,13 @@ import com.phonedsh.gateway.GatewaySession
 import com.phonedsh.gateway.HttpUrlConnectionGatewayTransport
 import com.phonedsh.hostevents.HostEvent
 import com.phonedsh.hostevents.HostEventKind
+import com.phonedsh.log.MutationBody
+import com.phonedsh.log.VfsOp
 import com.phonedsh.log.WalPaths
 import com.phonedsh.log.WorkspaceLog
+import com.phonedsh.ui.projection.UiStateNode
+import com.phonedsh.ui.state.ChatAttachment
+import com.phonedsh.ui.state.ChatScreenState
 import com.phonedsh.loopback.ChannelCloseCause
 import com.phonedsh.loopback.LoopbackChannelHandler
 import com.phonedsh.loopback.LoopbackConnection
@@ -90,6 +97,7 @@ import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -830,11 +838,17 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         turnScope.launch {
             try {
                 val scan = withContext(Dispatchers.IO) { readJournalSessions() }
+                // A journal row a chat already owns must not also list as its own
+                // conversation: the chat's row (with its title) is the one row.
+                val claimed = chatWorkerClaims
                 mutableSessions.update { snapshot ->
                     snapshot.copy(
                         waiting = false,
                         failure = scan.failure,
-                        sessions = mergeSessions(scan.sessions, snapshot.sessions),
+                        sessions = mergeSessions(
+                            scan.sessions.filterNot { it.id in claimed },
+                            snapshot.sessions,
+                        ),
                     )
                 }
             } finally {
@@ -863,6 +877,55 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     /** One journal scan at a time; a second request while one runs is ignored. */
     private val sessionScanInFlight = AtomicBoolean(false)
 
+    // ---------------------------------------------------------------- chat lane
+
+    /**
+     * The chat transcript cache: the App's own stable conversation records.
+     *
+     * `SessionArchive` (the L65 lane) keeps the settled tail's *kinds*, which is
+     * enough for the probe's summary but not for painting a conversation after a
+     * cold start. This store keeps the rendered node sequence (see
+     * `ChatSessionStore`); neither is the authority for the events — the journal is.
+     */
+    private val chatStore = ChatSessionStore(domainStore)
+
+    private val mutableChat = MutableStateFlow(ChatUiState())
+
+    /** The chat screen's host state; the App's one writer is this view model. */
+    internal val chat: StateFlow<ChatUiState> = mutableChat.asStateFlow()
+
+    /**
+     * The Worker session ids a chat record has claimed.
+     *
+     * The journal lists Worker sessions; a chat owns one or more of them across
+     * restarts (each restart creates a new Worker session in the same chat), so
+     * the list must not also show them as separate conversations.
+     */
+    @Volatile
+    private var chatWorkerClaims: Set<String> = emptySet()
+
+    /** The running chat turn, or `null`; cancelling it is 停止. */
+    private var chatTurnJob: kotlinx.coroutines.Job? = null
+
+    /** The turn's runner, kept so 停止 can reach the Worker's cancel endpoint. */
+    @Volatile
+    private var chatRunner: ChatTurnRunner? = null
+
+    /**
+     * The Worker session this *process* created, or `null`.
+     *
+     * Deliberately not persisted: a Worker session id is only valid while the
+     * Worker page that minted it is alive, and every App start (and every import's
+     * host restart) replaces that page. Reusing a stored id would spend the first
+     * message after a launch waiting for a turn that can never start; the stored
+     * id stays in the chat record for the session list's claim, not for sending.
+     */
+    @Volatile
+    private var liveWorkerSessionId: String? = null
+
+    /** A monotonic counter for node ordinals; never reset, so ids stay unique. */
+    private var chatOrdinal: Int = 0
+
     private val turnScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     init {
@@ -890,6 +953,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         LogcatHostLog.info(modelRouteLine())
         channelSeam.attach(host.channelHandler)
         restoreSessionArchive()
+        restoreChatSessions()
         // Asynchronous by contract: recovery, the final HELLO and engine.start()
         // run on the host's scope. Observe engine.state for the outcome.
         host.start()
@@ -985,12 +1049,12 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
      * before any request leaves the device. [failureText] then names the missing
      * input in the App's own line.
      */
-    fun runTurn() {
+    fun runTurn(prompt: String = launchConfig.prompt) {
         if (!turnRunning.compareAndSet(false, true)) {
             Log.i(TAG_TURN, "turn ignored: one is already running")
             return
         }
-        Log.i(TAG_TURN, "APP_TURN_BUTTON prompt=${launchConfig.prompt.length} chars")
+        Log.i(TAG_TURN, "APP_TURN_BUTTON prompt=${prompt.length} chars")
         // Durable tombstone before the first await: a process killed during the
         // turn leaves it behind, and the next launch reports "interrupted at step
         // N" instead of silently showing a half session.
@@ -1024,7 +1088,9 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     engine.state.first { it is EngineHostState.Running }
                 }
                 val client = DshTurnClient(host.channel, ::logTurn)
-                val result = client.runTurn(launchConfig.prompt)
+                // The prompt is the caller's (the composer's in the chat lane); the
+                // launch extra is only the default for the probe's own button.
+                val result = client.runTurn(prompt)
                 for (event in result.events) logTurn("host event: ${event.describe()}")
                 // Completion is the Worker's own edge, not the shape of its tool
                 // use: a turn that answered without calling a tool is still a
@@ -1194,8 +1260,644 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             }
         }
 
+    // ---------------------------------------------------------------- chat lane
+    //
+    // The three calls of a chat turn are the same ones 跑一轮 uses (`session/create`,
+    // `session/follow`, `session/prompt`); the difference is that this path takes the
+    // prompt from the composer, keeps one stable conversation across turns and cold
+    // starts, renders the live text, and can stop the turn.
+    //
+    // Persistence is serialised on one IO thread: every write of a chat record is
+    // submitted in the order the screen produced it, so a later save can never be
+    // overtaken by an earlier one.
+
+    private val chatIo = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+
+    /** The page's state, assembled from the host's own readings. */
+    internal fun chatSurfaceState(): ChatScreenState = chatScreenState(
+        ui = mutableChat.value,
+        engineStarted = state.value is EngineHostState.Running,
+        providerNeedsKey = modelRoute.route == ModelRoute.NONE,
+        canSend = state.value is EngineHostState.Running,
+    )
+
+    /** What the person typed. Local state; the page never stores it. */
+    internal fun chatDraftChanged(text: String) {
+        mutableChat.update { it.copy(draft = text) }
+    }
+
+    /** 新建会话: a real record the session list shows immediately. */
+    internal fun newChatSession(): String {
+        val at = clock.nowMillis()
+        val id = "chat-$at-${++chatOrdinal}"
+        chatIo.launch { chatStore.save(ChatRecord(id, "", at, emptyList(), emptyList())) }
+        mutableSessions.update { snapshot ->
+            snapshot.copy(
+                waiting = false,
+                currentSessionID = id,
+                sessions = mergeSessions(emptyList(), snapshot.sessions + HostSessionRecord(id, at)),
+            )
+        }
+        mutableChat.value = ChatUiState(chatId = id, updatedAtMs = at)
+        LogcatHostLog.info("chat: new session $id")
+        return id
+    }
+
+    /**
+     * Switches to [chatId], painting its stored transcript.
+     *
+     * A row that the journal knows but this App never opened (a session the Worker
+     * ran before the chat lane existed) is adopted as an empty conversation with
+     * that Worker session id, so selecting it still opens a chat rather than
+     * nothing.
+     */
+    internal fun openChatSession(chatId: String) {
+        if (mutableChat.value.running) return
+        if (mutableChat.value.chatId == chatId) return
+        turnScope.launch {
+            val stored = withContext(Dispatchers.IO) { runCatching { chatStore.load(chatId) }.getOrNull() }
+            val known = mutableSessions.value.sessions.any { it.id == chatId }
+            val at = clock.nowMillis()
+            val record = stored ?: ChatRecord(
+                id = chatId,
+                title = "",
+                updatedAtMs = at,
+                // A journal id IS a Worker session id, so adopting it keeps the
+                // conversation continuable instead of starting a second one.
+                workerSessionIds = if (stored == null && known) listOf(chatId) else emptyList(),
+                nodes = emptyList(),
+            )
+            if (stored == null) chatIo.launch { chatStore.save(record) }
+            chatWorkerClaims = chatWorkerClaims + record.workerSessionIds
+            mutableChat.value = record.toUiState()
+            mutableSessions.update { it.copy(currentSessionID = chatId) }
+            LogcatHostLog.info(
+                "chat: opened session=$chatId rows=${record.nodes.size} " +
+                    "worker=${record.workerSessionId ?: "-"}",
+            )
+        }
+    }
+
+    /** 重命名: writes the title to the record; `true` when it really landed there. */
+    internal fun renameChatSession(chatId: String, title: String): Boolean {
+        val trimmed = title.trim()
+        if (trimmed.isEmpty() || chatId.isEmpty()) return false
+        val at = clock.nowMillis()
+        if (mutableChat.value.chatId == chatId) {
+            mutableChat.update { it.copy(title = trimmed, updatedAtMs = at) }
+        }
+        chatIo.launch {
+            val existing = chatStore.load(chatId)
+            val nodes = if (mutableChat.value.chatId == chatId) {
+                mutableChat.value.nodes
+            } else {
+                existing?.nodes.orEmpty()
+            }
+            val workers = (existing?.workerSessionIds.orEmpty() +
+                listOfNotNull(mutableChat.value.takeIf { it.chatId == chatId }?.workerSessionId))
+                .distinct()
+            chatStore.save(ChatRecord(chatId, trimmed, at, workers, nodes))
+        }
+        mutableSessions.update { snapshot ->
+            snapshot.copy(
+                sessions = snapshot.sessions.map {
+                    if (it.id == chatId) it.copy(title = trimmed, lastActivityMs = at) else it
+                }.sortedByDescending { it.lastActivityMs ?: Long.MIN_VALUE },
+            )
+        }
+        LogcatHostLog.info("chat: renamed session=$chatId title_chars=${trimmed.length}")
+        return true
+    }
+
+    /** The page-head 重命名 of the open conversation. */
+    internal fun renameCurrentChat(title: String): Boolean {
+        val chatId = mutableChat.value.chatId
+        if (chatId.isEmpty()) return false
+        return renameChatSession(chatId, title)
+    }
+
+    /** Removes one pending import. */
+    internal fun removeChatAttachment(index: Int) {
+        mutableChat.update { current ->
+            if (index !in current.attachments.indices) {
+                current
+            } else {
+                current.copy(attachments = current.attachments.filterIndexed { i, _ -> i != index })
+            }
+        }
+    }
+
+    /** Closes the import status line and the send-failure banner. */
+    internal fun dismissChatNotice() {
+        mutableChat.update { it.copy(notice = null, error = null, attachmentError = null, bannerDismissed = true) }
+    }
+
+    /**
+     * 添加文件/图片: copies the picked document into the workspace.
+     *
+     * The bytes go through the WAL's mutation lane (`WorkspaceLog.appendMutation`),
+     * not into the App's private directory: the workspace is what the files page
+     * lists, what the model's host-exec tools mount at `/dsh/workspace`, and what the
+     * next boot's overlay is packed from. A copy beside the stores would be a second
+     * workspace nothing reads.
+     */
+    internal fun importIntoWorkspace(uri: Uri, image: Boolean) {
+        turnScope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                runCatching {
+                    importLocked(uri, image)
+                }
+            }
+            outcome.fold(
+                onSuccess = { imported ->
+                    mutableChat.update { current ->
+                        current.copy(
+                            attachments = current.attachments + imported.attachment,
+                            notice = "已写入工作区：${imported.attachment.name}（${imported.bytes} 字节）",
+                            attachmentError = null,
+                            // No restart happens here (see the note above `workspaceFileName`),
+                            // and a stored id would only be a guess; the next send opens a
+                            // fresh Worker session.
+                        )
+                    }
+                    LogcatHostLog.info(
+                        "CHAT_IMPORT path=${imported.attachment.path} bytes=${imported.bytes} " +
+                            "image=$image",
+                    )
+                },
+                onFailure = { failure ->
+                    val reason = when (failure) {
+                        is IllegalArgumentException -> failure.message ?: "无法读取所选文件"
+                        is Exception -> reasonOf(failure)
+                        else -> failure.javaClass.simpleName
+                    }
+                    mutableChat.update { it.copy(attachmentError = "导入失败：$reason") }
+                    LogcatHostLog.warn("CHAT_IMPORT_FAILED reason=$reason")
+                },
+            )
+        }
+    }
+
+    private class Imported(val attachment: ChatAttachment, val bytes: Int)
+
+    private fun importLocked(uri: Uri, image: Boolean): Imported {
+        val resolver = getApplication<Application>().contentResolver
+        val declared = resolver.getType(uri)
+        var displayName: String? = null
+        var declaredBytes: Long? = null
+        runCatching {
+            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
+                ?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex >= 0) displayName = cursor.getString(nameIndex)
+                        val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) declaredBytes = cursor.getLong(sizeIndex)
+                    }
+                }
+        }
+        val limit = deviceBudgets.singleFileBytes
+        declaredBytes?.let {
+            require(it <= limit) { "文件超过本机单文件上限（$limit 字节）" }
+        }
+        val bytes = resolver.openInputStream(uri)?.use { stream ->
+            val buffer = java.io.ByteArrayOutputStream()
+            val chunk = ByteArray(64 * 1024)
+            var total = 0L
+            while (true) {
+                val read = stream.read(chunk)
+                if (read < 0) break
+                total += read
+                require(total <= limit) { "文件超过本机单文件上限（$limit 字节）" }
+                buffer.write(chunk, 0, read)
+            }
+            buffer.toByteArray()
+        } ?: throw IllegalArgumentException("无法打开所选文件")
+        require(bytes.isNotEmpty()) { "所选文件是空的" }
+        val safeName = workspaceFileName(displayName ?: "attachment", image)
+        val vfsPath = "/dsh/workspace/$safeName"
+        kotlinx.coroutines.runBlocking {
+            workspaceLog.appendMutation(
+                MutationBody(
+                    op = VfsOp.WRITE,
+                    mode = FILE_MODE,
+                    path = vfsPath,
+                    data = bytes,
+                ),
+            )
+        }
+        return Imported(
+            attachment = ChatAttachment(
+                name = safeName,
+                mimeType = declared,
+                image = image || declared?.startsWith("image/") == true,
+                path = vfsPath,
+            ),
+            bytes = bytes.size,
+        )
+    }
+
+    /**
+     * Nothing is restarted here, and that is a measured decision.
+     *
+     * `WorkspaceLog.appendMutation` is the VFS mutation lane: the record is
+     * durable and materialized, which is what makes the file part of the
+     * workspace rather than a copy beside the stores. It has one host-side
+     * consequence this App cannot repair: the `VfsSink` numbers the Worker's
+     * mutations from its own counter, seeded once from `WorkspaceLog.recover()`,
+     * and `recover()` caches its outcome — so an App-side append makes the log one
+     * mseq ahead of the sink, and the Worker's first later `VFS_MUT` closes the
+     * channel with `WAL allocated mseq N+1 for the worker's N` (measured on this
+     * lane, API 35). Restarting the host does not reseed that counter (the cached
+     * recovery is reused), so this class deliberately does not try; the durable
+     * fix belongs in `:dsh` (`VfsSink` should reseed from the log, or
+     * `WorkspaceLog.recover()` should report the live watermark).
+     *
+     * This note is documentation of the constraint, not a plan: nothing in this
+     * class restarts the host, because a restart cannot reseed the counter.
+     */
+    /** A workspace file name that cannot escape `/dsh/workspace` and does not collide. */
+    private fun workspaceFileName(raw: String, image: Boolean): String {
+        val base = raw.substringAfterLast('/').substringAfterLast('\\')
+        val cleaned = base.replace(FILE_NAME_DISALLOWED, "_").ifBlank { "attachment" }
+        val withExtension = if (cleaned.contains('.')) {
+            cleaned
+        } else {
+            cleaned + if (image) ".png" else ".txt"
+        }
+        var candidate = withExtension
+        var suffix = 1
+        val directory = walPaths.materializedWorkspace
+        while (Files.exists(directory.resolve(candidate)) ||
+            mutableChat.value.attachments.any { it.name == candidate }
+        ) {
+            val dot = withExtension.lastIndexOf('.')
+            candidate = if (dot > 0) {
+                "${withExtension.substring(0, dot)}-$suffix${withExtension.substring(dot)}"
+            } else {
+                "$withExtension-$suffix"
+            }
+            suffix++
+        }
+        return candidate
+    }
+
+    /**
+     * Sends the draft (and every pending import) as one turn.
+     *
+     * The conversation is created on demand: 新建会话 writes the record, and the
+     * Worker's `session/create` happens here, on the first message that needs it.
+     */
+    internal fun sendChat() {
+        val current = mutableChat.value
+        if (current.running) return
+        val typed = current.draft.trim()
+        val attachments = current.attachments
+        if (typed.isEmpty() && attachments.isEmpty()) return
+        if (state.value !is EngineHostState.Running) {
+            mutableChat.update {
+                it.copy(error = "本地引擎还没就绪，消息没有发出", bannerDismissed = false)
+            }
+            return
+        }
+        if (!turnRunning.compareAndSet(false, true)) {
+            mutableChat.update {
+                it.copy(error = "上一个回合还在运行，这条消息没有发出", bannerDismissed = false)
+            }
+            return
+        }
+        // `newChatSession` replaces the state, so it runs before the send snapshot
+        // is taken again.
+        val chatId = current.chatId.ifEmpty { newChatSession() }
+        val sending = mutableChat.value
+        val prompt = composeChatPrompt(typed, attachments)
+        val ordinal = ++chatOrdinal
+        // Every send gets its own turn-id prefix: a replacement Worker session
+        // numbers its turns from 0001 again.
+        // Wall-clock prefix, not just the process-local ordinal: the node ids of a
+        // previous process must never collide with this one's, or the transcript's
+        // duplicate-id guard would drop a legitimate new row (measured: the answer
+        // of the newest turn was not drawn while an older turn's row was).
+        val turnToken = "t${clock.nowMillis()}-$ordinal"
+        val userNode = userNodeOf(
+            chatId,
+            turnToken,
+            typed.ifEmpty { attachments.joinToString(", ") { it.name } },
+            ordinal,
+        )
+        val at = clock.nowMillis()
+        mutableChat.update {
+            it.copy(
+                chatId = chatId,
+                nodes = it.nodes + userNode,
+                draft = "",
+                attachments = emptyList(),
+                running = true,
+                streaming = "",
+                error = null,
+                bannerDismissed = false,
+                notice = null,
+                attachmentError = null,
+                activeTurnNodeId = null,
+                turnToken = turnToken,
+                updatedAtMs = at,
+            )
+        }
+        persistChat(chatId)
+        LogcatHostLog.info(
+            "APP_CHAT_SEND session=$chatId chars=${prompt.length} " +
+                "attachments=${attachments.size} worker=${sending.workerSessionId ?: "-"}",
+        )
+        chatTurnJob = turnScope.launch(Dispatchers.IO) {
+            var outcome: ChatTurnOutcome? = null
+            try {
+                withTimeout(HOST_READY_TIMEOUT_MILLIS) { host.ready.first { it } }
+                withTimeout(ENGINE_READY_TIMEOUT_MILLIS) {
+                    engine.state.first { it is EngineHostState.Running }
+                }
+                val runner = ChatTurnRunner(host.channel, DshTurnClient(host.channel, ::logTurn), ::logTurn)
+                chatRunner = runner
+                outcome = runner.run(
+                    // The live id, never the stored one: see [liveWorkerSessionId].
+                    workerSessionId = liveWorkerSessionId,
+                    prompt = prompt,
+                    onSession = { workerSessionId -> claimWorkerSession(chatId, workerSessionId) },
+                    onEvent = { event -> onChatEvent(chatId, event) },
+                    onDelta = { text ->
+                        mutableChat.update { live ->
+                            if (live.chatId == chatId) live.copy(streaming = live.streaming + text) else live
+                        }
+                    },
+                )
+                finishChatTurn(chatId, outcome)
+            } catch (timeout: TimeoutCancellationException) {
+                failChatTurn(chatId, "timeout")
+            } catch (cancelled: CancellationException) {
+                // 停止: the job was cancelled from the main thread. The three lines
+                // below do not suspend, so they still run before the coroutine dies.
+                markChatTurnStopped(chatId)
+                throw cancelled
+            } catch (failure: Exception) {
+                failChatTurn(chatId, reasonOf(failure))
+            } finally {
+                chatRunner = null
+                turnRunning.set(false)
+                mutableChat.update {
+                    it.copy(running = false, streaming = "", activeTurnNodeId = null)
+                }
+                persistChat(chatId)
+            }
+        }
+    }
+
+    /**
+     * 停止: tells the Worker to cancel, then stops reading its stream here.
+     *
+     * The cancel receipt is what makes the Worker's own turn end `interrupted`
+     * instead of leaving it generating for a phone that stopped listening. It is
+     * sent from a scope that outlives the cancelled turn job.
+     */
+    internal fun stopChat() {
+        val current = mutableChat.value
+        if (!current.running) return
+        val runner = chatRunner
+        val workerSessionId = current.workerSessionId
+        LogcatHostLog.info("APP_CHAT_STOP session=${current.chatId}")
+        chatTurnJob?.cancel()
+        chatTurnJob = null
+        if (runner != null && workerSessionId != null) {
+            turnScope.launch {
+                val failure = runner.cancel(workerSessionId)
+                if (failure != null) {
+                    LogcatHostLog.warn("APP_CHAT_STOP cancel not accepted ($failure)")
+                }
+            }
+        }
+        // The cancelled job's own branch records the stop; this line is the state
+        // the user sees even if the job had already finished.
+        mutableChat.update { it.copy(running = false, streaming = "", activeTurnNodeId = null) }
+    }
+
+    /** Appends the node(s) one Worker event produces. */
+    private fun onChatEvent(chatId: String, event: HostEvent) {
+        when (event.kind) {
+            HostEventKind.TURN_STARTED -> mutableChat.update { current ->
+                if (current.chatId != chatId) {
+                    current
+                } else {
+                    current.copy(activeTurnNodeId = current.turnIdOf(event.turnId))
+                }
+            }
+
+            else -> {
+                val current = mutableChat.value
+                if (current.chatId != chatId) return
+                val node = chatNodeOf(chatId, current.turnToken, event, ++chatOrdinal) ?: return
+                mutableChat.update { live ->
+                    if (live.chatId != chatId || live.nodes.any { it.nodeID == node.nodeID }) {
+                        live
+                    } else {
+                        live.copy(nodes = live.nodes + node)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Records the Worker session a turn opened, so the journal row belongs to this
+     * conversation and the list does not show it twice.
+     */
+    private fun claimWorkerSession(chatId: String, workerSessionId: String) {
+        liveWorkerSessionId = workerSessionId
+        chatWorkerClaims = chatWorkerClaims + workerSessionId
+        mutableChat.update {
+            if (it.chatId == chatId) it.copy(workerSessionId = workerSessionId) else it
+        }
+        persistChat(chatId)
+        mutableSessions.update { snapshot ->
+            snapshot.copy(sessions = mergeSessions(emptyList(), snapshot.sessions))
+        }
+        LogcatHostLog.info("chat: session=$chatId claimed worker=$workerSessionId")
+    }
+
+    private fun finishChatTurn(chatId: String, outcome: ChatTurnOutcome) {
+        val at = clock.nowMillis()
+        val kinds = outcome.events.joinToString(",") { it.kind.wire }
+        if (outcome.completed) {
+            LogcatHostLog.info(
+                "APP_CHAT_TURN_OK session=$chatId worker=${mutableChat.value.workerSessionId ?: "-"} " +
+                    "kinds=$kinds reason=completed streamed=${outcome.liveText.length} chars " +
+                    "text=${outcome.assistantText.length} chars",
+            )
+        } else if (outcome.endReason == null) {
+            failChatTurn(chatId, "the turn ended without a turn_ended edge (kinds=$kinds)")
+            return
+        } else {
+            // interrupted / aborted / blocked: the row says so, and the turn is not
+            // reported as a failure the person has to dismiss.
+            LogcatHostLog.info(
+                "APP_CHAT_TURN_ENDED session=$chatId kinds=$kinds reason=${outcome.endReason}",
+            )
+        }
+        mutableChat.update { it.copy(updatedAtMs = at, activeTurnNodeId = null) }
+        mutableSessions.update { snapshot ->
+            snapshot.copy(
+                currentSessionID = chatId,
+                sessions = mergeSessions(emptyList(), snapshot.sessions),
+            )
+        }
+        persistChat(chatId)
+        logJournalEvidence(chatId)
+    }
+
+    private fun markChatTurnStopped(chatId: String) {
+        val at = clock.nowMillis()
+        val ordinal = ++chatOrdinal
+        val turnID = mutableChat.value.turnIdOf("stopped")
+        val node = UiStateNode(
+            kind = com.phonedsh.ui.projection.UiStateKind.STATUS,
+            nodeID = "session/$chatId/turn/$turnID/event/0/turn-end",
+            parentID = "session/$chatId",
+            sessionID = chatId,
+            turnID = turnID,
+            seq = 0,
+            text = "cancelled",
+            props = com.phonedsh.agentcore.JsonObject(
+                linkedMapOf(
+                    "reason" to com.phonedsh.agentcore.JsonString("cancelled"),
+                    "detail" to com.phonedsh.agentcore.JsonString(""),
+                ),
+            ),
+        )
+        mutableChat.update {
+            it.copy(
+                running = false,
+                streaming = "",
+                activeTurnNodeId = null,
+                nodes = it.nodes + node,
+                updatedAtMs = at,
+            )
+        }
+        LogcatHostLog.info("APP_CHAT_TURN_STOPPED session=$chatId")
+    }
+
+    private fun failChatTurn(chatId: String, reason: String) {
+        val safe = reason.substringBefore('\n').take(240)
+        LogcatHostLog.error("APP_CHAT_TURN_FAILED session=$chatId reason=$safe")
+        mutableChat.update {
+            it.copy(
+                running = false,
+                streaming = "",
+                activeTurnNodeId = null,
+                error = "消息发送失败（$safe）",
+                bannerDismissed = false,
+            )
+        }
+        persistChat(chatId)
+    }
+
+    /**
+     * Prints whether the journal really holds the turn's Worker session.
+     *
+     * This is the evidence line for "a session that exists", read from the store
+     * itself (`JournalStore.recover` is public and idempotent) rather than assumed
+     * from a successful reply.
+     */
+    private fun logJournalEvidence(chatId: String) {
+        val workerSessionId = mutableChat.value.workerSessionId ?: return
+        try {
+            val recovery = kotlinx.coroutines.runBlocking { journalStore.recover() }
+            val highest = recovery.highestJseq[workerSessionId]
+            LogcatHostLog.info(
+                "CHAT_JOURNAL_SESSION present=${highest != null} jseq=${highest ?: "-"} " +
+                    "chat=$chatId worker=$workerSessionId sessions=${recovery.highestJseq.size}",
+            )
+        } catch (failure: Exception) {
+            LogcatHostLog.warn("CHAT_JOURNAL_SESSION present=unknown reason=${reasonOf(failure)}")
+        }
+    }
+
+    /**
+     * Copies the current conversation into the store.
+     *
+     * Only durable nodes are written: the streaming text is not a row, and the
+     * running turn's node is transient. A later `openChatSession` paints exactly
+     * what was on screen when the turn settled.
+     */
+    private fun persistChat(chatId: String) {
+        val ui = mutableChat.value
+        if (ui.chatId != chatId) return
+        val nodes = ui.nodes
+        val title = ui.title
+        val workerSessionId = ui.workerSessionId
+        val at = ui.updatedAtMs
+        chatIo.launch {
+            val existing = runCatching { chatStore.load(chatId) }.getOrNull()
+            val workers = (existing?.workerSessionIds.orEmpty() + listOfNotNull(workerSessionId)).distinct()
+            runCatching {
+                chatStore.save(ChatRecord(chatId, title, at, workers, nodes))
+            }.onFailure { LogcatHostLog.warn("chat: save refused session=$chatId (${reasonOf(it as? Exception ?: Exception(it))})") }
+        }
+    }
+
+    /**
+     * Paints the conversations the previous process had.
+     *
+     * The newest record opens by default, which is the baseline's
+     * `currentSessionDefaultsKey` behaviour: a cold start shows the conversation
+     * the person left. Everything here is a read; a store that cannot be read
+     * leaves the screen empty rather than showing a fabricated one.
+     */
+    private fun restoreChatSessions() {
+        turnScope.launch {
+            val records = withContext(Dispatchers.IO) {
+                runCatching { chatStore.loadAll() }
+                    .onFailure { LogcatHostLog.warn("chat: store not restored (${reasonOf(it as? Exception ?: Exception(it))})") }
+                    .getOrDefault(emptyList())
+            }
+            if (records.isEmpty()) {
+                LogcatHostLog.info("chat: no stored conversation")
+                return@launch
+            }
+            chatWorkerClaims = records.flatMap { it.workerSessionIds }.toSet()
+            mutableSessions.update { snapshot ->
+                snapshot.copy(
+                    waiting = false,
+                    sessions = mergeSessions(
+                        emptyList(),
+                        snapshot.sessions + records.map {
+                            HostSessionRecord(it.id, it.updatedAtMs, it.title)
+                        },
+                    ),
+                    currentSessionID = snapshot.currentSessionID ?: records.first().id,
+                )
+            }
+            val newest = records.first()
+            if (!turnRunning.get() && mutableChat.value.chatId.isEmpty()) {
+                mutableChat.value = newest.toUiState()
+            }
+            LogcatHostLog.info(
+                "chat: restored ${records.size} conversation(s) open=${newest.id} " +
+                    "rows=${newest.nodes.size} worker=${newest.workerSessionId ?: "-"}",
+            )
+        }
+    }
+
+    /** The prompt the Worker receives: the typed text plus the workspace paths. */
+    private fun composeChatPrompt(typed: String, attachments: List<ChatAttachment>): String {
+        val references = attachments.mapNotNull { it.path }
+        if (references.isEmpty()) return typed
+        val block = buildString {
+            append("已附加的文件（工作区路径，可用工具读取）：")
+            references.forEach { append('\n').append("- ").append(it) }
+        }
+        return listOf(typed, block).filter { it.isNotBlank() }.joinToString("\n\n")
+    }
+
     override fun onCleared() {
         turnScope.cancel()
+        chatIo.cancel()
         host.stop()
         super.onCleared()
     }
@@ -1412,7 +2114,13 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             merged[record.id] = if (previous == null) {
                 record
             } else {
-                HostSessionRecord(record.id, newer(previous.lastActivityMs, record.lastActivityMs))
+                HostSessionRecord(
+                    id = record.id,
+                    lastActivityMs = newer(previous.lastActivityMs, record.lastActivityMs),
+                    // An empty title is "this source has no name", never "the name is
+                    // empty": the chat record's name must survive a journal merge.
+                    title = previous.title.ifEmpty { record.title },
+                )
             }
         }
         return merged.values.sortedByDescending { it.lastActivityMs ?: Long.MIN_VALUE }
@@ -1480,8 +2188,15 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         /** The tool names §2 folds into the changed-files card (write/edit/str_replace_editor). */
         val WRITE_TOOLS: Set<String> = setOf("write", "edit", "str_replace_editor")
 
+        /** `0644` for a workspace file the person imported. */
+        const val FILE_MODE: Int = 0b110100100
+
+        /** Characters a workspace file name may not carry; everything else is kept. */
+        val FILE_NAME_DISALLOWED: Regex = Regex("[^A-Za-z0-9._-]")
+
         const val HOST_READY_TIMEOUT_MILLIS = 180_000L
         const val ENGINE_READY_TIMEOUT_MILLIS = 180_000L
+
     }
 }
 

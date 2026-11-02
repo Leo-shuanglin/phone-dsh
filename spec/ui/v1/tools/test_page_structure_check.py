@@ -13,7 +13,13 @@ the checker is green when the two agree and red for every way they disagree:
   stale or points at an unknown `spec/platform/whitelist.json` id;
 * the known-divergence ratchet: a baselined divergence passes, a new one fails, a
   baseline entry that no longer diverges fails;
-* a stale contract provenance line (the anchor moved) — never ratcheted.
+* a stale contract provenance line (the anchor moved) — never ratcheted;
+* the summary row counts the *labelled* actions and their unique wordings, so a
+  page with 36 labelled actions is never printed beside 29 Android labels as if
+  the difference were missing controls;
+* a label inside `if (callback != null)` is conditional presence, not presence —
+  and a guard the baseline itself uses (`if let errorText`) is accepted;
+* a page title that differs from `.navigationTitle` is a divergence.
 
 Run:
     python3 -m unittest discover -s spec/ui/v1/tools -p 'test_*.py' -v
@@ -934,6 +940,224 @@ class PageStructureCheckTests(unittest.TestCase):
         rc, out = run_check(self.fx.root)
         self.assertEqual(rc, 0, out)
         self.assertIn("not compared", out)
+
+    # -- ① the summary row: labelled actions, not the whole inventory -------
+    #
+    # The old row printed `contract 67 labelled` beside `android 29`. Chat's 67
+    # actions were 27 icon-only + 4 dynamicLabel + 36 labelled, and the labelled
+    # set deduplicated to the same keys as Android's labels — so the row said
+    # "38 missing" about a page that matched. The row must print the labelled
+    # count, its exclusions, and the unique wordings actually compared.
+
+    def test_summary_prints_the_labelled_basis_not_the_whole_inventory(self) -> None:
+        """Chat's real shape: 67 actions = 36 labelled + 27 icon-only + 4 dynamic.
+
+        The old row printed `contract 67 labelled` beside `android 29`, reading as
+        38 missing controls; the labelled set dedupes to the 29 wordings Android
+        draws, so this must PASS and the row must show the labelled basis.
+        """
+        wordings = [f"动作{chr(0x4e00 + i)}" for i in range(29)]
+        actions = []
+        for label in wordings + wordings[:7]:          # 36 labelled, 29 wordings
+            actions.append({"id": f"a{len(actions)}", "label": label, "kind": "button",
+                            "trigger": "tap", "semantic": None, "writes": True,
+                            "destination": None, "condition": None,
+                            "provenance": "FakePage.swift:4",
+                            "anchor": 'Button("Go") { open() }', "extraction": "syntax"})
+        for _ in range(27):                            # icon-only controls, no wording
+            actions.append({"id": f"a{len(actions)}", "label": None, "kind": "button",
+                            "trigger": "tap", "semantic": None, "writes": True,
+                            "destination": None, "condition": None,
+                            "provenance": "FakePage.swift:4",
+                            "anchor": 'Button("Go") { open() }', "extraction": "syntax"})
+        for i in range(4):                             # data-driven labels
+            actions.append({"id": f"a{len(actions)}", "label": f"动态{i}", "dynamicLabel": True,
+                            "kind": "button", "trigger": "tap", "semantic": None,
+                            "writes": True, "destination": None, "condition": None,
+                            "provenance": "FakePage.swift:4",
+                            "anchor": 'Button("Go") { open() }', "extraction": "syntax"})
+        data = contract()
+        data["actions"] = actions
+        self.fx.write_contract(data)
+        self.fx.write_android(
+            "package com.phonedsh.ui.page\n\npublic fun FakePage() {\n"
+            "    SessionSectionLabel(text = UiStrings.ALPHA)\n"
+            "    SessionSectionLabel(text = UiStrings.BETA)\n"
+            + "".join(f'    SessionTextAction(label = "{label}", onClick = {{}})\n'
+                      for label in wordings)
+            + "}\n")
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("labelled 36 of 67 actions (27 unlabelled, 4 dynamicLabel) = 29 comparable keys", out)
+        self.assertIn("android 29 labels (29 keys: 29 unconditional, 0 conditional)", out)
+        # The ambiguous shape the finding was about: inventory beside Android labels.
+        self.assertNotIn("contract 67 labelled", out)
+
+    # -- ② null-callback guard: conditional presence, not presence ---------
+
+    def _guarded_page(self, guard: str = "if (onOpenDemo != null) {") -> None:
+        self.fx.write_android(
+            "package com.phonedsh.ui.page\n\n"
+            "public fun FakePage(onOpenDemo: (() -> Unit)? = null) {\n"
+            "    SessionSectionLabel(text = UiStrings.ALPHA)\n"
+            "    SessionSectionLabel(text = UiStrings.BETA)\n"
+            f"    {guard}\n"
+            "        SessionTextAction(label = UiStrings.GO, onClick = onOpenDemo)\n"
+            "    }\n}\n")
+
+    def test_label_inside_a_null_callback_guard_is_conditional_not_present(self) -> None:
+        """The L64 hole: `if (onOpenDemo != null)` used to satisfy the contract.
+
+        `FilesPage.kt:478` carried `3D 示例` under exactly that guard while
+        `PdshNavHost` never passed the callback: the source had the label, the
+        pixels had no control, and the gate was green. Source-level presence must
+        be reported as conditional presence — not as present, and not as missing.
+        """
+        self._guarded_page()
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("conditional-action", out)
+        self.assertIn("only rendered behind `if (onOpenDemo != null)`", out)
+        self.assertIn("conditionally present", out)
+        # The label is in the source: neither direction of the label diff applies.
+        self.assertNotIn("missing-action", out)
+        self.assertNotIn("extra-action", out)
+
+    def test_let_guard_is_conditional_presence_too(self) -> None:
+        """`onOpenDemo?.let { … }` is the same host-wiring condition."""
+        self._guarded_page(guard="onOpenDemo?.let {")
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("conditional-action", out)
+        self.assertIn("onOpenDemo?.let", out)
+
+    def test_a_guard_the_baseline_also_uses_is_not_a_divergence(self) -> None:
+        """`if let onGo { Button("Go") }` in the baseline: Android's guard matches.
+
+        The contract's `condition` is null for syntax-extracted actions (the
+        extractor only fills it for manual ones), so the gate must read the
+        baseline source. Without this, every correct retry-only-on-error control
+        would be reported as a conditional-presence divergence.
+        """
+        self.fx.write_swift("""import SwiftUI
+struct FakePage: View { var body: some View {
+        Section("Alpha") {
+            if let onGo {
+                Button("Go") { onGo() }
+            }
+        }
+        Section("Beta") {
+            Text("hi")
+        }
+} }
+""")
+        data = contract()
+        data["sections"][1]["provenance"] = "FakePage.swift:8"
+        data["actions"][0]["provenance"] = "FakePage.swift:5"
+        data["actions"][0]["anchor"] = 'Button("Go") { onGo() }'
+        self.fx.write_contract(data)
+        self.fx.write_android(
+            "package com.phonedsh.ui.page\n\n"
+            "public fun FakePage(onGo: (() -> Unit)? = null) {\n"
+            "    SessionSectionLabel(text = UiStrings.ALPHA)\n"
+            "    SessionSectionLabel(text = UiStrings.BETA)\n"
+            "    if (onGo != null) {\n"
+            "        SessionTextAction(label = UiStrings.GO, onClick = onGo)\n"
+            "    }\n}\n")
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("matches the contract's own condition (if let onGo)", out)
+
+    def test_section_title_inside_a_null_callback_guard_is_conditional(self) -> None:
+        """The hole is about any labelled UI: a section header counts too."""
+        self.fx.write_android(
+            "package com.phonedsh.ui.page\n\n"
+            "public fun FakePage(onShowBeta: (() -> Unit)? = null) {\n"
+            "    SessionSectionLabel(text = UiStrings.ALPHA)\n"
+            "    if (onShowBeta != null) {\n"
+            "        SessionSectionLabel(text = UiStrings.BETA)\n"
+            "    }\n"
+            '    SessionTextAction(label = UiStrings.GO, onClick = {})\n'
+            "}\n")
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("conditional-section", out)
+        self.assertIn("only rendered behind `if (onShowBeta != null)`", out)
+        self.assertNotIn("missing-section", out)
+
+    def test_a_section_guard_the_contract_also_declares_is_listed_not_failed(self) -> None:
+        data = contract()
+        data["sections"][1]["condition"] = "onShowBeta != nil"
+        self.fx.write_contract(data)
+        self.fx.write_android(
+            "package com.phonedsh.ui.page\n\n"
+            "public fun FakePage(onShowBeta: (() -> Unit)? = null) {\n"
+            "    SessionSectionLabel(text = UiStrings.ALPHA)\n"
+            "    if (onShowBeta != null) {\n"
+            "        SessionSectionLabel(text = UiStrings.BETA)\n"
+            "    }\n"
+            '    SessionTextAction(label = UiStrings.GO, onClick = {})\n'
+            "}\n")
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("section 'Beta'", out)
+        self.assertIn("matches the contract's own condition (onShowBeta != nil)", out)
+
+    # -- ③ the page title is compared --------------------------------------
+
+    def _titled_android(self, title_expr: str) -> None:
+        self.fx.write_android(
+            "package com.phonedsh.ui.page\n\npublic fun FakePage() {\n"
+            f"    PageFrame(title = {title_expr}) {{\n"
+            "        SessionSectionLabel(text = UiStrings.ALPHA)\n"
+            "        SessionSectionLabel(text = UiStrings.BETA)\n"
+            "        SessionTextAction(label = UiStrings.GO, onClick = {})\n"
+            "    }\n}\n")
+
+    def _title(self, text: str, anchor: str = 'struct FakePage: View { var body: some View {') -> None:
+        data = contract()
+        data["title"] = {"text": text, "provenance": "FakePage.swift:2", "anchor": anchor}
+        self.fx.write_contract(data)
+
+    def test_page_title_mismatch_is_red(self) -> None:
+        """Two pages with different headings used to be green: the title was never read."""
+        self._title("Alpha")
+        self._titled_android('"Beta"')
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("title-mismatch", out)
+        self.assertIn("'Beta'", out)
+        self.assertIn("title     contract 'Alpha'", out)
+
+    def test_matching_page_title_passes(self) -> None:
+        self._title("Alpha")
+        self._titled_android("UiStrings.ALPHA")
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("title     contract 'Alpha'   android 'Alpha'", out)
+
+    def test_a_title_only_known_at_runtime_is_unresolved(self) -> None:
+        """`PageFrame(title = state.title)` cannot be compared; say so, do not guess."""
+        self._title("Alpha")
+        self._titled_android("state.title")
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("unresolved-title", out)
+        self.assertIn("cannot be compared", out)
+
+    def test_a_dynamic_title_with_the_contract_wording_is_accepted(self) -> None:
+        """`currentTitle() ?: UiStrings.ALPHA` renders the contract title in a mode."""
+        self._title("Alpha")
+        self._titled_android("currentTitle() ?: UiStrings.ALPHA")
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 0, out)
+
+    def test_the_baselines_own_dynamic_title_is_not_compared(self) -> None:
+        """`directory.isEmpty ? "手机工作区" : …` fixes no single title: skip, don't guess."""
+        self._title("手机工作区", anchor='.navigationTitle(directory.isEmpty ? "手机工作区" : name)')
+        self._titled_android("state.groupTitle")
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 0, out)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,13 @@
 // callbacks that would leave the app (run a probe, present the black screen, share
 // a brief) are no-ops here: this host has no such command, and a control that
 // claims one would be the fake this file exists to avoid.
+//
+// L72 appended 工作文件夹 and 命令 for a different reason: their iOS entries are
+// surfaces of the chat page (the DEBUG preview router, and 工作面板's 命令
+// segment), and this host's chat page still has neither. They live here rather
+// than in the drawer because iOS's drawer is the session list plus 定时任务 and
+// 设置 — the eight Android rows that used to mirror the app map were the defect
+// this lane removed.
 package com.phonedsh.ui.nav
 
 import androidx.compose.foundation.layout.fillMaxSize
@@ -57,6 +64,7 @@ import com.phonedsh.ui.page.InfoRow
 import com.phonedsh.ui.page.MemoryFacts
 import com.phonedsh.ui.page.MemoryPage
 import com.phonedsh.ui.page.MemoryScreenState
+import com.phonedsh.ui.page.PDSHShellPage
 import com.phonedsh.ui.page.PageFrame
 import com.phonedsh.ui.page.ProbesFacts
 import com.phonedsh.ui.page.ProbesPage
@@ -64,11 +72,19 @@ import com.phonedsh.ui.page.ProbesScreenState
 import com.phonedsh.ui.page.SessionActivityPage
 import com.phonedsh.ui.page.SessionActivityScreenState
 import com.phonedsh.ui.page.SessionActivitySource
+import com.phonedsh.ui.page.ShellLocalState
+import com.phonedsh.ui.page.ShellUiEvent
 import com.phonedsh.ui.page.TaskScreenFacts
 import com.phonedsh.ui.page.TaskScreenLocalState
 import com.phonedsh.ui.page.TaskScreenPage
 import com.phonedsh.ui.page.TaskScreenScreenState
 import com.phonedsh.ui.page.TaskScreenUiEvent
+import com.phonedsh.ui.page.ToolsScreenState
+import com.phonedsh.ui.page.WorkspaceFoldersLocalState
+import com.phonedsh.ui.page.WorkspaceFoldersPage
+import com.phonedsh.ui.page.WorkspaceFoldersScreenState
+import com.phonedsh.ui.page.WorkspaceFoldersUiEvent
+import com.phonedsh.ui.page.apply
 
 /** Which settings-sheet surface replaced the index (and [NONE] is the index). */
 internal enum class SettingsSurface {
@@ -82,7 +98,19 @@ internal enum class SettingsSurface {
     DEV_TOOLS,
 }
 
-/** The one page the developer index can open. */
+/**
+ * The one page the developer index can open.
+ *
+ * The last two entries are not orphaned in the baseline the way the first six are
+ * (`MemoryPage` … `SessionActivityPage` have no call site at all): iOS reaches
+ * 工作文件夹 only from its DEBUG preview router, and 命令 only from the chat
+ * page's 右侧边栏 → 工作面板 命令 segment. Neither edge exists on this host —
+ * the chat page's page-head menu is the chat lane's file, and `PreviewScreen` is a
+ * DEBUG launch router this host does not carry — so the two pages live here while
+ * they have no product entry. They are the same pages, rendered from the same
+ * facts and local state their routes use (`PdshNavHost`'s `WorkspaceFoldersRoute` /
+ * `ToolsRoute`); when those entries land, the rows below are the duplicate to drop.
+ */
 private enum class DevTool(val label: String) {
     MEMORY(UiStrings.MEMORY_PROBE_TITLE),
     PROBES(UiStrings.PROBES_TITLE),
@@ -90,6 +118,8 @@ private enum class DevTool(val label: String) {
     TASK_SCREEN(UiStrings.TASK_SCREEN_TITLE),
     DAILY_BRIEF(UiStrings.DAILY_BRIEF_TITLE),
     ACTIVITY(UiStrings.ACTIVITY_TITLE),
+    WORKSPACE_FOLDERS(UiStrings.WORKSPACE_FOLDERS),
+    COMMAND(UiStrings.TOOLS),
 }
 
 /**
@@ -131,7 +161,13 @@ internal fun AboutSurface(
 }
 
 /**
- * 开发者工具: the index of the pages whose iOS baseline has no entry.
+ * 开发者工具: the index of the pages this host cannot reach the way iOS does.
+ *
+ * Two kinds of row live here: the pages the baseline deleted an entry for
+ * (`MemoryPage` … `SessionActivityPage`, see `DevTool`), and the pages whose iOS
+ * entry is a surface of the chat page this host has not wired yet (工作文件夹's
+ * preview router, 命令's 工作面板 segment). The drawer is not a home for either —
+ * iOS's drawer is the session list plus 定时任务 / 设置 and nothing else.
  *
  * The label is the page's own title (`UiStrings`), so the row a person taps and
  * the header they land on are the same word.
@@ -140,8 +176,9 @@ internal fun AboutSurface(
  * @param onBack return to the settings index.
  * @param backLevel the host's inner-level back chain; the sheet-level back leaves
  *   the open page first, then the index.
- * @param onAction the host action channel, used by the one row here that is an
- *   action rather than a page (revoking the session's Ubuntu approval).
+ * @param onAction the host action channel: the two action rows (revoking the
+ *   session's Ubuntu approval, and 工作文件夹's "open this folder's files") and the
+ *   command page's run gesture.
  */
 @Composable
 internal fun DeveloperToolsSurface(
@@ -239,6 +276,68 @@ internal fun DeveloperToolsSurface(
             onCancel = {},
             onBack = { open = null },
         )
+
+        // 工作文件夹: the baseline's preview-only folder page. Its one navigation
+        // relation (§1: 每行打开 FilesPage) is the documented handoff whose whole
+        // meaning is "this folder asked for its file listing"
+        // (`PdshHostAction.OpenWorkspaceFiles`); the shell answers it by pushing
+        // the files route, because this surface has no route stack of its own.
+        DevTool.WORKSPACE_FOLDERS -> {
+            var local by remember { mutableStateOf(WorkspaceFoldersLocalState()) }
+            WorkspaceFoldersPage(
+                state = WorkspaceFoldersScreenState.from(facts.workspaceFolders, local),
+                onBack = { open = null },
+                onOpenFiles = { folder ->
+                    onAction(PdshHostAction.OpenWorkspaceFiles(folder.id))
+                },
+                onSwitch = { folder -> onAction(PdshHostAction.WorkspaceSwitch(folder.id)) },
+                onBeginCreate = { local = local.apply(WorkspaceFoldersUiEvent.BeginCreate) },
+                onDraftChange = { text ->
+                    local = local.apply(WorkspaceFoldersUiEvent.DraftChange(text))
+                },
+                onCancelCreate = { local = local.apply(WorkspaceFoldersUiEvent.CancelCreate) },
+                onCreate = { onAction(PdshHostAction.WorkspaceCreate(local.draft)) },
+                onDeleteRequest = { folder ->
+                    local = local.apply(WorkspaceFoldersUiEvent.RequestDelete(folder.id))
+                },
+                onDeleteConfirm = { folder ->
+                    local = local.apply(WorkspaceFoldersUiEvent.CancelDelete)
+                    onAction(PdshHostAction.WorkspaceDelete(folder.id))
+                },
+                onDeleteCancel = { local = local.apply(WorkspaceFoldersUiEvent.CancelDelete) },
+            )
+        }
+
+        // 命令: the read-only accelerator shell. Its run gesture is the host
+        // action it always was (`PdshHostAction.RunShellCommand`), so the page is
+        // fully live here — no read is duplicated, nothing is faked.
+        DevTool.COMMAND -> {
+            var local by remember { mutableStateOf(ShellLocalState()) }
+            val state = ToolsScreenState.from(facts.shell, local)
+            PDSHShellPage(
+                state = state,
+                onSelectCommand = { name ->
+                    local = local.apply(ShellUiEvent.SelectCommand(name))
+                },
+                onWorkingDirectoryChange = { value ->
+                    local = local.apply(ShellUiEvent.SetWorkingDirectory(value))
+                },
+                onArgumentsChange = { value ->
+                    local = local.apply(ShellUiEvent.SetArguments(value))
+                },
+                onRun = {
+                    onAction(
+                        PdshHostAction.RunShellCommand(
+                            command = state.selectedCommand,
+                            workingDirectory = state.workingDirectory,
+                            arguments = state.arguments,
+                        ),
+                    )
+                },
+                onCancel = {},
+                onBack = { open = null },
+            )
+        }
     }
 }
 

@@ -51,6 +51,7 @@ public object ApprovalCardTokens {
     /** Tokens the spec declares for this surface. */
     public val declared: List<String> = listOf(
         UiTokenNames.COLORS_SELECTOR,
+        UiTokenNames.COLORS_APPROVAL_CARD,
         UiTokenNames.COLORS_CTA_OVERRIDE,
         UiTokenNames.COLORS_ON_ACCENT,
         UiTokenNames.COLORS_SECONDARY,
@@ -109,7 +110,10 @@ public fun ApprovalCard(
             .testTag(UiTags.APPROVAL_CARD)
             // A pending ask must interrupt, but politely: it is a live region.
             .semantics(mergeDescendants = false) { liveRegion = LiveRegionMode.Polite }
-            .background(color = tokens.colors.selector, shape = shape)
+            // iOS fills the card with `NativeChatTheme.selector` (#F5F6F7);
+            // `colors.selector` (#F2F3F5) is 3/255 off in the green channel, which
+            // the pixel comparator counts across the card's whole area.
+            .background(color = tokens.colors.approvalCard, shape = shape)
             .padding(tokens.geometry.cardPadding),
         verticalArrangement = Arrangement.spacedBy(tokens.geometry.cardPadding),
     ) {

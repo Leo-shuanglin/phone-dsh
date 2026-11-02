@@ -18,6 +18,9 @@ import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -64,6 +67,59 @@ data class AppendAck(
     val materializedUptoMseq: Long,
     val resync: ResyncRequest? = null,
 )
+
+/**
+ * The live mseq allocator of one workspace log (`wal.md` \u00a73, \u00a77.2; D17).
+ *
+ * `lastMseq` is the highest mseq ever allocated (it never decreases, truncation
+ * does not lower it) and `nextMseq` is `lastMseq + 1`. The pair is published
+ * atomically so a reader can never see a tail newer than its own next number.
+ *
+ * This is the **one** allocator: `channel.md` \u00a78 makes the host the allocator
+ * and `wal.md` \u00a77.2 derives `next_mseq` from the WAL tail, so anything that
+ * numbers mutations \u2014 the HELLO, the VFS sink, the App's import lane \u2014 must
+ * read it here instead of keeping a counter of its own. A second counter is what
+ * produced `WAL allocated mseq N+1 for the worker's N` (L77).
+ */
+data class MseqAllocator(
+    /** The highest mseq ever allocated; never decreases (D17). */
+    val lastMseq: Long,
+    /** `lastMseq + 1`: the number the next mutation receives. */
+    val nextMseq: Long,
+) {
+    init {
+        require(lastMseq >= 0L) { "lastMseq must be non-negative, was $lastMseq" }
+        require(nextMseq == lastMseq + 1L) {
+            "nextMseq must be lastMseq + 1, was $nextMseq for a tail of $lastMseq"
+        }
+    }
+}
+
+/**
+ * The answer to a worker-lane append at an explicit mseq (`channel.md` \u00a78).
+ *
+ * The sink supplies the mseq the Worker put on the frame; the log decides against
+ * its **live** allocator under its own lock, so the decision cannot race an
+ * App-side append (the App's import lane calls [WorkspaceLog.appendMutation] from
+ * another coroutine).
+ */
+sealed interface WorkerLaneAppend {
+    /** The mseq was the live next one: the record is in the WAL. */
+    data class Appended(val ack: AppendAck) : WorkerLaneAppend
+
+    /**
+     * `mseq` is at or below the WAL tail: the record already exists.
+     *
+     * A D9 replay (`\u00a79.2`) answers the level-1 watermark and appends nothing;
+     * an mseq the **host lane** consumed (an App-side workspace write) looks
+     * identical here, which is why the sink compares against the highest mseq it
+     * itself accepted before it calls this a replay.
+     */
+    data class Behind(val lastMseq: Long) : WorkerLaneAppend
+
+    /** `mseq` is ahead of the live allocator: a gap, never a silent append. */
+    data class Ahead(val nextMseq: Long) : WorkerLaneAppend
+}
 
 /**
  * The result of a D18 epoch close.
@@ -217,6 +273,34 @@ class WorkspaceLog(
 ) {
     private val mutex = Mutex()
 
+    /**
+     * The live allocator, published as one immutable pair.
+     *
+     * `@Volatile` because the HELLO and the VFS sink read it without the
+     * coroutine [mutex] (the HELLO is built synchronously on the channel's send
+     * path), while every write happens inside [mutex].
+     */
+    @Volatile
+    private var liveAllocator: MseqAllocator = MseqAllocator(lastMseq = 0L, nextMseq = 1L)
+
+    /**
+     * Host-lane mutations: the App's own workspace writes (an attachment import
+     * through [appendMutation], never a Worker frame).
+     *
+     * `wal.md` line 3 makes the Worker's in-memory VFS the single authority while
+     * it runs, so a host-lane write while a Worker is connected leaves that
+     * Worker's numbering and its VFS behind. The flow is the notification the
+     * host uses to re-establish the invariant (close the epoch, restart the
+     * Worker so it re-anchors on a live HELLO and re-reads the overlay); the
+     * number is the mseq the host lane consumed. `tryEmit` keeps the App's write
+     * path non-blocking; a dropped event only costs the proactive repair, never
+     * the record.
+     */
+    private val hostLane = MutableSharedFlow<Long>(extraBufferCapacity = 16)
+
+    /** The App-lane mutations of this log, in mseq order (see [hostLane]). */
+    val hostLaneAppends: Flow<Long> get() = hostLane.asSharedFlow()
+
     private var outcome: RecoveryOutcome? = null
     private var ready: Boolean = false
     private var fatal: LogException? = null
@@ -261,6 +345,21 @@ class WorkspaceLog(
      * method returns it unchanged. Nothing in this package may assume level 2.
      */
     fun durabilityClaim(): DurabilityLevel = durability.level()
+
+    /**
+     * The live allocator (`wal.md` \u00a77.2): `nextMseq = max(last_mseq, WAL tail) + 1`.
+     *
+     * Non-suspending and safe from any thread: it reads the pair published by the
+     * last append or by [recover]. This is what the HELLO's `next_mseq`/`acked_mseq`
+     * and the VFS sink's expected mseq must come from \u2014 a boot-time snapshot of
+     * the same numbers is what closed the channel after an App-side write.
+     */
+    fun allocator(): MseqAllocator = liveAllocator
+
+    /** Publishes [nextMseq] and [lastMseq] as one pair (inside [mutex]). */
+    private fun publishAllocator() {
+        liveAllocator = MseqAllocator(lastMseq = lastMseq, nextMseq = nextMseq)
+    }
 
     /**
      * `wal.md` §9: the quota, the droppable-segment rule and the §7.2-order
@@ -344,7 +443,49 @@ class WorkspaceLog(
     suspend fun appendMutation(body: MutationBody): AppendAck = mutex.withLock {
         ensureReady()
         body.validate()
-        val mseq = nextMseq
+        val ack = appendLocked(body, nextMseq)
+        // Host-lane write (the App's own workspace write, e.g. an attachment
+        // import). The Worker cannot see it while its VFS is the authority, so
+        // the host is told the mseq it consumed and re-establishes the invariant
+        // (see [hostLaneAppends]).
+        hostLane.tryEmit(ack.mseq)
+        ack
+    }
+
+    /**
+     * Appends one mutation **at the Worker's mseq**, decided against the live
+     * allocator (`channel.md` \u00a78: "Only `mseq == expected_mseq` is accepted").
+     *
+     * This is the VFS sink's write path. Doing the check under this log's lock
+     * is what makes it race-free: the App's import lane calls [appendMutation]
+     * from another coroutine, so a sink that compared numbers outside the lock
+     * (the L77 defect) could observe the old tail, append anyway and get a
+     * different mseq back \u2014 the `WAL allocated mseq N+1 for the worker's N`
+     * line, followed by a closed channel and a replayed-to-death turn.
+     *
+     * @return [WorkerLaneAppend.Appended] when the mseq was the live next one,
+     *   [WorkerLaneAppend.Behind] when it is at or below the tail (a D9 replay,
+     *   or an mseq the host lane consumed) and [WorkerLaneAppend.Ahead] when it
+     *   is above the allocator. Nothing is appended in the last two cases.
+     */
+    suspend fun appendWorkerMutation(
+        body: MutationBody,
+        mseq: Long,
+    ): WorkerLaneAppend = mutex.withLock {
+        ensureReady()
+        body.validate()
+        val tail = lastMseq
+        if (mseq <= tail) {
+            return@withLock WorkerLaneAppend.Behind(tail)
+        }
+        if (mseq != nextMseq) {
+            return@withLock WorkerLaneAppend.Ahead(nextMseq)
+        }
+        WorkerLaneAppend.Appended(appendLocked(body, mseq))
+    }
+
+    /** The one append body; the caller has already validated [body] and [mseq]. */
+    private suspend fun appendLocked(body: MutationBody, mseq: Long): AppendAck {
         val frame = WalRecordCodec.encodeMutation(mseq, body)
         // wal.md §9: compact before a write that would cross the limit. The
         // decision is taken on the projected size, before the mseq is spent, so
@@ -369,13 +510,14 @@ class WorkspaceLog(
         summaryFor(segment).lastMutationMseq = mseq
         lastMseq = mseq
         nextMseq = mseq + 1
+        publishAllocator()
 
         val request = try {
             materialize(WalRecord.Mutation(mseq, body))
         } catch (error: LogException) {
             fatal(error)
         }
-        AppendAck(
+        return AppendAck(
             mseq = mseq,
             level = AckLevel.LEVEL_1,
             materializedUptoMseq = materializedUptoMseq,
@@ -624,6 +766,7 @@ class WorkspaceLog(
 
         nextMseq = plan.nextMseq
         lastMseq = plan.effectiveTail
+        publishAllocator()
         materializedUptoMseq = watermark
         lastDurableEpoch = durableEpoch
         epoch = plan.nextEpoch

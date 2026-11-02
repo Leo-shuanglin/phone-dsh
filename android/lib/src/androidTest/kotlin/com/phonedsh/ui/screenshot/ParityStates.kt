@@ -202,7 +202,7 @@ enum class ParityState(
         screen = "SessionsPage",
         owner = "Sessions lane",
         status = ParityStatus.CAPTURED,
-        note = "0 sessions, 0 folders, engine off: the drawer's big empty block. iOS spells this state in a container that hides the 会话 section label; Android always renders it, so this capture equals page-sessions-nothing",
+        note = "0 sessions, 0 folders, engine off: the big empty block in the FULL 402 pt window, which is the container the iOS `.sessions` route mounts the page in (NativeShell.swift:842). The block centres on 201 and the CTA runs 16 → 385.7. Same state in the 320 pt drawer is page-sessions-nothing; since L73 the two captures differ exactly where the two iOS shots do",
     ),
     PAGE_SESSIONS_MANY(
         androidName = "page-sessions-many",
@@ -229,7 +229,7 @@ enum class ParityState(
         screen = "SessionsPage",
         owner = "Sessions lane",
         status = ParityStatus.CAPTURED,
-        note = "0 sessions, 0 folders: the true empty state, identical to page-sessions-default on Android",
+        note = "0 sessions, 0 folders inside the baseline's DrawerPreview (.frame(width: 320), NativeShell.swift:872-879): the block centres on 160 and the CTA runs 16 → 304, so this capture is NOT page-sessions-default — the two differ by the container width, exactly like the two iOS PNGs",
     ),
     PAGE_SESSIONS_UNGROUPED(
         androidName = "page-sessions-ungrouped",

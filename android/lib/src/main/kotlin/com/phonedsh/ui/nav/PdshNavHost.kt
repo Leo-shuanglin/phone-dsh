@@ -364,6 +364,20 @@ public fun PdshNavHost(
     // cannot prompt still renders the page — as a read-only surface.
     onPhonePermissionRequest: (PhoneCapability) -> Unit = {},
     onPhonePermissionSettings: (PhoneCapability) -> Unit = {},
+    // L69: the chat page's host half. `chat` is the fully folded screen state the
+    // composition root built from the Worker's events (`ChatScreenState.from`), so
+    // this file stays a route table and never learns the event vocabulary. `null`
+    // keeps the library's honest empty conversation for a host that has no chat.
+    chat: ChatScreenState? = null,
+    chatTitle: String? = null,
+    onChatDraftChange: (String) -> Unit = {},
+    onChatSend: () -> Unit = {},
+    onChatStop: () -> Unit = {},
+    onChatRename: (String) -> Unit = {},
+    onChatAddFiles: () -> Unit = {},
+    onChatAddImages: () -> Unit = {},
+    onChatRemoveAttachment: (Int) -> Unit = {},
+    onChatDismissNotice: () -> Unit = {},
 ) {
     val route = nav.current
     if (route == PdshRoute.Home) {
@@ -375,7 +389,20 @@ public fun PdshNavHost(
             PdshRoute.Home -> Unit // rendered above; kept for the exhaustive when
             PdshRoute.Sessions ->
                 if (sessions != null) sessions() else SessionsRoute(facts, onBack)
-            PdshRoute.Chat -> ChatRoute(chatSubpages, onNavigate)
+            PdshRoute.Chat -> ChatRoute(
+                subpages = chatSubpages,
+                onNavigate = onNavigate,
+                state = chat,
+                title = chatTitle,
+                onDraftChange = onChatDraftChange,
+                onSend = onChatSend,
+                onStop = onChatStop,
+                onRename = onChatRename,
+                onAddFiles = onChatAddFiles,
+                onAddImages = onChatAddImages,
+                onRemoveAttachment = onChatRemoveAttachment,
+                onDismissNotice = onChatDismissNotice,
+            )
             PdshRoute.WorkspaceFolders -> WorkspaceFoldersRoute(facts, onBack, onHostAction, onNavigate)
             is PdshRoute.Files -> FilesRoute(onBack, onNavigate, workspaceRoot, backLevel)
             is PdshRoute.Preview -> PreviewRoute(route, onBack, workspaceRoot)
@@ -487,31 +514,51 @@ private fun RouteSurface(presentation: PdshPresentation, content: @Composable ()
 /**
  * 对话: §1's root native face.
  *
- * `PdshNavFacts` carries no chat field yet (this host reads no transcript, no
- * pending ask and no model catalog through the router), so the projector is handed
- * an empty node sequence and the page renders its honest empty session: empty
- * state A — 引擎还没启动 — over a live composer dock. No row, no ask and no stat is
- * invented to fill the frame; the dock's own gestures are no-ops here because the
- * host owns no send/stop command yet, exactly like [ToolsRoute] and [ExportRoute].
+ * The page is a pure function of the folded screen state, so this route takes the
+ * state **already built by the composition root** and forwards the page's
+ * gestures. Before L69 the caller had nothing to hand it: `ChatScreenState.from`
+ * was called here with an empty node sequence, the dock's `onSend`/`onStop` were
+ * literal no-ops, and the composer could not even be enabled (an empty projection
+ * is `ChatPhase.WAITING` → `ComposerLock.WAITING_ENGINE`). The five `onChat*`
+ * callbacks below are the host's own commands (send, stop, rename, the two file
+ * pickers, remove, dismiss); this file only forwards them.
  *
  * @param onNavigate push the sessions list: the page head's leading control is
  *   the baseline's session-drawer control (`ChatPage.swift`), and this host's
  *   drawer body is the sessions page, so the control opens that route.
+ * @param state the host's folded chat state, or `null` for a host that has none.
+ * @param title the conversation's name; empty falls back to 新会话 in the page.
+ * @param onOpenFile a row's file chip: the host routes it to its preview.
  */
 @Composable
-private fun ChatRoute(subpages: ChatSubpageFacts, onNavigate: (PdshRoute) -> Unit) {
+private fun ChatRoute(
+    subpages: ChatSubpageFacts,
+    onNavigate: (PdshRoute) -> Unit,
+    state: ChatScreenState?,
+    title: String?,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onStop: () -> Unit,
+    onRename: (String) -> Unit,
+    onAddFiles: () -> Unit,
+    onAddImages: () -> Unit,
+    onRemoveAttachment: (Int) -> Unit,
+    onDismissNotice: () -> Unit,
+) {
     ChatPage(
-        state = ChatScreenState.from(nodes = emptyList(), local = ChatLocalState()),
-        onDraftChange = {},
-        onSend = {},
-        onStop = {},
+        state = state ?: ChatScreenState.from(nodes = emptyList(), local = ChatLocalState()),
+        onDraftChange = onDraftChange,
+        onSend = onSend,
+        onStop = onStop,
         onToggleRow = {},
         onApprove = {},
         onDeny = {},
-        onDismissBanner = {},
-        onRetry = {},
+        // One host line serves both the failure banner's 关闭 and the import notice:
+        // both are the App's own sentence about what just happened.
+        onDismissBanner = { _: String -> onDismissNotice() },
+        onRetry = onSend,
         onOpenSessions = { onNavigate(PdshRoute.Sessions) },
-        title = UiStrings.SESSION_TITLE_NEW,
+        title = title ?: UiStrings.SESSION_TITLE_NEW,
         // The page-head menu's 后台任务（N）/定时任务（N） rows exist only while the
         // host reported rows (`ChatPage.swift:247`/`:252`); with no read they are
         // absent instead of opening a sheet that can only say 读取不到.
@@ -519,23 +566,31 @@ private fun ChatRoute(subpages: ChatSubpageFacts, onNavigate: (PdshRoute) -> Uni
         schedules = subpages.schedules,
         onOpenJobs = { onNavigate(PdshRoute.SessionJobs) },
         onOpenSchedules = { onNavigate(PdshRoute.SessionSchedules) },
-        // Appended by the L25 lane: the page-head menu's 产物 row
-        // (`ChatPage.swift:256`), which opens the artifacts page and from there the
-        // preview subpage this lane implemented. `ChatPage` deliberately takes the
-        // callback as `null`-able because "this page never learns a session id from
-        // its state"; the router is the only place that can name one, and the only
-        // session this host has reads is the demo transport's — the same one the
-        // demo artifacts' evidence came from.
+        // The page-head menu's 产物 row (`ChatPage.swift:256`), which opens the
+        // artifacts page. The apps' artifact transport is still the demo one (the
+        // real produced files are the workspace, reached by the 文件 route), so the
+        // row keeps naming the session that transport knows.
         onOpenArtifacts = {
             onNavigate(PdshRoute.SessionArtifacts(InMemoryDeviceSessionTransport.DEMO_SESSION_ID))
         },
         // The menu's 运行状态 and 本会话设置 rows were drawn with the page's default
         // empty callbacks, so they closed the menu and did nothing. Both pages are
-        // already routes (`PdshRoute.Runtime` is the page-head dot's, and the
-        // configuration sheet is the native face's ⋯), so the wiring is the two
-        // edges — no new page, no new state.
+        // already routes, so the wiring is the two edges.
         onOpenRunStatus = { onNavigate(PdshRoute.Runtime) },
         onOpenSessionSettings = { onNavigate(PdshRoute.Configuration) },
+        // L72/L73: the baseline's 文件/命令 path is 对话 ⋯ → 右侧边栏
+        // (`ChatPage.swift:243-291` → `:263-266` → `NativeWorkbenchPage`). The route
+        // already exists; the row was hidden because this callback was null.
+        onOpenWorkbench = { onNavigate(PdshRoute.Workbench()) },
+        // L69: the rename alert writes through the host's session store.
+        onRenameSession = onRename,
+        // The composer's two pickers open the platform document UI (the Activity
+        // owns it), and the preview of a row's file is a route push.
+        onAddFiles = onAddFiles,
+        onAddImages = onAddImages,
+        onRemoveAttachment = onRemoveAttachment,
+        onDismissComposerNotice = onDismissNotice,
+        onOpenFile = { path -> onNavigate(PdshRoute.Preview(path)) },
     )
 }
 

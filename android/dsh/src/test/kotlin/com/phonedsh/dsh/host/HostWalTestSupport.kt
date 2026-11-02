@@ -8,6 +8,7 @@
 
 package com.phonedsh.dsh.host
 
+import com.phonedsh.log.MseqAllocator
 import com.phonedsh.log.MutationBody
 import com.phonedsh.loopback.LoopbackConnection
 import com.phonedsh.platform.DurabilityLevel
@@ -74,12 +75,17 @@ internal class FakeHostWal(
 
     override fun appliedMseq(): Long = (recovery as? WalRecovery.Recovered)?.ackedMseq ?: 0L
 
-    override suspend fun append(body: MutationBody): WalAppend {
+    override fun allocator(): MseqAllocator =
+        MseqAllocator(lastMseq = nextAppendMseq - 1, nextMseq = nextAppendMseq)
+
+    override suspend fun appendWorker(body: MutationBody, mseq: Long): WalWorkerAppend {
         appendFailure?.let { throw it }
-        val mseq = nextAppendMseq
+        val tail = nextAppendMseq - 1
+        if (mseq <= tail) return WalWorkerAppend.Behind(tail)
+        if (mseq != nextAppendMseq) return WalWorkerAppend.Ahead(nextAppendMseq)
         appendedBodies += body
         nextAppendMseq += 1
-        return WalAppend(mseq = mseq, materializedUptoMseq = mseq)
+        return WalWorkerAppend.Appended(WalAppend(mseq = mseq, materializedUptoMseq = mseq))
     }
 
     override suspend fun closeEpoch(): WalClose {

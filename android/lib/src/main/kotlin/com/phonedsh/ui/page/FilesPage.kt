@@ -80,6 +80,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import com.phonedsh.ui.ShellFilesMetrics
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.surface.CubeGlyph
+import com.phonedsh.ui.surface.PageBarCapsule
+import com.phonedsh.ui.surface.SettingsSubPageFrame
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
@@ -462,7 +465,10 @@ public data class FilesLocalState(
  *   drawn, because the baseline always draws it (`FilesPage.swift:79`): when the
  *   host supplies no demo surface the page opens its own sheet, so a null
  *   callback can no longer make a labelled control exist in the source and never
- *   render — the hole `page_structure_check.py` could not see.
+ *   render — the hole `page_structure_check.py` could not see. Since L75 the entry
+ *   is drawn as the baseline's icon-only cube in a floating white pill rather than
+ *   as a text verb: `Label(…, systemImage: "cube")` in a toolbar renders its icon
+ *   alone, and `ios-files.png` shows exactly that (x 353.0–374.33, y 72.33–96.33).
  */
 @Composable
 public fun FilesPage(
@@ -486,17 +492,38 @@ public fun FilesPage(
     var showingDemo by rememberSaveable { mutableStateOf(false) }
     val openDemo: () -> Unit = onOpenDemo ?: { showingDemo = true }
 
-    PageFrame(
-        title = state.groupTitle,
+    // The baseline is a **large-title** page: `.navigationTitle(...)` +
+    // `.navigationBarTitleDisplayMode(.large)` (`FilesPage.swift:51`–`:52`), which
+    // `ios-files.png` measures at 34 pt with its ink box at y 125.33–155.33 and a
+    // 17.33 pt leading inset. `PageFrame` draws the bar's 17 pt inline title
+    // instead, so this page takes the large-title frame the settings sub-pages
+    // already use and paints the page fill the baseline sets explicitly
+    // (`.background(NativePagePalette.page)`, `:55` — #FFFFFF; the default frame
+    // leaves the Material surface, i.e. one grey step, showing through).
+    val tokens = LocalUiTokens.current
+    SettingsSubPageFrame(
+        largeTitle = state.groupTitle,
         onBack = onHeaderBack,
+        backGlyph = PAGE_BACK_GLYPH,
+        pageFill = true,
         rootTag = UiPageTags.FILES_ROOT,
         modifier = modifier,
-        actions = {
-            HeaderAction(
-                label = UiStrings.FILES_DEMO,
-                tag = UiPageTags.FILES_DEMO,
+        trailing = {
+            // `:77`–`:82`: the toolbar item is a `Label(…, systemImage: "cube")`, and
+            // a toolbar renders it icon-only — `ios-files.png` has the cube at
+            // x 353.0–374.33, y 72.33–96.33 in a white 44 pt pill (the pill is
+            // visible only through its shadow, hence the halo in the shot).
+            PageBarCapsule(
+                // The visible name is the baseline's `Label` title 3D 示例; the
+                // spoken one is its `.accessibilityLabel` 打开 3D 示例 (`:81`).
+                description = UiStrings.FILES_DEMO,
                 onClick = openDemo,
-                description = UiStrings.FILES_DEMO_OPEN,
+                insetH = tokens.geometry.pageBarButtonInsetH,
+                elevation = tokens.geometry.pageBarButtonElevation,
+                showsLabel = false,
+                glyph = { CubeGlyph() },
+                tag = UiPageTags.FILES_DEMO,
+                accessibilityLabel = UiStrings.FILES_DEMO_OPEN,
             )
         },
     ) {
@@ -668,8 +695,11 @@ private fun NoFilesCard() {
             .testTag(UiPageTags.FILES_NONE)
             .padding(
                 horizontal = tokens.geometry.pageOuterMarginH,
-                // `ios-files.png`: the two-line card sits 24 pt under the search field.
-                vertical = tokens.spacing.cardInset * 2,
+                // `ios-files.png`: the search field ends at y 212.67 and the card's
+                // title ink starts at 269.33 — a 56.7 pt gap, which is the card's own
+                // 24 pt padding plus the list's 32 pt top inset. Android has no list
+                // inset here (the card is the body), so the two are summed.
+                vertical = tokens.spacing.cardInset * 2 + tokens.spacing.iconText * 4,
             )
             .semantics(mergeDescendants = true) {},
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -783,28 +813,6 @@ private fun FileRow(file: WorkspaceFile, onOpenFile: (WorkspaceFile) -> Unit) {
             style = type.caption.copy(color = tokens.colors.tertiary),
         )
     }
-}
-
-/** A header text action; the page never draws a bar button it cannot label. */
-@Composable
-private fun HeaderAction(
-    label: String,
-    tag: String,
-    onClick: () -> Unit,
-    description: String = label,
-) {
-    val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
-    BasicText(
-        text = label,
-        style = type.secondary.copy(color = tokens.colors.accent),
-        maxLines = 1,
-        modifier = Modifier
-            .testTag(tag)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = description }
-            .padding(tokens.spacing.iconText),
-    )
 }
 
 /**
@@ -966,5 +974,10 @@ internal object FilesPageTokens {
         UiTokenNames.STROKE_HAIRLINE,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
+        // L75: the toolbar capsule's two page-layer lengths (the pill's text inset
+        // and its shadow). The frame's white fill is `SettingsSubPageFrame`'s
+        // `pageFill`, not a read of this file.
+        UiTokenNames.GEOMETRY_PAGE_BAR_BUTTON_INSET_H,
+        UiTokenNames.GEOMETRY_PAGE_BAR_BUTTON_ELEVATION,
     )
 }

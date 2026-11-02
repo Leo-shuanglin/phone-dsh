@@ -40,7 +40,10 @@
 // no clock, no window and no screen brightness.
 package com.phonedsh.ui.page
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -56,9 +59,15 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -254,8 +263,11 @@ public data class TaskScreenLocalState(
  *
  * @param state the pure screen state (`TaskScreenScreenState.from`).
  * @param onBack leave the page (push, per §1).
- * @param onShowTaskScreen ask the host to present the black screen with this
- *   status line and brightness; the page never draws the surface itself.
+ * @param onShowTaskScreen hand the status line and brightness to the host (the
+ *   baseline's `model.store.noteTaskScreenPresented`, `TaskScreenPage.swift:83`).
+ *   The black surface itself is the page's, not the host's: iOS presents it from
+ *   its own `@State presenting` as a `.fullScreenCover` (`:65`–`:84`), so the page
+ *   draws it here too and this callback only reports what was shown.
  * @param onStatusLineChange the field's new text; the host applies
  *   `TaskScreenUiEvent.EditStatusLine` and re-projects.
  * @param onBrightnessChange the Slider's new value; the host applies
@@ -275,41 +287,108 @@ public fun TaskScreenPage(
     onRetry: (() -> Unit)? = null,
     onDismissFailure: (() -> Unit)? = null,
 ) {
-    PageFrame(
-        title = UiStrings.TASK_SCREEN_TITLE,
-        onBack = onBack,
-        rootTag = UiPageTags.TASK_SCREEN_ROOT,
-        modifier = modifier,
-    ) {
-        ProbeControlsTheme {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag(UiPageTags.TASK_SCREEN_LIST),
-                verticalArrangement = Arrangement.spacedBy(pageListGap),
-            ) {
-                state.failure?.let { failure ->
-                    item(key = "task.failure") {
-                        SessionFailureLine(
-                            message = failure,
-                            tag = UiPageTags.TASK_SCREEN_FAILURE,
-                            retryLabel = if (onRetry != null) UiStrings.RETRY else null,
-                            onRetry = onRetry,
-                            onDismiss = onDismissFailure,
-                        )
+    // The screen's own presentation state, exactly like the baseline's
+    // `@State private var presenting` (`TaskScreenPage.swift:15`): the cover is a
+    // local surface, not a route and not a host fact.
+    var presenting by rememberSaveable { mutableStateOf(false) }
+    Box(modifier = modifier.fillMaxSize()) {
+        PageFrame(
+            title = UiStrings.TASK_SCREEN_TITLE,
+            onBack = onBack,
+            rootTag = UiPageTags.TASK_SCREEN_ROOT,
+        ) {
+            ProbeControlsTheme {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag(UiPageTags.TASK_SCREEN_LIST),
+                    verticalArrangement = Arrangement.spacedBy(pageListGap),
+                ) {
+                    state.failure?.let { failure ->
+                        item(key = "task.failure") {
+                            SessionFailureLine(
+                                message = failure,
+                                tag = UiPageTags.TASK_SCREEN_FAILURE,
+                                retryLabel = if (onRetry != null) UiStrings.RETRY else null,
+                                onRetry = onRetry,
+                                onDismiss = onDismissFailure,
+                            )
+                        }
                     }
+                    formBlock(
+                        state = state,
+                        onShow = {
+                            // Two effects, both the baseline's: present the cover, and
+                            // tell the host what was presented.
+                            presenting = true
+                            onShowTaskScreen(state.statusLine, state.brightness)
+                        },
+                        onStatusLineChange = onStatusLineChange,
+                        onBrightnessChange = onBrightnessChange,
+                    )
+                    reportBlock(state)
                 }
-                formBlock(state, onShowTaskScreen, onStatusLineChange, onBrightnessChange)
-                reportBlock(state)
             }
+        }
+        if (presenting) {
+            TaskScreenCover(
+                statusLine = state.statusLine,
+                onClose = { presenting = false },
+            )
         }
     }
 }
 
+/**
+ * The landed black screen (`TaskScreenPage.swift:65`–`:84`): pure black, the status
+ * line, and the ✕ that closes it.
+ *
+ * iOS mounts `PhoneDSH.Background.TaskScreen` with `dimsScreen: true`, which also
+ * lowers `UIScreen.main.brightness`. `:lib` has no window: a page composable cannot
+ * set the system brightness, so that one half is the host's and the page says so
+ * (see the lane receipt) instead of pretending to dim. What the page *can* do — and
+ * therefore does — is everything visible: the black surface, the status line and
+ * the close control, so the button is not a dead tap.
+ *
+ * @param statusLine the line the baseline passes as `TaskScreenConfiguration.status`.
+ * @param onClose the ✕ (`Image(systemName: "xmark.circle.fill")`, `:77`).
+ */
+@Composable
+private fun TaskScreenCover(statusLine: String, onClose: () -> Unit) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag(UiPageTags.TASK_SCREEN_ROOT + ".presented")
+            .background(tokens.colors.taskScreen)
+            .clickable(role = Role.Button, onClick = onClose)
+            .semantics { contentDescription = UiStrings.TASK_SCREEN_PRESENTED },
+    ) {
+        BasicText(
+            text = statusLine,
+            style = type.secondary.copy(color = tokens.colors.onAccent),
+            modifier = Modifier.align(Alignment.Center),
+        )
+        BasicText(
+            text = TASK_SCREEN_CLOSE_GLYPH,
+            style = type.headline.copy(color = tokens.colors.onAccent),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .clickable(role = Role.Button, onClick = onClose)
+                .semantics { contentDescription = UiStrings.TASK_SCREEN_CLOSE }
+                .padding(tokens.spacing.cardInset),
+        )
+    }
+}
+
+/** unverified glyph: the baseline's `xmark.circle.fill` at the cover's top-trailing. */
+private const val TASK_SCREEN_CLOSE_GLYPH: String = "✕"
+
 /** The description, the status line, the brightness Slider and the show action. */
 private fun LazyListScope.formBlock(
     state: TaskScreenScreenState,
-    onShowTaskScreen: (String, Double) -> Unit,
+    onShow: () -> Unit,
     onStatusLineChange: (String) -> Unit,
     onBrightnessChange: (Double) -> Unit,
 ) {
@@ -361,7 +440,7 @@ private fun LazyListScope.formBlock(
     }
     item(key = "task.show") {
         Button(
-            onClick = { onShowTaskScreen(state.statusLine, state.brightness) },
+            onClick = onShow,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
@@ -478,11 +557,17 @@ internal object TaskScreenPageTokens {
         "colors.accent",
         "colors.primary",
         "colors.tertiary",
+        // L75: the presented black cover.
+        "colors.taskScreen",
+        "colors.onAccent",
+        "spacing.cardInset",
         "geometry.pageOuterMarginH",
         "geometry.pageRowMinHeight",
         "spacing.badgeInsetV",
         "typography.body",
         "typography.caption",
+        // The presented cover's ✕ (headline ink) and its status line (secondary).
+        "typography.headline",
         "typography.secondary",
     )
 }

@@ -109,9 +109,11 @@ internal fun PDSHShellPage(
     Column(
         modifier = modifier
             .fillMaxSize()
-            // The grouped background is the one surface colour the token table has
-            // for it (`selector`); `colors.background` is unmeasured by design.
-            .background(tokens.colors.selector)
+            // `ios-shell.png`: the `List` keeps the system grouped background
+            // (#F2F2F7). `colors.selector` (#F2F3F5) is the theme's selector fill,
+            // not the grouped page: using it made 54% of the frame differ by
+            // (0,1,2) per pixel, which is the whole-block cause behind the 64.6%.
+            .background(tokens.colors.groupedBackground)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
             .testTag(UiPageTags.SHELL_ROOT),
     ) {
@@ -246,18 +248,23 @@ private fun ShellSectionView(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            // `ios-shell.png`: the caption's glyph starts 25.7 pt below the 44 pt
-            // bar (12 pt of the token table's card inset twice, rounded to the
-            // available tokens), and the caption-to-card gap is one card inset.
-            .padding(top = tokens.spacing.cardInset * 2),
-        verticalArrangement = Arrangement.spacedBy(tokens.spacing.cardInset),
+            // `ios-shell.png`: caption ink 128.7 pt; the 44 pt bar ends at 106,
+            // so the caption box starts ~19 pt below it. 18 = cardInset + iconText.
+            // The caption-to-card gap measures 11-12 pt on iOS, but Compose's
+            // 17 sp line box is ~4 pt taller than CoreText's, so the gap that
+            // reproduces the measured card top (156.3 - 62 = 94.3) is 8.
+            // `unverified geometry`: 8 is borrowed from `spacing.codeToolbar`.
+            .padding(top = tokens.spacing.cardInset + tokens.spacing.iconText),
+        verticalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
     ) {
         if (title != null) {
             BasicText(
                 text = title,
                 // `ios-shell.png` draws the section caption ("这台手机") at ink
-                // 15.3 pt — the 17 pt role — not at the 12 pt caption size.
-                style = type.rowLabel.copy(color = tokens.colors.secondary),
+                // 15.3 pt — the 17 pt role — not at the 12 pt caption size, and
+                // its measured ink is #85858B: system secondary over the grouped
+                // fill, not the theme's #66666B.
+                style = type.rowLabel.copy(color = tokens.colors.systemSecondary),
                 modifier = Modifier
                     .padding(horizontal = tokens.geometry.pageOuterMarginH * 2)
                     .testTag(titleTag)
@@ -286,7 +293,10 @@ private fun ShellInfoRow(label: String, value: String, tag: String) {
         modifier = Modifier
             .fillMaxWidth()
             .testTag(tag)
-            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+            // `ios-shell.png`: hairline-to-hairline row pitch is 52.33 pt. 52 is
+            // pageRowMinHeight (44) + codeToolbar (8); the 0.33 residual is below
+            // one raster pixel per row. `unverified geometry` for the borrow.
+            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight + tokens.spacing.codeToolbar)
             .padding(
                 horizontal = tokens.spacing.cardInset,
                 vertical = tokens.spacing.badgeInsetV,
@@ -298,15 +308,17 @@ private fun ShellInfoRow(label: String, value: String, tag: String) {
         BasicText(
             text = label,
             // A `LabeledContent` row in the baseline is `.body` = 17 pt:
-            // `ios-shell.png` measures 状态 / 网络 / 工作区 at ink 15.3 pt.
-            style = type.rowLabel.copy(color = tokens.colors.primary),
+            // `ios-shell.png` measures 状态 / 网络 / 工作区 at ink 15.3 pt, and
+            // its dominant ink is #000000 (systemLabel), not #111114.
+            style = type.rowLabel.copy(color = tokens.colors.systemLabel),
             modifier = Modifier.weight(1f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         BasicText(
             text = value,
-            style = type.rowLabel.copy(color = tokens.colors.secondary),
+            // Value ink measured #8A8A8E on both cards.
+            style = type.rowLabel.copy(color = tokens.colors.systemSecondary),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -328,26 +340,43 @@ private fun ShellHairline() {
             .fillMaxWidth()
             .padding(horizontal = tokens.spacing.cardInset)
             .height(tokens.stroke.hairline)
-            .background(tokens.colors.border),
+            // Same SwiftUI grouped-list separator as the settings cards: measured
+            // #E8E8E8, while the theme border is #E4E4E8 (delta 4 > the 2/255
+            // visibility threshold, so every hairline pixel used to count).
+            .background(tokens.colors.separator),
     )
 }
 
-/** A footnote inside the card (`:30`, `:44`): 13 pt secondary ink. */
+/**
+ * A footnote inside the card (`:30`, `:44`): 13 pt secondary ink.
+ *
+ * `ios-shell.png`: the footnote occupies the same 52.33 pt rhythm as the three
+ * rows above it (last hairline 313.3 → card bottom 365.7), and its text is
+ * vertically centred in that band — so it is a min-height row, not a text block
+ * with symmetric padding.
+ */
 @Composable
 private fun ShellFootnote(text: String, tag: String) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    BasicText(
-        text = text,
-        style = type.secondary.copy(color = tokens.colors.secondary),
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .testTag(tag)
-            .padding(
-                horizontal = tokens.spacing.cardInset,
-                vertical = tokens.spacing.cardInset,
-            ),
-    )
+            .defaultMinSize(
+                minHeight = tokens.geometry.pageRowMinHeight + tokens.spacing.codeToolbar,
+            )
+            .padding(horizontal = tokens.spacing.cardInset),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        BasicText(
+            text = text,
+            // `Text(...).font(.footnote).foregroundStyle(.secondary)` renders
+            // #7F7F7F on the white card (the same construct L79 measured in the
+            // settings/about footnotes), not the #8A8A8E LabeledContent value.
+            style = type.secondary.copy(color = tokens.colors.settingsFootnoteInk),
+        )
+    }
 }
 
 /**
@@ -369,19 +398,27 @@ private fun ShellUnavailableCard() {
             .clip(RoundedCornerShape(tokens.radius.card))
             .background(tokens.colors.input)
             .testTag(UiPageTags.SHELL_EMPTY)
-            // The baseline's ContentUnavailableView is 214.6 pt tall: 44 pt of
-            // page-row floor above and below the glyph/title/description stack.
+            // The baseline's ContentUnavailableView is 214.3 pt tall and is not
+            // symmetric: icon top is +34.3 from the card edge, the last
+            // description line ends 47 pt above the bottom. 34 = pageRowMinHeight
+            // (44) - badgeInsetV twice; the bottom keeps the 44 pt row floor.
             .padding(
-                horizontal = tokens.spacing.cardInset * 2,
-                vertical = tokens.geometry.pageRowMinHeight,
+                start = tokens.spacing.cardInset * 2,
+                top = tokens.geometry.pageRowMinHeight - tokens.spacing.badgeInsetV * 2,
+                end = tokens.spacing.cardInset * 2,
+                bottom = tokens.geometry.pageRowMinHeight,
             )
             .semantics(mergeDescendants = true) {},
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // The SF Symbol `terminal` box: a rounded outline with the prompt glyph.
+        // iOS glyph measures 55.0 x 43.3 pt; 56 x 44 is the nearest token sum.
         Box(
             modifier = Modifier
-                .size(tokens.geometry.pageRowMinHeight)
+                .size(
+                    width = tokens.geometry.pageRowMinHeight + tokens.spacing.cardInset,
+                    height = tokens.geometry.pageRowMinHeight,
+                )
                 .border(
                     width = tokens.stroke.hairline * 4,
                     color = tokens.colors.tertiary,
@@ -395,27 +432,45 @@ private fun ShellUnavailableCard() {
             )
         }
         Column(
-            modifier = Modifier.padding(top = tokens.spacing.cardInset * 2),
+            // `ios-shell.png`: icon bottom 417.0 → title ink 439.0 after the
+            // 61.3 pt status-bar offset. 14 = badgeInsetH (10) + jsonChevronGap (4)
+            // reproduces that 22 pt icon-to-title gap once Compose's line-box
+            // leading is included; `unverified geometry` for the borrow.
+            modifier = Modifier.padding(top = tokens.spacing.badgeInsetH + tokens.spacing.jsonChevronGap),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+            verticalArrangement = Arrangement.spacedBy(tokens.spacing.jsonChevronGap),
         ) {
             BasicText(
                 text = UiStrings.SHELL_EMPTY,
                 // iOS draws this inside `ContentUnavailableView`, whose title is
                 // ~20 pt (ios-shell.png ink 19.7) — not a 17 pt headline.
                 style = type.emptyStateTitle.copy(
-                    color = tokens.colors.primary,
+                    // Ink measured #000000 (systemLabel).
+                    color = tokens.colors.systemLabel,
                     textAlign = TextAlign.Center,
                 ),
                 modifier = Modifier.fillMaxWidth(),
             )
             BasicText(
                 text = UiStrings.SHELL_EMPTY_HINT,
-                style = type.secondary.copy(
-                    color = tokens.colors.secondary,
+                // `ios-shell.png`: the description ink is 14.7 pt high and wraps
+                // to two lines — `.subheadline` = 15 pt, not the 17 pt body and
+                // not the 13 pt footnote. Its measured line 1 is 17 CJK cells
+                // (ink x 87.7-312.3) and line 2 is 命令。; the column therefore
+                // has to be narrower than 18 cells. 32 pt a side
+                // (pageOuterMarginH 16 + cardInset 12 + jsonChevronGap 4) leaves
+                // 258 pt, so 17 cells fit and the 18th does not.
+                style = type.subheadline.copy(
+                    color = tokens.colors.systemSecondary,
                     textAlign = TextAlign.Center,
                 ),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        horizontal = tokens.geometry.pageOuterMarginH +
+                            tokens.spacing.cardInset +
+                            tokens.spacing.jsonChevronGap,
+                    ),
             )
         }
     }

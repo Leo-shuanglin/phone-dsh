@@ -55,6 +55,7 @@ public enum class BubbleRole {
 public object BubbleTokens {
     public val refs: List<String> = listOf(
         UiTokenNames.COLORS_SELECTOR,
+        UiTokenNames.COLORS_USER_BUBBLE,
         UiTokenNames.COLORS_PRIMARY,
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.TYPOGRAPHY_BODY,
@@ -159,8 +160,11 @@ public fun ChatBubble(
             // at x 16.7 and runs to the trailing page margin).
             modifier = common
                 .widthIn(max = tokens.geometry.bubbleMaxWidth)
+                // iOS draws the bubble in `NativeChatTheme.bubble`
+                // (`NativeParityTokens.userBubble`, #EDF3FE), not in the selector
+                // grey; `ios-chat-assistant.png` samples the fill at #EDF3FE.
                 .background(
-                    color = tokens.colors.selector,
+                    color = tokens.colors.userBubble,
                     shape = RoundedCornerShape(tokens.radius.bubble),
                 )
                 // iOS PR13's pair: 16 horizontal / 10 vertical

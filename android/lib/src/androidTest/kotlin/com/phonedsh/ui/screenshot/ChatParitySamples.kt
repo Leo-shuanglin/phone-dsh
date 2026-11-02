@@ -39,17 +39,17 @@ object ChatParitySamples {
     const val TITLE: String = "新会话"
 
     /** `ios-chat-default.png`: the permission card's body. */
-    const val PERMISSION_BODY: String = "要跑一条命令，可以吗？"
+    const val PERMISSION_BODY: String = "要跑一条命令,可以吗?"
 
     /** `ios-chat-permission.png`: the two cards' bodies. */
-    const val PERMISSION_WRITE_BODY: String = "要写一个文件，可以吗？"
+    const val PERMISSION_WRITE_BODY: String = "要写一个文件,可以吗?"
     const val PERMISSION_WRITE_DETAIL: String = "notes/todo.md"
     const val PERMISSION_RUN_DETAIL: String = "swift build"
 
     /** `ios-chat-assistant.png`: the user bubble and the answer's two paragraphs. */
     const val USER_HELLO: String = "hello test 123"
-    const val ASSISTANT_INTRO: String = "先看了工程的入口，.build 目录已经在忽略列表里。"
-    const val ASSISTANT_OUTRO: String = "接下来我会把这一段改动落到 ChatPage.swift，然后重新编译验证。"
+    const val ASSISTANT_INTRO: String = "先看了工程的入口,.build 目录已经在忽略列表里。"
+    const val ASSISTANT_OUTRO: String = "接下来我会把这一段改动落到 ChatPage.swift,然后重新编译验证。"
 
     /** The `swift` fence of `ios-chat-assistant.png` / `ios-code-block.png`. */
     const val CODE_LANGUAGE: String = "swift"
@@ -82,7 +82,7 @@ object ChatParitySamples {
     /** The 5000-character draft of `ios-chat-draft.png` / `ios-chat-long.png`. */
     val LONG_DRAFT: String = buildString {
         repeat(40) {
-            append("把这句话放进输入框里，看看行高和滚动还正不正常。")
+            append("把这句话放进输入框里,看看行高和滚动还正不正常。")
             append("Mixed English words like accessibilityIdentifier and 1234567890 should wrap.")
             append('\n')
         }
@@ -91,7 +91,7 @@ object ChatParitySamples {
     /** `ios-chat-long.png`: the model answer the draft is typed under. */
     val LONG_ANSWER: String = buildString {
         repeat(12) {
-            append("这段是模型的回答，用来核对长正文的行高与滚动是否正常。\n")
+            append("这段是模型的回答,用来核对长正文的行高与滚动是否正常。\n")
         }
     }
 
@@ -189,7 +189,9 @@ object ChatParitySamples {
             draft = LONG_DRAFT,
             mode = ComposerMode.SEND,
             enabled = true,
-            canSubmit = true,
+            // The shot's send key is the pale one: the host is not started, so a
+            // draft alone cannot be sent (`ChatModel.canSend` is false).
+            canSubmit = false,
         ),
     )
 
@@ -197,12 +199,15 @@ object ChatParitySamples {
     fun chatLong(): ChatScreenState = base().copy(
         phase = ChatPhase.IDLE,
         runStatus = RunStatus.STOPPED,
-        rows = listOf(ChatRow.Assistant("row-assistant-1", LONG_ANSWER)),
+        rows = listOf(
+            ChatRow.User("row-user-1", LONG_DRAFT),
+            ChatRow.Assistant("row-assistant-1", LONG_ANSWER),
+        ),
         composer = ComposerState(
             draft = LONG_DRAFT,
             mode = ComposerMode.SEND,
             enabled = true,
-            canSubmit = true,
+            canSubmit = false,
         ),
     )
 
@@ -251,7 +256,14 @@ object ChatParitySamples {
             ChatRow.User("row-user-2", USER_QUEUED, badge = UiStrings.QUEUED_TAG),
         ),
         // A turn runs, but the shot shows the pale send key rather than a stop key.
-        composer = ComposerState(running = true, canSubmit = false),
+        // The message is in the host queue, so the queue strip renders above the
+        // composer (`ios-chat-queued.png` y 705-719 pt: text + edit + delete +
+        // send-now); without `queued` the strip had no state to draw.
+        composer = ComposerState(
+            running = true,
+            canSubmit = false,
+            queued = listOf(USER_QUEUED),
+        ),
     )
 
     /** `ios-chat-official.png`: a short thread plus the stats line under the card. */

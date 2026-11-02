@@ -46,17 +46,31 @@
 // bar and the drawer pins it above the list; the query and the title filter are
 // the same.
 //
+// Width (L73): the page fills the container it is given. The 320 pt drawer is the
+// *container's* constant (`NativeShell.swift:97`, and the preview drawer at
+// `:875`), never this page's: iOS captures the same page at 402 in the `.sessions`
+// route and at 320 inside `DrawerPreview`, and the two PNGs differ by the container
+// alone. A page that pinned its own list to 320 could not reproduce that pair.
+//
 // Geometry: the page margin and the three row floors are page-level tokens from
 // `spec/ui/v1/tokens.json`; the search field's floor reuses the composer's
-// minimum height and is marked `unverified geometry` at its one use site. No
-// value is re-typed here.
+// minimum height and is marked `unverified geometry` at its one use site. The
+// values the baseline hard-codes as literals (288 pt separators, 50 pt CTA, the
+// 16.3 x 15.3 balloon ink, 18.3 x 4 ellipsis) live in the private constants at the
+// bottom of the file, each with the source line it was measured from. No value is
+// re-typed here.
 package com.phonedsh.ui.page
 
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,6 +81,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -93,17 +108,21 @@ import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -116,6 +135,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.phonedsh.ui.SessionsMetrics
@@ -604,10 +624,16 @@ public data class SessionsScreenState(
  * @param onDeleteCancel legacy session delete: never called by this page.
  * @param onNewSession create a session in the current folder (or ungrouped).
  * @param onRetry retry a failed list read.
- * @param onDismissFailure dismiss the failure line.
- * @param onBack leave the page; the baseline's bar is empty, Android needs the
- *   control, so the bar carries the back glyph (the baseline's only occupant is
- *   the capture harness's ✕).
+ * @param onDismissFailure legacy Android-only control: the baseline's failure row
+ *   is `Text(errorText)` + 重试 and has **no** dismiss glyph
+ *   (`SessionsPage.swift:176-197`), so the page no longer draws one. The
+ *   parameter is kept so a host compiled against the previous page still links
+ *   (its one caller is the app's `HostSessionsScreen`); the row disappears when
+ *   the failed read is cleared, which is what 重试 does.
+ * @param onBack leave the page. The baseline's bar is empty
+ *   (`SessionsPage.swift:137`), so the band is drawn either way and only the
+ *   glyph is Android's: `null` (the drawer/home presentation) leaves the band
+ *   empty exactly as iOS draws it.
  * @param onToggleWorkspace expand or collapse one folder section.
  * @param onWorkspaceMenuToggle open or close one folder's overflow menu.
  * @param onNewSessionInWorkspace create a session inside that folder.
@@ -679,9 +705,13 @@ public fun SessionsPage(
                 .statusBarsPadding()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
         ) {
-            if (onBack != null) {
-                SessionsNavBar(onBack = onBack)
-            }
+            // `SessionsPage.swift:137`–`:324`: the baseline's `NavigationStack` declares
+            // no title and no toolbar item, so its bar is an empty 44 pt band and the
+            // search field hangs directly below it. The band is part of the page on
+            // both platforms; only the back control inside it is Android's own (a
+            // drawer has nothing behind it, a route does), so it is drawn only when
+            // the host routes this page.
+            SessionsNavBar(onBack = onBack)
             if (state.waiting) {
                 EmptyHint(
                     title = UiStrings.WAITING_ENGINE,
@@ -693,10 +723,14 @@ public fun SessionsPage(
             // The baseline's `.searchable(navigationBarDrawer)`: a white capsule
             // pinned under the bar, above the scrolling list.
             SessionsSearchField(query = state.query, onQueryChange = onQueryChange)
-            // The baseline's list is the drawer body: a 320 pt column whose rows
-            // inset 16 on both sides, so every hairline runs 16 -> 304. The search
-            // bar above it belongs to the window, not to this column, which is why
-            // it stays 402 - 32 wide (`SessionsPage.swift:594`, `NativeShell.swift:97`).
+            // The page fills the width it is given; the 320 pt drawer is the
+            // *container's* number, not this page's (`NativeShell.swift:97` frames the
+            // drawer at 320, and the baseline's own `sessions` state is captured in the
+            // full 402 pt window). That is the one difference between the two iOS
+            // empty captures: `ios-sessions-default` is the page at 402 and
+            // `ios-sessions-nothing` the same page inside the 320 drawer, which is why
+            // its CTA is 288 wide there and 370 wide here.
+            //
             // The search capsule stays pinned; the list under it consumes the IME
             // inset so its last row can still be scrolled above the keyboard
             // (spec §5 row `insets`). The page's own `navigationBarsPadding` below
@@ -707,8 +741,7 @@ public fun SessionsPage(
                     isRefreshing = state.refreshInFlight,
                     onRefresh = onRefresh ?: {},
                     modifier = Modifier
-                        .width(SessionsMetrics.drawerWidth)
-                        .fillMaxHeight()
+                        .fillMaxSize()
                         .navigationBarsPadding()
                         .testTag(UiPageTags.SESSIONS_REFRESH),
                 ) {
@@ -718,7 +751,6 @@ public fun SessionsPage(
                         onNewSession = onNewSession,
                         onRenameStart = onRenameStart,
                         onRetry = onRetry,
-                        onDismissFailure = onDismissFailure,
                         onToggleWorkspace = onToggleWorkspace,
                         onWorkspaceMenuToggle = onWorkspaceMenuToggle,
                         onNewSessionInWorkspace = onNewSessionInWorkspace,
@@ -779,14 +811,17 @@ public fun SessionsPage(
 }
 
 /**
- * The bar above the search field.
+ * The 44 pt band above the search field.
  *
- * The baseline's bar is empty (the drawer body owns the content), so this one
- * carries only the back control: the page is reached as a route here, and a
- * route needs a way back that is not the system gesture alone.
+ * The baseline's bar is empty: `NavigationStack { List { … } }` declares no
+ * `navigationTitle` and no toolbar item (`SessionsPage.swift:137`, `:322`), so the
+ * band is there and holds nothing. Android keeps the same band and puts the one
+ * control iOS gets from the system there: the back control, drawn only when the
+ * host routes the page (`onBack != null`). A drawer — the baseline's own
+ * presentation — passes `null` and gets the empty band the baseline draws.
  */
 @Composable
-private fun SessionsNavBar(onBack: () -> Unit) {
+private fun SessionsNavBar(onBack: (() -> Unit)?) {
     val tokens = LocalUiTokens.current
     Row(
         modifier = Modifier
@@ -795,14 +830,16 @@ private fun SessionsNavBar(onBack: () -> Unit) {
             .padding(horizontal = tokens.geometry.pageOuterMarginH),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BasicText(
-            text = PAGE_BACK_GLYPH,
-            style = LocalUiType.current.secondary.copy(color = tokens.colors.secondary),
-            modifier = Modifier
-                .clickable(role = Role.Button, onClick = onBack)
-                .semantics { contentDescription = UiStrings.BACK }
-                .padding(tokens.spacing.iconText),
-        )
+        if (onBack != null) {
+            BasicText(
+                text = PAGE_BACK_GLYPH,
+                style = LocalUiType.current.secondary.copy(color = tokens.colors.secondary),
+                modifier = Modifier
+                    .clickable(role = Role.Button, onClick = onBack)
+                    .semantics { contentDescription = UiStrings.BACK }
+                    .padding(tokens.spacing.iconText),
+            )
+        }
     }
 }
 
@@ -875,7 +912,6 @@ private fun SessionsList(
     onNewSession: () -> Unit,
     onRenameStart: (SessionRowView) -> Unit,
     onRetry: (() -> Unit)?,
-    onDismissFailure: (() -> Unit)?,
     onToggleWorkspace: (SessionWorkspaceView) -> Unit,
     onWorkspaceMenuToggle: (SessionWorkspaceView) -> Unit,
     onNewSessionInWorkspace: (SessionWorkspaceView) -> Unit,
@@ -902,11 +938,15 @@ private fun SessionsList(
         // the sessions that belong to no folder.
         item(key = "new-session") {
             Column {
-                NewSessionRow(
-                    block = state.newSessionBlock,
-                    onNewSession = onNewSession,
-                )
-                InsetHairline()
+                Box {
+                    NewSessionRow(
+                        block = state.newSessionBlock,
+                        onNewSession = onNewSession,
+                    )
+                    // `SessionsPage.swift:153-158`: an overlay, `.bottom`, 288 wide, so
+                    // it is centred in the row's content box and costs no height.
+                    SessionSeparator(Modifier.align(Alignment.BottomCenter))
+                }
                 if (state.newSessionBlock != null) {
                     BasicText(
                         text = state.newSessionBlock.reason,
@@ -928,11 +968,7 @@ private fun SessionsList(
                     )
                 }
                 if (state.failure != null) {
-                    SessionsFailureLine(
-                        message = state.failure,
-                        onRetry = onRetry,
-                        onDismiss = onDismissFailure,
-                    )
+                    SessionsFailureLine(message = state.failure, onRetry = onRetry)
                 }
             }
         }
@@ -981,7 +1017,14 @@ private fun SessionsList(
                     item(key = "workspace-empty-${workspace.id}") {
                         Column {
                             WorkspaceSessionsEmpty()
-                            InsetHairline()
+                            // The baseline's empty copy carries no
+                            // `.listRowSeparator(.hidden)` (`SessionsPage.swift:246-256`),
+                            // so the platform draws that row's separator (16 → 304 in the
+                            // drawer the state is captured in, `ios-sessions-empty.png`
+                            // y 438). It stays an overlay, like every other line here.
+                            Box {
+                                SessionSeparator(Modifier.align(Alignment.BottomStart).padding(start = SessionsMetrics.SEPARATOR_INSET_PT.dp))
+                            }
                         }
                     }
                 } else {
@@ -1044,13 +1087,25 @@ private fun SessionsList(
 // Drawer pieces
 // ---------------------------------------------------------------------------
 
-/** A hairline inset by the page margin: the baseline's 16 → panel-width rule. */
+/**
+ * One hand-drawn separator, the baseline's own shape.
+ *
+ * `SessionsPage.swift:157` and `:596` both hard-code `.frame(width: 288, height:
+ * 0.5)`, so the line is *288 wide regardless of the page width* — it is not a
+ * full-bleed rule with a 16 pt inset. The two call sites differ only in the
+ * overlay's alignment: the new-session row centres it (`.bottom`) and a session
+ * row pins it to the row's leading edge (`.bottomLeading`, i.e. x 16 after the
+ * row inset). Both are overlays, so neither takes layout height.
+ */
 @Composable
-private fun InsetHairline() {
+private fun SessionSeparator(modifier: Modifier = Modifier) {
     val tokens = LocalUiTokens.current
-    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = tokens.geometry.pageOuterMarginH)) {
-        SessionHairline()
-    }
+    Box(
+        modifier = modifier
+            .width(SessionsMetrics.SEPARATOR_WIDTH_PT.dp)
+            .height(tokens.stroke.hairline)
+            .background(tokens.colors.border),
+    )
 }
 
 /** The 新建会话 row: accent when enabled, the disabled ink plus a reason when not. */
@@ -1090,7 +1145,6 @@ private fun NewSessionRow(block: NewSessionBlock?, onNewSession: () -> Unit) {
 private fun SessionsFailureLine(
     message: String,
     onRetry: (() -> Unit)?,
-    onDismiss: (() -> Unit)?,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -1127,19 +1181,6 @@ private fun SessionsFailureLine(
                     .padding(tokens.spacing.iconText),
             )
         }
-        if (onDismiss != null) {
-            BasicText(
-                text = DISMISS_GLYPH,
-                style = type.headline.copy(
-                    fontWeight = FontWeight.Normal,
-                    color = tokens.colors.tertiary,
-                ),
-                modifier = Modifier
-                    .clickable(role = Role.Button, onClick = onDismiss)
-                    .semantics { contentDescription = UiStrings.DISMISS }
-                    .padding(tokens.spacing.iconText),
-            )
-        }
     }
 }
 
@@ -1147,8 +1188,16 @@ private fun SessionsFailureLine(
  * One session row, its long-press `DropdownMenu` and the current check mark.
  *
  * The baseline's row: `bubble.left` in a 17 pt box, the title on 17 pt, the
- * relative time and the run dot on 12 pt, a 56 pt floor and a hairline inset by
- * the page margin.
+ * relative time and the run dot on 12 pt, a 56 pt floor, and a 288 pt hairline
+ * pinned to the row's leading edge as an *overlay*.
+ *
+ * Two things the overlay placement changes, both measured on `ios-sessions-many`:
+ * the row is exactly 56 pt tall (a sibling hairline used to add its 0.5 pt, so 20
+ * rows drifted 14 pt), and the line sits on the boundary instead of above it.
+ *
+ * Pressing the row paints it `NativePagePalette.toast` with a 12 pt radius for
+ * 0.15 s (`SessionsPage.swift:583`, `:641-654`), which replaces the platform
+ * ripple: the baseline's feedback is a flat fill, not a splash.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1161,121 +1210,140 @@ private fun SessionItem(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Box(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag(UiPageTags.SESSION_ROW)
-                    .combinedClickable(
-                        role = Role.Button,
-                        onClick = { onSelect(row) },
-                        onLongClick = { onSessionMenuToggle(row) },
-                    )
-                    // The baseline's row: 56 pt floor, a 16 pt inset plus an 8 pt
-                    // inner pad (so the glyph lands on 24 and the title on 51), a
-                    // 17 pt glyph box and a 10 pt glyph-to-text gap.
-                    .heightIn(min = SessionsMetrics.sessionRowHeight)
-                    .padding(horizontal = SessionsMetrics.rowInset)
-                    .padding(horizontal = SessionsMetrics.SESSION_ROW_INNER_INSET_PT.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_GLYPH_GAP_PT.dp),
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressFill by animateFloatAsState(
+        targetValue = if (pressed) 1f else 0f,
+        animationSpec = tween(durationMillis = ROW_PRESS_MS, easing = ROW_PRESS_EASING),
+        label = "session-row-press",
+    )
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(UiPageTags.SESSION_ROW)
+                .background(
+                    color = tokens.colors.selector.copy(alpha = pressFill),
+                    shape = RoundedCornerShape(tokens.radius.card),
+                )
+                .combinedClickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    role = Role.Button,
+                    onClick = { onSelect(row) },
+                    onLongClick = { onSessionMenuToggle(row) },
+                )
+                // The baseline's row: 56 pt floor, a 16 pt inset plus an 8 pt
+                // inner pad (so the glyph lands on 24 and the title on 51), a
+                // 17 pt glyph box and a 10 pt glyph-to-text gap.
+                .heightIn(min = SessionsMetrics.sessionRowHeight)
+                .padding(horizontal = SessionsMetrics.rowInset)
+                .padding(horizontal = SessionsMetrics.SESSION_ROW_INNER_INSET_PT.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_GLYPH_GAP_PT.dp),
+        ) {
+            SessionRowGlyph(ink = tokens.colors.secondary)
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_TEXT_GAP_PT.dp),
             ) {
-                SessionRowGlyph(ink = tokens.colors.secondary)
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(SessionsMetrics.SESSION_TEXT_GAP_PT.dp),
+                BasicText(
+                    text = row.title,
+                    style = type.headline.copy(
+                        fontWeight = FontWeight.Normal,
+                        color = tokens.colors.primary,
+                        platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    BasicText(
-                        text = row.title,
-                        style = type.headline.copy(
-                            fontWeight = FontWeight.Normal,
-                            color = tokens.colors.primary,
-                            platformStyle = PlatformTextStyle(includeFontPadding = false),
-                        ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.copyGap),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (row.timeLabel != null) {
-                            BasicText(
-                                text = row.timeLabel,
-                                style = type.caption.copy(
-                                    color = tokens.colors.secondary,
-                                    platformStyle = PlatformTextStyle(includeFontPadding = false),
-                                ),
-                            )
-                        }
-                        // The baseline shows one run indicator only: a grey dot and
-                        // 运行中. A failure is not a row state there, so it is not
-                        // invented here.
-                        if (row.status == SessionRunStatus.RUNNING) {
-                            BasicText(
-                                text = SEPARATOR_GLYPH,
-                                style = type.caption.copy(color = tokens.colors.secondary),
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .size(SessionsMetrics.SESSION_RUNNING_DOT_PT.dp)
-                                    .clip(CircleShape)
-                                    .background(tokens.colors.secondary),
-                            )
-                            BasicText(
-                                text = UiStrings.RUNNING,
-                                style = type.caption.copy(color = tokens.colors.secondary),
-                            )
-                        }
+                    if (row.timeLabel != null) {
+                        BasicText(
+                            text = row.timeLabel,
+                            style = type.caption.copy(
+                                color = tokens.colors.secondary,
+                                platformStyle = PlatformTextStyle(includeFontPadding = false),
+                            ),
+                        )
+                    }
+                    // The baseline shows one run indicator only: a grey dot and
+                    // 运行中. A failure is not a row state there, so it is not
+                    // invented here.
+                    if (row.status == SessionRunStatus.RUNNING) {
+                        BasicText(
+                            text = SEPARATOR_GLYPH,
+                            style = type.caption.copy(color = tokens.colors.secondary),
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(SessionsMetrics.SESSION_RUNNING_DOT_PT.dp)
+                                .clip(CircleShape)
+                                .background(tokens.colors.secondary),
+                        )
+                        BasicText(
+                            text = UiStrings.RUNNING,
+                            style = type.caption.copy(color = tokens.colors.secondary),
+                        )
                     }
                 }
-                if (row.selected) {
-                    BasicText(
-                        text = CHECK_GLYPH,
-                        style = type.headline.copy(
-                            fontWeight = FontWeight.Normal,
-                            color = tokens.colors.primary,
-                        ),
-                        modifier = Modifier
-                            .testTag(UiPageTags.SESSIONS_SESSION_CURRENT)
-                            .semantics { contentDescription = UiStrings.SESSIONS_CURRENT },
-                    )
-                }
             }
-            // The baseline's `contextMenu`: a standard DropdownMenu, not an inline row.
-            DropdownMenu(
-                expanded = row.menuOpen,
-                onDismissRequest = { onSessionMenuToggle(row) },
-                modifier = Modifier.testTag(UiPageTags.SESSIONS_SESSION_MENU),
-            ) {
-                DropdownMenuItem(
-                    text = {
-                        BasicText(
-                            text = UiStrings.SESSION_RENAME_TITLE,
-                            style = type.body.copy(color = tokens.colors.primary),
-                        )
-                    },
-                    onClick = { onRenameStart(row) },
-                    colors = MenuDefaults.itemColors(textColor = tokens.colors.primary),
-                    modifier = Modifier.testTag(UiPageTags.SESSIONS_SESSION_RENAME),
-                )
-                DropdownMenuItem(
-                    // Archiving is recoverable, so it is not inked as destructive
-                    // and it gets no confirmation (the baseline's rule).
-                    text = {
-                        BasicText(
-                            text = UiStrings.SESSIONS_ARCHIVE,
-                            style = type.body.copy(color = tokens.colors.primary),
-                        )
-                    },
-                    onClick = { onArchiveSession(row) },
-                    colors = MenuDefaults.itemColors(textColor = tokens.colors.primary),
-                    modifier = Modifier.testTag(UiPageTags.SESSIONS_SESSION_ARCHIVE),
+            if (row.selected) {
+                // `SessionsPage.swift:572`: `Spacer(minLength: 4)` between the
+                // title block and the check, on top of the 10 pt row gap.
+                Box(modifier = Modifier.width(SESSIONS_CHECK_GAP_PT.dp))
+                BasicText(
+                    text = CHECK_GLYPH,
+                    style = type.headline.copy(
+                        fontWeight = FontWeight.Normal,
+                        color = tokens.colors.primary,
+                    ),
+                    modifier = Modifier
+                        .testTag(UiPageTags.SESSIONS_SESSION_CURRENT)
+                        .semantics { contentDescription = UiStrings.SESSIONS_CURRENT },
                 )
             }
         }
-        InsetHairline()
+        // The baseline's `contextMenu`: a standard DropdownMenu, not an inline row.
+        DropdownMenu(
+            expanded = row.menuOpen,
+            onDismissRequest = { onSessionMenuToggle(row) },
+            modifier = Modifier.testTag(UiPageTags.SESSIONS_SESSION_MENU),
+        ) {
+            DropdownMenuItem(
+                text = {
+                    BasicText(
+                        text = UiStrings.SESSION_RENAME_TITLE,
+                        style = type.body.copy(color = tokens.colors.primary),
+                    )
+                },
+                onClick = { onRenameStart(row) },
+                colors = MenuDefaults.itemColors(textColor = tokens.colors.primary),
+                modifier = Modifier.testTag(UiPageTags.SESSIONS_SESSION_RENAME),
+            )
+            DropdownMenuItem(
+                // Archiving is recoverable, so it is not inked as destructive
+                // and it gets no confirmation (the baseline's rule).
+                text = {
+                    BasicText(
+                        text = UiStrings.SESSIONS_ARCHIVE,
+                        style = type.body.copy(color = tokens.colors.primary),
+                    )
+                },
+                onClick = { onArchiveSession(row) },
+                colors = MenuDefaults.itemColors(textColor = tokens.colors.primary),
+                modifier = Modifier.testTag(UiPageTags.SESSIONS_SESSION_ARCHIVE),
+            )
+        }
+        // `SessionsPage.swift:592-597`: `.overlay(alignment: .bottomLeading)`.
+        SessionSeparator(
+            Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = SessionsMetrics.SEPARATOR_INSET_PT.dp),
+        )
     }
 }
 
@@ -1288,9 +1356,13 @@ private fun CompletelyEmptyBlock(onCreateWorkspace: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .testTag(UiPageTags.SESSIONS_SECTION_EMPTY)
+            // `SessionsPage.swift:207-232`: the block itself adds only 8 pt below
+            // (`.padding(.bottom, 8)`); the air above it belongs to the list.
             .padding(
-                horizontal = tokens.geometry.pageOuterMarginH,
-                vertical = tokens.spacing.cardInset,
+                start = tokens.geometry.pageOuterMarginH,
+                end = tokens.geometry.pageOuterMarginH,
+                top = tokens.spacing.cardInset,
+                bottom = SessionsMetrics.EMPTY_STATE_BOTTOM_PT.dp,
             )
             .semantics(mergeDescendants = true) {},
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1298,11 +1370,13 @@ private fun CompletelyEmptyBlock(onCreateWorkspace: () -> Unit) {
     ) {
         BasicText(
             text = UiStrings.WORKSPACE_EMPTY,
-            style = type.headline.copy(color = tokens.colors.primary),
+            // `.font(.system(size: 17, weight: .semibold))` + `.multilineTextAlignment(.center)`
+            style = type.headline.copy(color = tokens.colors.primary, textAlign = TextAlign.Center),
         )
         BasicText(
             text = UiStrings.SESSIONS_EMPTY_WORKSPACE_HINT,
-            style = type.secondary.copy(color = tokens.colors.secondary),
+            style = type.secondary.copy(color = tokens.colors.secondary, textAlign = TextAlign.Center),
+            modifier = Modifier.fillMaxWidth(),
         )
         Box(
             modifier = Modifier
@@ -1394,22 +1468,22 @@ private fun WorkspaceRow(
             }
         }
         Box {
-            BasicText(
-                text = MORE_GLYPH,
-                style = type.headline.copy(
-                    fontWeight = FontWeight.Normal,
-                    color = tokens.colors.secondary,
-                ),
+            // The baseline's hit box is 32 x 44 with the mark centred in it
+            // (`SessionsPage.swift:451-457`).
+            Box(
                 modifier = Modifier
                     .testTag(UiPageTags.SESSIONS_WORKSPACE_MENU)
                     .clickable(role = Role.Button, onClick = { onMenuToggle(workspace) })
                     .width(SessionsMetrics.WORKSPACE_MENU_WIDTH_PT.dp)
-                    .padding(tokens.spacing.iconText)
+                    .defaultMinSize(minHeight = SessionsMetrics.workspaceRowHeight)
                     .semantics {
                         contentDescription =
                             UiStrings.SESSIONS_WORKSPACE_OPTIONS.format(workspace.title)
                     },
-            )
+                contentAlignment = Alignment.Center,
+            ) {
+                WorkspaceMenuGlyph(ink = tokens.colors.secondary)
+            }
             // The baseline's `Menu`: a standard DropdownMenu in the baseline's order.
             DropdownMenu(
                 expanded = workspace.menuOpen,
@@ -1450,6 +1524,37 @@ private fun WorkspaceRow(
                     modifier = Modifier.testTag(UiPageTags.SESSIONS_WORKSPACE_DELETE),
                 )
             }
+        }
+    }
+}
+
+/**
+ * The folder row's overflow mark: the baseline's `Image(systemName: "ellipsis")`
+ * at 20 pt (`SessionsPage.swift:452-453`).
+ *
+ * SF's ellipsis draws three round dots 4 pt across, 18.3 pt end to end
+ * (`ios-sessions-empty.png`: ink x 279.0-297.0, y 305.0-308.7). U+2026 "…" in the
+ * system font measures 9.3 x 2.3 pt on the same row — half the width and half the
+ * height — because it is a text ellipsis, not the symbol. `:lib` ships no icon
+ * set, so the three dots are drawn here at the measured size; nothing outside
+ * this composable depends on the drawing.
+ */
+@Composable
+private fun WorkspaceMenuGlyph(ink: Color) {
+    Canvas(
+        modifier = Modifier.size(
+            width = WORKSPACE_MENU_GLYPH_W_PT.dp,
+            height = WORKSPACE_MENU_GLYPH_H_PT.dp,
+        ),
+    ) {
+        val radius = size.height / 2f
+        val gap = (size.width - 3 * size.height) / 2f
+        repeat(3) { index ->
+            drawCircle(
+                color = ink,
+                radius = radius,
+                center = Offset(x = radius + index * (size.height + gap), y = radius),
+            )
         }
     }
 }
@@ -1927,6 +2032,7 @@ private fun DeleteWorkspaceDialog(
 internal object SessionsPageTokens {
     val refs: List<String> = listOf(
         UiTokenNames.COLORS_ACCENT,
+        UiTokenNames.COLORS_BORDER,
         UiTokenNames.COLORS_BORDER_LIGHT,
         UiTokenNames.COLORS_PAGE_ACCENT,
         UiTokenNames.COLORS_DANGER,
@@ -1934,12 +2040,14 @@ internal object SessionsPageTokens {
         UiTokenNames.COLORS_ON_ACCENT,
         UiTokenNames.COLORS_PRIMARY,
         UiTokenNames.COLORS_SECONDARY,
+        UiTokenNames.COLORS_SELECTOR,
         UiTokenNames.COLORS_TERTIARY,
         UiTokenNames.GEOMETRY_CARD_OUTER_MARGIN_V,
         UiTokenNames.GEOMETRY_PAGE_HEADER_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_PAGE_LIST_ROW_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_PAGE_OUTER_MARGIN_H,
         UiTokenNames.GEOMETRY_PAGE_ROW_MIN_HEIGHT,
+        UiTokenNames.RADIUS_CARD,
         UiTokenNames.SPACING_BADGE_INSET_H,
         UiTokenNames.SPACING_BADGE_INSET_V,
         UiTokenNames.SPACING_CARD_INSET,
@@ -2089,7 +2197,6 @@ private const val DAY_MS: Long = 86_400_000
 
 /** The glyphs the drawer draws; the baseline's SF Symbols have no Compose peer. */
 private const val PLUS_GLYPH: String = "+"
-private const val MORE_GLYPH: String = "…"
 private const val CHEVRON_GLYPH: String = "›"
 private const val CHECK_GLYPH: String = "✓"
 private const val SEPARATOR_GLYPH: String = "·"
@@ -2120,15 +2227,23 @@ private fun SessionRowGlyph(ink: Color) {
         ),
     ) {
         val stroke = size.minDimension * GLYPH_STROKE_RATIO
-        val bodyTop = size.height * 0.10f
-        val bodyBottom = size.height * 0.68f
-        val radius = size.minDimension * 0.22f
+        // The symbol's ink is 16.3 x 15.3 pt inside the 17 pt frame
+        // (`ios-sessions-many.png` row 1: x 24.3-40.3, y 353.3-368.3), so the
+        // balloon is laid out in that ink box instead of the frame: the stroke
+        // straddles the path, hence the half-stroke insets.
+        val inkWidth = size.width * (SESSION_GLYPH_INK_W_PT / SessionsMetrics.SESSION_GLYPH_BOX_PT)
+        val inkHeight = size.height * (SESSION_GLYPH_INK_H_PT / SessionsMetrics.SESSION_GLYPH_BOX_PT)
+        val left = (size.width - inkWidth) / 2f
+        val top = (size.height - inkHeight) / 2f
+        val bodyTop = top + stroke / 2f
+        val bodyBottom = top + inkHeight * GLYPH_BODY_BOTTOM_RATIO
+        val radius = size.minDimension * GLYPH_BODY_RADIUS_RATIO
         val body = Path().apply {
             addRoundRect(
                 RoundRect(
-                    left = stroke / 2f,
+                    left = left + stroke / 2f,
                     top = bodyTop,
-                    right = size.width - stroke / 2f,
+                    right = left + inkWidth - stroke / 2f,
                     bottom = bodyBottom,
                     cornerRadius = CornerRadius(radius, radius),
                 ),
@@ -2137,14 +2252,47 @@ private fun SessionRowGlyph(ink: Color) {
         // The tail: down from the body's lower-left, then back up into it. A
         // separate stroke, so the two shapes read as one balloon at this size.
         val tail = Path().apply {
-            moveTo(size.width * 0.22f, bodyBottom - stroke / 2f)
-            lineTo(size.width * 0.17f, size.height * 0.88f)
-            lineTo(size.width * 0.46f, bodyBottom - stroke / 2f)
+            moveTo(left + inkWidth * 0.22f, bodyBottom - stroke / 2f)
+            lineTo(left + inkWidth * 0.17f, top + inkHeight - stroke / 2f)
+            lineTo(left + inkWidth * 0.46f, bodyBottom - stroke / 2f)
         }
         drawPath(body, color = ink, style = Stroke(width = stroke))
-        drawPath(tail, color = ink, style = Stroke(width = stroke, cap = StrokeCap.Round))
+        // A round join, not the default miter: the tail's V is acute, and a miter
+        // would push the corner ~1 pt below the ink box (measured 16.3 pt tall
+        // against the symbol's 15.3).
+        drawPath(
+            tail,
+            color = ink,
+            style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
     }
 }
 
 /** Balloon outline width as a fraction of the 17 pt box (`bubble.left` at 15 pt ≈ 1.5 pt). */
 private const val GLYPH_STROKE_RATIO: Float = 0.085f
+
+/** The balloon's ink width inside the 17 pt frame, measured on `ios-sessions-many.png`. */
+private const val SESSION_GLYPH_INK_W_PT: Float = 16.3f
+
+/** The balloon's ink height inside the 17 pt frame, measured on `ios-sessions-many.png`. */
+private const val SESSION_GLYPH_INK_H_PT: Float = 15.3f
+
+/** The balloon body's bottom edge as a fraction of its ink box (the tail hangs below). */
+private const val GLYPH_BODY_BOTTOM_RATIO: Float = 0.72f
+
+/** The balloon body's corner radius as a fraction of the 17 pt box. */
+private const val GLYPH_BODY_RADIUS_RATIO: Float = 0.22f
+
+/**
+ * The ellipsis ink: three 4 pt dots 18.3 pt end to end
+ * (`SessionsPage.swift:452-453`, measured on `ios-sessions-empty.png`).
+ */
+private const val WORKSPACE_MENU_GLYPH_W_PT: Float = 18.3f
+private const val WORKSPACE_MENU_GLYPH_H_PT: Float = 4f
+
+/** The baseline's row gap before the check mark: `Spacer(minLength: 4)` (`:572`). */
+private const val SESSIONS_CHECK_GAP_PT: Int = 4
+
+/** The row's pressed fill: `.easeIn(duration: 0.15)` (`SessionsPage.swift:652`). */
+private const val ROW_PRESS_MS: Int = 150
+private val ROW_PRESS_EASING: CubicBezierEasing = CubicBezierEasing(0.42f, 0f, 1f, 1f)
