@@ -248,6 +248,20 @@ class UiCheckTests(unittest.TestCase):
         self.write_tokens(document)
         self.assert_fails(run_checker(self.root), "no longer names the token or its value")
 
+    def test_same_value_wrong_geometry_line_fails(self) -> None:
+        # HomeSpec.swift:44 is navTitleLine = 22, not geometry.navIcon = 22.
+        document = self.tokens()
+        document["provenance"]["geometry.navIcon"]["source"] = "HomeSpec.swift:44"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "no longer names the token or its value")
+
+    def test_same_value_wrong_spacing_line_fails(self) -> None:
+        # HomeSpec.swift:20 is navTop = 8, not spacing.disclosureGap = 8.
+        document = self.tokens()
+        document["provenance"]["spacing.disclosureGap"]["source"] = "HomeSpec.swift:20"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "no longer names the token or its value")
+
     def test_stale_provenance_line_content_fails(self) -> None:
         document = self.tokens()
         document["provenance"]["colors.textPrimary"]["source"] = "HomeSpec.swift:1"

@@ -105,7 +105,11 @@ ABSOLUTE_USER_PATH = "/" + "Users" + "/"
 # are no longer accepted provenance for a colour/type/spacing token: leaving them
 # accepted is how the superseded values survived the first port.
 AUTHORITY_FILE = "HomeSpec.swift"
-COMPONENT_FILES = (AUTHORITY_FILE,)
+# HomeSpec is the authority for the six product roles. A small set of component
+# tokens that PR22 still renders (the ShimmerText default font) keeps its owning
+# component file as provenance; geometry/radius stay on HomeSpec or a page.
+TYPE_SOURCE_FILES = (AUTHORITY_FILE, "DSHComponents.swift")
+GEOMETRY_SOURCE_FILES = (AUTHORITY_FILE,)
 
 
 class CheckError(Exception):
@@ -376,14 +380,14 @@ def check_provenance(document) -> list:
         elif group in ("typography", "spacing"):
             if tier not in ("theme", "component"):
                 raise CheckError(f"provenance.{token}: {group} needs tier theme or component, not {tier!r}")
-            if filename not in COMPONENT_FILES:
-                raise CheckError(f"provenance.{token}: {group} values must come from {', '.join(COMPONENT_FILES)}")
+            if filename not in TYPE_SOURCE_FILES:
+                raise CheckError(f"provenance.{token}: {group} values must come from {', '.join(TYPE_SOURCE_FILES)}")
         elif group in ("geometry", "radius"):
             if tier not in ("component", "page"):
                 raise CheckError(f"provenance.{token}: {group} needs tier component or page")
-            if tier == "component" and filename not in COMPONENT_FILES:
+            if tier == "component" and filename not in GEOMETRY_SOURCE_FILES:
                 raise CheckError(
-                    f"provenance.{token}: component {group} must come from {', '.join(COMPONENT_FILES)}"
+                    f"provenance.{token}: component {group} must come from {', '.join(GEOMETRY_SOURCE_FILES)}"
                 )
         elif group == "motion":
             if tier not in ("component", "page"):
@@ -456,13 +460,13 @@ def check_provenance_sources(root: Path, document) -> tuple:
             )
         elif group == "typography":
             base = document["typography"]["styles"][leaf].get("baseSize")
-            evidence = numeric_literal_on_line(base, cited)
+            evidence = leaf in cited and numeric_literal_on_line(base, cited)
         elif group == "geometry":
             value = document[group][leaf].get("value")
-            evidence = numeric_literal_on_line(value, cited)
+            evidence = leaf in cited and numeric_literal_on_line(value, cited)
         elif group in ("spacing", "radius"):
             value = document[group][leaf]
-            evidence = numeric_literal_on_line(value, cited)
+            evidence = leaf in cited and numeric_literal_on_line(value, cited)
         if not evidence:
             raise CheckError(
                 f"provenance.{token}: stale source {source!r}; the line no longer names the token or its value"
