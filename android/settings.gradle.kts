@@ -45,3 +45,11 @@ include(":dsh")
 include(":lib")
 include(":testkit")
 include(":app")
+// The consumer probe. `:lib` is the deliverable, but nothing in this tree
+// consumed it the way another product would: `:app` depends on project(":lib"),
+// which shares this build's classpath and variant attributes. This module
+// depends on `lib-release.aar` as a *file* and declares its own Compose
+// dependencies, so it is the only place where "someone else can use the AAR" is
+// actually compiled. It publishes nothing and runs no tests; see
+// docs/design/android-aar-consumer-api-2026-11-02.md.
+include(":lib-consumer-test")

@@ -981,3 +981,204 @@ L58 把 `PDSH_TOOL_CALL_SESSION` 写在 `shell-ext/src/bridge.ts`，但**生产 
 
 **这个回答我认。** 它是「诚实的部分够诚实」和「三处把边界说得比实际硬」的区别——
 后者已被逐条改成实话。
+
+---
+
+## 二十一、产品化：`com.phonedsh.app` / `0.1.0` / 两条签名路 / 一副自适应图标
+
+需求方的原话是「你必须要做一个可以到生产的安卓 app 啊，要不然真机调试怎么调？」。
+上一轮 `:app` 的身份是 `com.phonedsh.probe` + `0.0.0` + **无 signingConfig** + **零图标**——
+`assembleRelease` 出来是 unsigned APK，`adb install` 直接 `INSTALL_PARSE_FAILED_NO_CERTIFICATES`。
+这一节只改**产品外壳**，不动内核（`:core` / `:dsh` / `:engine` / `:lib` / `MainActivity` 一行没碰）。
+
+### 身份四件套
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| `applicationId` | `com.phonedsh.probe` | **`com.phonedsh.app`** |
+| `android:label` | `PDSH 引擎探针` | **`PDSH`** |
+| `versionName` | `0.0.0` | **`0.1.0`** |
+| `versionCode` | `1` | `1`（不变） |
+
+`namespace` **保持 `com.phonedsh.probe`**：它命名 Kotlin 包与生成的 `R`/`BuildConfig`
+（18 个文件的 `package com.phonedsh.probe`），改名是纯搬运，用户看不见。
+
+**改 `applicationId` 时踩到的真坑（会白屏到 ClassNotFoundException）**：
+`android:name=".MainActivity"` 里的前导点是按 **applicationId** 展开的，不是 namespace。
+applicationId 一改成 `com.phonedsh.app`，`.MainActivity` 就指向 `com.phonedsh.app.MainActivity`，
+而类实际在 `com.phonedsh.probe`。所以源 manifest 里改成全限定
+`android:name="com.phonedsh.probe.MainActivity"`。设备侧的证实：
+
+```
+$ adb shell cmd package resolve-activity --brief -c android.intent.category.LAUNCHER com.phonedsh.app
+com.phonedsh.app/com.phonedsh.probe.MainActivity
+```
+
+**旧的 `com.phonedsh.probe` 不会被覆盖**，它是另一个 App。验证前先
+`adb uninstall com.phonedsh.probe`，否则截图和 `dumpsys` 可能打到旧包上。
+
+### 签名：两条路，仓库里零密钥
+
+**(a) 开箱可装（默认）**。没有 `keystore.properties` 也没有环境变量时，`release` 的直接拿
+AGP 自己的 **debug** signing config（`signingConfigs.getByName("debug")`，即
+`~/.android/debug.keystore`）。仓库里**不出现任何口令**——那些众所周知的默认值是 AGP 的，
+不是我抄进来的。于是 `./gradlew :app:assembleRelease` 出来就能 `adb install`。
+
+**(b) 真发布**。`android/keystore.properties`（**gitignored**）或四个环境变量
+`PDSH_KEYSTORE_FILE` / `PDSH_KEYSTORE_PASSWORD` / `PDSH_KEY_ALIAS` / `PDSH_KEY_PASSWORD`。
+文件优先于环境变量；`storeFile` 写相对路径时按 `android/` 解析。
+生成 keystore 的命令在 `android/keystore.properties.example`（提交，**不含真值**）：
+
+```
+keytool -genkey -v -keystore pdsh-release.jks -keyalg RSA -keysize 4096 \
+  -validity 10000 -alias pdsh
+```
+
+**回落条件（一条都不用猜，全部落在代码里）**：
+
+| 情况 | 结果 |
+|---|---|
+| 没有 `keystore.properties`，四个环境变量也不齐 | 回落 (a)，警告点名缺什么 |
+| 有文件，但缺 `storeFile` / `storePassword` / `keyAlias` / `keyPassword` | 回落 (a)，警告点名缺哪个键 |
+| 有文件，`storeFile` 指向的文件不存在 | 回落 (a)，警告打出该路径 |
+| 只有环境变量且四个齐全，`PDSH_KEYSTORE_FILE` 不存在 | 回落 (a) |
+| 以上全部满足 | 走 (b)，日志 `[signing] release: road (b), keystore … alias …` |
+
+**配置错了绝不让构建失败**：回落是行为，不是异常。`logger.lifecycle` 每次都打一行
+`[signing] release: road (a)/road (b)`，所以看日志就知道手上这个 APK 是哪条路。
+
+**「这是调试签名」写在哪（三层，同一句话）**：
+
+| 层 | 名字 | 值（当前这套构建就是回落态） |
+|---|---|---|
+| `BuildConfig` | `SIGNING_MODE` | `debug-keystore-fallback` |
+| `BuildConfig` | `SIGNING_RELEASABLE` | `false` |
+| `BuildConfig` | `SIGNING_NOTICE` | `调试签名，不可发布` |
+| `res/values/strings.xml` | `pdsh_signing_notice_debug` / `_release` | 同一句话，给资源侧的消费者 |
+| manifest `<meta-data>` | `com.phonedsh.app.SIGNING_MODE` / `.SIGNING_NOTICE` | 同上（**占位符注入**，不是资源引用） |
+
+manifest 那份为什么用 `manifestPlaceholders` 而不是 `@string/…`：release 开了
+`isShrinkResources = true`，一条没人引用的字符串会被裁掉，而「APK 里标明」不能靠运气。
+占位符是编译期字面量，`aapt2 dump xmltree` 直接可读：
+
+```
+$ aapt2 dump xmltree <apk> --file AndroidManifest.xml | grep -A1 SIGNING
+  A: android:name="com.phonedsh.app.SIGNING_MODE"   A: android:value="debug-keystore-fallback"
+  A: android:name="com.phonedsh.app.SIGNING_NOTICE" A: android:value="调试签名，不可发布"
+```
+
+字节级复核（`resources.arsc` 与二进制 `AndroidManifest.xml` 分开看，UTF-16LE 字符串池）：
+
+```
+release APK, AndroidManifest.xml : "调试签名，不可发布" ×1, "debug-keystore-fallback" ×1, "release-keystore" ×0
+release APK, resources.arsc     : "调试签名" ×0      <- isShrinkResources 把没人引用的两条 string 裁了
+debug   APK, resources.arsc     : pdsh_signing_notice_debug / _release 都在
+```
+
+也就是说：**release APK 里那句标记活在 manifest 里**（占位符是编译期字面量，裁不掉），
+`strings.xml` 那两条只在 debug / 被代码引用时才留下。这正是为什么 APK 级的标记不放在资源里。
+
+`BuildConfig` 是 `buildFeatures.buildConfig = true` 之后生成的
+（`APPLICATION_ID` / `VERSION_NAME` / `VERSION_CODE` / `DEBUG` 也一并可用）。
+**副作用要说清楚**：`MainActivity.kt:151` 那句「this module compiles with `buildConfig = false`」
+现在过时了。它读的是 `ApplicationInfo.FLAG_DEBUGGABLE`，**行为不变**，只是注释不再准确；
+该文件属于 L62 的口子，本轮不碰。
+
+### 图标：终端提示符，不是字母
+
+`res/mipmap-anydpi-v26/`（只有 `-v26`：`minSdk = 26`，所以位图兜底是死重）+
+`res/drawable/ic_launcher_{background,foreground}.xml`（都是 vector）+ `values/colors.xml`。
+
+- **background**：108×108 满幅方块，纯色 `#111114` = `tokens.json colors.primary.light`
+- **foreground**：`>` 折线（`M40,42 L60,54 L40,66`，stroke 8，round cap/join，`#FFFFFF` =
+  `colors.onAccent.light`）+ 光标方块（`M64,46h16v16h-16z`，`#3964FE` = `colors.accent.light`）
+- 全部落在 66dp 安全区内（最远点是光标外角 r≈27.2，折线圆帽 r≈22.4），所以圆/方/超椭圆任何
+  mask 都裁不到；`roundIcon` 复用同一对图层，不缩不裁
+- 颜色**没有一处是新调的**：三个值都来自 `spec/ui/v1/tokens.json`，`values/colors.xml` 里
+  逐条注了 token 路径
+
+### manifest 复核
+
+| 项 | 结论 |
+|---|---|
+| `allowBackup` | 本来就是 `false`，**保持 `false`**；`dataExtractionRules` + `fullBackupContent` 两层照旧（这个 App 存着 API key 的密文与 WAL 工作区） |
+| `android:debuggable` | release 合并后**没有该属性**（=false），且 `release { isDebuggable = false }` 显式写死；设备 `flags=[ HAS_CODE ALLOW_CLEAR_USER_DATA ]` 无 `DEBUGGABLE` |
+| `android:icon` / `roundIcon` | `@mipmap/ic_launcher` / `@mipmap/ic_launcher_round` |
+| `android:label` | `PDSH` |
+| `android:exported` | 合并后逐个点过：`MainActivity` = `true`（唯一 LAUNCHER，必须）；`:dsh` 的 `TurnForegroundService` / `TurnJobService` / `TurnStopReceiver` / `BootReceiver` **全部 `false`**；`FileProvider` = `false`。剩下 3 个 `true` 来自库：`androidx.work` 的 `SystemJobService`、`DiagnosticsReceiver` 与 `androidx.profileinstaller` 的 `ProfileInstallReceiver`（都是系统/调试入口，非本仓库代码） |
+| `allowBackup` 的设备侧 | `dumpsys package` 的 flags 里**没有** `ALLOW_BACKUP` |
+
+`.gitignore`（`android/`）新增 `keystore.properties`、`*.jks`、`*.keystore`。
+
+### 设备证据（自建 AVD，端口 **5722**，android-35，`-no-window`，用完删除）
+
+| 项 | 证据 |
+|---|---|
+| **装得上** | `adb -s emulator-5722 install -r app-release.apk` → `Success`（48 MB，签名 `CN=Android Debug`） |
+| **启得动** | `am start -W` → `LaunchState: COLD`、`TotalTime: 693`、`pid 4553`、`topResumedActivity=com.phonedsh.app/com.phonedsh.probe.MainActivity`，logcat 无 `FATAL EXCEPTION` / `ClassNotFoundException` |
+| **应用名** | `aapt2 dump badging`（**从设备 pull 回来的 base.apk**）→ `application-label:'PDSH'` + `versionName='0.1.0'` + `versionCode='1'`；launcher 抽屉里图标下方就是 `PDSH` |
+| **图标** | 抽屉截图：白 `>` + 蓝方块落在近黑圆形底上，圆 mask 无裁切；`application-icon-65534:'res/BW.xml'`（资源名被 `optimizeReleaseResources` 改短，指向同一份 adaptive icon）；系统 App info 页同图同标 |
+| **关于页那行** | 设置 → 通用 → 当前版本 → **关于**：`版本号  0.1.0 · 调试签名，不可发布` |
+| **签名标记** | 合并 manifest 里 `SIGNING_MODE=debug-keystore-fallback`、`SIGNING_NOTICE=调试签名，不可发布` |
+| **包名** | `dumpsys package` → `versionCode=1 minSdk=26 targetSdk=35`、`versionName=0.1.0` |
+
+关于页那一行是 L62 在 `HostNavFacts.kt` 里补的（`versionName = BuildConfig.VERSION_NAME + " · "
++ BuildConfig.SIGNING_NOTICE`），本轮只提供 `BuildConfig` 与字符串资源；若 L62 的改动没进来，
+关于页会显示 `未知`——不是签名事实没进 APK，而是页面没有读它。
+
+### 门禁
+
+```
+$ cd android && ./gradlew :app:assembleRelease :app:assembleDebug
+BUILD SUCCESSFUL    app-release.apk 48 MB / app-debug.apk 70 MB
+
+$ bash ../scripts/ci/check.sh --only phone-android-structure,phone-android-tests,phone-android-release
+== PASS: phone-android-structure      5s
+== PASS: phone-android-tests          2s     (JVM 1886 tests / 0 failing, 12 modules; :app 53)
+== PASS: phone-android-release        2s     (16 KB 页对齐：15 PT_LOAD, min p_align=0x4000)
+== CI GATE: PASS
+```
+
+`phone-android-release` 除了 `assembleRelease`，还带 16 KB 页对齐证明——读的是**打包进 APK
+的那份 `.so`**，不是 `shell/target/` 里的源件。`phone-android-structure` 的 11 条里与本轮直接相关的：
+`sdk-levels`（`:app minSdk=26 targetSdk=35`）、`nested-comments`、`absolute-paths`（0 条）、
+`kotlin-stubs`（344 个生产 `.kt`，无 `TODO()`）。
+
+### 两条签名路的**分支实测**（每一条都真跑过 `assembleRelease`）
+
+| # | 输入 | 日志 | 结果 |
+|---|---|---|---|
+| 1 | 一次性 4096-bit jks + 完整 `keystore.properties`（放在 `/tmp`，事后删） | `[signing] release: road (b), keystore pdsh-test.jks alias pdsh` | `CN=L61 Test Only`、meta-data `release-keystore` / `正式签名，可发布`、`SIGNING_RELEASABLE=true` |
+| 2 | 环境变量四个齐全（无文件） | `road (b)` | 同上，但凭据只活在环境里 |
+| 3 | `keystore.properties` 缺 `keyPassword` | `road (a) — reason: keystore.properties has no keyPassword` | 构建成功，debug 证书 |
+| 4 | `storeFile` 指向不存在的文件 | `road (a) — reason: storeFile does not exist: …` | 构建成功，debug 证书 |
+| 5 | 无文件、无环境变量 | `road (a) — reason: no keystore.properties and no complete PDSH_KEYSTORE_* environment` | 构建成功，debug 证书 |
+
+第 1 条用的 keystore 与口令全部在 `/tmp/l61-keystore/`（**仓库外**），验完 `rm -rf`；
+仓库里 `git status` 无 `keystore.properties`、无 `*.jks`，`git check-ignore` 对两者都返回忽略。
+
+### 仍然开着的
+
+| # | 项 | 为什么挂着 |
+|---|---|---|
+| 1 | **关于页「系统」段全是 `未知`** | `AboutFacts.platform` 在 `SettingsSurfaces.kt:118` 没被填；版本行修好不等于整页修好。属 `:lib`/L62 口子 |
+| 2 | **关于页「构建号」`未知`** | 同上，`AboutFacts.build` 无生产者 |
+| 3 | **App 内标题仍是「PDSH 引擎探针」** | `ProbeScreen.kt:144` 的 headline 与 `HostShell.kt:897` 的 `ENGINE_PROBE_LABEL`；`android:label` 已改，页面标题属 L62/预览车道 |
+| 4 | **只有 `arm64-v8a` 装得上** | APK 内 `libpdsh_jni.so` 仅 arm64（其余 ABI 只有 Compose 的 `libandroidx.graphics.path.so`）。真机都是 arm64，但 x86_64 模拟器会 `UnsatisfiedLinkError` |
+| 5 | **没有 AAB / 没有 Play 上传** | 本轮目标是「能装真机」，产出是 APK；上架要 `bundleRelease` + 上传密钥 + 商店资料，另开 |
+| 6 | **`docs/design/android-device-matrix-2026-11-01.md:326`** | 仍写着「发布身份是探针 / `0.0.0` / 无签名」，该文档不在本轮可写范围 |
+| 7 | **真机 gate 仍 0 格** | 需求方定本轮不做（沿用上一轮结论） |
+
+**给 L62 的可粘贴补丁**（本轮的 `BuildConfig` 落盘之后才能编译；若它没赶上，贴这一行即可）：
+
+```kotlin
+// android/app/src/main/kotlin/com/phonedsh/probe/HostNavFacts.kt
+// SettingsFacts(...) 里，原本的 versionName = null
+versionName = BuildConfig.VERSION_NAME + " · " + BuildConfig.SIGNING_NOTICE,
+```
+
+```
+$ cd android && ./gradlew :app:assembleRelease :app:assembleDebug
+$ bash ../scripts/ci/check.sh --only phone-android-structure,phone-android-tests,phone-android-release
+```
+

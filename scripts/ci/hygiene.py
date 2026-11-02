@@ -90,6 +90,11 @@ PACKAGE_PATH_PREFIXES = (
     "org.xmlpull.",
     "sun.",
     "jdk.",
+    # The app's own install id (`com.phonedsh.app`) is an Android package name,
+    # not infrastructure. The rule matched it the moment the applicationId moved
+    # off `com.phonedsh.probe`, which is the same false positive the list above
+    # was created for -- a dotted identifier whose last segment looks like a TLD.
+    "com.phonedsh.",
 )
 
 

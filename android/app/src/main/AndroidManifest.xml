@@ -65,18 +65,61 @@
       the new path is the device's answer, which is why the 返回手势 row is measured at
       runtime rather than printed from this file.
     -->
+    <!--
+      Product identity: the label the launcher shows and the icons it draws. The
+      APK's `applicationId` (`com.phonedsh.app`, set in build.gradle.kts) is what
+      the system knows this app by; this file's component names are therefore
+      fully qualified rather than `.MainActivity`, because a leading dot resolves
+      against the applicationId and the class actually lives in the `namespace`
+      package `com.phonedsh.probe`.
+
+      Both icons are adaptive (API 26+ only, and minSdk is 26): the
+      `mipmap-anydpi-v26` XMLs are the only icon resources, and `roundIcon`
+      points at the same layers so a round-masked launcher gets the same mark
+      from its own mask instead of a scaled bitmap.
+
+      allowBackup: already `false`, and it stays `false`. This app owns an API
+      key's encrypted record under `noBackupFilesDir` plus the WAL workspace; a
+      backup that carried either off the device would be a leak. The two rule
+      files remain as the second layer for the day someone flips the switch.
+    -->
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:enableOnBackInvokedCallback="true"
         android:fullBackupContent="@xml/backup_rules"
-        android:label="PDSH 引擎探针"
+        android:icon="@mipmap/ic_launcher"
+        android:label="PDSH"
         android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
+        <!--
+          What the APK says about its own signature, readable without launching
+          the app (XML comments cannot spell the tools' double-dash flags, so
+          the exact command lines live in the "产品化" section of
+          docs/receipts/android-port-pr-description.md):
+
+            adb shell dumpsys package com.phonedsh.app | grep -A2 SIGNING
+            aapt2 dump xmltree <apk> <the AndroidManifest.xml file flag>
+
+          The values are manifest placeholders from build.gradle.kts, so they
+          always describe the build they are in:
+          `debug-keystore-fallback` + 调试签名，不可发布 when `release` fell back
+          to AGP's debug key, `release-keystore` + 正式签名，可发布 otherwise.
+          They are also exposed to code as BuildConfig.SIGNING_MODE /
+          SIGNING_RELEASABLE / SIGNING_NOTICE, which is what the 关于 page reads.
+        -->
+        <meta-data
+            android:name="com.phonedsh.app.SIGNING_MODE"
+            android:value="${pdshSigningMode}" />
+        <meta-data
+            android:name="com.phonedsh.app.SIGNING_NOTICE"
+            android:value="${pdshSigningNotice}" />
+
         <activity
-            android:name=".MainActivity"
+            android:name="com.phonedsh.probe.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

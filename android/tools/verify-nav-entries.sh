@@ -33,7 +33,7 @@ ANDROID_HOME="${ANDROID_HOME:-$(sed -n 's/^sdk\.dir=//p' "$ROOT/android/local.pr
 if [ -z "${JAVA_HOME:-}" ] && command -v java >/dev/null 2>&1; then
   JAVA_HOME="$(cd "$(dirname "$(command -v java)")/.." && pwd)"
 fi
-PACKAGE="com.phonedsh.probe"
+PACKAGE="${PDSH_PACKAGE:-com.phonedsh.app}"
 ARTIFACTS="$ROOT/android/build/nav-artifacts"
 
 BUILD=1

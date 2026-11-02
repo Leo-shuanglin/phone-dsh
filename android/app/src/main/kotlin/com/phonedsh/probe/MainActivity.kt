@@ -148,8 +148,10 @@ class MainActivity : ComponentActivity() {
         PhonePermissionAsks.install(applicationContext)
         // Development only: a key dropped into the app's own files dir is imported and
         // the plaintext is deleted. Gated on the *install's* debuggable flag rather than
-        // BuildConfig (this module compiles with `buildConfig = false`); a release APK
-        // therefore has no such path at all.
+        // BuildConfig: `buildConfig` is on now (L61 needs SIGNING_NOTICE), but reading
+        // FLAG_DEBUGGABLE stays the right check — it asks what this install is, not what
+        // the module was compiled as, so a debug-signed release build still has no such
+        // path (the release manifest sets isDebuggable = false).
         val debuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (debuggable) ApiKeyStore.importDevelopmentKey(applicationContext)
         // The fail-loud collector: one developmental vault operation named by the

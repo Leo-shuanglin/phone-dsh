@@ -647,6 +647,15 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     fun webFaceOnLaunch(): Boolean = launchConfig.webFace
 
     /**
+     * True when the launch asked for the engine probe as the start face.
+     *
+     * L62 made the product home the session list; the device scripts that tap
+     * 跑一轮 right after launch pass `--ez pdsh.face.probe true` and land on the
+     * probe instead (see [ProbeLaunchConfig.EXTRA_PROBE_FACE]).
+     */
+    fun probeFaceOnLaunch(): Boolean = launchConfig.probeFace
+
+    /**
      * One walk over every value the navigation facts are built from.
      *
      * Measured: the engine's view, the running duration (monotonic), the WebView

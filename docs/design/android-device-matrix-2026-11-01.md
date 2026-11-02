@@ -323,7 +323,7 @@ $ git log --oneline --reverse -- android/settings.gradle.kts
 | `targetSdk = 35` | `android/app/build.gradle.kts:202`、`android/lib/build.gradle.kts:33`、`android/dsh/build.gradle.kts:29`；合并清单 `…/merged_manifest/release/…/AndroidManifest.xml:10` |
 | `compileSdk = 35` | `android/app/build.gradle.kts:197` |
 | **没有 release 签名配置** | `grep -n "signingConfig" android/app/build.gradle.kts` → 无输出；产物名就是 `app-release-unsigned.apk` |
-| 发布身份是探针 | `applicationId = "com.phonedsh.probe"`（:200）、`versionCode = 1`、`versionName = "0.0.0"`（:203-204） |
+| ~~发布身份是探针~~ | **已改（2026-11-02）**：`applicationId = "com.phonedsh.app"`、`label = "PDSH"`、`versionName = "0.1.0"`、`versionCode = 1`；`namespace` 仍是 `com.phonedsh.probe`（改它要搬 18 个文件，不值）。签名走两条路，无 keystore 时回落到调试签名并在关于页标明「调试签名，不可发布」 |
 | release APK 存在且可检查 | `android/app/build/outputs/apk/release/app-release-unsigned.apk`（约 64 MB，含 65 MB worker bundle） |
 | **16 KB：ELF 合规** | `python3 android/tools/check-native-alignment.py` → `LOAD[1..3] p_align=0x4000 (16384 bytes) OK` / `[PASS] … 3 PT_LOAD segment(s), min p_align=0x4000 (16384) is 16 KB-page ready` |
 | **16 KB：APK zip 合规** | `zipalign -c -P 16 -v 4 app-release-unsigned.apk` → `Verification succesful`（build-tools 35.0.0） |

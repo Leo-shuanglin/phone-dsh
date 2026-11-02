@@ -192,21 +192,174 @@ abstract class PackagePdshJni @Inject constructor(
     }
 }
 
+// ---- identity ------------------------------------------------------------
+//
+// `applicationId` is the product identity; `namespace` above it stays
+// `com.phonedsh.probe`. Those are two different things and they are allowed to
+// differ: the namespace names the Kotlin package and the generated R /
+// BuildConfig class (18 files' worth of `package com.phonedsh.probe`), while the
+// applicationId is what the launcher, the installer and the store see. Renaming
+// the namespace would be a move-only diff with no user-visible effect.
+//
+// The source manifest therefore names its own components fully qualified
+// (`com.phonedsh.probe.MainActivity`) instead of `.MainActivity`: a leading dot
+// resolves against the *applicationId*, so the relative form would look for
+// `com.phonedsh.app.MainActivity` and die with ClassNotFoundException at launch.
+//
+// Changing the applicationId makes this a different app to Android: an installed
+// `com.phonedsh.probe` stays behind as its own, data and all. That is intended —
+// the probe was never the product.
+
+// ---- release signing: two roads, no secrets in the repository ------------
+//
+// (a) 开箱可装. With nothing configured, `release` is signed with AGP's own
+//     **debug** signing config (`signingConfigs.getByName("debug")`, the
+//     `~/.android/debug.keystore` AGP generates on demand). The APK then
+//     `adb install`s on a real device, which is what device-debug work needs.
+//     That key is not a publishing key, so the fallback is stated *in the APK*:
+//     `BuildConfig.SIGNING_MODE` / `SIGNING_RELEASABLE` / `SIGNING_NOTICE`, the
+//     same sentence in `res/values/strings.xml` (`pdsh_signing_notice_debug`),
+//     and two `<meta-data>` entries in the manifest that survive resource
+//     shrinking because they are manifest placeholders, not resource references.
+//
+// (b) 真发布. `android/keystore.properties` (gitignored; see
+//     `android/keystore.properties.example`) or the `PDSH_KEYSTORE_FILE` /
+//     `PDSH_KEYSTORE_PASSWORD` / `PDSH_KEY_ALIAS` / `PDSH_KEY_PASSWORD`
+//     environment variables carry a real keystore. A *partially* filled file, a
+//     path that does not exist, or a missing password is treated exactly like
+//     "not configured": a warning names the reason and the build falls back to
+//     (a). A configuration problem therefore never fails `assembleRelease`.
+//
+// No credential is ever written to a committed file: the fallback borrows AGP's
+// debug config (whose well-known defaults live in AGP, not here) and
+// keystore.properties is only *read*, at configuration time.
+val keystorePropertiesFile: File = rootProject.projectDir.resolve("keystore.properties")
+val keystoreProperties: Properties = Properties().apply {
+    if (keystorePropertiesFile.isFile) keystorePropertiesFile.inputStream().use { load(it) }
+}
+
+/** Reads one signing setting from keystore.properties first, then the environment. */
+fun signingSetting(propertyKey: String, envKey: String): String? =
+    keystoreProperties.getProperty(propertyKey)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: System.getenv(envKey)?.trim()?.takeIf { it.isNotEmpty() }
+
+/** A relative `storeFile` resolves against `android/`, next to the project it signs. */
+val releaseStoreFile: File? = signingSetting("storeFile", "PDSH_KEYSTORE_FILE")?.let { configured ->
+    val asFile = File(configured)
+    if (asFile.isAbsolute) asFile else rootProject.projectDir.resolve(configured)
+}
+val releaseStorePassword: String? = signingSetting("storePassword", "PDSH_KEYSTORE_PASSWORD")
+val releaseKeyAlias: String? = signingSetting("keyAlias", "PDSH_KEY_ALIAS")
+val releaseKeyPassword: String? = signingSetting("keyPassword", "PDSH_KEY_PASSWORD")
+
+/**
+ * Why the release build cannot use a real keystore, or `null` when it can.
+ *
+ * One reason string drives both the warning and the `BuildConfig` value, so the
+ * build log and what the shipped APK says about itself cannot disagree.
+ */
+val releaseSigningProblem: String? = when {
+    keystorePropertiesFile.isFile -> when {
+        releaseStoreFile == null -> "keystore.properties has no storeFile"
+        !releaseStoreFile.isFile -> "storeFile does not exist: ${releaseStoreFile.path}"
+        releaseStorePassword == null -> "keystore.properties has no storePassword"
+        releaseKeyAlias == null -> "keystore.properties has no keyAlias"
+        releaseKeyPassword == null -> "keystore.properties has no keyPassword"
+        else -> null
+    }
+    // No file at all: the fallback must still happen when the *environment* is
+    // only half set, so an incomplete set is a reason, not an exception.
+    releaseStoreFile == null || releaseStorePassword == null ||
+        releaseKeyAlias == null || releaseKeyPassword == null ->
+        "no keystore.properties and no complete PDSH_KEYSTORE_* environment"
+    !releaseStoreFile.isFile -> "PDSH_KEYSTORE_FILE points at a missing file: ${releaseStoreFile.path}"
+    else -> null
+}
+val releaseSigningConfigured: Boolean = releaseSigningProblem == null
+
+/** The one sentence the app states about its own signature; `strings.xml` repeats it. */
+val releaseSigningNotice: String =
+    if (releaseSigningConfigured) "正式签名，可发布" else "调试签名，不可发布"
+
+/** Machine-readable form of the same fact, mirrored by `BuildConfig.SIGNING_MODE`. */
+val releaseSigningMode: String =
+    if (releaseSigningConfigured) "release-keystore" else "debug-keystore-fallback"
+
+logger.lifecycle(
+    if (releaseSigningConfigured) {
+        "[signing] release: road (b), keystore ${releaseStoreFile?.name} alias $releaseKeyAlias"
+    } else {
+        "[signing] release: road (a), debug keystore — reason: $releaseSigningProblem. " +
+            "The APK installs on a device but must not be published; " +
+            "see android/keystore.properties.example."
+    },
+)
+
 android {
     namespace = "com.phonedsh.probe"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.phonedsh.probe"
+        applicationId = "com.phonedsh.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.0.0"
+        versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        // Created only on road (b): a config with a null storeFile would fail at
+        // signing time instead of falling back.
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            // The same three fields as release, pointing at this variant's truth:
+            // a debug APK is never releasable.
+            buildConfigField("String", "SIGNING_MODE", "\"debug\"")
+            buildConfigField("boolean", "SIGNING_RELEASABLE", "false")
+            buildConfigField("String", "SIGNING_NOTICE", "\"调试签名，不可发布\"")
+            // The manifest's SIGNING_* meta-data is substituted per build type,
+            // and the merger rejects an unsubstituted placeholder in *any*
+            // variant it builds, so debug has to declare its own pair.
+            manifestPlaceholders["pdshSigningMode"] = "debug"
+            manifestPlaceholders["pdshSigningNotice"] = "调试签名，不可发布"
+        }
         release {
+            // Road (b) when a keystore is configured, road (a) otherwise. The
+            // debug signing config is AGP's, not a copy: its key material and
+            // its well-known credentials stay out of this file.
+            signingConfig = if (releaseSigningConfigured) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+            // AGP's release default. Stated explicitly because "the release APK
+            // is not debuggable" is a shipping property, not an accident of the
+            // current default.
+            isDebuggable = false
+
+            // The app's own statement about the signature, per build. Read by the
+            // 关于 page (BuildConfig.SIGNING_NOTICE) and mirrored by the two
+            // manifest <meta-data> entries below.
+            buildConfigField("String", "SIGNING_MODE", "\"$releaseSigningMode\"")
+            buildConfigField("boolean", "SIGNING_RELEASABLE", releaseSigningConfigured.toString())
+            buildConfigField("String", "SIGNING_NOTICE", "\"$releaseSigningNotice\"")
+            // Manifest placeholders, not resource references: a released APK
+            // whose only marker were an unreferenced string resource would have
+            // that string shrunk away by `isShrinkResources = true`.
+            manifestPlaceholders["pdshSigningMode"] = releaseSigningMode
+            manifestPlaceholders["pdshSigningNotice"] = releaseSigningNotice
+
             // R8 shrinks and obfuscates the app (and :core's JNI facade classes
             // unless proguard-rules.pro pins their native names). Resource
             // shrinking drops unreferenced resources only; assets such as
@@ -222,7 +375,11 @@ android {
 
     buildFeatures {
         compose = true
-        buildConfig = false
+        // BuildConfig carries the version and the signing facts
+        // (SIGNING_MODE / SIGNING_RELEASABLE / SIGNING_NOTICE). MainActivity's
+        // comment about this module compiling with `buildConfig = false` is now
+        // out of date; that file is L62's and is left untouched.
+        buildConfig = true
     }
 
     compileOptions {

@@ -16,6 +16,24 @@
 package com.phonedsh.probe
 
 import android.util.Log
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -23,13 +41,21 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import com.phonedsh.engine.EngineState
+import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.page.ArchivedRowView
 import com.phonedsh.ui.page.SessionRowView
 import com.phonedsh.ui.page.SessionWorkspaceView
 import com.phonedsh.ui.page.SessionsLocalState
 import com.phonedsh.ui.page.SessionsPage
+import com.phonedsh.ui.theme.PdshThemeValues
 import java.time.ZoneId
 
 /**
@@ -42,9 +68,16 @@ import java.time.ZoneId
  * @param engine the composition root (its session read and its clock).
  * @param state the engine lifecycle state (the 新建会话 blocked reason).
  * @param turn the one turn's state (the other blocked reason).
- * @param onBack leave the page and return to the native face.
+ * @param onBack leave the page; `null` on the home face, which is the root of
+ *   the stack and therefore has nothing behind it (the page then draws no back
+ *   glyph at all — a back arrow on the first screen would promise a level that
+ *   does not exist).
  * @param onHostNotice show one host line for a handed-off write gesture; the
  *   shell owns the four-second fallback and the bar itself.
+ * @param refreshOnEnter ask for a journal scan when this page enters the
+ *   composition. The home face owns that first read itself (it decides between
+ *   the list and its empty state from the same snapshot), so it passes `false`
+ *   and the scan happens once, not twice.
  * @param modifier the space the shell gives this page (the note bar takes the
  *   top when a line is showing).
  */
@@ -53,20 +86,20 @@ internal fun HostSessionsScreen(
     engine: ProbeEngineViewModel,
     state: EngineState,
     turn: AppTurnState,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)? = null,
     onHostNotice: (String) -> Unit,
+    refreshOnEnter: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     // Every write gesture is handed off, never applied: the line is the same
     // wording the routed pages' host actions use, so one app has one style.
-    val handOff: (String) -> Unit = { gesture ->
-        Log.i(TAG_SESSIONS, "host session gesture handed off: $gesture")
-        onHostNotice("宿主未实现：${sessionGestureLabel(gesture)}，本次未提交")
-    }
+    val handOff: (String) -> Unit = sessionHandOff(onHostNotice)
     val sessionSnapshot by engine.sessions.collectAsState()
     // The first visit asks for a read; a later one is already fresh from the
     // last scan and a completed turn.
-    LaunchedEffect(Unit) { engine.refreshSessions() }
+    LaunchedEffect(refreshOnEnter) {
+        if (refreshOnEnter) engine.refreshSessions()
+    }
     var local by remember { mutableStateOf(SessionsLocalState()) }
     val facts = remember(state, turn, sessionSnapshot) {
         buildSessionsFacts(state, turn, sessionSnapshot)
@@ -161,6 +194,306 @@ internal fun HostSessionsScreen(
     )
 }
 
+// ---------------------------------------------------------------------------
+// L62: the product home face
+// ---------------------------------------------------------------------------
+
+/**
+ * The app's home: the session list, with the drawer that reaches everything else.
+ *
+ * Before L62 the home slot rendered `ProbeScreen` — the D3 diagnostic console
+ * with 跑一轮, the HELLO summary and the D14/channel cards. That is a debugging
+ * panel, not a product page: a person who installs the APK landed on a screen
+ * addressed to whoever wrote it. This composable is the product face instead,
+ * and the probe moved to the drawer (see `HostShell`'s `ENGINE_PROBE_LABEL` row).
+ *
+ * The body is the same [HostSessionsScreen] the 会话 route renders, so there is
+ * one session list in the app rather than two. What this file adds around it is
+ * exactly what a home needs and the list page cannot own:
+ *
+ *   * the drawer entry. The drawer was only reachable from the probe's header
+ *     while the probe was home (the L10 report's finding), so removing the probe
+ *     without adding this control would have made every other page unreachable
+ *     by touch;
+ *   * the 模型服务 onboarding card. A fresh install has no key, and the product
+ *     answer is to say so and open the settings page that can fix it — not to
+ *     leave a probe full of D14 state as the first screen;
+ *   * the empty state. An empty list is not a product page: the person sees what
+ *     this app is and which control to use next, in the baseline's own words.
+ *
+ * @param engine the composition root (its session read and its clock).
+ * @param state the engine lifecycle state (the 新建会话 blocked reason).
+ * @param turn the one turn's state (the other blocked reason).
+ * @param providerConfigured whether the device holds a model key the last use
+ *   accepted. `false` also covers a key that exists but is unusable, because the
+ *   card's sentence ("还差一步:配好模型服务") is true for both, while the model
+ *   page names the exact state per service.
+ * @param onHostNotice show one host line for a handed-off write gesture.
+ * @param onOpenDrawer open the drawer (the home's only route to the other pages).
+ * @param onOpenModelProvider open 模型服务 in the settings family.
+ */
+@Composable
+internal fun HostHomeScreen(
+    engine: ProbeEngineViewModel,
+    state: EngineState,
+    turn: AppTurnState,
+    providerConfigured: Boolean,
+    onHostNotice: (String) -> Unit,
+    onOpenDrawer: () -> Unit,
+    onOpenModelProvider: () -> Unit,
+) {
+    val tokens = PdshThemeValues.tokens
+    val sessionSnapshot by engine.sessions.collectAsState()
+    // The home is where the app opens, so the first journal read belongs here:
+    // the snapshot decides between the list and the empty state, and neither can
+    // be drawn before it is taken.
+    LaunchedEffect(Unit) { engine.refreshSessions() }
+    val handOff: (String) -> Unit = sessionHandOff(onHostNotice)
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(tokens.colors.selector)
+            // One status-bar reading for the whole face. The strip is consumed
+            // here so the sessions page below it does not add the same inset a
+            // second time (the rule the shell's note bar already follows), and
+            // the header is not pushed under the system bar.
+            .windowInsetsPadding(WindowInsets.statusBars),
+    ) {
+        HomeHeader(onOpenDrawer = onOpenDrawer)
+        if (!providerConfigured) {
+            ProviderSetupCard(onOpenModelProvider = onOpenModelProvider)
+        }
+        Box(Modifier.weight(1f)) {
+            // A read still running, or a read that found rows: the list page.
+            // Read-and-empty is the third state, and it is this face's own.
+            if (sessionSnapshot.waiting || sessionSnapshot.sessions.isNotEmpty()) {
+                HostSessionsScreen(
+                    engine = engine,
+                    state = state,
+                    turn = turn,
+                    onBack = null,
+                    onHostNotice = onHostNotice,
+                    refreshOnEnter = false,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                HomeEmptyState(
+                    providerConfigured = providerConfigured,
+                    onNewSession = { handOff("new") },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The home's header: the drawer control and the page's own name.
+ *
+ * The drawer is the only way to reach the other pages by touch (no route draws a
+ * drawer button), so this control is what makes the app navigable at all. The
+ * glyph is the probe header's own (☰) and the spoken name is the baseline's
+ * (`UiStrings.HEADER_DRAWER`), so the two faces cannot disagree about the verb.
+ */
+@Composable
+private fun HomeHeader(onOpenDrawer: () -> Unit) {
+    val tokens = PdshThemeValues.tokens
+    val type = PdshThemeValues.type
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
+            .padding(horizontal = tokens.geometry.pageOuterMarginH),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BasicText(
+            text = DRAWER_GLYPH,
+            style = type.secondary.copy(color = tokens.colors.secondary),
+            modifier = Modifier
+                .clickable(role = Role.Button, onClick = onOpenDrawer)
+                .semantics { contentDescription = UiStrings.HEADER_DRAWER }
+                // unverified geometry: no header-action token; the icon gap is
+                // what keeps the touch target two text lines tall, the same
+                // reuse the probe header makes.
+                .padding(tokens.spacing.iconText),
+        )
+        BasicText(
+            text = UiStrings.SESSIONS,
+            style = type.headline.copy(color = tokens.colors.primary),
+        )
+    }
+}
+
+/**
+ * 还差一步:配好模型服务 — the one onboarding the product home owes a new install.
+ *
+ * Every word is the baseline's (`ChatPage.swift:1355`–`:1364`, the chat page's
+ * provider-setup empty state): the title, the sentence and the button. Nothing
+ * here claims a model service exists; the card is drawn only while the host's
+ * key read says none is usable, and the page it opens is the one that writes.
+ *
+ * @param onOpenModelProvider push 模型服务 (a sheet; L56 made it writable).
+ */
+@Composable
+private fun ProviderSetupCard(onOpenModelProvider: () -> Unit) {
+    val tokens = PdshThemeValues.tokens
+    val type = PdshThemeValues.type
+    val shape = RoundedCornerShape(tokens.radius.card)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = tokens.geometry.cardOuterMarginH,
+                vertical = tokens.geometry.cardOuterMarginV,
+            ),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(tokens.colors.input)
+                .border(tokens.stroke.hairline, tokens.colors.border, shape)
+                .padding(tokens.geometry.cardPadding),
+        ) {
+            BasicText(
+                text = UiStrings.PROVIDER_SETUP_TITLE,
+                style = type.secondary.copy(color = tokens.colors.primary),
+            )
+            Spacer(Modifier.height(tokens.spacing.jsonStack))
+            BasicText(
+                text = UiStrings.PROVIDER_SETUP_HINT,
+                style = type.caption.copy(color = tokens.colors.secondary),
+            )
+            Spacer(Modifier.height(tokens.spacing.cardInset))
+            HomeButton(label = UiStrings.PROVIDER_SETUP_ACTION, primary = true, onClick = onOpenModelProvider)
+        }
+    }
+}
+
+/**
+ * The read-and-empty state: what this app is, and which control to use next.
+ *
+ * Both sentences are the baseline's: the identity pair is the chat page's ready
+ * state (`READY_TITLE` / `READY_SUBTITLE`) and the list pair is the drawer's own
+ * empty copy (`SESSIONS_EMPTY` / `SESSIONS_EMPTY_HINT`). No new copy was written
+ * for this face — the two platforms say the same words.
+ *
+ * The one control is 新建会话, and it is handed off like the list page's own row
+ * gestures: this host has no session write, so the shell's note bar says so
+ * instead of the button silently doing nothing.
+ *
+ * @param providerConfigured when `false` the card above already carries 去配置
+ *  模型服务, and a second call to action here would compete with it.
+ * @param onNewSession hand the 新建会话 gesture to the shell.
+ */
+@Composable
+private fun HomeEmptyState(providerConfigured: Boolean, onNewSession: () -> Unit) {
+    val tokens = PdshThemeValues.tokens
+    val type = PdshThemeValues.type
+    val shape = RoundedCornerShape(tokens.radius.card)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(
+                horizontal = tokens.geometry.cardOuterMarginH,
+                vertical = tokens.geometry.cardOuterMarginV,
+            ),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(tokens.colors.input)
+                .border(tokens.stroke.hairline, tokens.colors.border, shape)
+                .padding(tokens.geometry.cardPadding),
+        ) {
+            BasicText(
+                text = UiStrings.READY_TITLE,
+                style = type.headline.copy(color = tokens.colors.primary),
+            )
+            Spacer(Modifier.height(tokens.spacing.jsonStack))
+            BasicText(
+                text = UiStrings.READY_SUBTITLE,
+                style = type.caption.copy(color = tokens.colors.secondary),
+            )
+            Spacer(Modifier.height(tokens.spacing.cardInset))
+            BasicText(
+                text = UiStrings.SESSIONS_EMPTY,
+                style = type.secondary.copy(color = tokens.colors.primary),
+            )
+            Spacer(Modifier.height(tokens.spacing.badgeInsetV))
+            BasicText(
+                text = UiStrings.SESSIONS_EMPTY_HINT,
+                style = type.caption.copy(color = tokens.colors.secondary),
+            )
+            if (providerConfigured) {
+                Spacer(Modifier.height(tokens.spacing.cardInset))
+                HomeButton(label = UiStrings.SESSION_NEW, primary = true, onClick = onNewSession)
+            }
+        }
+    }
+}
+
+/**
+ * One home-face button: the probe's `ActionButton` shape, from tokens only.
+ *
+ * A host-owned face has no page frame to borrow a control from, so the button is
+ * drawn here rather than from `:lib`'s page layer — the same reason the note bar
+ * and the engine-unavailable notice are drawn by the shell.
+ */
+@Composable
+private fun HomeButton(label: String, primary: Boolean, onClick: () -> Unit) {
+    val tokens = PdshThemeValues.tokens
+    val shape = RoundedCornerShape(tokens.radius.card)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(
+                if (primary) tokens.geometry.primaryButtonHeight else tokens.geometry.secondaryButtonHeight,
+            )
+            .clip(shape)
+            .background(if (primary) tokens.colors.accent else tokens.colors.input)
+            .then(
+                if (primary) {
+                    Modifier
+                } else {
+                    Modifier.border(tokens.stroke.hairline, tokens.colors.border, shape)
+                },
+            )
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = tokens.spacing.cardInset),
+        contentAlignment = Alignment.Center,
+    ) {
+        BasicText(
+            text = label,
+            style = homeButtonStyle(primary),
+        )
+    }
+}
+
+/** The ink of one home button; a pure function so the modifier chain stays readable. */
+@Composable
+private fun homeButtonStyle(primary: Boolean): TextStyle {
+    val tokens = PdshThemeValues.tokens
+    val type = PdshThemeValues.type
+    return if (primary) {
+        type.body.copy(color = tokens.colors.onAccent)
+    } else {
+        type.secondary.copy(color = tokens.colors.primary)
+    }
+}
+
+/**
+ * One handed-off session gesture, with the app's one wording for it.
+ *
+ * Shared by the list page and the home's empty state so a 新建会话 tap says the
+ * same sentence wherever it is made.
+ */
+private fun sessionHandOff(onHostNotice: (String) -> Unit): (String) -> Unit = { gesture ->
+    Log.i(TAG_SESSIONS, "host session gesture handed off: $gesture")
+    onHostNotice("宿主未实现：${sessionGestureLabel(gesture)}，本次未提交")
+}
+
 /** Flips one folder's fold; every folder starts expanded, like the baseline. */
 private fun SessionsLocalState.toggleWorkspace(workspace: SessionWorkspaceView): SessionsLocalState =
     copy(
@@ -187,3 +520,12 @@ private fun sessionGestureLabel(gesture: String): String = when (gesture) {
 
 /** This screen's logcat tag; only the stable gesture names above reach it. */
 private const val TAG_SESSIONS: String = "PDSHSessions"
+
+/**
+ * The home header's drawer glyph.
+ *
+ * The same character the probe header uses for the same control, because this
+ * app has one drawer: two faces drawing two different marks for it would read as
+ * two different destinations.
+ */
+private const val DRAWER_GLYPH: String = "☰"

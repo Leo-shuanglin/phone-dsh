@@ -24,6 +24,13 @@
 // surface is the engine-ready default face only when the launch asks for it
 // (`pdsh.face.web`), because the demo acceptance taps 跑一轮 on the native face
 // after the worker is ready.
+//
+// L62 moved the launch face off the probe. [PdshRoute.Home] now renders the
+// product home (`HostHomeScreen`: the session list, the drawer entry and the
+// model-service onboarding), and `ProbeScreen` — the D3 diagnostic console —
+// renders at that same address only while the person opened it from the
+// drawer's 引擎探针 row. A debug panel as the first screen of an installable app
+// was the L62 brief's defect; the probe itself is unchanged and still reachable.
 package com.phonedsh.probe
 
 import com.phonedsh.dsh.localexec.UbuntuApproval
@@ -80,6 +87,7 @@ import com.phonedsh.ui.nav.PdshNavState
 import com.phonedsh.ui.nav.PdshRoute
 import com.phonedsh.ui.page.PhoneCapability
 import com.phonedsh.ui.page.ProviderDraft
+import com.phonedsh.ui.page.ProviderKeyStatus
 import com.phonedsh.ui.page.WorkbenchSection
 import com.phonedsh.ui.theme.PdshTheme
 import com.phonedsh.ui.theme.PdshThemeValues
@@ -155,7 +163,24 @@ internal fun HostShell(
     var nav by remember { mutableStateOf(PdshNavState()) }
     var drawerOpen by remember { mutableStateOf(false) }
     var webFaceOpened by remember { mutableStateOf(false) }
+    // L62: the probe is no longer the home face; it is the host's own surface
+    // *at* the home address, opened from the drawer's 引擎探针 row. Keeping it in
+    // the `home` slot (instead of a new route) is deliberate: `PdshRoute` lives in
+    // `:lib` and this lane may not extend it, and the probe was always the host's
+    // own face rather than a page of §1. The default value is `false`, which is
+    // what makes the product home — the session list — the launch face; a launch
+    // that passes `pdsh.face.probe` starts on the probe instead, which is what the
+    // device scripts that tap 跑一轮 straight after launch ask for.
+    var probeOpen by remember { mutableStateOf(engine.probeFaceOnLaunch()) }
     val webFaceOnLaunch = remember { engine.webFaceOnLaunch() }
+    // The one fact the home's onboarding card is drawn from. Re-read when this
+    // host writes a model service (`settingsRevision`), because a save is what
+    // turns the card off — and never on a recomposition alone: reading the
+    // Keystore per frame would be a per-frame cost for a value that only a write
+    // can change.
+    val providerConfigured = remember(settingsRevision) {
+        ApiKeyStore.activeFact().status == ProviderKeyStatus.CONFIGURED
+    }
 
     // The host's own voice. A page owns its controls, so this host cannot render
     // a button disabled; what it can do is state the truth on every route that
@@ -189,10 +214,15 @@ internal fun HostShell(
         // route through `PdshBackLevel`), then the route stack. When none of the
         // three can consume the gesture no callback is registered, which is what
         // leaves "exit the app" to the platform's own default behaviour.
+        //
+        // L62 adds a fourth level *above* the route stack: the probe is the home
+        // address's host-owned face, so while it is showing, one gesture leaves it
+        // for the product home instead of closing the app.
         val backLevel = remember { PdshBackLevel() }
-        PdshBackHandler(enabled = drawerOpen || backLevel.available || nav.canGoBack) {
+        PdshBackHandler(enabled = drawerOpen || probeOpen || backLevel.available || nav.canGoBack) {
             when {
                 drawerOpen -> drawerOpen = false
+                probeOpen -> probeOpen = false
                 backLevel.consume() -> Unit
                 else -> nav = nav.pop()
             }
@@ -225,7 +255,12 @@ internal fun HostShell(
                             nav = nav.push(route)
                         },
                         onBack = { nav = nav.pop() },
-                        onHome = { nav = nav.popToHome() },
+                        onHome = {
+                            // 原生恢复 returns to the *product* home, never back
+                            // into the diagnostic face the person left open.
+                            probeOpen = false
+                            nav = nav.popToHome()
+                        },
                         onHostAction = { action ->
                             val feedback = handleHostAction(
                                 action = action,
@@ -247,26 +282,43 @@ internal fun HostShell(
                         // is an Activity-scoped contract.
                         onPhonePermissionRequest = onPhonePermissionRequest,
                         onPhonePermissionSettings = onPhonePermissionSettings,
+                        // L62: the home face is the product home — the session list
+                        // (option (a): the list is rendered *in* the home slot, so
+                        // `popToHome()` and the launch face are the same screen). The
+                        // probe is the host's own face at this address, reachable from
+                        // the drawer's 引擎探针 row and never the launch face.
                         home = {
-                            ProbeScreen(
-                                state = state,
-                                hostState = hostState,
-                                handshake = handshake,
-                                channel = channel,
-                                turn = turn,
-                                notice = recoveryNotice,
-                                onStart = onStart,
-                                onStop = onStop,
-                                onRunTurn = onRunTurn,
-                                onOpenDrawer = { drawerOpen = true },
-                                onOpenConfiguration = { nav = nav.push(PdshRoute.Configuration) },
-                                onOpenRuntime = { nav = nav.push(PdshRoute.Runtime) },
-                                onOpenWorkbench = { section, path ->
-                                    nav = nav.push(
-                                        PdshRoute.Workbench(previewPath = path, section = section),
-                                    )
-                                },
-                            )
+                            if (probeOpen) {
+                                ProbeScreen(
+                                    state = state,
+                                    hostState = hostState,
+                                    handshake = handshake,
+                                    channel = channel,
+                                    turn = turn,
+                                    notice = recoveryNotice,
+                                    onStart = onStart,
+                                    onStop = onStop,
+                                    onRunTurn = onRunTurn,
+                                    onOpenDrawer = { drawerOpen = true },
+                                    onOpenConfiguration = { nav = nav.push(PdshRoute.Configuration) },
+                                    onOpenRuntime = { nav = nav.push(PdshRoute.Runtime) },
+                                    onOpenWorkbench = { section, path ->
+                                        nav = nav.push(
+                                            PdshRoute.Workbench(previewPath = path, section = section),
+                                        )
+                                    },
+                                )
+                            } else {
+                                HostHomeScreen(
+                                    engine = engine,
+                                    state = state,
+                                    turn = turn,
+                                    providerConfigured = providerConfigured,
+                                    onHostNotice = { notice = it },
+                                    onOpenDrawer = { drawerOpen = true },
+                                    onOpenModelProvider = { nav = nav.push(PdshRoute.ModelProvider) },
+                                )
+                            }
                         },
                         webSurface = { EngineWebSurface(engine, state) },
                         // 会话 is a route now, and this host is the one that owns
@@ -306,7 +358,20 @@ internal fun HostShell(
                         // A line from a routed page is not about the next one.
                         notice = null
                         drawerOpen = false
-                        nav = nav.push(route)
+                        if (route == PdshRoute.Home) {
+                            // The 引擎探针 row. `PdshRoute.Home` is the one route
+                            // this host renders itself, so it is the row's token:
+                            // the drawer only knows routes, and the probe's
+                            // address has always been the home slot.
+                            probeOpen = true
+                            nav = nav.popToHome()
+                        } else {
+                            // Any other row is a page of §1: the probe is not
+                            // behind it, so the next 返回 lands on the product
+                            // home rather than on a diagnostic console.
+                            probeOpen = false
+                            nav = nav.push(route)
+                        }
                     },
                     onDismiss = { drawerOpen = false },
                 )
@@ -800,6 +865,16 @@ private val DRAWER_ENTRIES: List<PdshDrawerEntry> = listOf(
     // the drawer's short name (its DEVICE_TITLE is the page's "Device" string).
     PdshDrawerEntry(DEVICE_CONNECTION_LABEL, PdshDrawerIcon.DEVICE, PdshRoute.DeviceConnection),
     PdshDrawerEntry(UiStrings.WEB_SURFACE_TITLE, PdshDrawerIcon.WEB, PdshRoute.WebSurface),
+    // L62: the D3 diagnostic console, moved off the home face. Its product home
+    // would be 设置 → 通用 → 开发者工具 (`SettingsSurfaces.kt`'s DevTool index,
+    // where L55 already put MemoryPage / ProbesPage / …), but that index is
+    // `:lib` code and cannot render a `:app` composable: `DeveloperToolsSurface`
+    // is called by `PdshNavHost` with fixed arguments and this lane may edit
+    // neither that call site nor a new parameter on it. So the app-side entry is
+    // a drawer row — reachable, labelled and dumpable — and the surface itself
+    // is unchanged. The row targets [PdshRoute.Home], the one route whose body
+    // this host supplies (see the `probeOpen` branch in the `home` slot above).
+    PdshDrawerEntry(ENGINE_PROBE_LABEL, PdshDrawerIcon.TERMINAL, PdshRoute.Home),
 )
 
 /** The two rows the iOS drawer pins below its session list (`NativeShell.swift:296`). */
@@ -813,6 +888,15 @@ private const val TAG_NAV = "PDSHNav"
 
 /** The drawer's short name for the device family; the page title is 设备连接. */
 private const val DEVICE_CONNECTION_LABEL: String = "设备连接"
+
+/**
+ * The drawer row that opens the engine probe (L62).
+ *
+ * The probe's own header calls the surface 「PDSH 引擎探针」; the drawer row uses the
+ * short half, because every other row in this list is a destination name and
+ * 「PDSH」 would read as part of one. The word is the one the L62 brief uses.
+ */
+private const val ENGINE_PROBE_LABEL: String = "引擎探针"
 
 /** How long a gesture's outcome line stays on screen (four seconds). */
 private const val NOTICE_MILLIS: Long = 4_000L

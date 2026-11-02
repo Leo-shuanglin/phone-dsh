@@ -12,6 +12,9 @@
 //   pdsh.model.name        the model id the Worker reports
 //   pdsh.model.proxy       mount the host model edge (default true)
 //   pdsh.face.web          open the DSH Web surface once the engine is ready
+//   pdsh.face.probe        open the engine probe as the launch face (L62: the
+//                          product home is the session list, so the device scripts
+//                          that tap 跑一轮 at launch ask for this)
 //   pdsh.boot.overlay      hand the recovered workspace to the Worker (default true)
 //
 // ---- the base URL is the Messages base, not the origin ---------------------
@@ -89,6 +92,17 @@ internal data class ProbeLaunchConfig(
     val modelName: String = DEFAULT_MODEL,
     val egressProbe: Boolean = false,
     val webFace: Boolean = false,
+    /**
+     * Open the engine probe (the D3 diagnostic console) as the launch face.
+     *
+     * The product home is the session list (L62), and the probe is one drawer tap
+     * away at 引擎探针. This switch exists for the device scripts that tap
+     * 跑一轮 on the launch face (`android/tools/run-app-turn.sh` and the demo
+     * runners): they pass `--ez pdsh.face.probe true` and get the pre-L62 start
+     * face back, with the product default unchanged. It is a diagnostic, not a
+     * setting, exactly like [bootOverlay] and [webFace].
+     */
+    val probeFace: Boolean = false,
     /** Mount the model edge for this launch. A scripted launch passes `false`. */
     val modelProxy: Boolean = true,
     /**
@@ -261,6 +275,16 @@ internal data class ProbeLaunchConfig(
          */
         const val EXTRA_WEB_FACE: String = "pdsh.face.web"
 
+        /**
+         * Open the engine probe as the launch face (L62).
+         *
+         * The product home is the session list now, so a device script that taps
+         * 跑一轮 straight after launch must ask for the probe. One tap on the
+         * drawer's 引擎探针 row reaches it by hand; this switch is what keeps the
+         * scripted runs a single command.
+         */
+        const val EXTRA_PROBE_FACE: String = "pdsh.face.probe"
+
         const val DEFAULT_PROMPT: String = "Run phone info and tell me what it says."
         const val DEFAULT_MODEL: String = "deepseek-flash"
 
@@ -334,6 +358,7 @@ internal data class ProbeLaunchConfig(
                 egressProbe = intent?.getBooleanExtra(EXTRA_EGRESS_PROBE, false) ?: false,
                 modelProxy = intent?.getBooleanExtra(EXTRA_MODEL_PROXY, true) ?: true,
                 webFace = intent?.getBooleanExtra(EXTRA_WEB_FACE, false) ?: false,
+                probeFace = intent?.getBooleanExtra(EXTRA_PROBE_FACE, false) ?: false,
                 bootOverlay = intent?.getBooleanExtra(EXTRA_BOOT_OVERLAY, true) ?: true,
             )
         }
