@@ -16,6 +16,7 @@
 // UiState node.
 package com.phonedsh.ui.surface
 
+import android.icu.text.BreakIterator
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -74,6 +75,7 @@ import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
+import java.util.Locale
 
 /** Which key the dock's trailing corner shows. */
 public enum class ComposerMode {
@@ -147,7 +149,7 @@ public object ComposerTokens {
  *   from the idle/steer/queue case).
  * @param controls the tool row docked inside the card (plus / permissions /
  *   model / running spinner); `null` leaves the row empty.
- * @param onTruncated the draft hit the 8000-character cap and was cut.
+ * @param onTruncated the draft exceeded 8000 extended graphemes and was cut.
  */
 @Composable
 public fun Composer(
@@ -253,16 +255,10 @@ public fun Composer(
                     BasicTextField(
                         value = fieldValue,
                         onValueChange = { value ->
-                            fieldValue = if (value.text.length > MAX_DRAFT_CHARS) {
-                                val clipped = value.text.take(MAX_DRAFT_CHARS)
-                                value.copy(text = clipped, selection = TextRange(clipped.length), composition = null)
-                            } else value
-                            if (value.text.length > MAX_DRAFT_CHARS) {
-                                onTextChange(value.text.take(MAX_DRAFT_CHARS))
-                                onTruncated()
-                            } else {
-                                onTextChange(value.text)
-                            }
+                            val limited = enforceComposerDraftLimit(value)
+                            fieldValue = limited.value
+                            onTextChange(limited.value.text)
+                            if (limited.truncated) onTruncated()
                         },
                         enabled = enabled,
                         textStyle = type.body.copy(
@@ -474,8 +470,37 @@ private fun ContextRing(percent: Int) {
     }
 }
 
-/** The draft cap the field enforces (iOS `value.count > 8_000`). */
-private const val MAX_DRAFT_CHARS: Int = 8_000
+/** The draft cap the field enforces (iOS `value.count > 8_000`, extended graphemes). */
+private const val MAX_DRAFT_GRAPHEMES: Int = 8_000
+
+internal data class ComposerDraftLimitResult(
+    val value: TextFieldValue,
+    val truncated: Boolean,
+)
+
+/** Applies the native extended-grapheme cap without disturbing valid under-cap edits. */
+internal fun enforceComposerDraftLimit(
+    value: TextFieldValue,
+    maxGraphemes: Int = MAX_DRAFT_GRAPHEMES,
+): ComposerDraftLimitResult {
+    require(maxGraphemes >= 0)
+    val iterator = BreakIterator.getCharacterInstance(Locale.ROOT)
+    iterator.setText(value.text)
+    var boundary = iterator.first()
+    var clusters = 0
+    while (clusters < maxGraphemes) {
+        val next = iterator.next()
+        if (next == BreakIterator.DONE) return ComposerDraftLimitResult(value, truncated = false)
+        boundary = next
+        clusters++
+    }
+    if (iterator.next() == BreakIterator.DONE) return ComposerDraftLimitResult(value, truncated = false)
+    val clipped = value.text.substring(0, boundary)
+    return ComposerDraftLimitResult(
+        value = value.copy(text = clipped, selection = TextRange(clipped.length), composition = null),
+        truncated = true,
+    )
+}
 private const val COMPOSER_CARD_TAG: String = "pdsh.composer.card"
 
 /** Tag for the 36pt painted send circle inside its 44pt tap target. */
