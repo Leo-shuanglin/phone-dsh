@@ -42,16 +42,23 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -59,9 +66,15 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
+import com.phonedsh.ui.HomeMetrics
+import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.LocalUiTokens
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -118,7 +131,7 @@ public fun PageBarCapsule(
             // A white pill on a white page is only visible through this shadow,
             // which is why the baseline's halo is wider than the pill.
             .shadow(elevation = elevation, shape = shape)
-            .background(tokens.colors.page, shape)
+            .background(tokens.colors.surface, shape)
             .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
@@ -141,11 +154,65 @@ public fun PageBarCapsule(
             BasicText(
                 text = description,
                 style = settingsLabelStyle().copy(
-                    color = if (enabled) tokens.colors.pageAccent else tokens.colors.tertiary,
+                    color = if (enabled) tokens.colors.textPrimary else tokens.colors.textTertiary,
                 ),
                 maxLines = 1,
             )
         }
+    }
+}
+
+/** HomeSpec's full-width black capsule for a page's primary action. */
+@Composable
+public fun HomePrimaryAction(
+    label: String,
+    onClick: (() -> Unit)? = null,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+    tag: String? = null,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val isEnabled = enabled && onClick != null
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val actionModifier = if (onClick != null) {
+        Modifier.clickable(
+            interactionSource = interactionSource,
+            indication = null,
+            enabled = isEnabled,
+            role = Role.Button,
+            onClick = onClick,
+        )
+    } else {
+        Modifier.semantics {
+            role = Role.Button
+            disabled()
+        }
+    }
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(HomeMetrics.homePrimaryButtonHeight)
+            .graphicsLayer {
+                alpha = if (isPressed && isEnabled) {
+                    HomeMetrics.HOME_PRIMARY_BUTTON_PRESSED_OPACITY
+                } else {
+                    1f
+                }
+            }
+            .clip(RoundedCornerShape(percent = CAPSULE_CORNER_PERCENT))
+            .background(
+                tokens.colors.primaryButton.copy(
+                    alpha = if (isEnabled) 1f else HomeMetrics.HOME_PRIMARY_BUTTON_DISABLED_OPACITY,
+                ),
+            )
+            .then(if (tag != null) Modifier.testTag(tag) else Modifier)
+            .then(actionModifier)
+            .semantics(mergeDescendants = true) { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        BasicText(label, style = type.buttonLabel.copy(color = tokens.colors.primaryButtonInk))
     }
 }
 
@@ -163,7 +230,9 @@ public fun PageBarCapsule(
 @Composable
 public fun CubeGlyph(modifier: Modifier = Modifier) {
     val tokens = LocalUiTokens.current
-    val ink = tokens.colors.systemLabel
+    // UIKit's dynamic label is unresolved in the current Android theme. HomeSpec
+    // supplies the page ink for this monochrome icon role.
+    val ink = tokens.colors.textPrimary
     Canvas(modifier = modifier.size(tokens.spacing.iconText * CUBE_GLYPH_BOX_RATIO)) {
         val stroke = tokens.stroke.hairline.toPx() * CUBE_STROKE_SCALE
         val radius = size.minDimension / 2f * CUBE_RADIUS_RATIO

@@ -112,7 +112,7 @@ internal fun SessionFailureLine(
     ) {
         BasicText(
             text = message,
-            style = type.secondary.copy(color = tokens.colors.warning),
+            style = type.homeBody.copy(color = tokens.colors.pageWarning),
             modifier = Modifier.weight(1f),
         )
         if (retryLabel != null && onRetry != null) {
@@ -150,15 +150,15 @@ internal fun SessionTextAction(
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     val ink = when {
-        !enabled -> tokens.colors.tertiary
-        tone == SessionActionTone.ACCENT -> tokens.colors.accent
-        tone == SessionActionTone.DANGER -> tokens.colors.danger
-        tone == SessionActionTone.SECONDARY -> tokens.colors.secondary
-        else -> tokens.colors.tertiary
+        !enabled -> tokens.colors.textTertiary
+        tone == SessionActionTone.ACCENT -> tokens.colors.textPrimary
+        tone == SessionActionTone.DANGER -> tokens.colors.pageDanger
+        tone == SessionActionTone.SECONDARY -> tokens.colors.textSecondary
+        else -> tokens.colors.textTertiary
     }
     BasicText(
         text = label,
-        style = type.secondary.copy(color = ink),
+        style = type.homeBody.copy(color = ink),
         maxLines = 1,
         modifier = modifier
             // Page-level geometry: a text action is a page control, so its floor is
@@ -177,7 +177,7 @@ internal fun SessionSectionLabel(text: String, modifier: Modifier = Modifier) {
     val type = LocalUiType.current
     BasicText(
         text = text,
-        style = type.caption.copy(color = tokens.colors.tertiary),
+        style = type.secondary.copy(color = tokens.colors.textSecondary),
         modifier = modifier
             .fillMaxWidth()
             // Page-level geometry: the section label aligns to the page margin.
@@ -200,7 +200,7 @@ internal fun SessionHairline(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .height(tokens.stroke.hairline)
-            .background(tokens.colors.border),
+            .background(tokens.colors.borderList),
     )
 }
 

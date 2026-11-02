@@ -46,8 +46,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import com.phonedsh.ui.theme.LocalUiTokens
-import com.phonedsh.ui.theme.color
-import com.phonedsh.ui.theme.generated.UiTokenData
 
 /**
  * One orange warning line: the triangle glyph, then the host's own sentence.
@@ -63,10 +61,10 @@ public fun WarningLine(
     tag: String? = null,
 ) {
     val tokens = LocalUiTokens.current
-    // `colors.systemOrange` is not in `UiColors` yet (that field lives in
-    // `theme/UiTokens.kt`, which this lane does not own); the generated
-    // `UiTokenData` is the same single source, so the value is not re-typed.
-    val ink = UiTokenData.colorSystemOrange.color(tokens.dark)
+    // UIKit systemOrange is unresolved in the Android theme. Use the current
+    // NativePagePalette warning role as a deliberate fallback; the system-orange
+    // hue remains a theme-resolver limitation.
+    val ink = tokens.colors.pageWarning
     Row(
         modifier = modifier
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)

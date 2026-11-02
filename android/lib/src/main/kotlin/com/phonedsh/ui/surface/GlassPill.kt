@@ -1,4 +1,4 @@
-// The iOS 26 glass pill: the bordered / borderedProminent button shape.
+// Android rendering of the iOS secondary toolbar's bordered pill.
 // SPDX-License-Identifier: MIT
 //
 // Why this file exists next to `PageBarControls.kt`: that file draws the *bar*
@@ -92,13 +92,11 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import com.phonedsh.ui.theme.LocalUiTokens
-import com.phonedsh.ui.theme.color
-import com.phonedsh.ui.theme.generated.UiTokenData
 import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * One glass pill: the system's `.bordered` button, in page content.
+ * One toolbar pill: the system's `.bordered` button, in page content.
  *
  * @param label the control's visible name (`Label`'s title in the baseline).
  * @param onClick the pill's action.
@@ -124,11 +122,11 @@ public fun GlassPill(
 ) {
     val tokens = LocalUiTokens.current
     val shape = RoundedCornerShape(percent = CAPSULE_CORNER_PERCENT)
-    // `colors.glassPillFill` is not in `UiColors` yet: adding a field there means
-    // editing `theme/UiTokens.kt`, which this lane does not own. The generated
-    // `UiTokenData` is the same single source, so the value is not re-typed.
-    val fill = UiTokenData.colorGlassPillFill.color(tokens.dark)
-    val ink = if (enabled) tokens.colors.accent else tokens.colors.tertiary
+    // The current iOS owner is a bordered control with a secondary system fill,
+    // not a captured fixed glass color. Android has no adaptive system-fill
+    // resolver here, so render the nearest reviewed control surface explicitly.
+    val fill = tokens.colors.selector
+    val ink = if (enabled) tokens.colors.textPrimary else tokens.colors.textTertiary
     Row(
         modifier = modifier
             .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)

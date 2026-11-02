@@ -65,6 +65,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
@@ -79,7 +80,6 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -90,23 +90,20 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.SettingsMetrics
 import com.phonedsh.ui.page.PageTone
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
-import com.phonedsh.ui.theme.generated.UiTokenData
-import com.phonedsh.ui.theme.style
 
 // ---------------------------------------------------------------------------
 // Current grouped-list geometry: read from SettingsMetrics, never re-typed
 // ---------------------------------------------------------------------------
 
-/** One grouped row: 52.33 pt, measured four times in `settings-chat.png`. */
-public val SettingsGroupedRowHeight: Dp get() = SettingsMetrics.rowHeight
+/** HomeSpec's source-backed minimum row height, shared by grouped page controls. */
+public val SettingsGroupedRowHeight: Dp get() = HomeMetrics.defaultMinListRowHeight
 
 /** The 1.0 pt separator (3 px @3x), measured at y=760/1179/… in `settings-chat.png`. */
 public val SettingsSeparatorThickness: Dp get() = SettingsMetrics.SEPARATOR_HEIGHT_PT.dp
@@ -207,17 +204,17 @@ public val LocalSettingsRowInk: androidx.compose.runtime.ProvidableCompositionLo
 /** The row-label ink: the page's override, else the theme's primary. */
 @Composable
 public fun settingsLabelInk(): Color =
-    LocalSettingsRowInk.current?.label ?: LocalUiTokens.current.colors.primary
+    LocalSettingsRowInk.current?.label ?: LocalUiTokens.current.colors.textPrimary
 
-/** The row-value ink: the page's override, else the theme's secondary. */
+/** The row-value ink: the page's override, else the HomeSpec placeholder role. */
 @Composable
 public fun settingsValueInk(): Color =
-    LocalSettingsRowInk.current?.value ?: LocalUiTokens.current.colors.secondary
+    LocalSettingsRowInk.current?.value ?: LocalUiTokens.current.colors.textPlaceholder
 
-/** The footnote ink: the page's override, else the theme's secondary. */
+/** The footnote ink: the page's override, else HomeSpec secondary text. */
 @Composable
 public fun settingsFootnoteInk(): Color =
-    LocalSettingsRowInk.current?.footnote ?: LocalUiTokens.current.colors.secondary
+    LocalSettingsRowInk.current?.footnote ?: LocalUiTokens.current.colors.textSecondary
 
 /**
  * The 17 pt row text's 1 pt optical lift ([SettingsMetrics.ROW_TEXT_OPTICAL_OFFSET_PT]).
@@ -230,21 +227,16 @@ public fun settingsRowTextLift(): Modifier =
     Modifier.offset(y = SettingsMetrics.ROW_TEXT_OPTICAL_OFFSET_PT.dp)
 
 /**
- * The iOS system inks a settings `List` draws its rows with.
- *
- * `colors.systemLabel` (#000000) and `colors.systemSecondary` (#8A8A8E) are the
- * measured iOS values; `colors.settingsFootnoteInk` (#7F7F7F) is what
- * `.font(.footnote).foregroundStyle(.secondary)` actually renders. The app's own
- * theme inks are #111114 / #66666B, which is a visible mismatch on every glyph of
- * a pixel comparison, so the two grouped pages that have an iOS baseline supply
- * the system three through [LocalSettingsRowInk].
+ * The HomeSpec page inks used where iOS delegates to adaptive system labels.
+ * Android currently uses the reviewed HomeSpec text roles; this is a resolved
+ * palette approximation, not an implementation of UIKit dynamic label colors.
  */
 @Composable
 public fun settingsSystemInk(): SettingsRowInk = LocalUiTokens.current.let { tokens ->
     SettingsRowInk(
-        label = tokens.colors.systemLabel,
-        value = tokens.colors.systemSecondary,
-        footnote = tokens.colors.settingsFootnoteInk,
+        label = tokens.colors.textPrimary,
+        value = tokens.colors.textSecondary,
+        footnote = tokens.colors.textSecondary,
     )
 }
 
@@ -325,86 +317,39 @@ private val SettingsSwitchTrackRadius: Dp = 14.5.dp
 // ---------------------------------------------------------------------------
 
 /**
- * The row label: 17 pt regular — `typography.rowLabel`, added to
- * `spec/ui/v1/tokens.json` by L9 while this lane was running.
- *
- * Before that token existed this role re-used `headline` (17/600) and forced the
- * weight back to 400; the size came from the token and the weight from the
- * baseline. Now both come from one token.
- *
- * The line height is stated rather than inherited: the row is 52.33 pt with a
- * single 17 pt line (52.33 - 2 × 16 measured padding = 20.33), and stating it
- * also keeps the row's height independent of a text engine whose default line
- * box is wider than the platform's (Robolectric measures the same string at
- * 35 pt, which is why the JVM row was 59 pt tall before this was stated).
+ * HomeSpec list copy uses the canonical 16/24 body role.
  */
 @Composable
 public fun settingsLabelStyle(): TextStyle =
-    UiTokenData.typeRowLabel.style().copy(lineHeight = SETTINGS_LABEL_LINE_HEIGHT)
+    LocalUiType.current.homeBody
 
 /**
- * The row value: 17 pt regular, secondary ink.
- *
- * The pre-#13 flat list used a 15 pt value; the current grouped list measures
- * 17 (`SettingsMetrics.ROW_VALUE_REF_PT`: the `未设置` ink box is 45 px = 15 pt,
- * i.e. a 17 pt font). The two are not interchangeable, and this one is the
- * measured one.
+ * The row value uses the HomeSpec 16/24 body role; the caller supplies its ink.
  */
 @Composable
 public fun settingsValueStyle(): TextStyle =
-    UiTokenData.typeRowLabel.style().copy(lineHeight = SETTINGS_LABEL_LINE_HEIGHT)
+    LocalUiType.current.homeBody
 
 /**
- * The footnote: 13 pt regular, secondary ink (`.font(.footnote)` at
- * `SettingsPage.swift:105,127`; ink 35 px = 11.7 pt).
+ * The settings footer uses the HomeSpec 13 pt secondary role.
  */
 @Composable
 public fun settingsFootnoteStyle(): TextStyle =
-    LocalUiType.current.secondary.copy(lineHeight = SETTINGS_FOOTNOTE_LINE_HEIGHT)
+    LocalUiType.current.secondary
 
 /**
- * The sub-pages' section label: 17 pt regular, secondary ink.
- *
- * Measured, not inferred from the old page: `ios-settings-model.png` `服务`'s
- * ink box is 46 px = 15.33 pt, the same box a 17 pt CJK row label produces. The
- * pre-#13 index's 13 pt group header is a different (removed) element; the
- * current general tab has **no** section headers at all, only footnotes.
+ * A page-section label uses the HomeSpec 13 pt secondary role.
  */
 @Composable
 public fun settingsSectionLabelStyle(): TextStyle =
-    UiTokenData.typeRowLabel.style().copy(lineHeight = SETTINGS_LABEL_LINE_HEIGHT)
+    LocalUiType.current.secondary
 
 /**
- * The baseline's large title: 34 pt bold at x 17 pt with its ink top at 125.67 pt.
- *
- * The `typography.largeTitle` (34/700) token landed in `spec/ui/v1/tokens.json`
- * while this lane was running (L9), so this reads it — through the generated
- * `UiTokenData` rather than through `LocalUiType`, because `UiType`'s twelve
- * roles are another lane's file and do not expose it yet. When
- * `UiType.largeTitle` exists this becomes `LocalUiType.current.largeTitle` and
- * nothing else changes.
- *
- * Before the token existed this role re-used `headline` (17/600) and said so; the
- * measured block (17 pt inset, 14 pt below the 44 pt bar) was already right, it
- * was only the glyph size that was not.
+ * The HomeSpec large-title role from generated typography tokens.
  */
 @Composable
 public fun settingsLargeTitleStyle(): TextStyle =
-    UiTokenData.typeLargeTitle.style().copy(lineHeight = SETTINGS_LARGE_TITLE_LINE_HEIGHT)
-
-/** unverified geometry: 52.33 - 2 × 16 = 20.33 pt of line box for a 17 pt label. */
-private val SETTINGS_LABEL_LINE_HEIGHT: TextUnit = 20.33.sp
-
-/** unverified geometry: 13 pt footnote in a 16 pt line box (two-line footnotes). */
-private val SETTINGS_FOOTNOTE_LINE_HEIGHT: TextUnit = 16.sp
-
-/**
- * unverified geometry: the 34 pt large title's line box. 34 × 1.2 = 40.8 pt is
- * the platform's default line height; until `typography.largeTitle` exists the
- * text is 17 pt, so this box is deliberately the *measured* 34 pt one and the
- * title renders as a stand-in inside it.
- */
-private val SETTINGS_LARGE_TITLE_LINE_HEIGHT: TextUnit = 40.8.sp
+    LocalUiType.current.largeTitle
 
 // ---------------------------------------------------------------------------
 // Chrome
@@ -447,7 +392,7 @@ public fun SettingsNavBar(
                     val tag = if (backTag != null) Modifier.testTag(backTag) else Modifier
                     BasicText(
                         text = BACK_GLYPH,
-                        style = settingsLabelStyle().copy(color = tokens.colors.accent),
+                        style = settingsLabelStyle().copy(color = tokens.colors.textPrimary),
                         modifier = tag
                             .clickable(role = Role.Button, onClick = onBack)
                             .semantics { contentDescription = UiStrings.BACK }
@@ -462,7 +407,7 @@ public fun SettingsNavBar(
                 // An inline navigation title is UIKit's .label, i.e. #000000; the
                 // theme's #111114 leaves a 17/255 delta on every glyph core. Measured
                 // on `ios-settings.png` 通用设置 (2,101 px of #000000).
-                style = type.headline.copy(color = tokens.colors.systemLabel),
+                style = type.pageTitle.copy(color = tokens.colors.textPrimary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
@@ -490,14 +435,17 @@ public fun SettingsNavAction(
     modifier: Modifier = Modifier,
     tag: String? = null,
     description: String = text,
+    enabled: Boolean = true,
 ) {
     val tokens = LocalUiTokens.current
     BasicText(
         text = text,
-        style = settingsLabelStyle().copy(color = tokens.colors.accent),
+        style = LocalUiType.current.pageTitle.copy(
+            color = if (enabled) tokens.colors.textPrimary else tokens.colors.textTertiary,
+        ),
         modifier = modifier
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .semantics { contentDescription = description }
             .padding(vertical = tokens.spacing.iconText, horizontal = tokens.spacing.iconText),
     )
@@ -529,7 +477,10 @@ public fun SettingsSegmentedPicker(
             .padding(horizontal = SettingsSegmentInset)
             .height(SettingsSegmentHeight)
             .clip(RoundedCornerShape(SettingsSegmentRadius))
-            .background(tokens.colors.segmentTrack)
+            // HomeSpec uses a white track and a black selected segment. The
+            // old system segmentTrack token is unresolved and belongs to no
+            // current iOS owner.
+            .background(tokens.colors.surface)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .semantics(mergeDescendants = false) {},
         verticalAlignment = Alignment.CenterVertically,
@@ -545,12 +496,13 @@ public fun SettingsSegmentedPicker(
                         if (isSelected) {
                             Modifier
                                 .clip(RoundedCornerShape(SettingsSegmentRadius))
-                                .background(tokens.colors.input)
+                                .background(tokens.colors.primaryButton)
                         } else {
                             Modifier
                         },
                     )
                     .clickable(role = Role.Button) { onSelect(index) }
+                    .then(if (tag != null) Modifier.testTag("$tag-segment-$index") else Modifier)
                     .semantics {
                         stateDescription = if (isSelected) UiStrings.EXPANDED else UiStrings.COLLAPSED
                     },
@@ -565,7 +517,7 @@ public fun SettingsSegmentedPicker(
                         // UISegmentedControl draws *every* label in .label, selected
                         // or not: the baseline's 模型/插件/手机权限/预设 are black, not
                         // the secondary grey the previous mapping used.
-                        color = settingsLabelInk(),
+                        color = if (isSelected) tokens.colors.primaryButtonInk else tokens.colors.textPrimary,
                     ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -593,7 +545,7 @@ public fun SettingsGroupCard(modifier: Modifier = Modifier, content: @Composable
             .fillMaxWidth()
             .padding(horizontal = SettingsCardMargin)
             .clip(RoundedCornerShape(SettingsCardRadius))
-            .background(tokens.colors.input),
+            .background(tokens.colors.surface),
     ) {
         content()
     }
@@ -659,8 +611,8 @@ public fun SettingsGroupedRow(
                     text = title,
                     style = settingsLabelStyle().copy(
                         color = when {
-                            !enabled -> tokens.colors.tertiary
-                            accentTitle -> tokens.colors.accent
+                            !enabled -> tokens.colors.textTertiary
+                            accentTitle -> tokens.colors.textPrimary
                             else -> settingsLabelInk()
                         },
                     ),
@@ -718,7 +670,7 @@ public fun SettingsBodyRow(
     Box(modifier = modifier.fillMaxWidth()) {
         BasicText(
             text = text,
-            style = settingsLabelStyle().copy(color = tokens.colors.secondary),
+            style = settingsLabelStyle().copy(color = tokens.colors.textSecondary),
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = SettingsGroupedRowHeight)
@@ -824,13 +776,13 @@ public fun SettingsSectionLabel(
     ) {
         BasicText(
             text = title,
-            style = settingsSectionLabelStyle().copy(color = tokens.colors.secondary),
+            style = settingsSectionLabelStyle().copy(color = tokens.colors.textSecondary),
             modifier = Modifier.weight(1f),
         )
         if (trailing != null) {
             BasicText(
                 text = trailing,
-                style = settingsFootnoteStyle().copy(color = tokens.colors.secondary),
+                style = settingsFootnoteStyle().copy(color = tokens.colors.textSecondary),
             )
         }
     }
@@ -902,8 +854,8 @@ public fun SettingsFormRow(
                     text = title,
                     style = settingsLabelStyle().copy(
                         color = when {
-                            !enabled -> tokens.colors.tertiary
-                            accentTitle -> tokens.colors.accent
+                            !enabled -> tokens.colors.textTertiary
+                            accentTitle -> tokens.colors.textPrimary
                             else -> settingsLabelInk()
                         },
                     ),
@@ -984,12 +936,13 @@ public fun SettingsSubPageFootnote(text: String, modifier: Modifier = Modifier) 
  * @param title the inline (centred) title; the six sub-pages set it on the two
  *   that live behind a modal sheet without a large title (`关于`, `网络访问`).
  * @param largeTitle the 34 pt heading drawn in the content instead of the bar.
- * @param pageFill paint the frame with `colors.page` instead of `colors.input`.
+ * @param pageFill retained compatibility flag; both modes use HomeSpec page fill.
  * @param onBack the leading affordance (the baseline's ✕ on a sheet, ‹ on a
  *   pushed page).
  * @param rootTag an optional stable test tag for the page root.
  */
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 public fun SettingsSubPageFrame(
     modifier: Modifier = Modifier,
     title: String? = null,
@@ -1002,15 +955,13 @@ public fun SettingsSubPageFrame(
     rootTag: String? = null,
     embedded: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
+    showSheetHandle: Boolean = backGlyph == SETTINGS_CLOSE_GLYPH && onBack != null,
     content: @Composable () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
-    val background = when {
-        grouped -> tokens.colors.groupedBackground
-        pageFill -> tokens.colors.page
-        tokens.colors.background.isSpecified -> tokens.colors.background
-        else -> tokens.colors.input
-    }
+    // HomeSpec is the owner of the page behind inset white rows in every
+    // appearance. `groupedBackground`/`background` are unresolved system slots.
+    val background = tokens.colors.page
     val tagged = if (rootTag != null) modifier.testTag(rootTag) else modifier
     Column(
         modifier = tagged
@@ -1022,6 +973,11 @@ public fun SettingsSubPageFrame(
         // the 44 pt bar and the segmented picker, so drawing another bar here
         // would stack two. The large title stays — it belongs to the page.
         if (!embedded) {
+            if (showSheetHandle) {
+                androidx.compose.material3.BottomSheetDefaults.DragHandle(
+                    modifier = Modifier.testTag("settings-sheet-drag-handle"),
+                )
+            }
             SettingsNavBar(
                 title = title,
                 leading = if (onBack != null) {
@@ -1030,7 +986,7 @@ public fun SettingsSubPageFrame(
                             text = backGlyph,
                             onClick = onBack,
                             tag = backTag,
-                            description = UiStrings.BACK,
+                            description = if (showSheetHandle) UiStrings.CANCEL else UiStrings.BACK,
                         )
                     }
                 } else {
@@ -1042,7 +998,7 @@ public fun SettingsSubPageFrame(
         if (largeTitle != null) {
             BasicText(
                 text = largeTitle,
-                style = settingsLargeTitleStyle().copy(color = tokens.colors.primary),
+                style = settingsLargeTitleStyle().copy(color = tokens.colors.textPrimary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
@@ -1074,7 +1030,7 @@ public fun SettingsSubPageFrame(
 public fun SettingsCloseGlyph(modifier: Modifier = Modifier) {
     val tokens = LocalUiTokens.current
     Canvas(modifier = modifier.size(SettingsCloseGlyphSize)) {
-        val ink = tokens.colors.accent
+        val ink = tokens.colors.textPrimary
         drawCircle(
             color = ink.copy(alpha = SETTINGS_CLOSE_RING_ALPHA),
             radius = size.minDimension / 2f,
@@ -1133,11 +1089,11 @@ public fun SettingsGlassPill(
         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
         if (glyph != null) {
-            BasicText(text = glyph, style = settingsLabelStyle().copy(color = tokens.colors.accent))
+            BasicText(text = glyph, style = settingsLabelStyle().copy(color = tokens.colors.textPrimary))
         }
         BasicText(
             text = label,
-            style = settingsLabelStyle().copy(color = if (enabled) tokens.colors.accent else tokens.colors.tertiary),
+            style = settingsLabelStyle().copy(color = if (enabled) tokens.colors.textPrimary else tokens.colors.textTertiary),
         )
     }
 }
@@ -1156,7 +1112,7 @@ public fun SettingsLargeTitle(text: String, modifier: Modifier = Modifier) {
     val tokens = LocalUiTokens.current
     BasicText(
         text = text,
-        style = settingsLargeTitleStyle().copy(color = tokens.colors.primary),
+        style = settingsLargeTitleStyle().copy(color = tokens.colors.textPrimary),
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = modifier
@@ -1238,7 +1194,7 @@ public fun SettingsRowLabel(text: String, enabled: Boolean = true, modifier: Mod
     BasicText(
         text = text,
         style = settingsLabelStyle().copy(
-            color = if (enabled) settingsLabelInk() else tokens.colors.tertiary,
+            color = if (enabled) settingsLabelInk() else tokens.colors.textTertiary,
         ),
         modifier = modifier.then(settingsRowTextLift()),
     )
@@ -1337,7 +1293,7 @@ public fun SettingsMenuChevron(ink: Color) {
     }
 }
 
-/** The baseline's separator: `colors.separator` (#E8E8E8), 1.0 pt thick (3 px @3x). */
+/** HomeSpec list separator, using the reviewed border-list color role. */
 @Composable
 public fun SettingsHairline(modifier: Modifier = Modifier) {
     val tokens = LocalUiTokens.current
@@ -1345,7 +1301,7 @@ public fun SettingsHairline(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .height(SettingsSeparatorThickness)
-            .background(tokens.colors.separator),
+            .background(tokens.colors.borderList),
     )
 }
 
@@ -1363,11 +1319,13 @@ public fun SettingsHairline(modifier: Modifier = Modifier) {
 public fun SettingsSwitch(checked: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true) {
     val tokens = LocalUiTokens.current
     val track = when {
-        !enabled -> tokens.colors.border
+        !enabled -> tokens.colors.borderList
         // iOS draws its default `systemGreen` on-tint here: the baseline's
         // Toggle has no `.tint()`, so the theme accent was never involved.
-        checked -> tokens.colors.switchOn
-        else -> tokens.colors.borderLight
+        // Nearest reviewed HomeSpec green. The current Android theme does not
+        // resolve UIKit's adaptive `systemGreen` value.
+        checked -> tokens.colors.homeSuccess
+        else -> tokens.colors.borderList
     }
     Canvas(modifier = modifier.size(width = SettingsSwitchWidth, height = SettingsSwitchHeight)) {
         val radius = SettingsSwitchTrackRadius.toPx().coerceAtMost(size.height / 2f)
@@ -1422,7 +1380,7 @@ public fun SettingsSectionHeader(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = tokens.geometry.pageHeaderMinHeight)
+            .heightIn(min = SettingsGroupedRowHeight)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .clickable(role = Role.Button, onClick = onToggle)
             .semantics(mergeDescendants = true) {
@@ -1438,12 +1396,12 @@ public fun SettingsSectionHeader(
     ) {
         BasicText(
             text = CHEVRON_FORWARD,
-            style = settingsLabelStyle().copy(color = tokens.colors.tertiary),
+            style = settingsLabelStyle().copy(color = tokens.colors.textTertiary),
             modifier = Modifier.rotate(rotation),
         )
         BasicText(
             text = title,
-            style = settingsSectionLabelStyle().copy(color = tokens.colors.secondary),
+            style = settingsSectionLabelStyle().copy(color = tokens.colors.textSecondary),
             modifier = Modifier
                 .weight(1f)
                 .semantics { heading() },
@@ -1451,7 +1409,7 @@ public fun SettingsSectionHeader(
         if (trailing != null) {
             BasicText(
                 text = trailing,
-                style = settingsFootnoteStyle().copy(color = tokens.colors.secondary),
+                style = settingsFootnoteStyle().copy(color = tokens.colors.textSecondary),
             )
         }
     }
@@ -1468,8 +1426,8 @@ private const val CHEVRON_FORWARD: String = "›"
  */
 @Composable
 public fun PageTone.settingsInk(tokens: com.phonedsh.ui.theme.UiTokens): Color = when (this) {
-    PageTone.NORMAL -> tokens.colors.secondary
-    PageTone.ON -> tokens.colors.success
-    PageTone.DEGRADED -> tokens.colors.warning
-    PageTone.UNKNOWN -> tokens.colors.tertiary
+    PageTone.NORMAL -> tokens.colors.textSecondary
+    PageTone.ON -> tokens.colors.homeSuccess
+    PageTone.DEGRADED -> tokens.colors.pageWarning
+    PageTone.UNKNOWN -> tokens.colors.textSecondary
 }
