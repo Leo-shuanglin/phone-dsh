@@ -140,6 +140,7 @@ internal fun ChatRowList(
     modifier: Modifier = Modifier,
     onOpenFile: ((String) -> Unit)? = null,
     onOpenResource: ((String) -> Unit)? = null,
+    imageSource: com.phonedsh.ui.surface.MarkdownImageSource? = null,
 ) {
     LazyColumn(
         modifier = modifier
@@ -155,6 +156,7 @@ internal fun ChatRowList(
                     onToggleRow = onToggleRow,
                     onOpenFile = onOpenFile,
                     onOpenResource = onOpenResource,
+                    imageSource = imageSource,
                 )
             }
         }
@@ -190,6 +192,7 @@ internal fun ChatRowItem(
     onOpenFile: ((String) -> Unit)? = null,
     onOpenResource: ((String) -> Unit)? = null,
     inListCard: Boolean = false,
+    imageSource: com.phonedsh.ui.surface.MarkdownImageSource? = null,
 ) {
     val tokens = LocalUiTokens.current
     // PR22 reading content uses the source HomeSpec's 20pt inset.
@@ -240,6 +243,7 @@ internal fun ChatRowItem(
                     modifier = Modifier.testTag(UiTags.BUBBLE),
                     onOpenFile = onOpenFile,
                     onOpenResource = onOpenResource,
+                    imageSource = imageSource,
                 )
             }
             if (row.changes.isNotEmpty()) {
@@ -272,6 +276,7 @@ internal fun ChatRowItem(
                 detailTruncated = row.fullReasoningTruncated,
                 onOpenFile = onOpenFile,
                 onOpenResource = onOpenResource,
+                imageSource = imageSource,
             )
         }
 
@@ -305,6 +310,7 @@ internal fun ChatRowItem(
             onOpenFile = onOpenFile,
             onOpenResource = onOpenResource,
             modifier = modifier,
+            imageSource = imageSource,
         )
 
         is ChatRow.TurnProcess -> TurnProcessRow(
@@ -315,6 +321,7 @@ internal fun ChatRowItem(
             onOpenFile = onOpenFile,
             onOpenResource = onOpenResource,
             modifier = modifier,
+            imageSource = imageSource,
         )
 
         is ChatRow.TurnTail -> TurnTailRow(row = row, modifier = modifier)
@@ -357,6 +364,7 @@ private fun ProcessGroupRow(
     onOpenFile: ((String) -> Unit)?,
     onOpenResource: ((String) -> Unit)?,
     modifier: Modifier = Modifier,
+    imageSource: com.phonedsh.ui.surface.MarkdownImageSource? = null,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -408,6 +416,7 @@ private fun ProcessGroupRow(
                         onToggleRow = onToggleRow,
                         onOpenFile = onOpenFile,
                         onOpenResource = onOpenResource,
+                        imageSource = imageSource,
                             inListCard = row.showsHeader,
                     )
                 }
@@ -437,6 +446,7 @@ private fun TurnProcessRow(
     onOpenFile: ((String) -> Unit)?,
     onOpenResource: ((String) -> Unit)?,
     modifier: Modifier = Modifier,
+    imageSource: com.phonedsh.ui.surface.MarkdownImageSource? = null,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -484,6 +494,7 @@ private fun TurnProcessRow(
                         onToggleRow = onToggleRow,
                         onOpenFile = onOpenFile,
                         onOpenResource = onOpenResource,
+                        imageSource = imageSource,
                             modifier = Modifier.padding(top = top),
                     )
                 }

@@ -18,14 +18,21 @@
 package com.phonedsh.ui.nav
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +41,7 @@ import com.phonedsh.ui.page.AutomationLocalState
 import com.phonedsh.ui.page.AutomationScreenState
 import com.phonedsh.ui.page.AutomationUiEvent
 import com.phonedsh.ui.page.ChatPage
+import com.phonedsh.ui.surface.MarkdownImageSource
 import com.phonedsh.ui.page.ConfigurationLocalState
 import com.phonedsh.ui.page.ConfigurationScreenState
 import com.phonedsh.ui.page.ConfigurationUiEvent
@@ -137,6 +145,7 @@ import com.phonedsh.ui.state.ChatScreenState
 import com.phonedsh.ui.state.PendingAnswer
 import com.phonedsh.ui.state.StateRequestId
 import com.phonedsh.ui.theme.LocalUiTokens
+import com.phonedsh.ui.theme.LocalUiType
 
 // Appended by the L24 lane: the chat family's three 内嵌子页 (`ChatPage.swift:3504`,
 // `:3554`, `:4243`). Grouped so this lane's edge is one block another lane can move
@@ -199,6 +208,7 @@ import com.phonedsh.ui.surface.preview.PreviewShare
 import com.phonedsh.ui.surface.preview.PreviewWorkspace
 import com.phonedsh.ui.surface.preview.rememberPreviewSource
 import java.io.File
+import kotlinx.coroutines.launch
 
 // Appended by the L44 lane: the one level of back that lives *inside* a route.
 // The system back gesture reaches the host, not the page, so a route that shows an
@@ -421,6 +431,7 @@ public fun PdshNavHost(
             PdshRoute.Sessions ->
                 if (sessions != null) sessions() else SessionsRoute(facts, onBack)
             PdshRoute.Chat -> ChatRoute(
+                workspaceRoot = workspaceRoot,
                 actionAvailability = facts.actionAvailability,
                 subpages = chatSubpages,
                 onNavigate = onNavigate,
@@ -578,6 +589,7 @@ private fun RouteSurface(presentation: PdshPresentation, content: @Composable ()
  */
 @Composable
 private fun ChatRoute(
+    workspaceRoot: File?,
     actionAvailability: PdshActionAvailabilities,
     subpages: ChatSubpageFacts,
     onNavigate: (PdshRoute) -> Unit,
@@ -602,7 +614,26 @@ private fun ChatRoute(
     fun available(action: PdshActionKey): Boolean =
         actionAvailability.forAction(action) is PdshActionAvailability.Available
     val sessionId = state?.sessionID?.takeIf(String::isNotBlank)
+    // Markdown dsh-resource identities name the backend Worker session. The local
+    // ChatScreenState session id is a different namespace; only ChatSurface's
+    // explicit workerSessionID (including its persisted legacy alias) may match.
     val workerSessionId = state?.workerSessionID?.takeIf(String::isNotBlank)
+    val latestLocalSessionId = rememberUpdatedState(sessionId)
+    val latestWorkerSessionId = rememberUpdatedState(workerSessionId)
+    val latestWorkspaceRoot = rememberUpdatedState(workspaceRoot)
+    val previewSource = rememberPreviewSource(workspaceRoot)
+    val imageSource = remember(workspaceRoot, workerSessionId, previewSource) {
+        MarkdownImageSource(
+            workspaceFiles = previewSource,
+            sessionFilesById = if (workspaceRoot != null && workerSessionId != null) {
+                mapOf(workerSessionId to previewSource)
+            } else {
+                emptyMap()
+            },
+        )
+    }
+    val scope = rememberCoroutineScope()
+    var unavailableResource by remember { mutableStateOf<MarkdownResourcePreviewTarget.Refused?>(null) }
     val latestAssistantReply = state?.rows?.asReversed()?.firstNotNullOfOrNull { row ->
         (row as? com.phonedsh.ui.state.ChatRow.Assistant)
             ?.takeIf { !it.streaming && it.text.isNotBlank() }
@@ -790,7 +821,33 @@ private fun ChatRoute(
         onRemoveAttachment = onRemoveAttachment,
         onDismissComposerNotice = onDismissNotice,
         onOpenFile = { path -> onNavigate(PdshRoute.Preview(path)) },
-        onOpenResource = { resource -> onNavigate(PdshRoute.Preview(resource)) },
+        onOpenResource = { resource ->
+            when (val target = markdownResourcePreviewTarget(
+                source = resource,
+                currentWorkerSessionId = workerSessionId,
+                hasVerifiedWorkspaceRoot = workspaceRoot != null,
+            )) {
+                is MarkdownResourcePreviewTarget.Refused -> unavailableResource = target
+                is MarkdownResourcePreviewTarget.WorkspacePath -> scope.launch {
+                    val requestedContext = MarkdownResourceContext(
+                        localSessionId = sessionId,
+                        workerSessionId = workerSessionId,
+                        workspaceRoot = workspaceRoot?.toPath()?.toAbsolutePath()?.normalize(),
+                    )
+                    when (val resolved = resolveMarkdownPreviewPath(previewSource, target, requestedContext) {
+                        MarkdownResourceContext(
+                            localSessionId = latestLocalSessionId.value,
+                            workerSessionId = latestWorkerSessionId.value,
+                            workspaceRoot = latestWorkspaceRoot.value?.toPath()?.toAbsolutePath()?.normalize(),
+                        )
+                    }) {
+                        is MarkdownResourcePreviewTarget.WorkspacePath -> onNavigate(PdshRoute.Preview(resolved.previewPath))
+                        is MarkdownResourcePreviewTarget.Refused -> unavailableResource = resolved
+                    }
+                }
+            }
+        },
+        imageSource = imageSource,
         timelineRetryAvailability = retryFromTable,
         permissionApproveAvailability = permissionApproveAvailability,
         permissionDenyAvailability = permissionDenyAvailability,
@@ -816,6 +873,46 @@ private fun ChatRoute(
             requestPlanChanges = available(PdshActionKey.REJECT_PLAN),
         ),
     )
+    unavailableResource?.let { refused ->
+        val tokens = LocalUiTokens.current
+        val type = LocalUiType.current
+        val explanation = when (refused.reason) {
+            MarkdownResourceRefusal.NO_CURRENT_SESSION -> UiStrings.FILES_PREVIEW_NO_SESSION
+            MarkdownResourceRefusal.NO_VERIFIED_WORKSPACE -> UiStrings.FILES_PREVIEW_NO_SESSION
+            MarkdownResourceRefusal.MISSING_PATH -> UiStrings.FILES_PREVIEW_MISSING
+            MarkdownResourceRefusal.ABSOLUTE_RESOURCE,
+            MarkdownResourceRefusal.DIFFERENT_SESSION,
+            MarkdownResourceRefusal.UNSAFE_PATH,
+            MarkdownResourceRefusal.INVALID -> UiStrings.FILES_PREVIEW_UNSAFE
+        }
+        Dialog(onDismissRequest = { unavailableResource = null }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(tokens.colors.surface, RoundedCornerShape(tokens.radius.card))
+                    .padding(tokens.spacing.cardInset),
+                verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+            ) {
+                BasicText(
+                    text = UiStrings.PREVIEW_UNAVAILABLE,
+                    style = type.subheadline.copy(color = tokens.colors.textPrimary),
+                )
+                BasicText(
+                    text = explanation,
+                    style = type.secondary.copy(color = tokens.colors.textSecondary),
+                )
+                BasicText(
+                    text = refused.sourceIdentity,
+                    style = type.caption.copy(color = tokens.colors.textTertiary),
+                )
+                BasicText(
+                    text = UiStrings.FILES_PREVIEW_DONE,
+                    style = type.secondary.copy(color = tokens.colors.accent),
+                    modifier = Modifier.clickable { unavailableResource = null },
+                )
+            }
+        }
+    }
 }
 
 /**

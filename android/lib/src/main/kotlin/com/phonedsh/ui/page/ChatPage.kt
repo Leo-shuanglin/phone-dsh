@@ -281,6 +281,8 @@ public fun ChatPage(
     onOpenFile: ((String) -> Unit)? = null,
     /** Opens a host-resolved resource URI exactly as received from markdown. */
     onOpenResource: ((String) -> Unit)? = null,
+    /** Safe current-workspace and session-scoped Markdown image sources. */
+    imageSource: com.phonedsh.ui.surface.MarkdownImageSource? = null,
     /** A real host callback is required before the stopped-engine CTA is enabled. */
     startEngineAvailability: PdshActionAvailability<() -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
     /** Request-bound permission decision capabilities; absent receipts stay disabled. */
@@ -434,6 +436,7 @@ public fun ChatPage(
                 onRetry = onRetry,
                 onOpenFile = onOpenFile,
                 onOpenResource = onOpenResource,
+                imageSource = imageSource,
                 retryAvailability = timelineRetryAvailability,
             )
         }
@@ -446,6 +449,7 @@ public fun ChatPage(
         ) {
             ComposerDock(
                 state = state,
+                imageSource = imageSource,
                 onDraftChange = onDraftChange,
                 onSend = onSend,
                 onGoalPause = onGoalPause,
@@ -1266,6 +1270,7 @@ private fun QuestionTakeover(
     maxHeight: Dp,
     canSubmit: Boolean,
     canDismiss: Boolean,
+    imageSource: com.phonedsh.ui.surface.MarkdownImageSource? = null,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -1396,7 +1401,7 @@ private fun QuestionTakeover(
                 verticalArrangement = Arrangement.spacedBy(tokens.geometry.bannerGap),
             ) {
                 item.detail?.takeIf(String::isNotBlank)?.let {
-                    MarkdownBody(markdown = it, modifier = Modifier
+                    MarkdownBody(markdown = it, imageSource = imageSource, modifier = Modifier
                         .padding(horizontal = ChatMetrics.QUESTION_DETAIL_INSET_H_PT.dp)
                         .padding(vertical = ChatMetrics.QUESTION_DETAIL_INSET_V_PT.dp))
                 }
@@ -1722,6 +1727,7 @@ private fun ChatTranscript(
     onRetry: () -> Unit,
     onOpenFile: ((String) -> Unit)?,
     onOpenResource: ((String) -> Unit)?,
+    imageSource: com.phonedsh.ui.surface.MarkdownImageSource?,
     retryAvailability: PdshActionAvailability<() -> Unit>,
 ) {
     val tokens = LocalUiTokens.current
@@ -1835,6 +1841,7 @@ private fun ChatTranscript(
                                 onToggleRow = onToggleRow,
                                 onOpenFile = onOpenFile,
                                 onOpenResource = onOpenResource,
+                                imageSource = imageSource,
                                             )
                             if (row.id == state.failedItemID && state.userFacingError != null) {
                                 FailureLine(
@@ -2223,6 +2230,7 @@ private fun ReadyState() {
 @Composable
 private fun ComposerDock(
     state: ChatScreenState,
+    imageSource: com.phonedsh.ui.surface.MarkdownImageSource?,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onGoalPause: (() -> Unit)?,
@@ -2446,6 +2454,7 @@ private fun ComposerDock(
                     onDismiss = { onDismissQuestion(pendingQuestion) },
                     canSubmit = availability.answerQuestions && pendingQuestion.channelAvailable == true,
                     canDismiss = availability.dismissQuestions,
+                    imageSource = imageSource,
                     maxHeight = minOf(
                         LocalConfiguration.current.screenHeightDp.dp * 0.6f,
                         ChatMetrics.QUESTION_MAX_HEIGHT_PT.dp,
