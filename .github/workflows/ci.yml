@@ -22,8 +22,21 @@ jobs:
           git clone --filter=blob:none "$repo" "$RUNNER_TEMP/dsh" && git -C "$RUNNER_TEMP/dsh" checkout "$commit"
           corepack enable && (cd "$RUNNER_TEMP/dsh" && pnpm install --frozen-lockfile && pnpm build)
           echo "PDSH_DSH_CHECKOUT=$RUNNER_TEMP/dsh" >> "$GITHUB_ENV"
-      - name: Plugins
-        run: cd plugins && npm ci && npm run typecheck && npm test
+      # The plugins stage is split so a typecheck error cannot hide the test
+      # result, and neither can hide the static gates below (both used to be
+      # unreachable: `npm run typecheck && npm test` fails the job at the first
+      # command, and every later step is skipped). The two soft steps keep the
+      # job running; the final step turns their outcome back into a failure.
+      - name: Plugins (install)
+        run: cd plugins && npm ci
+      - name: Plugins (typecheck)
+        id: plugins-typecheck
+        continue-on-error: true
+        run: cd plugins && npm run typecheck
+      - name: Plugins (tests)
+        id: plugins-tests
+        continue-on-error: true
+        run: cd plugins && npm test
       - name: Static gates
         run: bash scripts/ci/check.sh --only phone-no-dsh-patch,phone-hygiene,phone-license,phone-modules,phone-spec,phone-gate-contracts
       - name: Android-port contract gates
@@ -51,3 +64,21 @@ jobs:
         run: bash scripts/ci/check.sh --only phone-sdk
       - name: macOS WKWebView smoke
         run: bash scripts/ci/smoke.sh
+      # Runs even when a soft step above failed or a later gate stopped the job,
+      # so a single red board always names every soft failure it saw.
+      - name: Gate summary
+        if: always()
+        run: |
+          set -u
+          status=0
+          for entry in \
+            "plugins-typecheck:${{ steps.plugins-typecheck.outcome }}" \
+            "plugins-tests:${{ steps.plugins-tests.outcome }}"; do
+            name=${entry%%:*}
+            outcome=${entry#*:}
+            if [ "$outcome" != "success" ]; then
+              echo "::error::${name} finished with outcome '${outcome}'"
+              status=1
+            fi
+          done
+          exit "$status"
