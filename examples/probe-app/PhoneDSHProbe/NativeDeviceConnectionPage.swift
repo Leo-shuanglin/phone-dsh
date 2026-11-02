@@ -13,7 +13,7 @@ struct NativeDeviceEntryIcon: View {
             .overlay(alignment: .topTrailing) {
                 if online {
                     Circle()
-                        .fill(Color(red: 0x0E / 255, green: 0x9F / 255, blue: 0x6E / 255))
+                        .fill(HomeSpec.success)
                         .frame(width: 6, height: 6)
                         .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 1))
                         .offset(x: 4, y: -2)
@@ -43,11 +43,11 @@ struct NativeDeviceSessionRows: View {
                             .frame(width: 22, height: 24)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(device.displayName)
-                                .font(.system(size: 17))
+                                .font(.system(size: HomeSpec.bodySize))
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
                             Text(device.deviceID)
-                                .font(.system(size: 12))
+                                .font(.system(size: 13))
                                 .foregroundStyle(ChatPage.inkSecondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -57,7 +57,7 @@ struct NativeDeviceSessionRows: View {
                             ProgressView().controlSize(.small)
                         } else {
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(.tertiary)
                         }
                     }
@@ -85,7 +85,7 @@ struct NativeDeviceConnectionPage: View {
             if let error = selectionError ?? coordinator.errorMessage {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .font(.footnote)
+                        .font(.system(size: 13))
                         .foregroundStyle(ChatPage.danger)
                         .textSelection(.enabled)
                     if let failedDeviceID,
@@ -117,9 +117,7 @@ struct NativeDeviceConnectionPage: View {
                 Text("真实传输尚未实现。此页只展示已注入连接器发布的状态，不会主动发起扫描。")
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Color(.systemBackground))
+        .homeGroupedList()
         .navigationTitle("Device")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $selection) { mapping in

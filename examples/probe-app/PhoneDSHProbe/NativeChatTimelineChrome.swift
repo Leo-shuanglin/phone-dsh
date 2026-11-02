@@ -33,41 +33,48 @@ struct NativeContextSourceGroup: View {
         items.map { $0.title.replacingOccurrences(of: "DSH context · ", with: "") }
     }
 
+    /// Home process row (HomeSpec): 18pt glyph, 15pt label, chevron right
+    /// after the label; opened, the sources sit in a list card 8pt below.
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(items) { item in
-                    contextDetail(item)
-                }
-            }
-            .padding(.leading, 16)
-            .padding(.top, 6)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "square.stack.3d.up")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Text("上下文")
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Text("· \(items.count) 条")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                if items.count == 1, let source = sourceNames.first.flatMap(NativeSourceName.chinese) {
-                    Text(source)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: HomeSpec.disclosureGap) {
+            Button {
+                withAnimation(.easeOut(duration: 0.16)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.system(size: 15, weight: .regular))
+                        .frame(width: HomeSpec.processIcon, height: HomeSpec.processIcon)
+                    Text(headerTitle)
+                        .font(.system(size: HomeSpec.processSize))
                         .lineLimit(1)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .medium))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .foregroundStyle(HomeSpec.textSecondary)
+                .frame(height: HomeSpec.processRowHeight)
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
-            .frame(minHeight: 44)
+            .buttonStyle(.plain)
+            .accessibilityValue(isExpanded ? "已展开" : "已折叠")
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(items) { item in
+                        contextDetail(item)
+                    }
+                }
+                .homeListCard()
+                .transition(.opacity)
+            }
         }
-        .font(.footnote)
-        .tint(.secondary)
-        .padding(.leading, -4)
-        .padding(.vertical, 1)
+    }
+
+    private var headerTitle: String {
+        if items.count == 1, let source = sourceNames.first.flatMap(NativeSourceName.chinese) {
+            return "上下文 · \(source)"
+        }
+        return "上下文 · \(items.count) 条"
     }
 
     private func contextDetail(_ item: ChatItem) -> some View {

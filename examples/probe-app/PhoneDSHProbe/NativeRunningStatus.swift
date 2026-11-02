@@ -146,30 +146,22 @@ struct NativeRunningStatus: View {
     }
 
     private func statusRow(now: Date) -> some View {
+        // Home process row: spinner in the 18pt glyph box, 15pt secondary
+        // label on a 24pt line.
         HStack(alignment: .center, spacing: 6) {
-            whale
+            ProgressView()
+                .controlSize(.small)
+                .tint(HomeSpec.textSecondary)
+                .frame(width: HomeSpec.processIcon, height: HomeSpec.processIcon)
+                .accessibilityHidden(true)
             NativeTurnShimmerText(
                 text: Self.label(startedAt: startedAt, now: now),
                 active: true,
-                font: .system(size: NativeParityTokens.captionSize).monospacedDigit(),
-                color: NativeParityTokens.deepDiving,
-                lineHeight: 22)
+                font: .system(size: HomeSpec.processSize).monospacedDigit(),
+                color: HomeSpec.textSecondary,
+                lineHeight: HomeSpec.processRowHeight)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// Approximation: the official mark is the custom 14×14 whale-tail path
-    /// (`RunningWhaleTail.tsx` / `running-whale@2x.png`). SF Symbols has no
-    /// whale glyph, so `fish` stands in at the same 14×14 box, tinted with the
-    /// row's deep-diving color; it is static because the SF glyph cannot be
-    /// masked into the official animated asset.
-    private var whale: some View {
-        Image(systemName: "fish")
-            .resizable()
-            .scaledToFit()
-            .frame(width: 14, height: 14)
-            .foregroundStyle(NativeParityTokens.deepDiving)
-            .accessibilityHidden(true)
     }
 
     /// Official `color-mix(border-l1 75%, border-l2)`.

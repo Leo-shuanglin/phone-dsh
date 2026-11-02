@@ -92,14 +92,22 @@ struct NativeProcessGroupHeader: View {
                 NativeTurnShimmerText(
                     text: displayTitle,
                     active: isRunning,
-                    font: .system(size: 14),
-                    color: NativeParityTokens.labelTertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                    font: .system(size: HomeSpec.processSize),
+                    color: HomeSpec.textSecondary)
+                    .layoutPriority(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 14, height: 14)
+                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                    .foregroundStyle(HomeSpec.textSecondary)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.1), value: isExpanded)
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
             }
-            // Official title line box is the body's 24pt line; the leading
-            // 16pt box centers inside it. Expanded adds 8pt below.
-            .frame(height: NativeParityTokens.bodyLineHeight, alignment: .leading)
-            .padding(.bottom, isExpanded ? 8 : 0)
+            // Home process row: 24pt, 18pt glyph, 15pt label, chevron after
+            // the label; an opened group keeps 8pt above its list card.
+            .frame(height: HomeSpec.processRowHeight, alignment: .leading)
+            .padding(.bottom, isExpanded ? HomeSpec.disclosureGap : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
@@ -109,23 +117,20 @@ struct NativeProcessGroupHeader: View {
         .accessibilityValue(isExpanded ? "已展开" : "已折叠")
     }
 
-    /// 16×16 box; the 14pt glyph and the chevron sit on top of each other and
-    /// cross-fade on expansion (touch has no hover, so 展开 replaces the
-    /// glyph), exactly like `.leading`/`.activityIcon`/`.chevron`.
+    /// 18pt activity glyph; a running group shows a spinner in its place.
     private var leading: some View {
-        ZStack {
-            // SF approximation of the official activity glyph (14pt in a 16pt box).
-            Image(systemName: glyph.systemImage)
-                .font(.system(size: 14, weight: .regular))
-                .opacity(isExpanded ? 0 : 1)
-            // Official open state uses the "up" chevron, closed state "down".
-            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                .font(.system(size: 14, weight: .regular))
-                .opacity(isExpanded ? 1 : 0)
+        Group {
+            if isRunning {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(HomeSpec.textSecondary)
+            } else {
+                Image(systemName: glyph.systemImage)
+                    .font(.system(size: 15, weight: .regular))
+            }
         }
-        .frame(width: 16, height: 16)
-        .foregroundStyle(NativeParityTokens.labelTertiary)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.1), value: isExpanded)
+        .frame(width: HomeSpec.processIcon, height: HomeSpec.processIcon)
+        .foregroundStyle(HomeSpec.textSecondary)
         .accessibilityHidden(true)
     }
 

@@ -146,44 +146,34 @@ struct NativeTurnProcessRow: View {
                 content
             }
             .buttonStyle(.plain)
-            .disabled(!isFoldable)
-            .foregroundStyle(NativeParityTokens.labelTertiary)
+            // Not `.disabled`: that dims the label below the #555 process ink.
+            .allowsHitTesting(isFoldable)
+            .foregroundStyle(HomeSpec.textSecondary)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(state.label)
             .accessibilityValue(accessibilityValue)
         }
     }
 
-    /// 33pt total: flexible 24.5pt label box, the official 8pt bottom
-    /// padding, then the 0.5pt border inside the row height.
+    /// Home process row: 24pt, 15pt secondary label followed by a 14pt
+    /// chevron (› folded, ⌄ open); no divider underneath.
     private var content: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                labelText
-                    .lineSpacing(NativeParityTokens.bodyLineSpacing)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if isFoldable {
-                    chevron
-                        .padding(.leading, 4)
-                }
+        HStack(spacing: 4) {
+            labelText
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if isFoldable {
+                chevron
             }
-            .frame(maxHeight: .infinity)
-            Color.clear
-                .frame(height: 8)
-            Rectangle()
-                .fill(NativeParityTokens.borderL2)
-                .frame(height: 0.5)
+            Spacer(minLength: 0)
         }
-        .frame(height: NativeParityTokens.turnProcessHeight)
+        .frame(height: HomeSpec.processRowHeight)
         .contentShape(Rectangle())
     }
 
-    /// Duration digits use the code family + tabular figures, as official
-    /// `.durationNumber` does; the units stay in the 14pt UI font.
+    /// Duration digits use tabular figures; the units stay in the UI font.
     private var labelText: Text {
-        let body = Font.system(size: NativeParityTokens.bodySize)
+        let body = Font.system(size: HomeSpec.processSize)
         switch state {
         case .running:
             return Text("").font(body)
@@ -199,7 +189,7 @@ struct NativeTurnProcessRow: View {
             for part in NativeRunDuration.parts(elapsed: elapsed) {
                 if part.isNumeric {
                     label = label + Text(part.text)
-                        .font(.system(size: NativeParityTokens.bodySize, design: .monospaced))
+                        .font(.system(size: HomeSpec.processSize).monospacedDigit())
                 } else {
                     label = label + Text(part.text).font(body)
                 }
@@ -211,10 +201,10 @@ struct NativeTurnProcessRow: View {
     /// SF approximation: the official glyph is `IconChevronDownOutlineRegular`
     /// (14×14). Rotation and 100ms ease match `.chevron`.
     private var chevron: some View {
-        Image(systemName: "chevron.down")
-            .font(.system(size: 14, weight: .regular))
+        Image(systemName: "chevron.right")
+            .font(.system(size: 12, weight: .medium))
             .frame(width: 14, height: 14)
-            .rotationEffect(.degrees(isOpen ? 180 : 0))
+            .rotationEffect(.degrees(isOpen ? 90 : 0))
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.1), value: isOpen)
     }
 

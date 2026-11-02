@@ -62,9 +62,7 @@ struct PhonePermissionsPage: View {
             capabilitySections
             auditSection
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(NativePagePalette.page)
+        .homeGroupedList()
     }
 
     private var capabilitySections: some View {
@@ -113,13 +111,13 @@ struct PhonePermissionsPage: View {
                                 .font(.body.weight(.medium))
                                 .foregroundStyle(.primary)
                             Text(capability.purpose)
-                                .font(.caption)
+                                .font(.system(size: 13))
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             let statusLabel = statusText(capability, status: current)
                             if !statusLabel.isEmpty {
                                 Text(statusLabel)
-                                    .font(.caption.weight(.medium))
+                                    .font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(statusColor(current))
                             }
                         }
@@ -257,11 +255,11 @@ private struct PhoneCapabilityAuditRow: View {
                     .font(.system(.subheadline, design: .monospaced))
                 Spacer()
                 Text(record.outcome)
-                    .font(.caption)
+                    .font(.system(size: 13))
                     .foregroundStyle(record.outcome == "success" ? Color.green : Color.orange)
             }
             Text("\(record.capability.title) · \(record.at.formatted(date: .abbreviated, time: .shortened)) · egress \(record.egress ? "true" : "false")")
-                .font(.caption)
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         }
         .listRowSeparatorTint(NativePagePalette.hairline)

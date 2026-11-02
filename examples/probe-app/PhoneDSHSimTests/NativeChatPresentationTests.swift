@@ -112,7 +112,7 @@ final class NativeChatPresentationTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = NativeChatPreferences(defaults: defaults)
-        XCTAssertEqual(preferences.textFontSize, 17)
+        XCTAssertEqual(preferences.textFontSize, 16)
         XCTAssertEqual(preferences.codeFontSize, 14)
         XCTAssertEqual(preferences.terminalFontSize, 13)
         XCTAssertEqual(NativeParityTokens.bodySize, 14)

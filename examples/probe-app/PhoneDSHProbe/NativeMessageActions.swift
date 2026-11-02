@@ -84,6 +84,7 @@ struct NativeTurnUsageDetails: View {
                 if let value = usage.reasoningTokens { LabeledContent("其中推理", value: "\(value) tok") }
                 LabeledContent("合计", value: "\(usage.totalTokens) tok")
             }
+            .homeGroupedList()
             .navigationTitle("本轮用量")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }

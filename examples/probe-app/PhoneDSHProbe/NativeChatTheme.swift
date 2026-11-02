@@ -11,7 +11,7 @@ enum NativeChatTheme {
     static let secondary = NativeParityTokens.labelSecondary
     static let tertiary = NativeParityTokens.labelTertiary
     static let caption = NativeParityTokens.labelCaption
-    static let background = Color(.systemBackground)
+    static let background = HomeSpec.page
     static let input = NativeParityTokens.input
     static let selector = NativeParityTokens.selector
     static let code = NativeParityTokens.codeBlock

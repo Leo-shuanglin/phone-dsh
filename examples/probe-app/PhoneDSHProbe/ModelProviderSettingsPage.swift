@@ -43,11 +43,9 @@ struct ModelProviderSettingsPage: View {
             actionsSection
             restartSection
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Color.white)
+        .homeGroupedList()
         .navigationTitle(NativeText("模型服务", "Model Providers"))
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .task { reload() }
         .onChange(of: hostRunning) { _, _ in reload() }
         .sheet(item: $editingProfile, onDismiss: {
@@ -59,6 +57,7 @@ struct ModelProviderSettingsPage: View {
                     notice = String(format: NativeText("已保存“%@”。%@", "Saved “%@”. %@"), saved.displayName, restartHint)
                 }
             }
+            .homeSheetChrome()
         }
         .confirmationDialog(NativeText("删除模型服务？", "Delete Model Provider?"),
                             isPresented: Binding(get: { pendingDelete != nil },
@@ -93,44 +92,47 @@ struct ModelProviderSettingsPage: View {
         }
     }
 
+    /// One provider: 16pt semibold name with a 默认 tag, the URL and the
+    /// model / key state in 13pt gray, a check on the default one.
     private func profileRow(_ profile: ProviderProfile) -> some View {
         Button {
             select(profile)
         } label: {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
                         Text(profile.displayName.isEmpty ? NativeText("模型服务", "Model Provider") : profile.displayName)
-                            .font(.headline)
+                            .font(.system(size: HomeSpec.bodySize, weight: .semibold))
+                            .foregroundStyle(HomeSpec.textPrimary)
+                            .lineLimit(1)
                         if snapshot.selected?.id == profile.id {
-                            Text(NativeText("默认", "Default"))
-                                .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
-                                .background(Color.accentColor.opacity(0.14), in: Capsule())
+                            HomeTag(text: NativeText("默认", "Default"))
                         }
                     }
                     Text(profile.baseURL)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13).monospaced())
+                        .foregroundStyle(HomeSpec.textPlaceholder)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         Text(profile.model)
                         if let effort = profile.reasoningEffort, !effort.isEmpty {
                             Text("· \(ProviderWording.effortTitle(effort))")
                         }
                         keyBadge(for: profile)
                     }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(HomeSpec.textPlaceholder)
+                    .lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 if snapshot.selected?.id == profile.id {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.tint)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(HomeSpec.textPrimary)
                 }
             }
+            .padding(.vertical, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -143,7 +145,7 @@ struct ModelProviderSettingsPage: View {
             Button { edit(profile) } label: {
                 Label(NativeText("编辑", "Edit"), systemImage: "pencil")
             }
-            .tint(.blue)
+            .tint(HomeSpec.textSecondary)
         }
     }
 
@@ -160,7 +162,7 @@ struct ModelProviderSettingsPage: View {
         switch status {
         case .present:
             text = NativeText("密钥已保存", "Key saved")
-            color = .green
+            color = HomeSpec.success
         case .missing:
             text = NativeText("未保存密钥", "No key saved")
             color = .orange
@@ -181,32 +183,37 @@ struct ModelProviderSettingsPage: View {
                 editingIsNew = true
                 editingProfile = ProviderProfile(id: "", displayName: "", baseURL: "https://api.deepseek.com/anthropic", model: "deepseek-flash")
             } label: {
-                Label(NativeText("添加模型服务", "Add Model Provider"), systemImage: "plus.circle")
+                SettingsRowLabel(title: NativeText("添加模型服务", "Add Model Provider"), icon: "plus")
             }
             if let selected = snapshot.selected {
                 Button {
                     edit(selected)
                 } label: {
-                    Label(NativeText("编辑默认服务", "Edit Default Provider"), systemImage: "slider.horizontal.3")
+                    SettingsRowLabel(title: NativeText("编辑默认服务", "Edit Default Provider"), icon: "slider.horizontal.3")
                 }
             }
         } footer: {
             if let notice {
-                Text(notice).foregroundStyle(.green)
+                Text(notice)
             }
         }
     }
 
     private var hostRunning: Bool { model.isStarted }
 
+    /// When changes apply: one 13pt note, plus the start button while the
+    /// engine is stopped.
     private var restartSection: some View {
-        Section(NativeText("生效方式", "When Changes Apply")) {
-            Label(restartHint, systemImage: "arrow.clockwise")
-                .font(.footnote)
-                .foregroundStyle(hostRunning ? Color.orange : Color.secondary)
+        Section {
             if !model.isStarted {
                 Button(NativeText("启动本地引擎", "Start Local Engine")) { Task { await model.start() } }
+                    .buttonStyle(HomePrimaryButtonStyle())
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
             }
+        } footer: {
+            Text(restartHint)
+                .foregroundStyle(hostRunning ? NativeParityTokens.warning : HomeSpec.textPlaceholder)
         }
     }
 
@@ -269,7 +276,7 @@ struct ModelProviderSettingsPage: View {
     }
 }
 
-private struct ModelProviderEditorPage: View {
+struct ModelProviderEditorPage: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: ProviderProfile
     @State private var apiKey = ""
@@ -279,6 +286,8 @@ private struct ModelProviderEditorPage: View {
     @State private var testing = false
     @State private var testResult: String?
     @State private var modelDrafts: [ProviderModelDefinition]
+    @State private var fetchingModels = false
+    @State private var catalogStatus: String?
 
     let isNew: Bool
     let onSaved: (ProviderProfile) -> Void
@@ -316,9 +325,9 @@ private struct ModelProviderEditorPage: View {
 
     private var keyStatusColor: Color {
         switch keyStatus {
-        case .present: return .green
-        case .missing: return .orange
-        case .unreadable: return .red
+        case .present: return HomeSpec.success
+        case .missing: return NativeParityTokens.warning
+        case .unreadable: return ChatPage.danger
         }
     }
 
@@ -331,126 +340,84 @@ private struct ModelProviderEditorPage: View {
     var body: some View {
         Form {
             Section {
-                TextField(NativeText("显示名称", "Display name"), text: $draft.displayName)
-                    .textInputAutocapitalization(.words)
-                TextField(isNew ? NativeText("标识（留空自动生成）", "Identifier (generated if empty)") : NativeText("标识", "Identifier"), text: $draft.id)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .disabled(!isNew)
-                TextField(NativeText("服务 URL", "Service URL"), text: $draft.baseURL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .textContentType(.URL)
-                Picker(NativeText("默认模型", "Default model"), selection: $draft.model) {
-                    ForEach(modelDrafts, id: \.id) { model in
-                        Text(model.id).tag(model.id)
-                    }
+                HomeFieldRow(title: NativeText("名称", "Name")) {
+                    TextField("", text: $draft.displayName, prompt: Text("例如 DeepSeek"))
+                        .textInputAutocapitalization(.words)
+                        .accessibilityIdentifier("provider.name")
                 }
-                Picker(NativeText("推理强度", "Reasoning effort"), selection: Binding(
-                    get: { draft.reasoningEffort ?? "" },
-                    set: { draft.reasoningEffort = $0.isEmpty ? nil : $0 }
-                )) {
-                    Text(NativeText("默认", "Default")).tag("")
-                    ForEach(efforts, id: \.self) { effort in
-                        Text(ProviderWording.effortTitle(effort)).tag(effort)
-                    }
+                HomeFieldRow(title: NativeText("密钥", "API key")) {
+                    SecureField("", text: $apiKey, prompt: Text(hasStoredKey ? "已保存，输入以替换" : "粘贴或输入 API 密钥"))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textContentType(.password)
+                        .accessibilityIdentifier("provider.key")
                 }
+                HomeFieldRow(title: NativeText("API 地址", "API URL")) {
+                    TextField("", text: $draft.baseURL, prompt: Text("https://api.deepseek.com/v1"))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .textContentType(.URL)
+                        .accessibilityIdentifier("provider.api")
+                }
+                Button {
+                    if let value = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                        apiKey = value; removeStoredKey = false
+                    }
+                } label: {
+                    SettingsRowLabel(title: NativeText("粘贴密钥", "Paste API key"), icon: "doc.on.clipboard")
+                }
+            } header: {
+                Text(NativeText("连接信息", "Connection"))
             } footer: {
-                // The address selects the protocol; say which one so nobody has
-                // to guess between /v1/messages and /chat/completions.
-                Text(draft.baseURL.lowercased().contains("/anthropic")
-                     ? NativeText("地址以 /anthropic 结尾：使用 Anthropic Messages（请求 /v1/messages，密钥走 x-api-key）。", "The /anthropic suffix selects Anthropic Messages (requests /v1/messages, key sent as x-api-key).")
-                     : NativeText("按 OpenAI 兼容协议请求 /chat/completions（密钥走 Authorization: Bearer）。", "Uses the OpenAI-compatible /chat/completions endpoint (key sent as Authorization: Bearer)."))
+                Text(NativeText("填写这三项，然后获取模型。密钥仅保存在这台手机的钥匙串中。", "Enter these three fields, then fetch models. Keys stay in this phone’s Keychain."))
             }
-
-            Section(NativeText("模型目录", "Model Catalog")) {
-                ForEach(modelDrafts.indices, id: \.self) { index in
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField(NativeText("模型 ID", "Model ID"), text: $modelDrafts[index].id)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        TextField(NativeText("显示名称（可选）", "Display name (optional)"), text: optionalTextBinding(index, \.name))
-                        HStack {
-                            TextField(NativeText("上下文窗口", "Context window"), text: optionalIntBinding(index, \.contextWindow))
-                                .keyboardType(.numberPad)
-                            TextField(NativeText("最大输出 Token", "Maximum output tokens"), text: optionalIntBinding(index, \.maxTokens))
-                                .keyboardType(.numberPad)
-                        }
-                        TextField(NativeText("推理档位（可留空）", "Reasoning effort (optional)"), text: optionalTextBinding(index, \.reasoningEffort))
-                        Toggle(NativeText("文本输入", "Text input"), isOn: $modelDrafts[index].textInput)
-                        Toggle(NativeText("图片输入", "Image input"), isOn: $modelDrafts[index].imageInput)
-                        Button(NativeText("删除此模型", "Delete This Model"), role: .destructive) {
-                            modelDrafts.remove(at: index)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-                Button(NativeText("添加模型", "Add Model")) {
-                    modelDrafts.append(ProviderModelDefinition(id: ""))
-                }
+            .onChange(of: apiKey) { _, entered in
+                if !entered.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { removeStoredKey = false }
             }
 
             Section {
-                SecureField(hasStoredKey ? NativeText("输入新密钥以替换", "Enter a new key to replace it") : NativeText("API 密钥", "API key"), text: $apiKey)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textContentType(.password)
-                HStack {
-                    Label(keyStatusText, systemImage: keyStatusSymbol)
-                        .font(.footnote)
-                        .foregroundStyle(keyStatusColor)
-                    Spacer()
-                    Button(NativeText("从剪贴板导入", "Import from Clipboard")) {
-                        if let value = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
-                           !value.isEmpty {
-                            apiKey = value
-                            removeStoredKey = false
+                Button {
+                    Task { await fetchModels() }
+                } label: {
+                    HStack {
+                        SettingsRowLabel(title: fetchingModels ? "正在获取模型…" : "获取模型", icon: "arrow.down.circle")
+                        if fetchingModels { ProgressView().controlSize(.small) }
+                    }
+                }
+                .disabled(fetchingModels || testing || draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("provider.fetch-models")
+                if !modelDrafts.isEmpty {
+                    Picker(NativeText("默认模型", "Default model"), selection: $draft.model) {
+                        ForEach(modelDrafts, id: \.id) { model in
+                            Text(model.name ?? model.id).tag(model.id)
                         }
                     }
-                    .font(.footnote)
-                }
-                if hasStoredKey {
-                    Toggle(NativeText("删除已保存的密钥", "Delete saved key"), isOn: $removeStoredKey)
-                        .onChange(of: removeStoredKey) { _, remove in
-                            if remove { apiKey = "" }
-                        }
-                }
-                if keyIsUnreadable {
-                    Label(NativeText("读不到已有密钥：可直接输入新密钥覆盖。", "The existing key could not be read. Enter a new key to replace it."), systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
                 }
             } header: {
-                Text(NativeText("密钥", "API Key"))
+                Text(NativeText("选择模型", "Model"))
             } footer: {
-                Text(NativeText("密钥只存在这台手机上,手机解锁过一次之后才读得到。配置、日志、网页里都没有它。", "The key is stored only on this phone and can be read after the phone has been unlocked once. It never appears in configuration, logs or web pages."))
+                if let catalogStatus { Text(catalogStatus) }
+                else { Text("获取后选择默认模型。接口不支持模型列表时，可在高级设置中手动添加。") }
             }
-            .onChange(of: apiKey) { _, entered in
-                // A typed/imported replacement cancels a stale delete toggle.
-                if !entered.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    removeStoredKey = false
+
+            Section {
+                NavigationLink { advancedSettings } label: {
+                    SettingsRowLabel(title: NativeText("高级设置", "Advanced settings"), icon: "slider.horizontal.3")
                 }
+            } footer: {
+                Text("推理强度、上下文和输出长度沿用默认值。")
             }
 
             if let errorText {
                 Section {
                     Label(errorText, systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
+                        .font(.system(size: 14))
+                        .foregroundStyle(ChatPage.danger)
                 }
             }
         }
-        .safeAreaInset(edge: .bottom) {
-            if let testResult {
-                Text(testResult)
-                    .font(.footnote)
-                    .foregroundStyle(testResult.hasPrefix(NativeText("连接正常", "Connected")) ? Color.secondary : ChatPage.danger)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(.bar)
-            }
-        }
+        .homeGroupedList()
         .navigationTitle(isNew ? NativeText("添加模型服务", "Add Model Provider") : NativeText("编辑模型服务", "Edit Model Provider"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -460,15 +427,8 @@ private struct ModelProviderEditorPage: View {
             ToolbarItem(placement: .confirmationAction) {
                 Button(NativeText("保存", "Save")) { save() }
                     .trailingBarText()
+                    .fontWeight(.semibold)
                     .disabled(!canSave)
-            }
-            ToolbarItem(placement: .topBarLeading) {
-                if testing {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button(NativeText("测试", "Test")) { Task { await runConnectionTest() } }
-                        .disabled(!canSave)
-                }
             }
         }
         .task {
@@ -479,6 +439,157 @@ private struct ModelProviderEditorPage: View {
                 keyStatus = .unreadable
                 errorText = String(format: NativeText("无法读取此设备的密钥：%@", "Could not read the key on this device: %@"), error.localizedDescription)
             }
+        }
+    }
+
+    private var advancedSettings: some View {
+        Form {
+            Section("服务选项") {
+                HomeFieldRow(title: NativeText("标识", "Identifier")) {
+                    TextField("", text: $draft.id,
+                              prompt: Text(isNew ? NativeText("留空自动生成", "Generated if empty") : ""))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .disabled(!isNew)
+                        .foregroundStyle(isNew ? HomeSpec.textPrimary : HomeSpec.textPlaceholder)
+                }
+                Picker(NativeText("推理强度", "Reasoning effort"), selection: Binding(
+                    get: { draft.reasoningEffort ?? "" },
+                    set: { draft.reasoningEffort = $0.isEmpty ? nil : $0 }
+                )) {
+                    Text(NativeText("默认", "Default")).tag("")
+                    ForEach(efforts, id: \.self) { effort in
+                        Text(ProviderWording.effortTitle(effort)).tag(effort)
+                    }
+                }
+            }
+            ForEach(modelDrafts.indices, id: \.self) { index in
+                Section {
+                    HomeFieldRow(title: NativeText("模型 ID", "Model ID")) {
+                        TextField("", text: $modelDrafts[index].id, prompt: Text("deepseek-chat"))
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                    HomeFieldRow(title: NativeText("显示名称", "Name")) {
+                        TextField("", text: optionalTextBinding(index, \.name), prompt: Text(NativeText("可选", "Optional")))
+                    }
+                    HomeFieldRow(title: NativeText("上下文", "Context")) {
+                        TextField("", text: optionalIntBinding(index, \.contextWindow), prompt: Text(NativeText("Token 数", "Tokens")))
+                            .keyboardType(.numberPad)
+                    }
+                    HomeFieldRow(title: NativeText("最大输出", "Max output")) {
+                        TextField("", text: optionalIntBinding(index, \.maxTokens), prompt: Text(NativeText("Token 数", "Tokens")))
+                            .keyboardType(.numberPad)
+                    }
+                    HomeFieldRow(title: NativeText("推理档位", "Effort")) {
+                        TextField("", text: optionalTextBinding(index, \.reasoningEffort), prompt: Text(NativeText("可留空", "Optional")))
+                            .textInputAutocapitalization(.never)
+                    }
+                    Toggle(NativeText("文本输入", "Text input"), isOn: $modelDrafts[index].textInput)
+                    Toggle(NativeText("图片输入", "Image input"), isOn: $modelDrafts[index].imageInput)
+                    Button(NativeText("删除这个模型", "Delete This Model"), role: .destructive) {
+                        modelDrafts.remove(at: index)
+                    }
+                }
+            }
+            Section {
+                Button {
+                    modelDrafts.append(ProviderModelDefinition(id: ""))
+                } label: {
+                    SettingsRowLabel(title: NativeText("添加模型", "Add Model"), icon: "plus")
+                }
+            }
+
+            Section {
+                Label(keyStatusText, systemImage: keyStatusSymbol)
+                    .foregroundStyle(keyStatusColor)
+                if hasStoredKey {
+                    Toggle("删除已保存的密钥", isOn: $removeStoredKey)
+                        .onChange(of: removeStoredKey) { _, remove in if remove { apiKey = "" } }
+                }
+                Button {
+                    Task { await runConnectionTest() }
+                } label: {
+                    HStack {
+                        SettingsRowLabel(title: testing ? "正在测试…" : "测试连接", icon: "bolt.horizontal")
+                        if testing { ProgressView().controlSize(.small) }
+                    }
+                }
+                .disabled(!canSave || testing)
+            } header: {
+                Text("密钥与连接")
+            } footer: {
+                if let testResult {
+                    Text(testResult)
+                        .foregroundStyle(testResult.hasPrefix(NativeText("连接正常", "Connected"))
+                                         ? HomeSpec.textPlaceholder : ChatPage.danger)
+                }
+            }
+        }
+        .homeGroupedList()
+        .navigationTitle("高级设置")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func fetchModels() async {
+        guard !fetchingModels else { return }
+        fetchingModels = true
+        catalogStatus = nil
+        defer { fetchingModels = false }
+        let base = draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: base), url.scheme == "https", url.host != nil,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else {
+            catalogStatus = "请输入有效的 HTTPS API 地址。"; return
+        }
+        let key: String
+        do {
+            key = !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                : (try settings.apiKey(for: draft.id) ?? "")
+        } catch { catalogStatus = "无法读取已保存的密钥，请解锁手机后重试。"; return }
+        guard !key.isEmpty else { catalogStatus = "请先填写 API 密钥。"; return }
+        do {
+            var request = URLRequest(url: url.appendingPathComponent("models"))
+            request.timeoutInterval = 20
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            if url.path.lowercased().contains("anthropic") {
+                request.setValue(key, forHTTPHeaderField: "x-api-key")
+                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            }
+            let session = URLSession(configuration: .ephemeral, delegate: ProviderCatalogRedirectPolicy(), delegateQueue: nil)
+            defer { session.invalidateAndCancel() }
+            var (data, response) = try await session.data(for: request)
+            if (response as? HTTPURLResponse)?.statusCode == 404,
+               url.path.lowercased().contains("anthropic"),
+               var origin = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+                origin.path = "/models"
+                if let catalogURL = origin.url {
+                    request.url = catalogURL
+                    (data, response) = try await session.data(for: request)
+                }
+            }
+            guard let http = response as? HTTPURLResponse else { catalogStatus = "接口未返回有效响应。"; return }
+            guard (200..<300).contains(http.statusCode) else {
+                switch http.statusCode {
+                case 401, 403: catalogStatus = "密钥未被接受，请检查密钥与 API 地址是否属于同一服务。"
+                case 404, 405: catalogStatus = "此地址不支持获取模型，请检查 API 地址或在高级设置中手动添加。"
+                case 429: catalogStatus = "请求过于频繁，请稍后再试。"
+                default: catalogStatus = "获取模型失败（HTTP \(http.statusCode)），请稍后重试。"
+                }
+                return
+            }
+            guard data.count <= 2 * 1024 * 1024 else { catalogStatus = "模型列表过大，请在高级设置中手动添加。"; return }
+            let envelope = try JSONDecoder().decode(ProviderCatalogResponse.self, from: data)
+            var seen = Set<String>()
+            let ids = envelope.data.map(\.id).filter { !$0.isEmpty && seen.insert($0).inserted }.sorted()
+            guard !ids.isEmpty, ids.count <= 2000 else { catalogStatus = "服务未返回可用的模型列表。"; return }
+            guard base == draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/")) else { return }
+            // Retain metadata already configured for a returned model.
+            modelDrafts = ids.map { id in modelDrafts.first(where: { $0.id == id }) ?? ProviderModelDefinition(id: id) }
+            if !ids.contains(draft.model) { draft.model = ids[0] }
+            catalogStatus = "已获取 \(ids.count) 个模型，选择后点保存。"
+        } catch {
+            catalogStatus = "暂时无法获取模型，请检查网络与 API 地址，或在高级设置中手动添加。"
         }
     }
 
@@ -704,5 +815,20 @@ private struct ModelProviderEditorPage: View {
         } catch {
             errorText = error.localizedDescription
         }
+    }
+}
+
+private struct ProviderCatalogResponse: Decodable {
+    struct Model: Decodable { let id: String }
+    let data: [Model]
+}
+
+/// Never forward a provider credential to a redirect target.
+private final class ProviderCatalogRedirectPolicy: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

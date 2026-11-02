@@ -28,7 +28,7 @@ struct PDSHShellPage: View {
                                ? "未设置"
                                : "\(provider.helloMounts.count) 个文件夹")
                 Text("这些命令在这台手机上跑,只能读不能写。")
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
             }
             if commands.isEmpty {
                 Section {
@@ -42,37 +42,41 @@ struct PDSHShellPage: View {
                     }
                     if ["phone", "ctx"].contains(command) {
                         Text("这个命令要连上 App 才能跑,现在跑不了。")
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
                     }
                     StrictASCIITextField("工作目录", text: $workingDirectory)
                         .accessibilityLabel("工作目录")
                     VStack(alignment: .leading, spacing: 6) {
                         Text("参数,每行一个")
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
                         ZStack(alignment: .topLeading) {
                             StrictASCIITextView(text: $arguments)
                             if arguments.isEmpty {
                                 Text("例如:--help\n文件名")
-                                    .font(.body.monospaced())
+                                    .font(.system(size: 15, design: .monospaced))
                                     .foregroundStyle(.tertiary)
                                     .padding(.horizontal, 8).padding(.vertical, 8)
                                     .allowsHitTesting(false)
                             }
                         }
                         .frame(height: 112)
-                        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 9))
-                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(.quaternary, lineWidth: 1))
+                        .background(HomeSpec.page, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(HomeSpec.borderList, lineWidth: 1))
                         .accessibilityLabel("参数,每行一个")
                     }
-                    HStack {
-                        Button("运行", systemImage: "play.fill") { Task { await run() } }
-                            .disabled(runningID != nil || command.isEmpty || ["phone", "ctx"].contains(command))
-                        if let runningID {
-                            Button("取消", systemImage: "stop.fill", role: .destructive) {
-                                Task { await provider.cancel(execID: runningID) }
-                            }
+                    if let runningID {
+                        Button("停止运行", role: .destructive) {
+                            Task { await provider.cancel(execID: runningID) }
                         }
                     }
+                }
+                Section {
+                    Button(runningID == nil ? "运行" : "运行中…") { Task { await run() } }
+                        .buttonStyle(HomePrimaryButtonStyle())
+                        .disabled(runningID != nil || command.isEmpty || ["phone", "ctx"].contains(command))
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                 }
                 Section("输出") {
                     if let error { Text(error).foregroundStyle(.red) }
@@ -89,6 +93,7 @@ struct PDSHShellPage: View {
                 }
             }
         }
+        .homeGroupedList()
         .navigationTitle("命令")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { if command.isEmpty { command = commands.first ?? "" } }

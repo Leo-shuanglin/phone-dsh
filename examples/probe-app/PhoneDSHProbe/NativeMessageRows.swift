@@ -11,6 +11,15 @@ struct NativeDisclosureRow<Content: View>: View {
     var showsSummaryWhenExpanded = false
     @Binding var expanded: Bool
     @ViewBuilder let content: () -> Content
+    @Environment(\.homeListRow) private var inListCard
+
+    // HomeSpec: a bare row is a 15/24 process row with an 18pt glyph; inside
+    // a list card it drops to 14/22 with a 16pt glyph and an 8pt gap.
+    private var font: Font { .system(size: inListCard ? HomeSpec.listItemSize : HomeSpec.processSize) }
+    private var ink: Color {
+        if running { return HomeSpec.textSecondary }
+        return inListCard ? HomeSpec.textTertiary : HomeSpec.textSecondary
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -21,26 +30,27 @@ struct NativeDisclosureRow<Content: View>: View {
                 HStack(spacing: 0) {
                     ZStack {
                         if expanded { NativeChatIcon(name: .chevronDown, size: 14).rotationEffect(.degrees(180)) }
-                        else { NativeChatIcon(name: icon, size: 14) }
+                        else { NativeChatIcon(name: icon, size: inListCard ? 14 : 16) }
                     }
-                    .frame(width: 16, height: 16)
-                    .padding(.trailing, 6)
+                    .frame(width: inListCard ? 16 : HomeSpec.processIcon,
+                           height: inListCard ? 16 : HomeSpec.processIcon)
+                    .padding(.trailing, inListCard ? 8 : 6)
                     Text(title)
-                        .font(NativeChatTheme.secondaryFont())
+                        .font(font)
                         .fixedSize(horizontal: true, vertical: false)
                     if !summary.isEmpty && (showsSummaryWhenExpanded || !expanded) {
                         Circle()
-                            .fill(NativeChatTheme.caption)
+                            .fill(HomeSpec.textPlaceholder)
                             .frame(width: 2, height: 2)
-                            .padding(.horizontal, 8)
+                            .padding(.horizontal, 6)
                         ShimmerText(text: summary, active: running,
-                                    font: NativeChatTheme.secondaryFont(), color: NativeChatTheme.tertiary)
+                                    font: font, color: ink)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(running ? NativeChatTheme.secondary : NativeChatTheme.tertiary)
-                .frame(height: 24)
+                .foregroundStyle(ink)
+                .frame(height: inListCard ? HomeSpec.listRowHeight : HomeSpec.processRowHeight)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }

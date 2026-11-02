@@ -204,6 +204,7 @@ targets:
       - path: PhoneDSHProbe/NativeDiffModel.swift
       - path: PhoneDSHProbe/NativeParityTokens.swift
       - path: PhoneDSHProbe/NativeChatTheme.swift
+      - path: PhoneDSHProbe/HomeSpec.swift
       - path: PhoneDSHProbe/NativeChatPreferences.swift
       # The scripted model upstream, the smoke evidence readers (WAL
       # replay/journal/step formats) and the kill-matrix support ship as the
@@ -295,6 +296,7 @@ targets:
       - path: PhoneDSHProbe/NativeDiffModel.swift
       - path: PhoneDSHProbe/NativeParityTokens.swift
       - path: PhoneDSHProbe/NativeChatTheme.swift
+      - path: PhoneDSHProbe/HomeSpec.swift
       - path: PhoneDSHProbe/NativeChatPreferences.swift
     dependencies:
       - target: PhoneDSHProbe

@@ -46,7 +46,8 @@ enum NativeFontRole {
 
     var defaultSize: Int {
         switch self {
-        case .text: 17
+        // HomeSpec body: 16/24.
+        case .text: 16
         case .code: 14
         case .terminal: 13
         }

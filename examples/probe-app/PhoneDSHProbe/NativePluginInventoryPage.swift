@@ -16,48 +16,54 @@ struct NativePluginInventoryPage: View {
     var body: some View {
         List {
             Section {
-                NavigationLink { NativeConfigurationPage() } label: {
-                    Label(NativeText("插件配置", "Plugin configuration"), systemImage: "slider.horizontal.3")
-                }
-                Text(NativeText("清单只读；修改官方插件、网页搜索和执行器配置请进入插件配置。", "The inventory is read-only. Edit official plugins, web search and executors in Plugin configuration."))
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            Section(NativeText("插件列表", "Inventory")) {
                 if model.isLoading && model.pluginEntries.isEmpty {
-                    ProgressView(NativeText("正在读取插件…", "Loading plugins…"))
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text(NativeText("正在读取插件…", "Loading plugins…"))
+                            .foregroundStyle(HomeSpec.textPlaceholder)
+                    }
                 } else if filtered.isEmpty {
                     Text(NativeText("没有匹配的插件。", "No matching plugins."))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HomeSpec.textPlaceholder)
                 } else {
                     ForEach(filtered) { plugin in
                         DisclosureGroup {
                             LabeledContent(NativeText("条目", "Entry"), value: plugin.id)
                             LabeledContent(NativeText("模块", "Module"), value: plugin.module)
-                            LabeledContent(NativeText("启用", "Enabled"), value: plugin.enabled ? NativeText("是", "Yes") : NativeText("否", "No"))
                             if let phase = plugin.phase {
                                 LabeledContent(NativeText("运行状态", "Phase"), value: phase)
                             }
                         } label: {
-                            HStack {
-                                Circle()
-                                    .fill(plugin.enabled && plugin.phase == "active" ? Color.green : Color.secondary)
-                                    .frame(width: 7, height: 7)
-                                Text(plugin.module)
-                                    .lineLimit(2)
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(plugin.module)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Text(plugin.id)
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(HomeSpec.textPlaceholder)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Spacer(minLength: 8)
+                                HomeTag(text: plugin.enabled && plugin.phase == "active"
+                                        ? NativeText("运行中", "Active")
+                                        : (plugin.enabled ? NativeText("已启用", "Enabled") : NativeText("已停用", "Disabled")))
                             }
                         }
                     }
                 }
-            }
-            if let error = model.inventoryError ?? model.error {
-                Section { Text(nativeConfigurationError(error)).foregroundStyle(.red) }
-            }
-            Section {
-                Text(nativePluginManagementMessage("This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH."))
-                    .font(.footnote).foregroundStyle(.secondary)
+            } footer: {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let error = model.inventoryError ?? model.error {
+                        Text(nativeConfigurationError(error)).foregroundStyle(ChatPage.danger)
+                    }
+                    Text(nativePluginManagementMessage("This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH."))
+                }
             }
         }
-        .navigationTitle(NativeText("内置插件", "Built-in Plugins"))
+        .homeGroupedList()
+        .navigationTitle(NativeText("已加载插件", "Loaded Plugins"))
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, prompt: NativeText("搜索插件", "Search plugins"))
         .refreshable { await model.refresh() }

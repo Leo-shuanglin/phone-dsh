@@ -15,7 +15,7 @@ struct SessionActivityPage: View {
         List {
             Section("会话") {
                 Text("查看此会话的计划、待办、目标和后台活动。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
             }
 
             Section("计划") {
@@ -39,14 +39,14 @@ struct SessionActivityPage: View {
                             .foregroundStyle(row.status == "completed" ? .green : .secondary)
                         Text(row.title)
                         Spacer()
-                        Text(todoLabel(row.status)).font(.caption).foregroundStyle(.secondary)
+                        Text(todoLabel(row.status)).font(.system(size: 13)).foregroundStyle(.secondary)
                     }
                 }
             }
 
             Section("目标") {
                 if let goal = management.goal {
-                    Text(goal.objective).font(.body)
+                    Text(goal.objective).font(.system(size: HomeSpec.bodySize))
                     LabeledContent("阶段", value: goalPhaseLabel(goal.phase))
                     LabeledContent("轮次", value: "\(goal.roundsStarted) / \(goal.maxGoalRounds)")
                     if goal.phase == "active" {
@@ -71,7 +71,7 @@ struct SessionActivityPage: View {
                 ForEach(management.subagents) { row in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(row.title).font(.body.weight(.medium))
-                        Text(row.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text(row.detail).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
                         if row.status == "continuable" {
                             Button("中断子智能体", role: .destructive) { confirmSubagent = row }
                         }
@@ -89,9 +89,9 @@ struct SessionActivityPage: View {
                         HStack {
                             Text(row.title).font(.body.weight(.medium))
                             Spacer()
-                            Text(statusLabel(row.status)).font(.caption).foregroundStyle(.secondary)
+                            Text(statusLabel(row.status)).font(.system(size: 13)).foregroundStyle(.secondary)
                         }
-                        Text(row.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text(row.detail).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
                         Button("删除计划任务", role: .destructive) { confirmSchedule = row }
                     }
                 }
@@ -107,9 +107,9 @@ struct SessionActivityPage: View {
                         HStack {
                             Text(row.title).font(.body.weight(.medium))
                             Spacer()
-                            Text(statusLabel(row.status)).font(.caption).foregroundStyle(.secondary)
+                            Text(statusLabel(row.status)).font(.system(size: 13)).foregroundStyle(.secondary)
                         }
-                        Text(row.detail).font(.caption).foregroundStyle(.secondary)
+                        Text(row.detail).font(.system(size: 13)).foregroundStyle(.secondary)
                         if ["running", "stopping"].contains(row.status ?? "") {
                             Button("停止后台作业", role: .destructive) { confirmJob = row }
                         }
@@ -129,10 +129,10 @@ struct SessionActivityPage: View {
                             Spacer()
                             // 认得出的档位翻中文,认不出就整行不出现——不拿原值顶上。
                             if let status = row.status, statusLabel(status) != status {
-                                Text(statusLabel(status)).font(.caption).foregroundStyle(.secondary)
+                                Text(statusLabel(status)).font(.system(size: 13)).foregroundStyle(.secondary)
                             }
                         }
-                        Text(row.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text(row.detail).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                 }
             }
@@ -141,15 +141,13 @@ struct SessionActivityPage: View {
                 if let value = management.activityErrors[key] {
                     Section("暂不可用") {
                         DisclosureGroup("\(key)的详细原因") {
-                            Text(value).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
+                            Text(value).font(.system(size: 13)).foregroundStyle(.red).textSelection(.enabled)
                         }
                     }
                 }
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(NativePagePalette.page)
+        .homeGroupedList()
         .navigationTitle("会话活动")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("刷新") { Task { await management.refreshActivity(sessionID: sessionID) } }.trailingBarText() } }

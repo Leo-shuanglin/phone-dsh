@@ -19,19 +19,19 @@ struct DailyBriefPage: View {
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(model.snapshot == nil ? "还没有简报" : "每日简报")
-                            .font(.headline)
+                            .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                             .accessibilityIdentifier("daily-brief-snapshot")
                             .accessibilityValue(model.snapshot?.id ?? "none")
                         if let date = model.lastSuccessfulAt {
                             Text("最近成功 \(date, style: .relative)")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.system(size: 13)).foregroundStyle(.secondary)
                         } else {
                             Text("添加来源后，打开页面就会更新")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.system(size: 13)).foregroundStyle(.secondary)
                         }
                         if let date = model.lastAttemptAt {
                             Text("最近尝试 \(date, style: .relative)")
-                                .font(.caption2).foregroundStyle(.tertiary)
+                                .font(.system(size: 12)).foregroundStyle(.tertiary)
                         }
                     }
                     Spacer()
@@ -50,11 +50,11 @@ struct DailyBriefPage: View {
                         Spacer()
                         Text("网络 \(ByteCountFormatter().string(fromByteCount: Int64(report.networkBytes))) · 模型 0 · 实际")
                     }
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
                 }
                 if let error = model.errorMessage {
                     Text(error)
-                        .font(.caption).foregroundStyle(.orange)
+                        .font(.system(size: 13)).foregroundStyle(.orange)
                         .textSelection(.enabled)
                 }
             }
@@ -76,11 +76,11 @@ struct DailyBriefPage: View {
                         Image(systemName: "newspaper")
                             .font(.largeTitle).foregroundStyle(.secondary)
                         Text("还没有可显示的内容")
-                            .font(.headline)
+                            .font(.system(size: HomeSpec.bodySize, weight: .semibold))
                         Text(model.sources.isEmpty
                              ? "先添加一个 RSS 或 Atom 来源。已有内容会保存在本机，离线也能看。"
                              : "下拉或点右上角刷新；失败时不会清空上一期。")
-                            .font(.subheadline).foregroundStyle(.secondary)
+                            .font(.system(size: 15)).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
@@ -92,9 +92,9 @@ struct DailyBriefPage: View {
                 ForEach(model.sources) { source in
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(source.name).font(.body)
+                            Text(source.name).font(.system(size: HomeSpec.bodySize))
                             Text(source.url.absoluteString)
-                                .font(.caption2).foregroundStyle(.secondary)
+                                .font(.system(size: 12)).foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
                         Spacer()
@@ -127,14 +127,15 @@ struct DailyBriefPage: View {
                     ForEach(Array(issues.enumerated()), id: \.offset) { _, issue in
                         VStack(alignment: .leading, spacing: 4) {
                             if !issue.sourceName.isEmpty {
-                                Text(issue.sourceName).font(.caption.weight(.semibold))
+                                Text(issue.sourceName).font(.system(size: 13, weight: .semibold))
                             }
-                            Text(issue.message).font(.caption).foregroundStyle(.secondary)
+                            Text(issue.message).font(.system(size: 13)).foregroundStyle(.secondary)
                         }
                     }
                 }
             }
         }
+        .homeGroupedList()
         .navigationTitle("每日简报")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -152,7 +153,7 @@ struct DailyBriefPage: View {
         .sheet(isPresented: $addingSource) {
             DailyBriefSourceEditor(model: model)
                 .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
+                .homeSheetChrome()
         }
     }
 }
@@ -167,7 +168,7 @@ private struct DailyBriefItemRow: View {
                 .foregroundStyle(.primary)
             if !item.summary.isEmpty {
                 Text(item.summary)
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(.system(size: 15)).foregroundStyle(.secondary)
                     .lineLimit(4)
             }
             HStack {
@@ -177,7 +178,7 @@ private struct DailyBriefItemRow: View {
                     Text(date, style: .relative)
                 }
             }
-            .font(.caption2).foregroundStyle(.tertiary)
+            .font(.system(size: 12)).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
@@ -208,6 +209,7 @@ private struct DailyBriefSourceEditor: View {
                     Section { Text(errorText).foregroundStyle(.red) }
                 }
             }
+            .homeGroupedList()
             .navigationTitle("添加资讯来源")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -95,11 +95,9 @@ struct MCPSettingsPage: View {
                 .disabled(!model.hostRunning)
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(NativePagePalette.page)
+        .homeGroupedList()
         .navigationTitle("MCP 网络与密钥")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .task { await model.refresh() }
     }
 }
@@ -121,9 +119,9 @@ private struct MCPSummaryRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text(server.serverName).font(.headline)
+                Text(server.serverName).font(.system(size: HomeSpec.bodySize, weight: .semibold))
                 Text(Self.statusText(server.status))
-                    .font(.caption2)
+                    .font(.system(size: 13))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(statusColor.opacity(0.14), in: Capsule())
@@ -141,11 +139,11 @@ private struct MCPSummaryRow: View {
                           systemImage: "key")
                 }
             }
-            .font(.caption2)
+            .font(.system(size: 13))
             .foregroundStyle(server.grant == nil ? Color.orange : Color.secondary)
             if server.error != nil {
                 Text("连不上这个服务器")
-                    .font(.caption2)
+                    .font(.system(size: 13))
                     .foregroundStyle(.red)
                     .lineLimit(3)
             }
@@ -263,6 +261,7 @@ private struct MCPEditorPage: View {
                 }
             }
         }
+        .homeGroupedList()
         .navigationTitle(existing == nil ? "添加 MCP 服务器" : "编辑 MCP 服务器")
         .navigationBarTitleDisplayMode(.inline)
     }

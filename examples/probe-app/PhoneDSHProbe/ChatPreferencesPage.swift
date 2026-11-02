@@ -72,7 +72,7 @@ struct ChatPreferencesPage: View {
                 Text("转录")
             }
         }
-        .listStyle(.insetGrouped)
+        .homeGroupedList()
         .navigationTitle("聊天外观")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
