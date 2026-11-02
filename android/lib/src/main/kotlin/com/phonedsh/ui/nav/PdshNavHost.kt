@@ -104,6 +104,9 @@ import com.phonedsh.ui.page.SessionsPage
 import com.phonedsh.ui.page.SessionsScreenState
 import com.phonedsh.ui.page.SessionWorkspace
 import com.phonedsh.ui.page.SettingsPage
+import com.phonedsh.ui.page.ArchivedSessionsPage
+import com.phonedsh.ui.page.ArchivedSessionsPageState
+import com.phonedsh.ui.page.SessionRunStatus
 import com.phonedsh.ui.page.SettingsScreenState
 import com.phonedsh.ui.page.ShellLocalState
 import com.phonedsh.ui.page.ShellUiEvent
@@ -1324,9 +1327,13 @@ private fun SettingsRoute(
     // 新会话默认权限 is the settings sheet's own child page in the baseline, so it
     // is a local page swap here, not a route the stack owns.
     var permissionDefaults by remember { mutableStateOf(false) }
+    var archivedSessions by remember { mutableStateOf(false) }
     // …which means the gesture had nothing to pop but the sheet: back from the child
     // page closed the whole settings sheet. One level means the child page.
-    RouteBackLevel(backLevel, permissionDefaults) { permissionDefaults = false }
+    RouteBackLevel(backLevel, permissionDefaults || archivedSessions) {
+        permissionDefaults = false
+        archivedSessions = false
+    }
     // L55: 关于 and 开发者工具 are the sheet's other two sub-surfaces. They are page
     // swaps for the same reason as 新会话默认权限 — the baseline renders both inside
     // the settings sheet, and neither is a route. Each surface registers its own back
@@ -1342,7 +1349,33 @@ private fun SettingsRoute(
     // The mirrored index reads `settings`, appendix included: the facts are one
     // value, and the host fills the platform rows where it measures them.
     val settings = facts.settings
-    if (surface == SettingsSurface.ABOUT) {
+    if (archivedSessions) {
+        val archivedRows = facts.sessions?.filter { it.archived == true }?.map { session ->
+            SessionListing(
+                id = session.id,
+                title = session.title ?: "",
+                updatedAtMs = session.updatedAt?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() },
+                status = SessionRunStatus.IDLE,
+            )
+        }
+        val restoreAvailability = facts.actionAvailability.forAction(PdshActionKey.SESSION_RESTORE)
+        ArchivedSessionsPage(
+            state = ArchivedSessionsPageState.from(
+                sessions = archivedRows,
+                nowMs = System.currentTimeMillis(),
+                zone = java.time.ZoneId.systemDefault(),
+                waiting = facts.sessionsWaiting,
+                failure = facts.sessionsFailure,
+            ),
+            onBack = { archivedSessions = false },
+            onRestore = if (restoreAvailability is PdshActionAvailability.Available) { row ->
+                facts.actionAvailability.dispatch(
+                    PdshActionKey.SESSION_RESTORE,
+                    PdshUiHostCommand.SessionRestore(row.id, StateRequestId("ui.settings.restore.${java.util.UUID.randomUUID()}")),
+                )
+            } else null,
+        )
+    } else if (surface == SettingsSurface.ABOUT) {
         AboutSurface(facts = facts, onBack = { surface = SettingsSurface.NONE }, backLevel = backLevel)
     } else if (surface == SettingsSurface.DEV_TOOLS) {
         DeveloperToolsSurface(
@@ -1355,7 +1388,7 @@ private fun SettingsRoute(
     } else if (permissionDefaults) {
         PermissionDefaultsPage(
             state = PermissionDefaultsState.from(settings.defaultPermissionTier, settings.preferences.language?.id),
-            onSelect = null,
+            onSelect = { tier -> onSettingsWrite(SettingsWrite.DefaultPermissionTier(tier)) },
             onBack = { permissionDefaults = false },
         )
     } else {
@@ -1383,6 +1416,12 @@ private fun SettingsRoute(
             onSelectBusyEnterMode = { mode -> onSettingsWrite(SettingsWrite.BusyEnter(mode)) },
             onSelectPreference = onPreferenceWrite,
             onSelectFontFamily = onSelectFontFamily,
+            onOpenAgentPresets = { onNavigate(PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.AGENT_PRESETS)) },
+            onOpenPhonePermissions = { onNavigate(PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.PHONE_PERMISSIONS)) },
+            onOpenPluginsTools = { onNavigate(PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.PLUGINS_TOOLS)) },
+            onOpenFolders = { onNavigate(PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.FOLDERS)) },
+            onOpenArchivedSessions = { archivedSessions = true },
+            onSelectDefaultPermission = { tier -> onSettingsWrite(SettingsWrite.DefaultPermissionTier(tier)) },
             onToggleDeveloperTools = onToggleDeveloperTools,
             onBack = onBack,
             tab = tab,

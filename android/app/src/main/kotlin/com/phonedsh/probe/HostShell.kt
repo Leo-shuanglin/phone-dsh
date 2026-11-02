@@ -212,6 +212,7 @@ internal fun HostShell(
     // The user preferences, collected so the theme and the facts follow a write.
     // The store is the view model's; this shell never reads the file itself.
     val preferences by engine.preferenceState.collectAsState()
+    val defaultPermissionTier by engine.defaultPermissionTier.collectAsState()
     val context = LocalContext.current
     val systemDark = isSystemInDarkTheme()
     // L69: the chat page's one state. Collected here so a Worker event rebuilds the
@@ -260,9 +261,15 @@ internal fun HostShell(
     var activeProviderTestRequest by remember { mutableStateOf<String?>(null) }
     var activeProviderSaveRequest by remember { mutableStateOf<String?>(null) }
     val providerProbeScope = rememberCoroutineScope()
+    var notice by remember { mutableStateOf<String?>(null) }
     var nav by remember { mutableStateOf(initialHostNavState(engine.probeFaceOnLaunch())) }
     var shellRun by remember { mutableStateOf(ShellRun()) }
     var speechNotice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(nav.current) {
+        if (nav.current == PdshRoute.Settings) {
+            engine.refreshDefaultPermissionTier()?.let { notice = "新会话默认权限读取失败：$it" }
+        }
+    }
     LaunchedEffect(state is EngineHostState.Running, chatUi.workerSessionId) {
         if (state is EngineHostState.Running) engine.refreshAutomation()
     }
@@ -290,6 +297,8 @@ internal fun HostShell(
         providerConnectionTest,
         providerSave,
         providerModels,
+        defaultPermissionTier,
+        sessionSnapshot,
         nav,
     ) {
         val measured = engine.navFacts(state, handshake, turn)
@@ -518,7 +527,7 @@ internal fun HostShell(
                 ) {
                     engine.refreshSessions()
                     settingsRevision++
-                }
+                } else notice = "恢复会话未确认，会话仍保留在归档列表中。"
             }
         }
         available(com.phonedsh.ui.nav.PdshActionKey.WORKSPACE_FOLDER_CREATE) { request ->
@@ -630,6 +639,24 @@ internal fun HostShell(
         measured.copy(
             actionAvailability = com.phonedsh.ui.nav.PdshActionAvailabilities(actions),
             licenses = ANDROID_NATIVE_LICENSE_FACTS,
+            sessions = if (sessionSnapshot.waiting && sessionSnapshot.sessions.isEmpty() && sessionSnapshot.archivedSessions.isEmpty()) null else
+                (sessionSnapshot.sessions.map { record ->
+                    com.phonedsh.ui.nav.PdshSessionRecord(
+                        id = record.id, title = record.title, archived = false,
+                        workspaceId = record.workspaceID, updatedAt = record.lastActivityMs?.let { java.time.Instant.ofEpochMilli(it).toString() },
+                    )
+                } + sessionSnapshot.archivedSessions.map { record ->
+                    com.phonedsh.ui.nav.PdshSessionRecord(
+                        id = record.id, title = record.title, archived = true,
+                        workspaceId = record.workspaceID, updatedAt = record.lastActivityMs?.let { java.time.Instant.ofEpochMilli(it).toString() },
+                    )
+                }),
+            sessionsWaiting = sessionSnapshot.waiting,
+            sessionsFailure = sessionSnapshot.failure,
+            settings = measured.settings.copy(
+                defaultPermissionTier = defaultPermissionTier,
+                archivedSessionCount = if (sessionSnapshot.waiting) null else sessionSnapshot.archivedSessions.size,
+            ),
             automation = automationFacts.copy(currentSessionID = chatUi.workerSessionId),
             modelProvider = measured.modelProvider.copy(
                 connectionTest = providerConnectionTest,
@@ -672,7 +699,6 @@ internal fun HostShell(
     // a button disabled; what it can do is state the truth on every route that
     // has no write command, and state the outcome of every gesture it cannot
     // complete. A dead button that says nothing reads as a missed tap.
-    var notice by remember { mutableStateOf<String?>(null) }
     val routeNote: String? = hostRouteNote(nav.current)
     LaunchedEffect(notice) {
         if (notice != null) {
@@ -843,12 +869,23 @@ internal fun HostShell(
                                 if (feedback != null) notice = feedback
                             }
                         },
-                        // The settings index's writes reach the one preference store.
-                        // 后台运行 and 繁忙时的发送行为 have typed handoffs; 新会话默认权限
-                        // still has no consumer on this host (nothing derives a new
-                        // session's permission tier from a preset), so it keeps the
-                        // honest refusal instead of storing a value no path reads.
+                        // Settings writes reach their real stores: ordinary choices
+                        // use PreferenceStore, while the new-session permission tier
+                        // updates the DSH permission namespace and is accepted only
+                        // after a settings/describe readback.
                         onSettingsWrite = { write ->
+                            if (write is SettingsWrite.DefaultPermissionTier) {
+                                providerProbeScope.launch {
+                                    val result = runCatching { engine.writeDefaultPermissionTier(write.tier) }
+                                    if (result.isSuccess) {
+                                        settingsRevision++
+                                        notice = null
+                                    } else {
+                                        notice = "新会话默认权限没有保存：${result.exceptionOrNull()?.message ?: "未确认"}"
+                                    }
+                                }
+                                return@PdshNavHost
+                            }
                             val change = when (write) {
                                 is SettingsWrite.BackgroundKeepAlive -> ConfirmedPreferenceChange.BackgroundKeepAlive(write.value)
                                 is SettingsWrite.BusyEnter -> ConfirmedPreferenceChange.BusyEnterMode(write.mode)
@@ -933,6 +970,7 @@ internal fun HostShell(
                                 if (!speaker(text)) speechNotice = "系统语音服务未能启动朗读。"
                             }
                         },
+
                         // L62: the home face is the product home — the session list
                         // (option (a): the list is rendered *in* the home slot, so
                         // `popToHome()` and the launch face are the same screen). The

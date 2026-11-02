@@ -138,6 +138,10 @@ public data class PdshNavFacts(
     public val licenses: List<PdshLicenseFact>? = null,
     /** Request-bound provider result receipts; null means no result read was supplied. */
     public val providerOperations: List<PdshProviderOperationFact>? = null,
+    /** Archived-session scan state; unknown is distinct from an empty archive. */
+    public val sessionsWaiting: Boolean = true,
+    /** Host-reported session scan failure, if present. */
+    public val sessionsFailure: String? = null,
 )
 
 /** Session identity facts kept distinct from route and local draft state. */

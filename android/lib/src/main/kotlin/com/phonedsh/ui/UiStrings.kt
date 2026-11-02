@@ -251,7 +251,7 @@ public object UiStrings {
     // The 权限 row's sub-page (the baseline's PermissionDefaultsPage): its title,
     // its scope sentence, and the three presets in menu order.
     public const val PERMISSION_DEFAULTS_TITLE: String = "新会话默认权限"
-    public const val PERMISSION_DEFAULTS_NOTE: String = "只影响之后新开的会话。正在聊的这个不跟着变。"
+    public const val PERMISSION_DEFAULTS_NOTE: String = "只影响之后新开的会话，当前会话保持不变。"
     public const val PERMISSION_TIER_VIEW_ONLY: String = "仅可查看"
     public const val PERMISSION_TIER_WORKSPACE_WRITE: String = "工作区内修改"
     public const val PERMISSION_TIER_FULL_ACCESS: String = "完全权限"
@@ -2373,7 +2373,7 @@ public object UiStrings {
         "Long-press a session in the drawer and choose Archive; restore it here any time."
     public const val ARCHIVED_RESTORE_FOOTER: String = "恢复后，会话回到原来的文件夹。"
     public const val ARCHIVED_RESTORE_FOOTER_EN: String = "Restored sessions return to their folder."
-    public const val PERMISSION_DEFAULTS_SCOPE: String = "只影响之后新开的会话，当前会话保持不变。"
+    public const val PERMISSION_DEFAULTS_SCOPE: String = PERMISSION_DEFAULTS_NOTE
     public const val PERMISSION_DEFAULTS_SCOPE_EN: String =
         "Only new sessions use this default; the current session is unchanged."
     // Legacy constant names retained for source compatibility. The values name

@@ -14,6 +14,8 @@ import android.webkit.WebView
 import androidx.lifecycle.AndroidViewModel
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonArray
+import com.phonedsh.agentcore.JsonBool
+import com.phonedsh.agentcore.JsonNumber
 import com.phonedsh.agentcore.JsonString
 import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.agentcore.toJsonString
@@ -608,6 +610,8 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     /** The resolved preferences; a write publishes a new value. */
     internal val preferenceState: StateFlow<Preferences> = preferenceStore.state
+    private val mutableDefaultPermissionTier = MutableStateFlow<com.phonedsh.ui.page.PermissionTier?>(null)
+    internal val defaultPermissionTier: StateFlow<com.phonedsh.ui.page.PermissionTier?> = mutableDefaultPermissionTier.asStateFlow()
 
     private val host: DefaultPhoneDshHost = DefaultPhoneDshHost(
         engine = engine,
@@ -823,6 +827,63 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     internal fun confirmedPreferenceChange(rowId: String, optionId: String): ConfirmedPreferenceChange? =
         preferenceStore.confirmedChange(rowId, optionId)
+
+    /** Refreshes the source-backed permission namespace for SettingsRoute. */
+    internal suspend fun refreshDefaultPermissionTier(): String? = withContext(Dispatchers.IO) {
+        runCatching { readDefaultPermissionTier(DshTurnClient(host.channel, ::logTurn)) }
+            .onSuccess { mutableDefaultPermissionTier.value = tierForPermissionMode(it) }
+            .exceptionOrNull()?.message?.substringBefore('\n')?.take(180)
+    }
+
+    /** Writes the same DSH permission namespace used by iOS and confirms by readback. */
+    internal suspend fun writeDefaultPermissionTier(tier: com.phonedsh.ui.page.PermissionTier) {
+        val client = DshTurnClient(host.channel, ::logTurn)
+        val catalog = client.call("permissionPresets/catalog", timeoutMillis = 5_000) as? JsonObject
+            ?: error("permission preset catalog was unreadable")
+        val candidates = when (tier) {
+            com.phonedsh.ui.page.PermissionTier.VIEW_ONLY -> setOf("read-only", "phone-read-only")
+            com.phonedsh.ui.page.PermissionTier.WORKSPACE_WRITE -> setOf("workspace-write", "phone")
+            com.phonedsh.ui.page.PermissionTier.FULL_ACCESS -> setOf("danger-full-access", "bypassPermissions")
+        }
+        val options = (catalog["defaultOptions"] as? JsonArray)?.values.orEmpty()
+        val mode = options.mapNotNull { (it as? JsonObject)?.get("value") as? JsonString }
+            .firstOrNull { it.value in candidates }?.value
+            ?: error("this host does not offer the selected default permission")
+        val before = client.call("settings/describe", timeoutMillis = 5_000) as? JsonObject
+            ?: error("settings description was unreadable")
+        check((before["writable"] as? JsonBool)?.value == true) { "DSH settings are read-only" }
+        val namespace = permissionNamespace(before) ?: error("the permission settings namespace is unavailable")
+        val revision = ((namespace["revision"] as? JsonNumber)?.asLongOrNull())
+            ?: error("the permission settings revision is unknown")
+        client.call("settings/update", JsonObject(mapOf(
+            "ns" to JsonString("permission"),
+            "patch" to JsonObject(mapOf("defaultPreset" to JsonString(mode))),
+            "expectedRevision" to JsonNumber(revision.toString()),
+        )), timeoutMillis = 5_000)
+        val after = client.call("permissionPresets/catalog", timeoutMillis = 5_000) as? JsonObject
+            ?: error("permission preset readback was unreadable")
+        check((after["defaultPreset"] as? JsonString)?.value == mode) {
+            "permission default was not confirmed by permission catalog readback"
+        }
+        mutableDefaultPermissionTier.value = tier
+    }
+
+    private suspend fun readDefaultPermissionTier(client: DshTurnClient): String? {
+        val catalog = client.call("permissionPresets/catalog", timeoutMillis = 5_000) as? JsonObject ?: return null
+        return (catalog["defaultPreset"] as? JsonString)?.value
+    }
+
+    private fun permissionNamespace(description: JsonObject): JsonObject? =
+        (description["namespaces"] as? JsonArray)?.values.orEmpty()
+            .mapNotNull { it as? JsonObject }
+            .firstOrNull { (it["ns"] as? JsonString)?.value == "permission" }
+
+    private fun tierForPermissionMode(id: String?): com.phonedsh.ui.page.PermissionTier? = when (id) {
+        "read-only", "phone-read-only" -> com.phonedsh.ui.page.PermissionTier.VIEW_ONLY
+        "workspace-write", "phone" -> com.phonedsh.ui.page.PermissionTier.WORKSPACE_WRITE
+        "danger-full-access", "bypassPermissions" -> com.phonedsh.ui.page.PermissionTier.FULL_ACCESS
+        else -> null
+    }
 
     /** 显示代码工作视图. */
     internal fun setDeveloperTools(value: Boolean) {

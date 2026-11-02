@@ -17,6 +17,14 @@ import org.junit.Test
 
 class PdshSettingsRouteTest {
     @Test
+    fun `the four hosted settings rows target real existing destinations`() {
+        assertEquals(PdshRoute.AgentPresets, PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.AGENT_PRESETS))
+        assertEquals(PdshRoute.PhonePermissions, PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.PHONE_PERMISSIONS))
+        assertEquals(PdshRoute.PluginInventory, PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.PLUGINS_TOOLS))
+        assertEquals(PdshRoute.WorkspaceFolders, PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.FOLDERS))
+    }
+
+    @Test
     fun `every navigating row has a route`() {
         assertEquals(PdshRoute.ModelProvider, PdshSettingsRows.targetOf(SettingsDestination.MODEL_PROVIDER))
         assertEquals(PdshRoute.WebSearch, PdshSettingsRows.targetOf(SettingsDestination.WEB_SEARCH))

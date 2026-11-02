@@ -417,6 +417,17 @@ public data class PdshNavState(public val stack: List<PdshRoute> = listOf(PdshRo
  * `null` here is "the sheet swaps its own body", never "the row does nothing".
  */
 public object PdshSettingsRows {
+    /** Settings-page host rows which already have a concrete route in this app. */
+    public enum class HostRow { AGENT_PRESETS, PHONE_PERMISSIONS, PLUGINS_TOOLS, FOLDERS }
+
+    /** The host-owned settings rows' direct route targets. */
+    public fun targetOf(row: HostRow): PdshRoute = when (row) {
+        HostRow.AGENT_PRESETS -> PdshRoute.AgentPresets
+        HostRow.PHONE_PERMISSIONS -> PdshRoute.PhonePermissions
+        HostRow.PLUGINS_TOOLS -> PdshRoute.PluginInventory
+        HostRow.FOLDERS -> PdshRoute.WorkspaceFolders
+    }
+
     public fun targetOf(destination: SettingsDestination): PdshRoute? = when (destination) {
         SettingsDestination.MODEL_PROVIDER -> PdshRoute.ModelProvider
         SettingsDestination.WEB_SEARCH -> PdshRoute.WebSearch

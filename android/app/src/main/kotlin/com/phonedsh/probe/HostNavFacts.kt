@@ -299,7 +299,8 @@ internal fun buildNavFacts(
             inFlight = readings.permissionInFlight,
         ),
         settings = SettingsFacts(
-            // No permission editor exists on this host, so no preset is stored.
+            // HostShell overlays this with the DSH permission namespace readback;
+            // this pure device-reading projection has not read that namespace.
             defaultPermissionTier = null,
             // The one service this host can speak about is its own row: the saved
             // device record names it, or — when nothing is saved — the launch's

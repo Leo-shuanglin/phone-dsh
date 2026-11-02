@@ -83,24 +83,33 @@ class SettingsNavigationTest {
     fun `optional host pages are live only when callbacks are supplied`() {
         val opened = mutableListOf<String>()
         show(
-            onOpenAgentPresets = { opened += "presets" },
-            onOpenPhonePermissions = { opened += "phone-permissions" },
-            onOpenPluginsTools = { opened += "plugins" },
-            onOpenFolders = { opened += "folders" },
+            onOpenAgentPresets = { opened += com.phonedsh.ui.nav.PdshSettingsRows.targetOf(com.phonedsh.ui.nav.PdshSettingsRows.HostRow.AGENT_PRESETS).toString() },
+            onOpenPhonePermissions = { opened += com.phonedsh.ui.nav.PdshSettingsRows.targetOf(com.phonedsh.ui.nav.PdshSettingsRows.HostRow.PHONE_PERMISSIONS).toString() },
+            onOpenPluginsTools = { opened += com.phonedsh.ui.nav.PdshSettingsRows.targetOf(com.phonedsh.ui.nav.PdshSettingsRows.HostRow.PLUGINS_TOOLS).toString() },
+            onOpenFolders = { opened += com.phonedsh.ui.nav.PdshSettingsRows.targetOf(com.phonedsh.ui.nav.PdshSettingsRows.HostRow.FOLDERS).toString() },
             onOpenArchivedSessions = { opened += "archived" },
         )
         listOf(
-            com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "agentPresets" to "presets",
-            com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "phonePermissions" to "phone-permissions",
-            com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "pluginsTools" to "plugins",
-            com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "folders" to "folders",
+            com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "agentPresets" to com.phonedsh.ui.nav.PdshRoute.AgentPresets.toString(),
+            com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "phonePermissions" to com.phonedsh.ui.nav.PdshRoute.PhonePermissions.toString(),
+            com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "pluginsTools" to com.phonedsh.ui.nav.PdshRoute.PluginInventory.toString(),
+            com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "folders" to com.phonedsh.ui.nav.PdshRoute.WorkspaceFolders.toString(),
             com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "archivedSessions" to "archived",
         ).forEach { (tag, expected) ->
             scrollTo(tag)
             compose.onNodeWithTag(tag).performClick()
             assertEquals(expected, opened.last())
         }
-        assertEquals(listOf("presets", "phone-permissions", "plugins", "folders", "archived"), opened)
+        assertEquals(
+            listOf(
+                com.phonedsh.ui.nav.PdshRoute.AgentPresets.toString(),
+                com.phonedsh.ui.nav.PdshRoute.PhonePermissions.toString(),
+                com.phonedsh.ui.nav.PdshRoute.PluginInventory.toString(),
+                com.phonedsh.ui.nav.PdshRoute.WorkspaceFolders.toString(),
+                "archived",
+            ),
+            opened,
+        )
     }
 
     @Test
