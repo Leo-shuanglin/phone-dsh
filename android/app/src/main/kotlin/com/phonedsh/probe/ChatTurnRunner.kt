@@ -109,6 +109,8 @@ internal class ChatTurnRunner(
     private val channel: HostChannel,
     private val client: DshTurnClient,
     private val log: (String) -> Unit = {},
+    private val firstEventTimeoutMillis: Long = FIRST_EVENT_TIMEOUT_MILLIS,
+    private val nextReadTimeoutMillis: Long = NEXT_TIMEOUT_MILLIS,
 ) {
     private val random = SecureRandom()
 
@@ -224,7 +226,6 @@ internal class ChatTurnRunner(
         val events = ArrayList<HostEvent>()
         val live = StringBuilder()
         var endReason: String? = null
-        var items = 0
         val pendingRemoteRequests = ConcurrentHashMap.newKeySet<String>()
         try {
             val prefetchedItems = ArrayDeque<JsonObject>()
@@ -234,27 +235,37 @@ internal class ChatTurnRunner(
             val eventClientId = awaitEventsReady(follow, prefetchedItems)
             // The whole wait for the first durable event, not per read: a stale
             // session sends one history snapshot and then nothing.
-            val firstEventDeadline = System.currentTimeMillis() + FIRST_EVENT_TIMEOUT_MILLIS
+            val firstEventDeadline = System.currentTimeMillis() + firstEventTimeoutMillis
             // The prompt goes out only after the stream is open: the Worker
             // publishes the turn's first frames as soon as it accepts it, and a
             // prompt sent first can outrun the subscription.
             client.prompt(sessionId, prompt)
             log("chat turn: session/prompt queued session=$sessionId")
             while (true) {
-                // A Worker session id only lives as long as the Worker page, and
-                // this page reloads when the App is backgrounded long enough for the
-                // WebView to be reclaimed (measured: the SAF picker did it). A
-                // prompt accepted by such a stale session produces a history
-                // snapshot and then nothing, so the first event has a short
-                // deadline; the caller retries once with a fresh session.
-                val timeout = if (events.isEmpty() && items < STALE_ITEMS) {
+                // Before the first durable event, keep the existing bounded
+                // first-event wait. Once an event arrives the caller owns this
+                // stream's lifetime through cancellation; interactive turns can
+                // legitimately remain open without a total wall-clock cutoff.
+                val timeout = if (events.isEmpty()) {
                     (firstEventDeadline - System.currentTimeMillis()).coerceAtLeast(1L)
                 } else {
-                    NEXT_TIMEOUT_MILLIS
+                    nextReadTimeoutMillis
                 }
                 val item = prefetchedItems.pollFirst() ?: follow.next(timeout)
-                items++
                 if (item == null) {
+                    if (!follow.isFinished) {
+                        // A receive timeout only means the Worker was quiet for
+                        // this window. Keep the same mux/session alive; the
+                        // first-event deadline above remains the stale-session
+                        // guard, and later quiet windows do not end a turn.
+                        if (events.isEmpty() && System.currentTimeMillis() >= firstEventDeadline) {
+                            throw DshTurnException(
+                                "no_turn_started",
+                                "the session accepted no turn; the Worker may have reloaded",
+                            )
+                        }
+                        continue
+                    }
                     if (events.isEmpty()) {
                         throw DshTurnException(
                             "no_turn_started",
@@ -432,39 +443,12 @@ internal class ChatTurnRunner(
         private val muxId: String,
         private val stream: HostApiStream,
     ) {
-        private val chunks: ReceiveChannel<ByteArray> = stream.chunks()
-        private val pending = StringBuilder()
-        private var finished = false
+        private val reader = FollowFrameReader(stream.chunks())
+
+        val isFinished: Boolean get() = reader.isFinished
 
         /** The next complete mux item, or `null` when the stream ended or timed out. */
-        suspend fun next(timeoutMillis: Long = NEXT_TIMEOUT_MILLIS): JsonObject? {
-            if (finished) return null
-            val deadline = System.currentTimeMillis() + timeoutMillis
-            while (true) {
-                val newline = pending.indexOf("\n")
-                if (newline >= 0) {
-                    val line = pending.substring(0, newline).trim()
-                    pending.delete(0, newline + 1)
-                    if (line.isEmpty()) continue
-                    val parsed = parseObject(line) ?: continue
-                    if (parsed.text("type") == "end") finished = true
-                    return parsed
-                }
-                val remaining = deadline - System.currentTimeMillis()
-                if (remaining <= 0) return null
-                val result = withTimeoutOrNull(remaining) { chunks.receiveCatching() } ?: return null
-                if (result.isClosed) {
-                    finished = true
-                    val cause = result.exceptionOrNull()
-                    if (cause != null && cause !is HostApiException) throw cause
-                    if (cause is HostApiException) {
-                        throw DshTurnException(cause.code, cause.message ?: "the follow stream ended")
-                    }
-                    return null
-                }
-                pending.append(String(result.getOrNull() ?: return null, Charsets.UTF_8))
-            }
-        }
+        suspend fun next(timeoutMillis: Long = NEXT_TIMEOUT_MILLIS): JsonObject? = reader.next(timeoutMillis)
 
         /** Closes the receive stream and the logical mux. */
         suspend fun close() {
@@ -529,8 +513,6 @@ internal class ChatTurnRunner(
         const val FIRST_EVENT_TIMEOUT_MILLIS = 20_000L
         const val EVENT_READY_TIMEOUT_MILLIS = 20_000L
 
-        /** Non-event items (the history snapshot) still expected before the first event. */
-        const val STALE_ITEMS = 3
         const val CLOSE_TIMEOUT_MILLIS = 5_000L
         const val EVENTS_STREAM_ID = "events"
         const val APPROVAL_REQUEST = "approval/request"
@@ -539,6 +521,89 @@ internal class ChatTurnRunner(
             linkedMapOf("kind" to JsonString("next")),
         )
         const val HEX = "0123456789abcdef"
+    }
+}
+
+/** Byte-framed NDJSON reader shared by the App's live follow stream and its JVM regression. */
+internal class FollowFrameReader(private val chunks: ReceiveChannel<ByteArray>) {
+    private val pending = NdjsonByteBuffer()
+    var isFinished: Boolean = false
+        private set
+
+    suspend fun next(timeoutMillis: Long): JsonObject? {
+        if (isFinished) return null
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (true) {
+            val lineBytes = pending.nextLine()
+            if (lineBytes != null) {
+                val line = lineBytes.toString(Charsets.UTF_8).trim()
+                if (line.isEmpty()) continue
+                val parsed = try { JsonValue.parse(line) as? JsonObject } catch (_: Exception) { null }
+                    ?: continue
+                if ((parsed["type"] as? JsonString)?.value == "end") isFinished = true
+                return parsed
+            }
+            val remaining = deadline - System.currentTimeMillis()
+            if (remaining <= 0) return null
+            val result = withTimeoutOrNull(remaining) { chunks.receiveCatching() } ?: return null
+            if (result.isClosed) {
+                isFinished = true
+                val cause = result.exceptionOrNull()
+                if (cause != null && cause !is HostApiException) throw cause
+                if (cause is HostApiException) {
+                    throw DshTurnException(cause.code, cause.message ?: "the follow stream ended")
+                }
+                return null
+            }
+            val chunk = result.getOrNull() ?: continue
+            pending.append(chunk)
+        }
+    }
+}
+
+/** Retains raw NDJSON bytes and scans only bytes not examined in an earlier quiet poll. */
+internal class NdjsonByteBuffer(initialCapacity: Int = 256) {
+    private var bytes = ByteArray(initialCapacity.coerceAtLeast(1))
+    private var start = 0
+    private var size = 0
+    private var scanOffset = 0
+
+    fun append(chunk: ByteArray) {
+        if (size + chunk.size > bytes.size && start > 0) {
+            val remaining = size - start
+            bytes.copyInto(bytes, 0, start, size)
+            size = remaining
+            scanOffset = (scanOffset - start).coerceAtLeast(0)
+            start = 0
+        }
+        if (size + chunk.size > bytes.size) {
+            var capacity = bytes.size
+            while (capacity < size + chunk.size) capacity = (capacity * 2).coerceAtLeast(size + chunk.size)
+            bytes = bytes.copyOf(capacity)
+        }
+        chunk.copyInto(bytes, size)
+        size += chunk.size
+    }
+
+    /** Returns one complete line (without LF), or null while the tail is partial. */
+    fun nextLine(): ByteArray? {
+        var index = scanOffset
+        while (index < size) {
+            if (bytes[index] == '\n'.code.toByte()) {
+                val line = bytes.copyOfRange(start, index)
+                start = index + 1
+                scanOffset = start
+                if (start == size) {
+                    start = 0
+                    size = 0
+                    scanOffset = 0
+                }
+                return line
+            }
+            index++
+        }
+        scanOffset = size
+        return null
     }
 }
 
