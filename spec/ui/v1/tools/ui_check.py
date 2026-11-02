@@ -9,7 +9,8 @@ Enforces these rules:
 3. tokens + goldens validate against `schema/tokens.schema.json` with the shared validator
    from `spec/v1/tools/spec_golden.py` (no second JSON Schema implementation);
 4. every leaf token has a provenance line (`file.swift:line`, `system:...` or `unmeasured`)
-   with a source tier the token group allows; stale provenance entries are failures;
+   with a source tier the token group allows; the cited line must still exist and contain the
+   token name/value (or the optional `expect` snippet), so stale provenance is a failure;
 5. page-layer geometry is absorbed as tokens (value + unit + scalesWith), so the six
    surfaces have base values instead of prose; geometry that follows the font must derive
    from a typography token;
@@ -52,18 +53,14 @@ from pathlib import Path
 
 UI_REL = Path("spec") / "ui" / "v1"
 PROBE_REL = Path("examples") / "probe-app" / "PhoneDSHProbe"
-# PR #13 (9d46fc3c) rebuilt SettingsPage as a five-tab sheet, which added eleven
-# `*Page` structs to the baseline: the settings tab bodies/children
-# (NativeGeneralSettingsPage, NativeShortcutsPage, PhonePermissionsPage,
-# NativeAgentPresetsPage, NativePluginInventoryPage) plus
-# SessionArtifactsPage/SessionArtifactPreviewPage,
-# NativeDeviceConnectionPage/NativeDeviceSessionPage, and two pages left with no
-# entry at all (ChatPreferencesPage, NativeSettingsDocumentPage). The inventory has
-# to name every one of them, and it also needs the three-way reachability legend
-# (reachable / -uiPreview-only / unreachable) those pages made necessary.
-# 280 -> 300 rather than leaving the inventory wrong; the file is 293 lines.
-README_MAX_LINES = 319
-MAX_DEFERRED_PAIRS = 8
+# PR22 replaced the five-tab settings sheet with a grouped settings list and put
+# the new/renamed pages (ArchivedSessionsPage, FontSizeSettingsPage,
+# ConversationSettingsPage) into that list. The inventory still has to name every
+# `*Page` struct, and it now carries the PR22 typography/geometry tables as well.
+# 319 -> 345 is a recorded rule change for those normative tables, not a way to
+# omit pages; the page cross-check below still fails if one is missing.
+README_MAX_LINES = 345
+MAX_DEFERRED_PAIRS = 7
 REQUIRED_SURFACES = (
     "bubble",
     "toolRow",
@@ -73,18 +70,12 @@ REQUIRED_SURFACES = (
     "failLoudBanner",
 )
 REQUIRED_STYLES = (
+    "navTitle",
+    "navSubtitle",
     "body",
-    "secondary",
-    "caption",
-    "code",
-    "codeLabel",
-    "codeAction",
-    "codeExpand",
-    "shimmer",
-    "jsonLabel",
-    "jsonBody",
-    "headline",
-    "subheadline",
+    "process",
+    "listItem",
+    "tabLabel",
 )
 DIVERGENCE_IDS = (
     "back-gesture",
@@ -97,7 +88,7 @@ DIVERGENCE_IDS = (
     "share-sheet",
 )
 PLATFORM_DEFAULT_SOURCE = "platform default, not measured in this repo"
-TYPE_ROLE_MAP = {"typography.headline": "Material titleMedium", "typography.subheadline": "Material titleSmall"}
+TYPE_ROLE_MAP = {"typography.navTitle": "Material titleMedium", "typography.navSubtitle": "Material titleSmall"}
 PAGE_RE = re.compile(r"^\s*(?:private |fileprivate |public |internal )*struct (\w+Page)\b", re.M)
 SECTION_RE = re.compile(r"^## (\d)\. (.+)$", re.M)
 JSON_BLOCK_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.S)
@@ -110,8 +101,15 @@ URL_RE = re.compile(r"(?i)\b(?:https?|ftp|wss?)://|(?<![\w/])www\.[a-z0-9-]+\.[a
 # Assembled from parts so this checker carries no absolute path literal of its own.
 ABSOLUTE_USER_PATH = "/" + "Users" + "/"
 
-THEME_FILE = "NativeChatTheme.swift"
-COMPONENT_FILES = ("NativeChatTheme.swift", "Components.swift", "DSHComponents.swift")
+# PR22 HomeSpec.swift is the single UI authority. Old 402pt theme/component files
+# are no longer accepted provenance for a colour/type/spacing token: leaving them
+# accepted is how the superseded values survived the first port.
+AUTHORITY_FILE = "HomeSpec.swift"
+# HomeSpec is the authority for the product roles and for spacing. The ShimmerText
+# effect is motion-only in PR22 (the text uses the process font), so there is no
+# component typography exception; geometry/radius stay on HomeSpec or a page.
+TYPE_SOURCE_FILES = (AUTHORITY_FILE,)
+GEOMETRY_SOURCE_FILES = (AUTHORITY_FILE,)
 
 
 class CheckError(Exception):
@@ -181,6 +179,16 @@ def resolve_token(document, reference: str):
     return table[name]
 
 
+def numeric_literal_on_line(value, line: str) -> bool:
+    """True when *value* appears on *line* as a whole numeric literal.
+
+    Substring matching is not enough: 17 is a substring of 17.5, so a changed
+    half-point size would otherwise keep a stale provenance line green.
+    """
+    literal = f"{value:g}" if isinstance(value, float) else str(value)
+    return re.search(r"(?<![\d.])" + re.escape(literal) + r"(?![\d.])", line) is not None
+
+
 def walk_keys(value, path="$"):
     """Yield (path, key, subvalue) for every dict member below *value*."""
     if isinstance(value, dict):
@@ -243,17 +251,28 @@ def check_typography_units(document) -> None:
         if not isinstance(style, dict):
             raise CheckError(f"typography.styles.{style_id} is not an object")
         for key in style:
-            if key in ("baseSize", "weight", "mono", "role", "note", "needsDeviceMeasure"):
+            if key in ("baseSize", "lineHeight", "weight", "mono", "role", "note", "needsDeviceMeasure"):
                 continue
             if ABSTRACT_KEY_RE.search(key):
                 raise CheckError(
                     f"typography.styles.{style_id}.{key}: absolute font sizes are forbidden; "
-                    "store baseSize and let the platform scale it"
+                    "store baseSize/lineHeight and let the platform scale it"
                 )
             raise CheckError(f"typography.styles.{style_id}.{key}: unknown member")
         base = style.get("baseSize")
-        if not isinstance(base, int) or isinstance(base, bool) or not 8 <= base <= 72:
-            raise CheckError(f"typography.styles.{style_id}.baseSize must be an integer 8..72")
+        # PR22 HomeSpec uses half-point sizes (17.5, 14.5, 10.5), so the base
+        # value is a number, not an integer. It is still a base size: the
+        # platform scale multiplies it and no rendered px is stored.
+        if not isinstance(base, (int, float)) or isinstance(base, bool) or not 8 <= base <= 72:
+            raise CheckError(f"typography.styles.{style_id}.baseSize must be a number 8..72")
+        if "lineHeight" not in style:
+            raise CheckError(f"typography.styles.{style_id} must declare lineHeight (null when HomeSpec does not define one)")
+        line_height = style.get("lineHeight")
+        if line_height is not None and (
+            not isinstance(line_height, (int, float)) or isinstance(line_height, bool)
+            or not 8 <= line_height <= 96
+        ):
+            raise CheckError(f"typography.styles.{style_id}.lineHeight must be a number 8..96 or null")
     for style_id in REQUIRED_STYLES:
         if style_id not in styles:
             raise CheckError(f"typography.styles is missing the canonical style {style_id!r}")
@@ -353,19 +372,107 @@ def check_provenance(document) -> list:
                     raise CheckError(
                         f"provenance.{token}: a page-tier colour needs baselineInconsistency: true"
                     )
-            elif tier != "theme" or filename != THEME_FILE:
-                raise CheckError(f"provenance.{token}: colours must come from {THEME_FILE} (tier theme)")
+            elif tier != "theme" or filename != AUTHORITY_FILE:
+                raise CheckError(
+                    f"provenance.{token}: colours must come from {AUTHORITY_FILE} (tier theme); "
+                    f"got {filename} / {tier!r}"
+                )
         elif group in ("typography", "spacing"):
             if tier not in ("theme", "component"):
                 raise CheckError(f"provenance.{token}: {group} needs tier theme or component, not {tier!r}")
-            if filename not in COMPONENT_FILES:
-                raise CheckError(f"provenance.{token}: {group} values must come from {', '.join(COMPONENT_FILES)}")
-        elif group == "geometry":
+            if filename not in TYPE_SOURCE_FILES:
+                raise CheckError(f"provenance.{token}: {group} values must come from {', '.join(TYPE_SOURCE_FILES)}")
+        elif group in ("geometry", "radius"):
             if tier not in ("component", "page"):
-                raise CheckError(f"provenance.{token}: geometry needs tier component or page")
+                raise CheckError(f"provenance.{token}: {group} needs tier component or page")
+            if tier == "component" and filename not in GEOMETRY_SOURCE_FILES:
+                raise CheckError(
+                    f"provenance.{token}: component {group} must come from {', '.join(GEOMETRY_SOURCE_FILES)}"
+                )
+        elif group == "motion":
+            if tier not in ("component", "page"):
+                raise CheckError(f"provenance.{token}: motion needs tier component or page")
         elif tier not in ("theme", "component", "page"):
             raise CheckError(f"provenance.{token}: tier {tier!r} not allowed for {group}")
     return unmeasured
+
+
+# ---------------------------------------------------------------------------
+# Rule 4b: the cited source line still holds the token.
+#
+# `file.swift:line` on its own is not provenance: lines move and files get
+# renamed, which is exactly how the old NativeChatTheme references stayed green
+# after PR22 replaced the design. Every cited line must exist, and it must still
+# carry the token name and value (colours: both hex literals; type/geometry:
+# the name or the numeric value), or the optional `expect` snippet for page-layer
+# lengths whose Swift line is a padding/frame call rather than a named constant.
+# The probe app is absent in a spec-only checkout; then there is nothing to
+# resolve against and the driver prints the check as skipped instead of passing
+# it silently.
+# ---------------------------------------------------------------------------
+
+
+def check_provenance_sources(root: Path, document) -> tuple:
+    probe = root / PROBE_REL
+    if not probe.is_dir():
+        return 0, False
+    files = {}
+    for path in sorted(probe.rglob("*.swift")):
+        files.setdefault(path.name, path)
+    checked = 0
+    for token, entry in sorted((document.get("provenance") or {}).items()):
+        source = entry.get("source")
+        if not isinstance(source, str) or not SWIFT_SOURCE_RE.match(source):
+            continue
+        filename, line_text = source.split(":")
+        line_number = int(line_text)
+        path = files.get(filename)
+        if path is None:
+            raise CheckError(f"provenance.{token}: stale source {source!r}; {filename} is not in the PR22 probe app")
+        lines = read_text(path).splitlines()
+        if not 1 <= line_number <= len(lines):
+            raise CheckError(
+                f"provenance.{token}: stale source {source!r}; {filename} has {len(lines)} line(s)"
+            )
+        cited = lines[line_number - 1]
+        expect = entry.get("expect")
+        if isinstance(expect, str):
+            if expect not in cited:
+                raise CheckError(
+                    f"provenance.{token}: stale source {source!r}; expected {expect!r} on that line"
+                )
+            checked += 1
+            continue
+        leaf = token.split(".", 1)[1]
+        group = token.split(".", 1)[0]
+        evidence = False
+        if group == "colors":
+            color = document["colors"][leaf]
+            light = color.get("light") or ""
+            dark = color.get("dark") or ""
+            upper = cited.upper()
+            evidence = (
+                leaf in cited
+                and bool(light)
+                and bool(dark)
+                and f"0X{light[1:].upper()}" in upper
+                and f"0X{dark[1:].upper()}" in upper
+            )
+        elif group == "typography":
+            base = document["typography"]["styles"][leaf].get("baseSize")
+            evidence = leaf in cited and numeric_literal_on_line(base, cited)
+        elif group == "geometry":
+            value = document[group][leaf].get("value")
+            evidence = leaf in cited and numeric_literal_on_line(value, cited)
+        elif group in ("spacing", "radius"):
+            value = document[group][leaf]
+            evidence = leaf in cited and numeric_literal_on_line(value, cited)
+        if not evidence:
+            raise CheckError(
+                f"provenance.{token}: stale source {source!r}; the line no longer names the token or its value"
+            )
+        checked += 1
+    return checked, True
 
 
 # ---------------------------------------------------------------------------
@@ -826,7 +933,7 @@ README_PHRASES = (
     ("只记录，不改基线", "the baseline observations are recorded, not fixed"),
     ("生成 Swift/Compose", "the P5 token generator must be registered as a work item"),
 )
-BASELINE_ANCHORS = ("SessionActivityPage", "DailyBriefPage", "NativeTab", "ChatPage.swift:1048")
+BASELINE_ANCHORS = ("SessionActivityPage", "DailyBriefPage", "NativeTab", "HomeSpec.swift:5")
 
 
 def check_readme_notes(readme: str) -> None:
@@ -931,6 +1038,7 @@ def run(root: Path, strict: bool) -> int:
             except spec_error as exc:
                 raise CheckError(f"{label}: {exc}") from exc
 
+        sourced, sourced_checked = check_provenance_sources(root, document)
         geometry_count = check_geometry(document)
         references = check_surfaces(document)
         contrast_lines, contrast_failures, deferred, pair_count = check_contrast(document, strict)
@@ -947,6 +1055,10 @@ def run(root: Path, strict: bool) -> int:
 
         for reference in unmeasured:
             report.unmeasured(f"  token    {reference} (value null, source unmeasured)")
+        if sourced_checked:
+            report.unmeasured(f"  source   {sourced} file:line provenance anchors resolved against the PR22 probe app")
+        else:
+            report.unmeasured("  source   provenance line check skipped (probe app absent)")
         surface_items = 0
         surface_lines = []
         for name in REQUIRED_SURFACES:

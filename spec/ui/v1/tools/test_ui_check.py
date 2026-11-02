@@ -56,10 +56,22 @@ class UiCheckTests(unittest.TestCase):
             self.root / "spec" / "v1",
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
+        # Provenance is now checked against the real PR22 source lines, not just
+        # the shape of a `file.swift:line` string. Copy the probe app so the
+        # control run resolves every anchor; a spec-only checkout still skips
+        # that check (see test_page_cross_check_skipped_without_probe_app).
+        probe_source = ROOT / "examples" / "probe-app" / "PhoneDSHProbe"
         probe = self.root / "examples" / "probe-app" / "PhoneDSHProbe"
-        probe.mkdir(parents=True)
-        (probe / "ChatPage.swift").write_text("struct ChatPage: View {}\n", encoding="utf-8")
-        (probe / "MemoryPage.swift").write_text("struct MemoryPage: View {}\n", encoding="utf-8")
+        if probe_source.is_dir():
+            shutil.copytree(
+                probe_source,
+                probe,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".build", "DerivedData"),
+            )
+        else:
+            probe.mkdir(parents=True)
+            (probe / "ChatPage.swift").write_text("struct ChatPage: View {}\n", encoding="utf-8")
+            (probe / "MemoryPage.swift").write_text("struct MemoryPage: View {}\n", encoding="utf-8")
 
     # -- helpers ---------------------------------------------------------
 
@@ -110,9 +122,9 @@ class UiCheckTests(unittest.TestCase):
 
     def test_contrast_below_threshold_fails(self) -> None:
         document = self.tokens()
-        document["contrast"]["pairs"][0]["foreground"] = "tertiary"
+        document["contrast"]["pairs"][0]["foreground"] = "textSubtle"
         self.write_tokens(document)
-        self.assert_fails(run_checker(self.root), "contrast onInput/input")
+        self.assert_fails(run_checker(self.root), "contrast textPrimary/surface")
 
     # -- 3. the whitelist loses one of the seven rows -----------------------
 
@@ -140,11 +152,32 @@ class UiCheckTests(unittest.TestCase):
         self.write_tokens(document)
         self.assert_fails(run_checker(self.root), "absolute font sizes are forbidden")
 
+    # -- 4b. PR22 composition facts the generic rules cannot infer ----------
+
+    def test_composer_composition_has_no_border(self) -> None:
+        # PR22 composerCard is HomeSpec.surface + homeComposerShadow only.
+        document = self.tokens()
+        composer = document["signatureSurfaces"]["composer"]["tokens"]
+        self.assertFalse([token for token in composer if token.startswith("stroke.")])
+
+    def test_tool_row_keeps_the_hairline(self) -> None:
+        document = self.tokens()
+        self.assertIn("stroke.hairline", document["signatureSurfaces"]["toolRow"]["tokens"])
+
+    def test_thinking_pill_uses_the_process_font(self) -> None:
+        # ShimmerText is called with the process/list-item font, never the 13pt
+        # default; the sweep is motion.shimmer, the text is typography.process.
+        document = self.tokens()
+        thinking = document["signatureSurfaces"]["thinkingPill"]["tokens"]
+        self.assertIn("typography.process", thinking)
+        self.assertIn("motion.shimmer", thinking)
+        self.assertNotIn("typography.shimmer", document["typography"]["styles"])
+
     # -- 5. provenance is dropped for one token -----------------------------
 
     def test_missing_provenance_fails(self) -> None:
         document = self.tokens()
-        del document["provenance"]["colors.warning"]
+        del document["provenance"]["colors.success"]
         self.write_tokens(document)
         self.assert_fails(run_checker(self.root), "provenance is missing")
 
@@ -152,15 +185,15 @@ class UiCheckTests(unittest.TestCase):
 
     def test_schema_type_error_fails(self) -> None:
         document = self.tokens()
-        document["colors"]["primary"]["light"] = 111114
+        document["colors"]["textPrimary"]["light"] = 111114
         self.write_tokens(document)
         self.assert_fails(run_checker(self.root), "expected ['string', 'null']")
 
     def test_schema_rejects_absolute_size_string(self) -> None:
         document = self.tokens()
-        document["typography"]["styles"]["body"]["baseSize"] = "14"
+        document["typography"]["styles"]["body"]["baseSize"] = "16"
         self.write_tokens(document)
-        self.assert_fails(run_checker(self.root), "baseSize must be an integer")
+        self.assert_fails(run_checker(self.root), "baseSize must be a number 8..72")
 
     # -- 7. a page exists in the baseline but not in the inventory ----------
 
@@ -170,12 +203,12 @@ class UiCheckTests(unittest.TestCase):
         self.assert_fails(run_checker(self.root), "page inventory misses: NewPage")
 
     def test_surface_missing_from_readme_fails(self) -> None:
-        readme = self.read_readme().replace("thinking_pill", "思考行")
+        readme = self.read_readme().replace("thinking_pill", "思考面板")
         self.write_readme(readme)
         self.assert_fails(run_checker(self.root), "does not document the signature surface")
 
     def test_deferred_pair_missing_from_readme_fails(self) -> None:
-        readme = self.read_readme().replace("caption/code", "caption-code")
+        readme = self.read_readme().replace("textSubtle/page", "textSubtle-page")
         self.write_readme(readme)
         self.assert_fails(run_checker(self.root), "deferred contrast pair")
 
@@ -189,19 +222,22 @@ class UiCheckTests(unittest.TestCase):
 
     def test_deferred_pair_that_now_passes_fails(self) -> None:
         document = self.tokens()
-        document["colors"]["caption"]["light"] = "#000000"
+        for pair in document["contrast"]["pairs"]:
+            if pair["id"] == "textSubtle/page":
+                pair["role"] = "large"
+                break
         self.write_tokens(document)
         self.assert_fails(run_checker(self.root), "promote it to required: true")
 
     def test_geometry_scales_with_unknown_typography_fails(self) -> None:
         document = self.tokens()
-        document["geometry"]["bubblePadding"]["scalesWith"] = "typography.huge"
+        document["geometry"]["contentInset"]["scalesWith"] = "typography.huge"
         self.write_tokens(document)
-        self.assert_fails(run_checker(self.root), "geometry.bubblePadding.scalesWith")
+        self.assert_fails(run_checker(self.root), "geometry.contentInset.scalesWith")
 
     def test_geometry_without_scales_with_fails(self) -> None:
         document = self.tokens()
-        del document["geometry"]["bubblePadding"]["scalesWith"]
+        del document["geometry"]["contentInset"]["scalesWith"]
         self.write_tokens(document)
         self.assert_fails(run_checker(self.root), "scalesWith")
 
@@ -214,15 +250,60 @@ class UiCheckTests(unittest.TestCase):
         self.write_tokens(document)
         self.assert_fails(run_checker(self.root), "needs an owner")
 
-    def test_page_tier_colour_without_baseline_flag_fails(self) -> None:
+    def test_colour_authority_is_home_spec(self) -> None:
         document = self.tokens()
-        document["colors"]["ctaOverride"]["baselineInconsistency"] = False
+        document["provenance"]["colors.textPrimary"]["source"] = "NativeChatTheme.swift:8"
         self.write_tokens(document)
-        self.assert_fails(run_checker(self.root), "baselineInconsistency")
+        self.assert_fails(run_checker(self.root), "must come from HomeSpec.swift")
+
+    def test_stale_provenance_line_fails(self) -> None:
+        document = self.tokens()
+        document["provenance"]["colors.textPrimary"]["source"] = "HomeSpec.swift:9999"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "stale source")
+
+    def test_provenance_value_must_match_exactly(self) -> None:
+        # 17 is a substring of the real 17.5; the anchor must not stay green.
+        document = self.tokens()
+        document["typography"]["styles"]["navTitle"]["baseSize"] = 17
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "no longer names the token or its value")
+
+    def test_same_value_wrong_geometry_line_fails(self) -> None:
+        # HomeSpec.swift:44 is navTitleLine = 22, not geometry.navIcon = 22.
+        document = self.tokens()
+        document["provenance"]["geometry.navIcon"]["source"] = "HomeSpec.swift:44"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "no longer names the token or its value")
+
+    def test_same_value_wrong_spacing_line_fails(self) -> None:
+        # HomeSpec.swift:20 is navTop = 8, not spacing.disclosureGap = 8.
+        document = self.tokens()
+        document["provenance"]["spacing.disclosureGap"]["source"] = "HomeSpec.swift:20"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "no longer names the token or its value")
+
+    def test_stale_provenance_line_content_fails(self) -> None:
+        document = self.tokens()
+        document["provenance"]["colors.textPrimary"]["source"] = "HomeSpec.swift:1"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "no longer names the token or its value")
+
+    def test_page_layer_expect_snippet_fails_on_wrong_line(self) -> None:
+        document = self.tokens()
+        document["provenance"]["geometry.bubblePaddingH"]["source"] = "ChatPage.swift:3902"
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "expected '.padding(.horizontal, 16)'")
+
+    def test_typography_line_height_is_required(self) -> None:
+        document = self.tokens()
+        del document["typography"]["styles"]["body"]["lineHeight"]
+        self.write_tokens(document)
+        self.assert_fails(run_checker(self.root), "lineHeight")
 
     def test_font_scale_mapping_missing_fails(self) -> None:
         readme = self.read_readme()
-        stripped = re.sub(r', "mapping": \{"typography\.headline"[^}]*\}', "", readme)
+        stripped = re.sub(r', "mapping": \{"typography\.navTitle"[^}]*\}', "", readme)
         self.assertNotEqual(stripped, readme)
         self.write_readme(stripped)
         self.assert_fails(run_checker(self.root), "type-role mapping")
@@ -273,16 +354,16 @@ class UiCheckTests(unittest.TestCase):
     def test_surface_row_missing_a_declared_token_fails(self) -> None:
         # `approvalCard` really uses colors.primary (ApprovalCard.kt:125); the
         # table dropping it is exactly the drift this rule exists for.
-        self.rewrite_surface_row("审批卡", lambda row: row.replace("`colors.primary` ", "", 1))
+        self.rewrite_surface_row("审批卡", lambda row: row.replace("`colors.textPrimary` ", "", 1))
         self.assert_fails(
             run_checker(self.root),
-            "surface 'approvalCard' omits token 'colors.primary' declared by tokens.json",
+            "surface 'approvalCard' omits token 'colors.textPrimary' declared by tokens.json",
         )
 
     def test_surface_row_with_an_undeclared_token_fails(self) -> None:
         self.rewrite_surface_row(
             "composer",
-            lambda row: row.replace("`colors.input`", "`colors.input` `colors.invented`", 1),
+            lambda row: row.replace("`colors.surface`", "`colors.surface` `colors.invented`", 1),
         )
         self.assert_fails(
             run_checker(self.root),
@@ -316,18 +397,18 @@ class UiCheckTests(unittest.TestCase):
         # never one token the surface does not declare.
         path, document = self.projection()
         row = next(entry for entry in document["rows"] if entry["row"] == "p1")
-        row["tokens"] = ["colors.selector", "colors.accent", "colors.onAccent", "radius.card"]
+        row["tokens"] = ["colors.surface", "colors.success", "colors.primaryButtonInk", "radius.listCard"]
         self.write_projection(path, document)
         self.assert_fails(
             run_checker(self.root),
-            "projection row 'p1' (surface 'approvalCard') names token 'colors.accent'",
+            "projection row 'p1' (surface 'approvalCard') names token 'colors.success'",
         )
 
     def test_partial_projection_row_is_legal(self) -> None:
         # One row renders part of a surface; only tokens outside the composition fail.
         path, document = self.projection()
         row = next(entry for entry in document["rows"] if entry["row"] == "p1")
-        row["tokens"] = ["radius.card"]
+        row["tokens"] = ["radius.listCard"]
         self.write_projection(path, document)
         self.assert_passes(run_checker(self.root))
 
@@ -340,8 +421,8 @@ class UiCheckTests(unittest.TestCase):
         # #767676 on white is the canonical WCAG AA boundary (4.54:1).
         self.assertAlmostEqual(checker.contrast_ratio("#767676", "#FFFFFF"), 4.54, places=2)
         self.assertAlmostEqual(
-            checker.contrast_ratio("#FFFFFF", "#3964FE"),
-            checker.contrast_ratio("#3964FE", "#FFFFFF"),
+            checker.contrast_ratio("#FFFFFF", "#191919"),
+            checker.contrast_ratio("#191919", "#FFFFFF"),
             places=6,
         )
 
