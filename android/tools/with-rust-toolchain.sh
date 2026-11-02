@@ -56,6 +56,19 @@ installer_sha256() {
   esac
 }
 
+sha256_file() {
+  # macOS ships shasum; minimal Linux images often ship only sha256sum. Probe
+  # the executable instead of relying on a pipeline's exit status: a missing
+  # shasum would otherwise make the `awk` stage succeed with an empty digest.
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    die 'need shasum or sha256sum to verify pinned Rust downloads'
+  fi
+}
+
 rustup_home_resolve() {
   if [[ -n "${RUSTUP_HOME:-}" ]]; then printf '%s\n' "$RUSTUP_HOME"
   elif [[ -n "${XDG_CACHE_HOME:-}" ]]; then printf '%s/pdsh/rustup\n' "${XDG_CACHE_HOME%/}"
@@ -95,18 +108,21 @@ install_pinned() {
   curl --fail --location --silent --show-error --max-time 60 --max-filesize 20000000 \
     --output "$manifest" "https://static.rust-lang.org/dist/channel-rust-$RUST_VERSION.toml" \
     || die "failed to download pinned Rust channel manifest $RUST_VERSION"
-  manifest_sha="$(shasum -a 256 "$manifest" 2>/dev/null | awk '{print $1}' || sha256sum "$manifest" | awk '{print $1}')"
+  manifest_sha="$(sha256_file "$manifest")"
   [[ "$manifest_sha" == "$RUST_CHANNEL_MANIFEST_SHA256" ]] \
     || die "Rust $RUST_VERSION channel manifest checksum mismatch: expected $RUST_CHANNEL_MANIFEST_SHA256 got $manifest_sha"
   local url="https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/$triple/rustup-init"
   curl --fail --location --silent --show-error --max-time 60 --max-filesize 30000000 \
     --output "$installer" "$url" || die "failed to download pinned rustup-init $RUSTUP_VERSION for $triple"
   local actual
-  actual="$(shasum -a 256 "$installer" 2>/dev/null | awk '{print $1}' || sha256sum "$installer" | awk '{print $1}')"
+  actual="$(sha256_file "$installer")"
   [[ "$actual" == "$sha" ]] || die "rustup-init checksum mismatch for $triple: expected $sha got $actual"
   chmod 700 "$installer"
+  # rustup-init 1.28.2 has no --no-self-update option (the installer does not
+  # update itself); passing it aborts before any toolchain is installed. The
+  # rustup CLI subcommand below does support the flag.
   RUSTUP_INIT_SKIP_PATH_CHECK=yes "$installer" -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" \
-    --default-host "$triple" --no-self-update || die "rustup could not install Rust $RUST_VERSION"
+    --default-host "$triple" || die "rustup could not install Rust $RUST_VERSION"
   "$CARGO_HOME/bin/rustup" toolchain install "$RUST_VERSION" --profile minimal --no-self-update || die "Rust $RUST_VERSION installation failed"
   "$CARGO_HOME/bin/rustup" default "$RUST_VERSION" >/dev/null
   trap - EXIT
