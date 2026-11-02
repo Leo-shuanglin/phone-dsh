@@ -86,6 +86,8 @@ public object ChatMetrics {
     public const val HOME_HEADER_FOLDER_GAP_PT: Int = 6
     /** Folder glyph in the HomeSpec session subtitle. Source: `ChatPage.swift:223-224`. Confidence: exact. */
     public const val HOME_HEADER_FOLDER_ICON_PT: Int = 13
+    /** More SF Symbol size and weight are represented by the bold registry vector. Source: `ChatPage.swift:329`. Confidence: exact. */
+    public const val CHAT_HEADER_MORE_ICON_PT: Int = 18
     /** Vertical text gap in system-event message rows. Source: `NativeMessageRows.swift:113`. Confidence: exact. */
     public const val SYSTEM_EVENT_TEXT_GAP_PT: Int = 2
 
@@ -528,30 +530,31 @@ public object ChatMetrics {
     public const val CHAT_HEADER_TITLE_RESERVE_PT: Int = 108
     /** Gap inside the device/menu group. Source: design spec (two 46 pt halves, no gap). Confidence: exact. */
     public const val CHAT_HEADER_GROUP_GAP_PT: Int = 0
-    /** Drawer icon box. Source: `HomeSpec.navIcon = 22`. Confidence: exact. */
+    /** Two-stroke drawer artwork box. Source: `HomeSpec.swift:207-211`. Confidence: exact. */
     public const val CHAT_DRAWER_ICON_PT: Int = 22
-    /** Drawer icon stroke. Source: SF `sidebar.left` 20pt Android vector approximation. Confidence: approximated. */
-    public const val CHAT_DRAWER_ICON_STROKE_TENTH_PT: Float = 1.5f
-    /** Drawer icon inset and corner. Source: 20pt icon's interior stroke geometry. Confidence: approximated. */
-    public const val CHAT_DRAWER_ICON_INSET_PT: Int = 2
-    public const val CHAT_DRAWER_ICON_CORNER_TENTH_PT: Float = 1.5f
     /** Online marker diameter. Source: `NativeDeviceConnectionPage.swift:16-19`. Confidence: exact. */
     public const val CHAT_DEVICE_STATUS_DOT_PT: Int = 6
     /** Online marker border. Source: `NativeDeviceConnectionPage.swift:19`. Confidence: exact. */
     public const val CHAT_DEVICE_STATUS_BORDER_PT: Int = 1
     /** Online marker top/right offsets in the 36x44 entry. Source: `NativeDeviceConnectionPage.swift:17-19`. Confidence: exact. */
     public const val CHAT_DEVICE_STATUS_INSET_PT: Int = 9
-    /** Device glyph's source font size. Source: `NativeDeviceConnectionPage.swift:11`. Confidence: exact. */
-    public const val CHAT_DEVICE_ICON_SIZE_PT: Int = 18
-    /** The Android line drawing's 10x20 phone outline box approximates the SF symbol ink. Source: `NativeDeviceConnectionPage.swift:11`. Confidence: approximated. */
-    public const val CHAT_DEVICE_ICON_BOX_WIDTH_PT: Int = 12
-    public const val CHAT_DEVICE_ICON_BOX_HEIGHT_PT: Int = 20
-    public const val CHAT_DEVICE_BODY_WIDTH_PT: Int = 10
-    public const val CHAT_DEVICE_BODY_STROKE_TENTH_PT: Float = 1.35f
-    public const val CHAT_DEVICE_BODY_CORNER_PT: Int = 2
-    public const val CHAT_DEVICE_SPEAKER_LEFT_PT: Int = 4
-    public const val CHAT_DEVICE_SPEAKER_RIGHT_PT: Int = 6
-    public const val CHAT_DEVICE_SPEAKER_BOTTOM_PT: Int = 2
+    /** Device radio SF Symbol size. Source: `ChatPage.swift:246`. Confidence: exact. */
+    public const val CHAT_DEVICE_ICON_SIZE_PT: Int = 19
+
+    /** Empty-state column offset from the transcript viewport top. Source: `ChatPage.swift:1402-1408`. Confidence: exact. */
+    public const val EMPTY_STATE_TOP_PT: Int = 88
+    /** Empty-state title size. Source: `ChatPage.swift:1420,1442`. Confidence: exact. */
+    public const val EMPTY_STATE_TITLE_SIZE_PT: Float = 17.5f
+    /** Empty-state supporting line size. Source: `ChatPage.swift:1423,1445`. Confidence: exact. */
+    public const val EMPTY_STATE_HINT_SIZE_PT: Int = 14
+    /** Empty-state title-to-hint gap. Source: `ChatPage.swift:1425,1447`. Confidence: exact. */
+    public const val EMPTY_STATE_HINT_TOP_PT: Int = 8
+    /** Empty-state hint-to-primary-action gap. Source: `ChatPage.swift:1433,1455`. Confidence: exact. */
+    public const val EMPTY_STATE_ACTION_TOP_PT: Int = 24
+    /** Empty-state primary action height. Source: `HomeSpec.swift:211-220`. Confidence: exact. */
+    public const val EMPTY_STATE_ACTION_HEIGHT_PT: Int = 50
+    /** Empty-state primary action label size. Source: `HomeSpec.swift:215`. Confidence: exact. */
+    public const val EMPTY_STATE_ACTION_LABEL_SIZE_PT: Int = 16
 
     // ----------------------------------------------------------- question composer
 

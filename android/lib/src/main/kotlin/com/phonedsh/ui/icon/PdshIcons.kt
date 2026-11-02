@@ -61,7 +61,11 @@ public enum class PdshIcon(
     INFO("info.circle"),
     DOCUMENT("doc.text"),
     NUMBER("number"),
+    /** ChatPage's bold 18pt ellipsis from `ChatPage.swift:329-340`. */
+    CHAT_MORE("ellipsis"),
     MENU("line.3.horizontal"),
+    /** ChatPage's two-stroke HomeSpec menu artwork (`ChatPage.swift:207-211`). */
+    CHAT_DRAWER("line.2.horizontal"),
     DEVICE("iphone"),
     DEVICE_RADIO("dot.radiowaves.left.and.right"),
     CHAT_BUBBLE("bubble.left"),
@@ -203,7 +207,13 @@ public object PdshIcons {
         PdshIcon.INFO to listOf(IconPath("M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z"), IconPath("M12 11v5M12 7.5h.01")),
         PdshIcon.DOCUMENT to listOf(IconPath("M6 3.5h8l4 4V20H6zM14 3.5V8h4M9 12h6M9 15h6M9 18h4")),
         PdshIcon.NUMBER to listOf(IconPath("M8 4 6 20M18 4l-2 16M4 9h16M3 15h16")),
+        PdshIcon.CHAT_MORE to listOf(
+            IconPath("M7 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0M14 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0M21 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0", filled = true),
+        ),
         PdshIcon.MENU to listOf(IconPath("M4 6h16M4 12h16M4 18h16")),
+        PdshIcon.CHAT_DRAWER to listOf(
+            IconPath("M3 8h18M3 16h12", width = 2.4f),
+        ),
         PdshIcon.DEVICE to listOf(IconPath("M7 2.8h10c1 0 1.8.8 1.8 1.8v14.8c0 1-.8 1.8-1.8 1.8H7c-1 0-1.8-.8-1.8-1.8V4.6c0-1 .8-1.8 1.8-1.8ZM10 5.5h4M10.5 18h3")),
         PdshIcon.DEVICE_RADIO to listOf(IconPath("M12 13v.1M8.5 9.5a5 5 0 0 0 0 7M15.5 9.5a5 5 0 0 1 0 7M5.5 6.5a9.2 9.2 0 0 0 0 13M18.5 6.5a9.2 9.2 0 0 1 0 13")),
         PdshIcon.CHAT_BUBBLE to listOf(IconPath("M4 5.5c0-1.1.9-2 2-2h12c1.1 0 2 .9 2 2v9c0 1.1-.9 2-2 2h-8l-5 4v-4.2c-.6-.4-1-1-1-1.8v-9Z")),

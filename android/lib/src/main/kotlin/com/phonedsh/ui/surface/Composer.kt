@@ -112,9 +112,7 @@ public object ComposerTokens {
         UiTokenNames.GEOMETRY_CHROME_INSET,
         UiTokenNames.GEOMETRY_COMPOSER_MAX_HEIGHT,
         UiTokenNames.GEOMETRY_COMPOSER_CONTROL_HEIGHT,
-        UiTokenNames.GEOMETRY_COMPOSER_MIN_HEIGHT,
         UiTokenNames.GEOMETRY_COMPOSER_OUTER_MARGIN_TOP,
-        UiTokenNames.GEOMETRY_COMPOSER_OUTER_MARGIN_BOTTOM,
         UiTokenNames.GEOMETRY_COMPOSER_PORT_TOP,
         UiTokenNames.GEOMETRY_COMPOSER_CONTROL_TOP,
         UiTokenNames.GEOMETRY_COMPOSER_CONTROL_BOTTOM,
@@ -202,7 +200,9 @@ public fun Composer(
                 start = tokens.geometry.composerOuterMarginH,
                 end = tokens.geometry.composerOuterMarginH,
                 top = tokens.geometry.composerOuterMarginTop,
-                bottom = tokens.geometry.composerOuterMarginBottom,
+                // PR22 ChatPage.swift removes the former 8 pt dock bottom inset;
+                // only the system navigation safe area remains below this card.
+                bottom = ChatMetrics.COMPOSER_OUTER_MARGIN_BOTTOM_PT.dp,
             ),
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
     ) {
@@ -285,7 +285,9 @@ public fun Composer(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(
-                                min = tokens.geometry.composerMinHeight,
+                                // The UIKit text view itself floors at 56 pt even
+                                // though its containing row's minimum is 36 pt.
+                                min = ChatMetrics.COMPOSER_TEXT_MIN_HEIGHT_PT.dp,
                                 max = tokens.geometry.composerMaxHeight,
                             )
                             .focusRequester(focusRequester)

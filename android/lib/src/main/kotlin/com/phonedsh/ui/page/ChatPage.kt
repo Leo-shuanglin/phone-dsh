@@ -296,6 +296,10 @@ public fun ChatPage(
     schedules: List<ChatScheduleRow>? = null,
     onOpenJobs: (() -> Unit)? = null,
     onOpenSchedules: (() -> Unit)? = null,
+    /** Host-reported workspace collapse timing; null stays unknown. */
+    collapseTiming: CollapseTiming? = null,
+    /** Writes the selection; null keeps both choices disabled. */
+    onSetCollapseTiming: ((CollapseTiming) -> Unit)? = null,
     /** Explicit host routes; missing capability remains unavailable. */
     composerAvailability: ComposerAvailability = ComposerAvailability(),
     /** Reads the most recent assistant reply aloud when the host supplies a route. */
@@ -383,6 +387,8 @@ public fun ChatPage(
             schedules = schedules,
             onOpenJobs = onOpenJobs,
             onOpenSchedules = onOpenSchedules,
+            collapseTiming = collapseTiming,
+            onSetCollapseTiming = onSetCollapseTiming,
         )
         // A failure that belongs to one row is rendered under it; every other
         // failure owns the top banner (iOS body: `failedItemID == nil` first).
@@ -630,6 +636,8 @@ private fun ChatHeader(
     schedules: List<ChatScheduleRow>? = null,
     onOpenJobs: (() -> Unit)? = null,
     onOpenSchedules: (() -> Unit)? = null,
+    collapseTiming: CollapseTiming?,
+    onSetCollapseTiming: ((CollapseTiming) -> Unit)?,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -694,10 +702,9 @@ private fun ChatHeader(
             }
             Box(modifier = Modifier.weight(1f)) {
                 HeaderMenuAction(
-                    glyph = MORE_GLYPH,
                     onClick = { menuOpen = true },
                     modifier = Modifier.fillMaxSize().testTag(UiPageTags.CHAT_HEADER_MENU)
-                        .semantics { contentDescription = UiStrings.HEADER_MORE },
+                        .semantics { contentDescription = "更多" },
                 )
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     val jobRows = jobs
@@ -713,6 +720,22 @@ private fun ChatHeader(
                     DropdownMenuItem(text = { Text(UiStrings.HEADER_EXPORT) }, onClick = { menuOpen = false; onExportTranscript() })
                     DropdownMenuItem(text = { Text(UiStrings.HEADER_RUN_STATUS) }, onClick = { menuOpen = false; onOpenRunStatus() })
                     DropdownMenuItem(text = { Text(UiStrings.HEADER_SESSION_SETTINGS) }, onClick = { menuOpen = false; onOpenSessionSettings() })
+                    androidx.compose.material3.HorizontalDivider()
+                    DropdownMenuItem(text = { Text("折叠时机") }, onClick = {}, enabled = false)
+                    CollapseTiming.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.chatMenuLabel()) },
+                            onClick = {
+                                onSetCollapseTiming?.invoke(option)
+                                menuOpen = false
+                            },
+                            enabled = onSetCollapseTiming != null,
+                            trailingIcon = if (collapseTiming == option) {
+                                { PdshIconView(PdshIcon.CHECK, 18.dp, tokens.colors.textPrimary, "当前选择") }
+                            } else null,
+                            modifier = Modifier.testTag(collapseTimingTag(option)),
+                        )
+                    }
                 }
             }
         }
@@ -732,7 +755,6 @@ private fun HeaderAction(
     modifier: Modifier = Modifier,
 ) {
     val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
     Box(
         modifier = modifier
             .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
@@ -741,32 +763,25 @@ private fun HeaderAction(
             .padding(horizontal = tokens.spacing.iconText),
         contentAlignment = Alignment.Center,
     ) {
-        DrawerGlyph()
+        DrawerGlyph(tokens.colors.primaryButton)
     }
 }
 
 /**
- * The page-head menu trigger: the `⋯` mark, in the accent ink.
+ * The page-head menu trigger: the bold ellipsis symbol in the primary ink.
  *
- * It draws a mark and nothing else, so it takes no label: the baseline's `Menu`
- * carries an `.accessibilityLabel` but no visible word (`ChatPage.swift:296`), and
- * the header's accessible name is therefore applied by the caller as a content
- * description rather than passed as this helper's first parameter. That is also
- * what the page-structure contract records — the entry is `menu-240` with
- * `label: null` — so a screen-reader string must not pose as a visible action.
+ * It draws a mark and nothing else. The baseline labels it `更多`
+ * (`ChatPage.swift:340`).
  *
- * @param glyph what is drawn.
  * @param onClick opens the menu.
  * @param modifier the caller's tag, accessible name and placement.
  */
 @Composable
 private fun HeaderMenuAction(
-    glyph: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tokens = LocalUiTokens.current
-    val type = LocalUiType.current
     Box(
         modifier = modifier
             .defaultMinSize(minHeight = tokens.geometry.pageHeaderMinHeight)
@@ -774,9 +789,11 @@ private fun HeaderMenuAction(
             .padding(horizontal = tokens.spacing.iconText),
         contentAlignment = Alignment.Center,
     ) {
-        BasicText(
-            text = glyph,
-            style = type.secondary.copy(color = tokens.colors.secondary),
+        PdshIconView(
+            icon = PdshIcon.CHAT_MORE,
+            size = ChatMetrics.CHAT_HEADER_MORE_ICON_PT.dp,
+            tint = tokens.colors.primaryButton,
+            contentDescription = null,
         )
     }
 }
@@ -792,14 +809,14 @@ private fun DeviceHeaderAction(
         modifier = modifier.size(width = ChatMetrics.CHAT_DEVICE_ENTRY_WIDTH_PT.dp, height = tokens.geometry.pageHeaderMinHeight)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics {
-                contentDescription = if (hasOnlineDevices == true) "Device，有在线设备" else "Device"
+                contentDescription = if (hasOnlineDevices == true) "连接设备，有在线设备" else "连接设备"
             },
         contentAlignment = Alignment.Center,
     ) {
         PdshIconView(
             icon = PdshIcon.DEVICE_RADIO,
-            size = ChatMetrics.CHAT_DEVICE_ICON_BOX_WIDTH_PT.dp,
-            tint = tokens.colors.textSecondary,
+            size = ChatMetrics.CHAT_DEVICE_ICON_SIZE_PT.dp,
+            tint = tokens.colors.primaryButton,
             contentDescription = null,
         )
         if (hasOnlineDevices == true) {
@@ -816,50 +833,13 @@ private fun DeviceHeaderAction(
 }
 
 @Composable
-private fun DrawerGlyph() {
-    val tokens = LocalUiTokens.current
-    androidx.compose.foundation.Canvas(Modifier.size(ChatMetrics.CHAT_DRAWER_ICON_PT.dp)) {
-        val stroke = ChatMetrics.CHAT_DRAWER_ICON_STROKE_TENTH_PT.dp.toPx()
-        val left = ChatMetrics.CHAT_DRAWER_ICON_INSET_PT.dp.toPx()
-        val right = size.width - ChatMetrics.CHAT_DRAWER_ICON_INSET_PT.dp.toPx()
-        val top = ChatMetrics.CHAT_DRAWER_ICON_INSET_PT.dp.toPx()
-        val bottom = size.height - ChatMetrics.CHAT_DRAWER_ICON_INSET_PT.dp.toPx()
-        drawRoundRect(
-            color = tokens.colors.secondary,
-            topLeft = androidx.compose.ui.geometry.Offset(left, top),
-            size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(ChatMetrics.CHAT_DRAWER_ICON_CORNER_TENTH_PT.dp.toPx()),
-            style = androidx.compose.ui.graphics.drawscope.Stroke(stroke),
-        )
-        drawLine(
-            tokens.colors.secondary,
-            androidx.compose.ui.geometry.Offset(size.width * 0.38f, top),
-            androidx.compose.ui.geometry.Offset(size.width * 0.38f, bottom),
-            stroke,
-        )
-    }
-}
-
-@Composable
-private fun DevicePhoneGlyph() {
-    val tokens = LocalUiTokens.current
-    androidx.compose.foundation.Canvas(Modifier.size(width = ChatMetrics.CHAT_DEVICE_ICON_BOX_WIDTH_PT.dp, height = ChatMetrics.CHAT_DEVICE_ICON_BOX_HEIGHT_PT.dp)) {
-        val stroke = ChatMetrics.CHAT_DEVICE_BODY_STROKE_TENTH_PT.dp.toPx()
-        val left = (size.width - ChatMetrics.CHAT_DEVICE_BODY_WIDTH_PT.dp.toPx()) / 2f
-        drawRoundRect(
-            color = tokens.colors.secondary,
-            topLeft = androidx.compose.ui.geometry.Offset(left, 0f),
-            size = androidx.compose.ui.geometry.Size(ChatMetrics.CHAT_DEVICE_BODY_WIDTH_PT.dp.toPx(), size.height),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(ChatMetrics.CHAT_DEVICE_BODY_CORNER_PT.dp.toPx()),
-            style = androidx.compose.ui.graphics.drawscope.Stroke(stroke),
-        )
-        drawLine(
-            tokens.colors.secondary,
-            androidx.compose.ui.geometry.Offset(left + ChatMetrics.CHAT_DEVICE_SPEAKER_LEFT_PT.dp.toPx(), size.height - ChatMetrics.CHAT_DEVICE_SPEAKER_BOTTOM_PT.dp.toPx()),
-            androidx.compose.ui.geometry.Offset(left + ChatMetrics.CHAT_DEVICE_SPEAKER_RIGHT_PT.dp.toPx(), size.height - ChatMetrics.CHAT_DEVICE_SPEAKER_BOTTOM_PT.dp.toPx()),
-            stroke,
-        )
-    }
+private fun DrawerGlyph(tint: Color) {
+    PdshIconView(
+        icon = PdshIcon.CHAT_DRAWER,
+        size = ChatMetrics.CHAT_DRAWER_ICON_PT.dp,
+        tint = tint,
+        contentDescription = null,
+    )
 }
 
 /**
@@ -2054,33 +2034,34 @@ private fun EmptyTimeline(
     startEngineAvailability: PdshActionAvailability<() -> Unit>,
     onConfigureProvider: (() -> Unit)?,
 ) {
-    val tokens = LocalUiTokens.current
     when (state.empty) {
-        // The iOS empty block lives inside the transcript's ScrollView, whose
-        // `defaultScrollAnchor(.bottom)` puts a short block against the dock
-        // (`ChatPage.swift:1186`, `:1310-1322`): ios-chat-draft.png's title ink
-        // starts at y 261.3 pt with the composer top at 438, i.e. 61 pt above the
-        // dock — not directly under the header, which is where a top-anchored
-        // Column used to put it (y 137). The block keeps the dock's 48 pt bottom
-        // inset (`transcript`'s `.padding(.bottom, 48)`).
+        // PR22's scroll content puts this block 88 pt below the transcript's
+        // content origin (`ChatPage.swift:1402-1408`); the ScrollView itself
+        // retains `.defaultScrollAnchor(.bottom)` (`:1241`) for short content.
         ChatEmpty.ENGINE_NOT_STARTED -> Box(
             modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.BottomCenter,
+            contentAlignment = Alignment.BottomStart,
         ) {
             EngineNotStartedState(
                 busy = state.starting,
                 startEngineAvailability = startEngineAvailability,
-                modifier = Modifier.padding(bottom = tokens.geometry.primaryButtonHeight),
+                modifier = Modifier.padding(
+                    top = ChatMetrics.EMPTY_STATE_TOP_PT.dp,
+                    bottom = ChatMetrics.TRANSCRIPT_LATEST_CLEARANCE_PT.dp,
+                ),
             )
         }
 
         ChatEmpty.PROVIDER_SETUP -> Box(
             modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.BottomCenter,
+            contentAlignment = Alignment.BottomStart,
         ) {
             ProviderSetupState(
                 onConfigureProvider = onConfigureProvider,
-                modifier = Modifier.padding(bottom = tokens.geometry.primaryButtonHeight),
+                modifier = Modifier.padding(
+                    top = ChatMetrics.EMPTY_STATE_TOP_PT.dp,
+                    bottom = ChatMetrics.TRANSCRIPT_LATEST_CLEARANCE_PT.dp,
+                ),
             )
         }
 
@@ -2101,6 +2082,7 @@ private fun EngineNotStartedState(
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
     val startEngine = (startEngineAvailability as? PdshActionAvailability.Available)?.callback
+    val startEnabled = !busy && startEngine != null
     Column(
         // iOS pins the column to the official 338 pt
         // (com.phonedsh.ui.UiMetrics.CONTENT_COLUMN_WIDTH_PT) on the baseline
@@ -2115,25 +2097,30 @@ private fun EngineNotStartedState(
             // re-typed.
             .padding(horizontal = HomeMetrics.contentInset)
             .testTag(UiPageTags.CHAT_EMPTY_ENGINE),
-        verticalArrangement = Arrangement.spacedBy(tokens.spacing.codeToolbar),
     ) {
         BasicText(
             text = UiStrings.ENGINE_NOT_STARTED,
-            style = type.headline.copy(color = tokens.colors.primary),
+            style = type.headline.copy(
+                fontSize = ChatMetrics.EMPTY_STATE_TITLE_SIZE_PT.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                color = tokens.colors.textPrimary,
+            ),
         )
         BasicText(
             text = UiStrings.ENGINE_NOT_STARTED_HINT,
-            style = type.secondary.copy(color = tokens.colors.secondary),
+            style = type.secondary.copy(
+                fontSize = ChatMetrics.EMPTY_STATE_HINT_SIZE_PT.sp,
+                color = tokens.colors.inputPlaceholder,
+            ),
+            modifier = Modifier.padding(top = ChatMetrics.EMPTY_STATE_HINT_TOP_PT.dp),
         )
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = tokens.geometry.composerOuterMarginTop)
-                .defaultMinSize(minHeight = tokens.geometry.primaryButtonHeight)
-                // iOS `Self.accent` = ChatPage's own #2F5BFF (`ChatPage.swift:1058`,
-                // applied at `:1343`), not the theme accent.
-                .background(tokens.colors.pageAccent, RoundedCornerShape(tokens.radius.card))
-                .clickable(enabled = !busy && startEngine != null, role = Role.Button) { startEngine?.invoke() }
+                .padding(top = ChatMetrics.EMPTY_STATE_ACTION_TOP_PT.dp)
+                .height(ChatMetrics.EMPTY_STATE_ACTION_HEIGHT_PT.dp)
+                .background(tokens.colors.primaryButton.copy(alpha = if (startEnabled) 1f else 0.25f), CircleShape)
+                .clickable(enabled = startEnabled, role = Role.Button) { startEngine?.invoke() }
                 .testTag(UiPageTags.CHAT_START_ENGINE),
             contentAlignment = Alignment.Center,
         ) {
@@ -2141,12 +2128,20 @@ private fun EngineNotStartedState(
             if (busy) {
                 BasicText(
                     text = UiStrings.STARTING_ENGINE,
-                    style = type.headline.copy(color = tokens.colors.onAccent),
+                    style = type.headline.copy(
+                        fontSize = ChatMetrics.EMPTY_STATE_ACTION_LABEL_SIZE_PT.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        color = tokens.colors.primaryButtonInk,
+                    ),
                 )
             } else {
                 BasicText(
                     text = UiStrings.START_ENGINE,
-                    style = type.headline.copy(color = tokens.colors.onAccent),
+                    style = type.headline.copy(
+                        fontSize = ChatMetrics.EMPTY_STATE_ACTION_LABEL_SIZE_PT.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        color = tokens.colors.primaryButtonInk,
+                    ),
                 )
             }
         }
@@ -2161,36 +2156,46 @@ private fun ProviderSetupState(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
+    val actionEnabled = onConfigureProvider != null
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = HomeMetrics.contentInset)
             .testTag(UiPageTags.CHAT_EMPTY_PROVIDER),
-        verticalArrangement = Arrangement.spacedBy(tokens.geometry.bannerGap),
     ) {
         BasicText(
             text = UiStrings.PROVIDER_SETUP_TITLE,
-            style = type.headline.copy(color = tokens.colors.primary),
+            style = type.headline.copy(
+                fontSize = ChatMetrics.EMPTY_STATE_TITLE_SIZE_PT.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                color = tokens.colors.textPrimary,
+            ),
         )
         BasicText(
             text = UiStrings.PROVIDER_SETUP_HINT,
-            style = type.secondary.copy(color = tokens.colors.secondary),
+            style = type.secondary.copy(
+                fontSize = ChatMetrics.EMPTY_STATE_HINT_SIZE_PT.sp,
+                color = tokens.colors.inputPlaceholder,
+            ),
+            modifier = Modifier.padding(top = ChatMetrics.EMPTY_STATE_HINT_TOP_PT.dp),
         )
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = tokens.spacing.codeToolbar)
-                .defaultMinSize(minHeight = tokens.geometry.primaryButtonHeight)
-                // iOS `Self.accent` = ChatPage's own #2F5BFF (`ChatPage.swift:1058`,
-                // applied at `:1343`), not the theme accent.
-                .background(tokens.colors.pageAccent, RoundedCornerShape(tokens.radius.card))
-                .clickable(enabled = onConfigureProvider != null, role = Role.Button) { onConfigureProvider?.invoke() }
+                .padding(top = ChatMetrics.EMPTY_STATE_ACTION_TOP_PT.dp)
+                .height(ChatMetrics.EMPTY_STATE_ACTION_HEIGHT_PT.dp)
+                .background(tokens.colors.primaryButton.copy(alpha = if (actionEnabled) 1f else 0.25f), CircleShape)
+                .clickable(enabled = actionEnabled, role = Role.Button) { onConfigureProvider?.invoke() }
                 .testTag(UiPageTags.CHAT_PROVIDER_SETUP),
             contentAlignment = Alignment.Center,
         ) {
             BasicText(
                 text = UiStrings.PROVIDER_SETUP_ACTION,
-                style = type.headline.copy(color = tokens.colors.onAccent),
+                style = type.headline.copy(
+                    fontSize = ChatMetrics.EMPTY_STATE_ACTION_LABEL_SIZE_PT.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = tokens.colors.primaryButtonInk,
+                ),
             )
         }
     }
@@ -3692,7 +3697,6 @@ internal object ChatPageTokens {
 
 /** The `kind` of ask that submits an answer instead of allowing an action. */
 private const val QUESTION: String = "question"
-private const val MORE_GLYPH: String = "⋯"
 private const val LOCK_GLYPH: String = "⛨"
 private const val COMMAND_GLYPH: String = "⌘"
 
@@ -4267,3 +4271,10 @@ private const val PLAN_REVIEW_INTENT: String = "plan-review"
 private const val SLASH_COMMAND_TAG_PREFIX: String = "pdsh.chat.slash-command."
 private const val CHAT_HEADER_DEVICE_TAG: String = "pdsh.chat.header.device"
 private const val CHAT_RESTART_ENGINE_TAG: String = "pdsh.chat.restart-engine"
+
+private fun CollapseTiming.chatMenuLabel(): String = when (this) {
+    CollapseTiming.COMPLETION -> "完成时"
+    CollapseTiming.NEXT_INPUT -> "下一条消息"
+}
+
+private fun collapseTimingTag(value: CollapseTiming): String = "pdsh.chat.header.collapse-timing.${value.id}"
