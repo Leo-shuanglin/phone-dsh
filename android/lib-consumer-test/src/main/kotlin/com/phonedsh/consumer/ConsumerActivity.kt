@@ -15,6 +15,14 @@ import androidx.activity.compose.setContent
 public class ConsumerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { ProbeConsumer() }
+        val showMathFixture = intent?.getBooleanExtra(EXTRA_RATEX_RELEASE_FIXTURE, false) == true
+        setContent {
+            if (showMathFixture) ReleaseMathProbe() else ProbeConsumer()
+        }
+    }
+
+    private companion object {
+        /** Private probe-only entry point; it is not a product app or library API. */
+        const val EXTRA_RATEX_RELEASE_FIXTURE: String = "com.phonedsh.consumer.EXTRA_RATEX_RELEASE_FIXTURE"
     }
 }

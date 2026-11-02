@@ -14,6 +14,7 @@ package com.phonedsh.consumer
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,12 +24,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.verticalScroll
 import com.phonedsh.ui.nav.PdshBackLevel
 import com.phonedsh.ui.nav.PdshNavFacts
 import com.phonedsh.ui.nav.PdshNavHost
 import com.phonedsh.ui.nav.PdshNavState
 import com.phonedsh.ui.nav.PdshRoute
 import com.phonedsh.ui.theme.PdshTheme
+import com.phonedsh.ui.surface.MarkdownBody
 
 /**
  * The consumer's whole integration: three public types, one theme wrapper and
@@ -84,6 +87,33 @@ public fun ProbeConsumer() {
             home = { HomeFace(onOpenSessions = { nav = nav.push(PdshRoute.Sessions) }) },
             webSurface = { Text("the host owns the WebView; this is the fallback face") },
         )
+    }
+}
+
+/**
+ * Intent-driven fixture for the minified published-coordinate consumer. This
+ * is probe-only: it uses synthetic math, makes no provider/model request and
+ * exercises the SDK's public MarkdownBody through the release AAR.
+ */
+@Composable
+internal fun ReleaseMathProbe() {
+    val fraction = "\\frac{a_1+b}{\\sqrt{x+1}}"
+    val root = "\\sqrt{a^2+b^2}"
+    val inlineMatrix = "\\begin{bmatrix}a&b\\\\c&d\\end{bmatrix}"
+    val displayMatrix = "\\begin{bmatrix}x_1&x_2\\\\y_1&y_2\\end{bmatrix}"
+    val markdown = buildString {
+        append("Synthetic minified release consumer fixture. No provider or model is contacted.\n\n")
+        append("Inline fraction: $").append(fraction).append("$; root: $").append(root)
+            .append("$; matrix: $").append(inlineMatrix).append("$.\n\n")
+        append("Display matrix:\n\n$$\n").append(displayMatrix).append("\n$$")
+    }
+    PdshTheme(darkTheme = false) {
+        Column(
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        ) {
+            Text("Synthetic release math fixture")
+            MarkdownBody(markdown = markdown)
+        }
     }
 }
 
