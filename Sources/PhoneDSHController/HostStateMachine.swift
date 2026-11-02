@@ -7,6 +7,15 @@
 // the loopback layer through `AdmissionGate` and is open only in `Running`.
 // A boot that finds `Running`, `Draining` or `Recovering` restores `Recovering`;
 // `Recovering -> Running` is reachable only through `verifyLease()`.
+//
+// Failure classification (incident: a retryable Worker handshake failure was
+// persisted as the absorbing `Failed` state and bricked the App):
+// a `transient` failure enters the existing `Backoff` state with an
+// exponential retry window instead of `Failed`, and a `terminal` failure
+// still enters `Failed` but records `retry_count` / `next_retry_at_ms` /
+// `failure_class`, so the *next* process boots into the retry window and
+// retries once it elapses. `Failed` is therefore only absorbing within one
+// process incarnation, never across a restart. No HostState case was added.
 
 import Foundation
 import PhoneDSHLog
@@ -24,6 +33,21 @@ public enum HostBootDisposition: String, CaseIterable, Codable, Sendable {
     case parkedResume = "parked_resume"
     /// The explicit user reset of a persisted `Failed` host.
     case userReset = "user_reset"
+}
+
+/// Classification of a fail-loud signal. The distinction is the blast radius
+/// of the condition, not how it happened to surface in this process.
+public enum FailureClass: String, Codable, Equatable, Sendable {
+    /// Process-scoped: a fresh Worker / one more attempt may make it go away
+    /// (a killed WebContent, a restarted Worker that answered `PROTO_MISMATCH`,
+    /// a lost channel). The machine enters `Backoff`, never `Failed`.
+    case transient
+    /// Workspace-scoped: the condition holds even across a new process (an
+    /// unprovable WAL divergence, quota exhaustion, an unusable configuration).
+    /// The machine enters `Failed`, but records a retry window so the *next*
+    /// boot retries instead of staying failed forever. `terminal` means "do
+    /// not retry this incarnation", not "never retry again".
+    case terminal
 }
 
 /// The driving inputs of the D14 transition table plus the signals of
@@ -62,8 +86,10 @@ public enum HostSignal: Equatable, Sendable {
     case reclaimResponseApplied
     /// The new fence was persisted and an epoch was closed.
     case reclaimCompleted(fencePersisted: Bool, epochClosed: Bool)
-    /// Unrecoverable condition, fail loud.
-    case failure(reason: String)
+    /// Unrecoverable condition for this incarnation, fail loud. `class`
+    /// decides whether the machine backs off (`transient`) or fails
+    /// (`terminal`); see ``FailureClass``.
+    case failure(reason: String, class: FailureClass)
     /// Explicit user reset of a `Failed` host.
     case userReset
 }
@@ -88,7 +114,7 @@ extension HostSignal {
         case .reclaimRequested: return "reclaimRequested"
         case .reclaimResponseApplied: return "reclaimResponseApplied"
         case .reclaimCompleted: return "reclaimCompleted"
-        case .failure: return "failure"
+        case .failure(_, let failureClass): return "failure(\(failureClass.rawValue))"
         case .userReset: return "userReset"
         }
     }
@@ -139,6 +165,17 @@ struct PersistedHostState: Codable, Equatable {
     /// D24: when a persisted `Backoff` may be booted again. Optional so files
     /// written before D24 (and every non-Backoff state) remain readable.
     var backoffUntilMilliseconds: Int64?
+    /// Classification of the last fail-loud signal. Optional so every file
+    /// written before failure classification (and every record that never
+    /// failed) remains readable; a missing value is `nil`, never guessed.
+    var failureClass: FailureClass?
+    /// Consecutive failed attempts since the last proven progress. Optional
+    /// for the same backward-compatibility reason; a missing value boots as 0.
+    var retryCount: Int?
+    /// When the next process may retry after a `terminal` failure (or when the
+    /// current `transient` backoff ends). Written for both classes so a boot
+    /// can restore the retry window; optional for old files.
+    var nextRetryAtMilliseconds: Int64?
     /// G2-FIX-96: why this process booted. Optional so older files remain
     /// readable; a missing value is reported as unknown, never guessed.
     var bootDisposition: HostBootDisposition?
@@ -150,6 +187,9 @@ struct PersistedHostState: Codable, Equatable {
         case updatedAtMilliseconds = "updated_at_ms"
         case reason
         case backoffUntilMilliseconds = "backoff_until_ms"
+        case failureClass = "failure_class"
+        case retryCount = "retry_count"
+        case nextRetryAtMilliseconds = "next_retry_at_ms"
         case bootDisposition = "boot_disposition"
         case bootReason = "boot_reason"
     }
@@ -167,6 +207,12 @@ public actor HostStateMachine {
     /// constant (the controller has no `Retry-After` source), not a
     /// measurement.
     public static let defaultBackoffIntervalSeconds: TimeInterval = 30
+    /// Base retry window of a classified failure. The window doubles per
+    /// consecutive attempt and is capped by
+    /// ``failureRetryCapSeconds``: `min(60 s, 5 s * 2^(retryCount - 1))`.
+    public static let failureRetryBaseSeconds: TimeInterval = 5
+    /// Upper bound of the exponential failure retry window.
+    public static let failureRetryCapSeconds: TimeInterval = 60
 
     /// Admission published to the loopback layer. Kept outside the actor so
     /// the side-effect path can consult it synchronously.
@@ -203,6 +249,15 @@ public actor HostStateMachine {
     private let backoffIntervalSeconds: TimeInterval
     /// D24 deadline of the current `Backoff`, persisted in `host-state.json`.
     private var backoffUntil: Date?
+    /// Consecutive classified failures since the last proven progress
+    /// (`Recovering -> Running` / `Backoff -> Running`). Persisted as
+    /// `retry_count` so the exponential window survives a restart.
+    private var failureRetryCount = 0
+    /// When the next process may retry after a classified failure. Persisted as
+    /// `next_retry_at_ms`; equal to ``backoffUntil`` while in `Backoff`.
+    private var failureRetryAt: Date?
+    /// Classification of the failure that produced ``failureRetryAt``.
+    private var failureClass: FailureClass?
     private let stateURL: URL
     private let transitionHub = SignalBroadcaster<HostTransitionRecord>()
     private var drainTimer: Task<Void, Never>?
@@ -215,16 +270,19 @@ public actor HostStateMachine {
     /// `Draining` and close the epoch twice.
     private var transitionInFlight = false
 
-    /// Boots from `host-state.json` with the D14 boot mapping.
+    /// Boots from `host-state.json` with the D14 boot mapping plus the failure
+    /// retry window (see ``FailureClass``).
     ///
-    /// - persisted `Running`, `Draining`, `Recovering` → `Recovering`
-    /// - persisted `Failed` → `Failed` (only an explicit reset leaves it)
-    /// - persisted `Parked`/`Backoff`/`Remote` keep their state; an interrupted
-    ///   `HandingOff` becomes `Failed` because the controller cannot prove the
-    ///   CAS outcome on its own. A cold `reclaim()` against the App's secure
-    ///   token vault may then leave `Failed` through the explicit user-reset
-    ///   action once the remote response proves the token. `Reclaiming`
-    ///   restarts in `Recovering`
+    /// - persisted `Running`, `Draining`, `Recovering`, `Reclaiming` → `Recovering`
+    /// - persisted `Failed` → `Backoff` while its `next_retry_at_ms` is still in
+    ///   the future (the deadline is restored as the D24 `Backoff` deadline),
+    ///   otherwise `Recovering` so the next process retries. `Failed` is not
+    ///   absorbing across a restart: it only says the previous incarnation must
+    ///   not retry.
+    /// - an interrupted `HandingOff` follows the same retry-window mapping.
+    ///   The authority evidence lives in `fence.json` / the persisted handoff
+    ///   intent, not in this record, so a boot does not need `Failed`.
+    /// - persisted `Parked`/`Backoff`/`Remote` keep their state
     /// - no persisted state → `Recovering`
     ///
     /// Admission is closed in every restored state.
@@ -235,7 +293,9 @@ public actor HostStateMachine {
     ///     only used to label an otherwise stateless boot (`cold_start` versus
     ///     `crash_recovery`); the D14 state mapping is unchanged.
     ///   - userReset: the explicit user acknowledgement of a persisted
-    ///     `Failed` controller, used for the `user_reset` disposition.
+    ///     `Failed` controller, used for the `user_reset` disposition. An
+    ///     explicit reset also overrides a pending retry window: the user's
+    ///     action boots `Recovering` immediately and clears the retry budget.
     public init(root: URL,
                 clock: any HostClock = SystemHostClock(),
                 epochCloser: (any HostEpochClosing)? = nil,
@@ -260,23 +320,52 @@ public actor HostStateMachine {
         var restored = HostState.recovering
         var restoredError: String?
         var restoredBackoffUntil: Date?
+        var restoredRetryCount = 0
+        var restoredRetryAt: Date?
+        var restoredFailureClass: FailureClass?
         var persistedState: HostState?
         if let persisted = try ControllerFileStore.readJSON(
             PersistedHostState.self, from: stateURL),
             persisted.version == 1 {
             persistedState = persisted.state
-            restored = Self.bootState(for: persisted.state)
             restoredError = persisted.reason
+            restoredRetryCount = persisted.retryCount ?? 0
+            restoredFailureClass = persisted.failureClass
+            if let milliseconds = persisted.nextRetryAtMilliseconds {
+                restoredRetryAt = Date(
+                    timeIntervalSince1970: TimeInterval(milliseconds) / 1000)
+            }
+            let explicitReset = userReset && persisted.state == .failed
+            if explicitReset {
+                // An explicit user acknowledgement beats the retry window: the
+                // user already decided this incarnation is done.
+                restored = .recovering
+                restoredRetryCount = 0
+                restoredRetryAt = nil
+                restoredFailureClass = nil
+            } else {
+                restored = Self.bootState(for: persisted.state,
+                                          nextRetryAt: restoredRetryAt,
+                                          now: clock.now)
+            }
             if restored == .backoff {
-                if let milliseconds = persisted.backoffUntilMilliseconds {
-                    restoredBackoffUntil = Date(
-                        timeIntervalSince1970: TimeInterval(milliseconds) / 1000)
+                if persisted.state == .backoff {
+                    if let milliseconds = persisted.backoffUntilMilliseconds {
+                        restoredBackoffUntil = Date(
+                            timeIntervalSince1970: TimeInterval(milliseconds) / 1000)
+                    } else {
+                        // Pre-D24 record: the transition that entered Backoff
+                        // wrote `updated_at_ms`, so the deadline starts there.
+                        restoredBackoffUntil = Date(
+                            timeIntervalSince1970:
+                                TimeInterval(persisted.updatedAtMilliseconds) / 1000
+                        ).addingTimeInterval(interval)
+                    }
                 } else {
-                    // Pre-D24 record: the transition that entered Backoff wrote
-                    // `updated_at_ms`, so the deadline starts there.
-                    restoredBackoffUntil = Date(
-                        timeIntervalSince1970: TimeInterval(persisted.updatedAtMilliseconds) / 1000
-                    ).addingTimeInterval(interval)
+                    // Failed/handingOff mapped into a live retry window: the
+                    // window itself is the D24 Backoff deadline.
+                    restoredBackoffUntil = restoredRetryAt
+                        ?? clock.now.addingTimeInterval(interval)
                 }
             }
         }
@@ -288,10 +377,16 @@ public actor HostStateMachine {
         self.state = restored
         self.lastError = restoredError
         self.backoffUntil = restoredBackoffUntil
+        self.failureRetryCount = restoredRetryCount
+        self.failureRetryAt = restoredRetryAt
+        self.failureClass = restoredFailureClass
         // Persist the mapped boot state even when the file did not exist so a
         // second boot always has a record.
         try Self.persist(state: restored, error: restoredError,
                          backoffUntil: restoredBackoffUntil,
+                         retryCount: restoredRetryCount,
+                         nextRetryAt: restoredRetryAt,
+                         failureClass: restoredFailureClass,
                          bootDisposition: boot.disposition, bootReason: boot.reason,
                          to: stateURL, at: clock.now)
     }
@@ -323,8 +418,17 @@ public actor HostStateMachine {
         return (.coldStart, Self.coldStartReason)
     }
 
-    /// The D14 boot mapping.
-    static func bootState(for persisted: HostState) -> HostState {
+    /// The D14 boot mapping extended by the failure retry window: a persisted
+    /// `Failed`/`HandingOff` host whose retry deadline has not elapsed boots
+    /// into `Backoff`, already elapsed (or absent) boots into `Recovering` and
+    /// retries. `Failed` is never restored as `Failed`, so a persisted failure
+    /// can no longer brick the workspace across a restart.
+    ///
+    /// - Parameters:
+    ///   - nextRetryAt: persisted `next_retry_at_ms`, `nil` for old records.
+    ///   - now: the injected clock reading of this boot.
+    static func bootState(for persisted: HostState, nextRetryAt: Date?,
+                          now: Date) -> HostState {
         switch persisted {
         case .running, .draining, .recovering, .reclaiming:
             return .recovering
@@ -334,11 +438,24 @@ public actor HostStateMachine {
             return .backoff
         case .remote:
             return .remote
-        case .handingOff:
-            return .failed
-        case .failed:
-            return .failed
+        case .handingOff, .failed:
+            if let nextRetryAt, nextRetryAt > now {
+                return .backoff
+            }
+            return .recovering
         }
+    }
+
+    /// Exponential window of a classified failure:
+    /// `min(cap, base * 2^(retryCount - 1))` for `retryCount >= 1`
+    /// (5 s, 10 s, 20 s, 40 s, then 60 s).
+    public static func failureRetryInterval(forRetryCount retryCount: Int) -> TimeInterval {
+        let attempt = max(1, retryCount)
+        // The cap makes the exact exponent irrelevant beyond a few steps; the
+        // clamp is only there to keep `pow` from producing infinity.
+        let exponent = min(attempt - 1, 32)
+        let scaled = failureRetryBaseSeconds * pow(2, Double(exponent))
+        return min(failureRetryCapSeconds, scaled)
     }
 
     /// Applies one signal of the D14 table. Signals that are not an edge out
@@ -496,17 +613,40 @@ public actor HostStateMachine {
             }
             return try await transition(to: .recovering, signal: signal)
 
-        case .failure(let reason):
-            // "any state -> Failed": a repeated failure keeps the first reason.
+        case .failure(let reason, let failureClass):
+            // Failure classification (incident fix): a `transient` failure backs
+            // off instead of failing forever; a `terminal` failure still fails
+            // but records the retry window the next process boots into.
             lastError = reason
-            if state == .failed { return state }
-            return try await transition(to: .failed, signal: signal)
+            if state == .failed {
+                // A repeated failure keeps the first reason. `Failed` stays
+                // absorbing for the rest of this incarnation; the recorded
+                // window already describes when the next process may retry.
+                return state
+            }
+            failureRetryCount += 1
+            self.failureClass = failureClass
+            let deadline = clock.now.addingTimeInterval(
+                Self.failureRetryInterval(forRetryCount: failureRetryCount))
+            failureRetryAt = deadline
+            switch failureClass {
+            case .transient:
+                return try await transition(to: .backoff, signal: signal,
+                                            backoffDeadlineOverride: deadline)
+            case .terminal:
+                return try await transition(to: .failed, signal: signal)
+            }
 
         case .userReset:
             guard state == .failed else { throw illegal(signal) }
             lastError = nil
             bootDisposition = .userReset
             bootReason = "explicit_user_reset"
+            // An explicit reset starts a new retry budget: the user, not the
+            // clock, decided to try again.
+            failureRetryCount = 0
+            failureRetryAt = nil
+            failureClass = nil
             // The migration record carries the disposition label; the more
             // specific `explicit_user_reset` stays in `bootReason`.
             return try await transition(to: .recovering, signal: signal,
@@ -657,7 +797,8 @@ public actor HostStateMachine {
                             signal: HostSignal,
                             signalLabel: String? = nil,
                             closeEpoch: Bool = false,
-                            reason: String? = nil) async throws -> HostState {
+                            reason: String? = nil,
+                            backoffDeadlineOverride: Date? = nil) async throws -> HostState {
         let from = state
         let label = signalLabel ?? signal.label
         if closeEpoch, let epochCloser {
@@ -689,9 +830,31 @@ public actor HostStateMachine {
         if newState == .backoff {
             // D24: record when the persisted Backoff may be booted again. A
             // process restart keeps this deadline; it does not restart it.
-            backoffUntil = clock.now.addingTimeInterval(backoffIntervalSeconds)
+            // A classified failure supplies the exponential window; the
+            // network/upstream backoff keeps the D24 policy interval.
+            let deadline = backoffDeadlineOverride
+                ?? clock.now.addingTimeInterval(backoffIntervalSeconds)
+            backoffUntil = deadline
+            if backoffDeadlineOverride != nil {
+                failureRetryAt = deadline
+            }
         } else {
             backoffUntil = nil
+        }
+        if newState == .running {
+            // Progress witness: any accepted entry into Running (the
+            // `verifyLease()` Recovering -> Running edge or the Backoff ->
+            // Running probe) proves the Worker recovered, so the failure retry
+            // budget starts over. Without this a host that recovered once
+            // would keep the previous exponential window forever.
+            failureRetryCount = 0
+            failureRetryAt = nil
+            failureClass = nil
+            // `Running` is the healthy state, and `lastError` is documented as
+            // "nil when healthy": leaving the previous fail-loud reason here
+            // made `diagnostics()` report an error on a host that had already
+            // recovered on its own.
+            lastError = nil
         }
 
         state = newState
@@ -699,6 +862,9 @@ public actor HostStateMachine {
         do {
             try Self.persist(state: newState, error: lastError,
                              backoffUntil: backoffUntil,
+                             retryCount: failureRetryCount,
+                             nextRetryAt: failureRetryAt,
+                             failureClass: failureClass,
                              bootDisposition: bootDisposition, bootReason: bootReason,
                              to: stateURL, at: clock.now)
         } catch {
@@ -716,10 +882,19 @@ public actor HostStateMachine {
 
     private func forceFailed(reason: String) throws {
         let from = state
+        // An epoch-close failure is workspace-scoped: the next process gets a
+        // retry window instead of inheriting a permanent `Failed`.
+        failureRetryCount += 1
+        failureClass = .terminal
+        failureRetryAt = clock.now.addingTimeInterval(
+            Self.failureRetryInterval(forRetryCount: failureRetryCount))
         state = .failed
         admission.set(.closed)
         backoffUntil = nil
         try? Self.persist(state: .failed, error: reason, backoffUntil: nil,
+                          retryCount: failureRetryCount,
+                          nextRetryAt: failureRetryAt,
+                          failureClass: failureClass,
                           bootDisposition: bootDisposition, bootReason: bootReason,
                           to: stateURL, at: clock.now)
         transitionHub.yield(HostTransitionRecord(
@@ -732,6 +907,8 @@ public actor HostStateMachine {
     }
 
     private static func persist(state: HostState, error: String?, backoffUntil: Date?,
+                                retryCount: Int, nextRetryAt: Date?,
+                                failureClass: FailureClass?,
                                 bootDisposition: HostBootDisposition, bootReason: String,
                                 to url: URL, at date: Date) throws {
         let record = PersistedHostState(
@@ -739,6 +916,14 @@ public actor HostStateMachine {
             updatedAtMilliseconds: date.millisecondsSinceEpoch,
             reason: error,
             backoffUntilMilliseconds: backoffUntil.map {
+                Int64(($0.timeIntervalSince1970 * 1000).rounded())
+            },
+            failureClass: failureClass,
+            // A cleared retry budget (progress or an explicit reset) is
+            // omitted, not written as 0, so a healthy record carries no failure
+            // bookkeeping at all.
+            retryCount: retryCount > 0 ? retryCount : nil,
+            nextRetryAtMilliseconds: nextRetryAt.map {
                 Int64(($0.timeIntervalSince1970 * 1000).rounded())
             },
             bootDisposition: bootDisposition,

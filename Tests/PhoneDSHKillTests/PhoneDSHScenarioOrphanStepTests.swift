@@ -20,8 +20,10 @@ import PhoneDSHWire
 
 /// Failures the planned restart can hit before the bounded orphan helper has
 /// had a chance to settle a pending step. Each one still has to leave a
-/// terminal D13 owner because the host enters Failed and never revisits the
-/// reconciliation on reset()/bootRuntime.
+/// terminal D13 owner: the host leaves this incarnation (`Backoff`, or
+/// `Failed` for a lease rejection) without revisiting the reconciliation on
+/// reset()/bootRuntime, so `plannedRestart` must settle the step before it
+/// reports the failure.
 private enum PlannedRestartEarlyFailure: Sendable {
     case engineRestart
     case helloTimeout
@@ -457,9 +459,21 @@ final class PhoneDSHScenarioOrphanStepTests: XCTestCase {
             // The restart's actionable failure is expected.
         }
 
-        try await waitForHost(host, .failed)
+        // A helper failure is not a retryable boot failure: `settleOrphans`
+        // could not persist the terminal D13 owner, so the step is still open
+        // and this host cannot prove it settled. `Backoff` would let the next
+        // `start()`/`bootRuntime` reopen admission without re-driving the
+        // reconcile helper (only the replacement-Worker path calls it), which
+        // is exactly the reopen this test forbids. The failure therefore keeps
+        // the workspace blast radius: `Failed` with admission closed.
+        //
+        // The settled state is asserted directly instead of polling for
+        // `failed`: `plannedRestart` has already awaited its fail-loud
+        // teardown when it throws, so a wrong (transient) classification fails
+        // here with a precise message instead of a generic 20 s timeout.
         let diagnostics = await host.diagnostics()
-        XCTAssertEqual(diagnostics.state, .failed)
+        XCTAssertEqual(diagnostics.state, .failed,
+                       "a failed D13 settlement is workspace-scoped, not a retryable boot")
         XCTAssertEqual(diagnostics.hostState, .failed)
         XCTAssertEqual(diagnostics.admission, .closed,
                        "a helper failure must not reopen admission")
@@ -514,17 +528,36 @@ final class PhoneDSHScenarioOrphanStepTests: XCTestCase {
             // The restart's actionable failure is expected.
         }
 
-        try await waitForHost(host, .failed)
+        // New contract: the classification of the early failure decides the
+        // state, and the facade mirrors it.
+        //  * engine restart (a fresh Worker may clear it) and HELLO timeout are
+        //    process-scoped (`HostFault.boot`): the controller enters its
+        //    persisted `Backoff`, which the facade maps to `.starting`.
+        //  * a rejected lease is workspace-scoped (stale authority evidence):
+        //    `HostFault.workspace` keeps the fail-loud `Failed`.
+        // In both cases `plannedRestart`'s catch discharges the D13 obligation
+        // before this failure is reported, so the step below must still be
+        // abandoned even though this incarnation ends.
         let diagnostics = await host.diagnostics()
-        XCTAssertEqual(diagnostics.state, .failed)
-        XCTAssertEqual(diagnostics.hostState, .failed)
+        switch failure {
+        case .engineRestart, .helloTimeout:
+            XCTAssertEqual(diagnostics.state, .starting,
+                           "a process-scoped restart failure reports InProgress")
+            XCTAssertEqual(diagnostics.hostState, .backoff,
+                           "a process-scoped restart failure backs off and retries")
+        case .leaseRejected:
+            XCTAssertEqual(diagnostics.state, .failed,
+                           "a rejected lease is workspace-scoped and stays fail loud")
+            XCTAssertEqual(diagnostics.hostState, .failed,
+                           "a rejected lease is not a retryable boot")
+        }
         XCTAssertEqual(diagnostics.admission, .closed,
                        "an early restart failure must not reopen admission")
 
         let stepMachine = try StepMachine(root: fixture.workspace)
         let record = await stepMachine.record(sessionID: sessionID, stepKey: stepKey)
         XCTAssertEqual(record?.state, .abandoned,
-                       "Failed is terminal for this incarnation; D13 must still close the step")
+                       "this incarnation ended; D13 must still close the step")
         XCTAssertEqual(record?.settledReason, "planned-restart")
         XCTAssertEqual(record?.history.last, .abandoned)
         XCTAssertFalse(record?.history.contains(.journaled) ?? true,

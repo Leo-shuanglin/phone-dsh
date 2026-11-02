@@ -320,14 +320,22 @@ final class EpochSealTests: XCTestCase {
         do {
             try await host.park()
             XCTFail("park() must throw when the tail epoch cannot be closed")
-        } catch let error as PhoneDSHError {
-            guard case .invalidState(let message) = error else {
-                return XCTFail("unexpected error: \(error)")
+        } catch let fault as HostFault {
+            // The seal failure carries the workspace scope: the durable tail
+            // cannot be proven and no retry repairs that evidence.
+            guard case .workspace(.log(let logError)) = fault else {
+                return XCTFail("unexpected fault: \(fault)")
             }
-            XCTAssertTrue(message.contains("epoch close") || message.contains("WAL"),
-                          "the failure must name the epoch/WAL close: \(message)")
+            XCTAssertTrue(logError.description.contains("open")
+                              || logError.description.contains("posix"),
+                          "the failure must name the underlying log failure: \(logError)")
         }
 
+        // Workspace-scoped, not a boot fault: the durable tail cannot be
+        // proven, and a fresh Worker or process cannot repair that evidence.
+        // The `FailureClass` split therefore has to keep this `Failed`;
+        // reporting `starting` (a transient `Backoff`) would turn a D18 seal
+        // failure into a retryable boot and hide the unclosed epoch.
         let state = await host.state
         XCTAssertEqual(state, .failed, "an epoch close failure is fail loud")
         let diagnostics = await host.diagnostics()
