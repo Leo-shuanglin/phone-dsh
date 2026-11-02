@@ -141,8 +141,8 @@
       "state": "user-sent",
       "collapsed": false,
       "tokens": [
-        "colors.selector",
-        "colors.primary",
+        "colors.userBubble",
+        "colors.textPrimary",
         "typography.body",
         "radius.bubble"
       ]
@@ -153,10 +153,10 @@
       "state": "reasoning-collapsed",
       "collapsed": true,
       "tokens": [
-        "colors.secondary",
-        "colors.tertiary",
-        "typography.secondary",
-        "typography.shimmer"
+        "colors.textSecondary",
+        "colors.textTertiary",
+        "typography.process",
+        "geometry.processRowHeight"
       ]
     },
     {
@@ -165,11 +165,11 @@
       "state": "tool-run-folded-ok",
       "collapsed": true,
       "tokens": [
-        "colors.code",
-        "colors.codeBanner",
-        "typography.code",
-        "radius.codeBlock",
-        "stroke.hairline"
+        "colors.surface",
+        "colors.textSecondary",
+        "typography.process",
+        "radius.listCard",
+        "motion.disclosure"
       ]
     },
     {
@@ -178,10 +178,9 @@
       "state": "user-queued",
       "collapsed": false,
       "tokens": [
-        "colors.selector",
+        "colors.userBubble",
         "typography.body",
-        "typography.secondary",
-        "colors.secondary"
+        "spacing.paragraphGap"
       ]
     },
     {
@@ -190,10 +189,10 @@
       "state": "permission-pending",
       "collapsed": false,
       "tokens": [
-        "colors.selector",
-        "colors.ctaOverride",
-        "colors.onAccent",
-        "radius.card",
+        "colors.surface",
+        "colors.primaryButton",
+        "colors.primaryButtonInk",
+        "radius.listCard",
         "geometry.cardPadding"
       ]
     },
@@ -203,10 +202,10 @@
       "state": "locked-by-approval",
       "collapsed": false,
       "tokens": [
-        "colors.input",
-        "colors.borderLight",
-        "colors.tertiary",
-        "typography.secondary"
+        "colors.surface",
+        "colors.inputPlaceholder",
+        "typography.body",
+        "geometry.composerOpenMinHeight"
       ]
     },
     {
@@ -215,10 +214,10 @@
       "state": "turn-error",
       "collapsed": false,
       "tokens": [
-        "colors.danger",
-        "colors.secondary",
-        "typography.secondary",
-        "typography.caption"
+        "colors.textPrimary",
+        "colors.textSecondary",
+        "typography.body",
+        "geometry.bannerGap"
       ]
     }
   ]
