@@ -278,9 +278,53 @@ ubuntu run --workspace <path> -- <command…>     # 命令本身由 bash 执行�
 |---|---|---|
 | 只读 | ✅（`exec.md:113-117` 强制） | ❌ 它会写 |
 | 未 advertised 时 | 回落到 Worker 本地实现 | **命令不存在 → 127 not-available**（诚实：这台设备没有这个能力） |
-| 传输 | `0x20` 出行 | 走宿主工具 `ubuntu.exec`，**不出行** |
+| 传输 | `0x20` 出行 | **也是 `0x20`（挂在 `phone` 工具目录下）**——见 §4.6 |
 
 **「未 advertised 就 127」这条很重要**：它让「这台设备没有挂载能力」变成一个**诚实的、可观测的事实**，而不是一个超时或一个假成功。这与仓库已有的「被拒绝的 redirect 有可观测面」是同一个纪律。
+
+### 4.3.1 传输的现状：仍然是 `0x20`，§12 的 bridge 没有实现
+
+**这一节的标题原本写着「不出行」，那是错的。** 独立车道查证（L57）：
+
+- Android 全树**没有 page↔host 消息通道**：`grep "addJavascriptInterface|postWebMessage|WebMessageListener"` 只命中
+  `WebViewEngine.kt:1176` 的**特性探测**，没有任何 listener 被安装；唯一的 `evaluateJavascript` 是
+  `probeKernel` 的一次性读回，无入站
+- **Worker 还不在 page 里**：`web-boot.ts:538` 用 `new Worker(worker-entry.js)` 起成 **dedicated Worker**，
+  即使 page 上有 shim 它也够不到，必须经 `WorkerTunnel` 中继——**那是第二层新代码**
+- `:dsh` **刻意不依赖** `:engine`（`:dsh/build.gradle.kts:76-84`），所以 `:dsh` 无法自己把 handler 注册进 engine
+
+**所以 `ubuntu.exec/status/fetch` 今天走的是 `0x20 EXEC_REQ`**，和 accelerator 同一条信道，
+只是挂在 `phone` 工具目录下。**「不出行」这个说法要撤掉。**
+
+### 为什么不做（判断，不是偷懒）
+
+做成 §12 的 bridge 需要：`:engine` 的 `@JavascriptInterface` 入站 + document-start nonce +
+出站 `evaluateJavascript` settle + `WorkerTunnel` 中继 + `:platform` SPI + 解开 `:dsh` 对 `:engine` 的刻意的非依赖。
+
+**收益是什么？** 让「传输方式」这个描述变准确。**`0x20` 和 bridge 都走本机 loopback，都不离开设备**——
+所以这不是安全属性，是**机制的名字**。
+
+**用模块级改动去换一句描述准确，不划算。** 正确做法是**把描述改对**（本节就是），
+并在 PR 的已知缺口里登记。真正该做 §12 bridge 的时机是：**当有第二个宿主工具也需要它的时候**——
+那时它是复用，不是为一个方法新建一条通道。
+
+### 4.3.2 两条实现与契约的语义差（登记，未修）
+
+**(1) `ubuntu run` 是「等到终态」，§12.2 要求「立即返回 JobRef」**
+
+`UbuntuHostTool.run` 会 `awaitTerminal`（`UbuntuHostTool.kt:196`），因为宿主工具跑在 `0x20` 的
+`EXEC_REQ` 上，那条信道是**请求-响应**形状。而 §12.2 的 `ubuntu.exec` 是「admit 后立即返回 JobRef」，
+让调用方轮询 `ubuntu.status`。
+
+**两种都自洽，但 `ubuntu run` 的输出语义不同**：现在它一次调用就把结果给出来，
+换成 §12 的形状就要两次。**接线时必须选一个，不能两个都留。**
+
+**(2) 现在接的是 `MockUbuntuAdapter`，不是真 Ubuntu**
+
+宿主是 `MockUbuntuSession`（`backend=mock`，120 ms 后 exit 0，`logTail` 是 `mock ubuntu-24.04: <jobId>`）。
+
+**所以 `ubuntu run -- gcc --version` 今天只证明 transport + JobRef 链路，不证明真的跑了 gcc。**
+Agent 也确实看懂了这点并按它行事（见 PR §十七）。**真 gcc 需要真 adapter，不在本轮范围。**
 
 ### 4.4 「需要的时候才用」在 Agent 侧怎么表达
 
