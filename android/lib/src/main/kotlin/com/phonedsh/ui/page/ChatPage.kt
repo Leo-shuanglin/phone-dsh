@@ -731,7 +731,7 @@ private fun ChatHeader(
                             },
                             enabled = onSetCollapseTiming != null,
                             trailingIcon = if (collapseTiming == option) {
-                                { PdshIconView(PdshIcon.CHECK, 18.dp, tokens.colors.textPrimary, "当前选择") }
+                                { PdshIconView(PdshIcon.CHECK, ChatMetrics.CHAT_HEADER_MORE_ICON_PT.dp, tokens.colors.textPrimary, "当前选择") }
                             } else null,
                             modifier = Modifier.testTag(collapseTimingTag(option)),
                         )
@@ -3633,13 +3633,14 @@ internal object ChatPageTokens {
         UiTokenNames.COLORS_BORDER_LIGHT,
         UiTokenNames.COLORS_CODE,
         UiTokenNames.COLORS_CTA_OVERRIDE,
-        UiTokenNames.COLORS_PAGE_ACCENT,
         UiTokenNames.COLORS_DANGER,
         UiTokenNames.COLORS_ICON_MUTED,
         UiTokenNames.COLORS_INPUT,
         UiTokenNames.COLORS_ON_ACCENT,
         UiTokenNames.COLORS_PAGE,
         UiTokenNames.COLORS_PRIMARY,
+        UiTokenNames.COLORS_INPUT_PLACEHOLDER,
+        UiTokenNames.COLORS_PRIMARY_BUTTON_INK,
         UiTokenNames.COLORS_PRIMARY_BUTTON,
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_SELECTOR,

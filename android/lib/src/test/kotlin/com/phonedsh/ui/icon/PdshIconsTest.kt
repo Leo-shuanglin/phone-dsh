@@ -56,11 +56,11 @@ class PdshIconsTest {
     fun `every registered symbol has distinct nonempty vector geometry`() {
         val icons = PdshIcon.values()
         assertTrue("registry should cover the HomeSpec and settings symbol set", icons.size >= 35)
-        val unsourcedFallbacks = icons.filter { it.sourceOwner == null }.map { it.sfSymbol }
-        assertEquals("SF-only entries have distinct system symbol owners", unsourcedFallbacks.size, unsourcedFallbacks.toSet().size)
+        val unsourcedFallbacks = icons.filter { it.sourceOwner == null }.map { "${it.sfSymbol}@${it.sourceWeight?.weight ?: "default"}" }
+        assertEquals("SF-only entries have distinct symbol and explicit-weight owners", unsourcedFallbacks.size, unsourcedFallbacks.toSet().size)
         val sourceIds = icons.mapNotNull { it.sourceOwner }
         assertEquals("asset source IDs are distinct", sourceIds.size, sourceIds.toSet().size)
-        val owners = icons.map { it.sourceOwner ?: "sf:${it.sfSymbol}" }
+        val owners = icons.map { it.sourceOwner ?: "sf:${it.sfSymbol}@${it.sourceWeight?.weight ?: "default"}" }
         assertEquals("each entry has a unique source owner or SF fallback", owners.size, owners.toSet().size)
         val signatures = icons.map { icon ->
             val vector = PdshIcons.vector(icon, Color.Black)

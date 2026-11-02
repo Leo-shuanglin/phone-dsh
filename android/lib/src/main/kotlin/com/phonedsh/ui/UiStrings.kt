@@ -1417,7 +1417,7 @@ public object UiStrings {
     public const val RUN_STATUS_STOPPED: String = "未启动"
     public const val HEADER_DRAWER: String = "打开会话列表"
     public const val HEADER_RUN_STATUS: String = "运行状态"
-    public const val HEADER_MORE: String = "更多操作"
+    public const val HEADER_MORE: String = "更多"
     public const val HEADER_EXPORT: String = "导出对话记录"
     public const val HEADER_SESSION_SETTINGS: String = "插件与工具"
     public const val SESSION_TITLE_NEW: String = "新会话"

@@ -169,8 +169,8 @@ class ChatPageTest {
     }
 
     @Test
-    fun `the head menu trigger is named 更多操作`() {
-        // ChatPage.swift:163 `.accessibilityLabel("更多操作")`.
+    fun `the head menu trigger uses the PR22 accessible name 更多`() {
+        // Current ChatPage.swift uses `.accessibilityLabel("更多")`.
         show(state(case = "chat-basic"))
         compose.onNodeWithContentDescription(UiStrings.HEADER_MORE).assertIsDisplayed()
     }

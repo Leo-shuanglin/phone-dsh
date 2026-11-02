@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -19,6 +20,8 @@ public enum class PdshIcon(
     public val sfSymbol: String,
     public val permissionOnly: Boolean = false,
     public val sourceOwner: String? = null,
+    /** Explicit Swift font-weight variant when the owning view requests one. */
+    public val sourceWeight: FontWeight? = null,
 ) {
     NEW_CHAT("square.and.pencil"),
     CLOCK("clock"),
@@ -62,7 +65,7 @@ public enum class PdshIcon(
     DOCUMENT("doc.text"),
     NUMBER("number"),
     /** ChatPage's bold 18pt ellipsis from `ChatPage.swift:329-340`. */
-    CHAT_MORE("ellipsis"),
+    CHAT_MORE("ellipsis", sourceWeight = FontWeight.Bold),
     MENU("line.3.horizontal"),
     /** ChatPage's two-stroke HomeSpec menu artwork (`ChatPage.swift:207-211`). */
     CHAT_DRAWER("line.2.horizontal"),
