@@ -83,10 +83,12 @@ cargo_home_resolve() {
   else die 'set XDG_CACHE_HOME or HOME to a writable location'; fi
 }
 
-RUSTUP_HOME_RESOLVED="$(rustup_home_resolve)"
-CARGO_HOME_RESOLVED="$(cargo_home_resolve)"
-export RUSTUP_HOME="$RUSTUP_HOME_RESOLVED" CARGO_HOME="$CARGO_HOME_RESOLVED"
-export PATH="$CARGO_HOME/bin:$PATH"
+configure_cache() {
+  # Resolve install/cache homes only after testing the caller in its original
+  # environment. Redirecting RUSTUP_HOME first breaks valid rustup shims.
+  export RUSTUP_HOME="$(rustup_home_resolve)" CARGO_HOME="$(cargo_home_resolve)"
+  export PATH="$CARGO_HOME/bin:$PATH"
+}
 
 current_adequate() {
   command -v rustc >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1 || return 1
@@ -121,10 +123,15 @@ install_pinned() {
   # rustup-init 1.28.2 has no --no-self-update option (the installer does not
   # update itself); passing it aborts before any toolchain is installed. The
   # rustup CLI subcommand below does support the flag.
-  RUSTUP_INIT_SKIP_PATH_CHECK=yes "$installer" -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" \
+  # The verified manifest and actual install must have the same official owner.
+  export RUSTUP_DIST_SERVER="https://static.rust-lang.org"
+  export RUSTUP_UPDATE_ROOT="https://static.rust-lang.org/rustup"
+  RUSTUP_INIT_SKIP_PATH_CHECK=yes "$installer" -y --no-modify-path --profile minimal --default-toolchain none \
     --default-host "$triple" || die "rustup could not install Rust $RUST_VERSION"
   "$CARGO_HOME/bin/rustup" toolchain install "$RUST_VERSION" --profile minimal --no-self-update || die "Rust $RUST_VERSION installation failed"
-  "$CARGO_HOME/bin/rustup" default "$RUST_VERSION" >/dev/null
+  # Select the pin only for this wrapper process; do not rewrite a user's
+  # unrelated rustup default toolchain.
+  export RUSTUP_TOOLCHAIN="$RUST_VERSION"
   trap - EXIT
   rm -rf "$tmp"
 }
@@ -133,6 +140,10 @@ mode="run"
 if [[ "${1:-}" == "--check" ]]; then mode=check; shift
 elif [[ "${1:-}" == "--install" ]]; then mode=install; shift
 fi
+
+# A valid caller toolchain keeps its own homes, selected toolchain and PATH.
+# Otherwise try the task-local cache before considering an install.
+if ! current_adequate; then configure_cache; fi
 
 if [[ "$mode" == check ]]; then
   if current_adequate; then
@@ -150,6 +161,6 @@ fi
 if ! current_adequate; then install_pinned; fi
 current_adequate || die "installed Rust does not satisfy >= $MIN_VERSION"
 [[ $# -gt 0 ]] || die 'usage: with-rust-toolchain.sh [--check|--install] <command> [args...]'
-printf 'Rust: rustc %s; cargo %s; CARGO_HOME=%s RUSTUP_HOME=%s\n' "$(rustc --version | awk '{print $2}')" "$(cargo --version | awk '{print $2}')" "$CARGO_HOME" "$RUSTUP_HOME" >&2
+printf 'Rust: rustc %s; cargo %s; CARGO_HOME=%s RUSTUP_HOME=%s\n' "$(rustc --version | awk '{print $2}')" "$(cargo --version | awk '{print $2}')" "${CARGO_HOME:-caller default}" "${RUSTUP_HOME:-caller default}" >&2
 cd "$REPO_ROOT"
 exec "$@"

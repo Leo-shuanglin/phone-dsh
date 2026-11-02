@@ -50,6 +50,13 @@ def pinned_digests() -> tuple[str, str]:
     return manifest.group(1), installer.group(1)
 
 
+def fixture_environment():
+    # The host's toolchain configuration must never defeat a missing/install
+    # fixture or send a fixture into a real caller cache.
+    return {key: value for key, value in os.environ.items()
+            if not key.startswith(("CARGO_", "RUSTUP_")) and key not in ("RUSTFLAGS", "RUSTC")}
+
+
 class RustToolchainWrapperTest(unittest.TestCase):
     def test_check_reuses_adequate_caller_toolchain_without_install(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -59,7 +66,7 @@ class RustToolchainWrapperTest(unittest.TestCase):
             executable(bin_dir / "rustc", "echo 'rustc 1.99.1 (fixture)'\n")
             executable(bin_dir / "cargo", "echo 'cargo 1.99.1 (fixture)'\n")
             env = {
-                **os.environ,
+                **fixture_environment(),
                 "PATH": f"{bin_dir}:{os.defpath}",
                 "HOME": str(root / "home"),
                 "XDG_CACHE_HOME": str(root / "cache"),
@@ -72,11 +79,28 @@ class RustToolchainWrapperTest(unittest.TestCase):
             self.assertIn("Rust toolchain OK", result.stdout)
             self.assertFalse((root / "cache/pdsh/rustup").exists())
 
+    def test_valid_rustup_shims_keep_original_homes_with_new_xdg(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            for tool in ("rustc", "cargo"):
+                executable(bin_dir / tool,
+                           '[ -z "${RUSTUP_HOME+x}" ] || exit 92\n'
+                           '[ -z "${CARGO_HOME+x}" ] || exit 93\n'
+                           f"echo '{tool} 1.99.1 (shim fixture)'\n")
+            env = {**fixture_environment(), "PATH": f"{bin_dir}:{os.defpath}",
+                   "HOME": str(root / "home"), "XDG_CACHE_HOME": str(root / "fresh-xdg")}
+            result = subprocess.run(["bash", str(WRAPPER), "--check"], env=env,
+                                    text=True, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((root / "fresh-xdg").exists())
+
     def test_check_fails_closed_when_rust_is_missing(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             env = {
-                **os.environ,
+                **fixture_environment(),
                 "PATH": os.defpath,
                 "HOME": str(root / "home"),
                 "XDG_CACHE_HOME": str(root / "cache"),
@@ -96,7 +120,7 @@ class RustToolchainWrapperTest(unittest.TestCase):
             bin_dir.mkdir()
             executable(bin_dir / "curl", 'while [ "$1" != "--output" ]; do shift; done; shift; printf fixture > "$1"\n')
             env = {
-                **os.environ,
+                **fixture_environment(),
                 "PATH": f"{bin_dir}:{os.defpath}",
                 "HOME": str(root / "home"),
                 "XDG_CACHE_HOME": str(root / "cache"),
@@ -129,6 +153,8 @@ case " $* " in
     exit 2
     ;;
 esac
+[ "$RUSTUP_DIST_SERVER" = "https://static.rust-lang.org" ] || exit 93
+[ "$RUSTUP_UPDATE_ROOT" = "https://static.rust-lang.org/rustup" ] || exit 94
 mkdir -p "$CARGO_HOME/bin"
 cat > "$CARGO_HOME/bin/rustup" <<'RUSTUP'
 #!/bin/sh
@@ -179,13 +205,15 @@ esac
 """,
             )
             env = {
-                **os.environ,
+                **fixture_environment(),
                 "PATH": f"{bin_dir}:{os.defpath}",
                 "HOME": str(root / "home"),
                 "XDG_CACHE_HOME": str(root / "xdg"),
                 "CARGO_HOME": str(root / "cargo"),
                 "RUSTUP_HOME": str(root / "rustup"),
                 "TMPDIR": str(root),
+                "RUSTUP_DIST_SERVER": "https://untrusted.invalid",
+                "RUSTUP_UPDATE_ROOT": "https://untrusted.invalid/rustup",
                 "FAKE_INSTALLER": str(installer),
                 "FAKE_MANIFEST_SHA": manifest_sha,
                 "FAKE_INSTALLER_SHA": installer_sha,
@@ -201,13 +229,13 @@ esac
 
             init_args = (root / "rustup-init.args").read_text(encoding="utf-8")
             self.assertNotIn("--no-self-update", init_args)
-            self.assertIn("--default-toolchain 1.99.1", init_args)
+            self.assertIn("--default-toolchain none", init_args)
             self.assertIn("--no-modify-path", init_args)
             self.assertIn("--profile minimal", init_args)
 
             rustup_args = (root / "rustup.args").read_text(encoding="utf-8")
             self.assertIn("toolchain install 1.99.1 --profile minimal --no-self-update", rustup_args)
-            self.assertIn("default 1.99.1", rustup_args)
+            self.assertNotIn("default ", rustup_args)
             self.assertTrue((root / "cargo/bin/rustup").is_file())
             # Explicit homes win over XDG, so no cache was created there.
             self.assertFalse((root / "xdg").exists())
