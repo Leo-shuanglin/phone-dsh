@@ -282,15 +282,24 @@ final class PhoneDSHFacadeHandoffTests: XCTestCase {
         let remoteOpen = await remote.isAdmissionOpen()
         XCTAssertFalse(remoteOpen)
 
-        // D14 fail-loud: start() stays refused until the user resets.
+        // A fence conflict is workspace-scoped, so it still ends in `Failed`.
+        // A persisted terminal failure is no longer a dead end, though: the
+        // next start reports the controller's retry window
+        // (`backoffNotElapsed`) instead of the old permanent `hostFailed`, and
+        // no Worker may boot until that window elapses.
         do {
             try await host.start()
-            XCTFail("a failed host must stay failed")
+            XCTFail("a start inside the retry window must not boot")
         } catch let error as PhoneDSHError {
-            guard case .hostFailed = error else {
-                return XCTFail("expected hostFailed, got \(error)")
+            guard case .backoffNotElapsed(let deadline) = error else {
+                return XCTFail("expected backoffNotElapsed, got \(error)")
             }
+            XCTAssertGreaterThan(deadline, Date())
         }
+        XCTAssertEqual(engine.bootCount, 1,
+                       "no Worker may boot before the retry window elapses")
+        let afterRefusal = await host.diagnostics()
+        XCTAssertEqual(afterRefusal.admission, .closed)
         try await host.stop()
     }
 

@@ -320,14 +320,22 @@ final class EpochSealTests: XCTestCase {
         do {
             try await host.park()
             XCTFail("park() must throw when the tail epoch cannot be closed")
-        } catch let error as PhoneDSHError {
-            guard case .invalidState(let message) = error else {
-                return XCTFail("unexpected error: \(error)")
+        } catch let fault as HostFault {
+            // The seal failure carries the workspace scope: the durable tail
+            // cannot be proven and no retry repairs that evidence.
+            guard case .workspace(.log(let logError)) = fault else {
+                return XCTFail("unexpected fault: \(fault)")
             }
-            XCTAssertTrue(message.contains("epoch close") || message.contains("WAL"),
-                          "the failure must name the epoch/WAL close: \(message)")
+            XCTAssertTrue(logError.description.contains("open")
+                              || logError.description.contains("posix"),
+                          "the failure must name the underlying log failure: \(logError)")
         }
 
+        // Workspace-scoped, not a boot fault: the durable tail cannot be
+        // proven, and a fresh Worker or process cannot repair that evidence.
+        // The `FailureClass` split therefore has to keep this `Failed`;
+        // reporting `starting` (a transient `Backoff`) would turn a D18 seal
+        // failure into a retryable boot and hide the unclosed epoch.
         let state = await host.state
         XCTAssertEqual(state, .failed, "an epoch close failure is fail loud")
         let diagnostics = await host.diagnostics()
@@ -335,6 +343,29 @@ final class EpochSealTests: XCTestCase {
         XCTAssertNotNil(diagnostics.lastError)
         XCTAssertEqual(try readFenceWalSeq(fixture), 0,
                        "a failed seal must not advertise a fence above the durable tail")
+        try? await host.stop()
+    }
+
+    func testTerminationRecoverySealFailureEscalatesBackoffToFailed() async throws {
+        enum InjectedSealError: Error { case failed }
+        let fixture = try FacadeFixture()
+        defer { fixture.cleanup() }
+        let engine = MockEngine(worker: MockWorker())
+        let host = try makeHost(fixture, engine)
+        try await host.start()
+        await host.setFailureSealProbeForTesting { throw InjectedSealError.failed }
+
+        engine.setBootError(WebEngineError.navigationFailed("无法连接服务器"))
+        engine.emit(.terminated(1))
+        try await waitUntil(timeout: 10) {
+            let diagnostics = await host.diagnostics()
+            return diagnostics.state == .failed
+        }
+        let diagnostics = await host.diagnostics()
+        XCTAssertEqual(diagnostics.hostState, .failed)
+        XCTAssertEqual(diagnostics.admission, .closed)
+        XCTAssertEqual(engine.bootCount, 4)
+        XCTAssertTrue(diagnostics.lastError?.contains("WAL stop seal failed") == true)
         try? await host.stop()
     }
 }

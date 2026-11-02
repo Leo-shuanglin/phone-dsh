@@ -124,22 +124,47 @@ final class HostStateMachineTests: XCTestCase {
         XCTAssertEqual(try persistedState(root), "recovering")
     }
 
-    func testBootKeepsPersistedFailed() async throws {
+    /// Incident regression: a persisted `Failed` used to survive every restart,
+    /// so one retryable failure bricked the App for good. A `terminal` failure
+    /// is still fail-loud for this incarnation, but it records a retry window:
+    /// the next process boots into `Backoff`, and past the window it recovers
+    /// on its own with the original reason preserved.
+    func testBootAfterPersistedFailedRetriesInsteadOfStayingFailed() async throws {
         let root = ControllerTestSupport.root(for: self)
-        let first = try ControllerTestSupport.makeHost(for: self, root: root,
-                                                       clock: ManualHostClock())
-        _ = try await first.handle(.failure(reason: "wal corrupt"))
+        let clock = ManualHostClock()
+        let first = try ControllerTestSupport.makeHost(for: self, root: root, clock: clock)
+        _ = try await first.handle(.failure(reason: "wal corrupt", class: .terminal))
         let firstState = await first.state
         XCTAssertEqual(firstState, .failed)
         await first.shutdown()
 
-        let second = try ControllerTestSupport.makeHost(for: self, root: root,
-                                                        clock: ManualHostClock())
+        // Same instant: the recorded retry window has not elapsed yet, so the
+        // next boot waits instead of latching `Failed` forever.
+        let second = try ControllerTestSupport.makeHost(for: self, root: root, clock: clock)
         let secondState = await second.state
-        XCTAssertEqual(secondState, .failed)
+        XCTAssertEqual(secondState, .backoff)
         let reason = await second.lastError
         XCTAssertEqual(reason, "wal corrupt")
         XCTAssertEqual(second.admission.current, .closed)
+        await second.shutdown()
+
+        // Past the window the host may recover without any user action: the
+        // restored `Backoff` deadline is now in the past, so the boot-side
+        // bridge that the facade calls is allowed to proceed.
+        clock.advance(by: HostStateMachine.failureRetryCapSeconds + 1)
+        let third = try ControllerTestSupport.makeHost(for: self, root: root, clock: clock)
+        let thirdState = await third.state
+        XCTAssertEqual(thirdState, .backoff)
+        let thirdReason = await third.lastError
+        XCTAssertEqual(thirdReason, "wal corrupt")
+        XCTAssertEqual(third.admission.current, .closed)
+        let deadline = await third.backoffDeadline()
+        XCTAssertNotNil(deadline)
+        XCTAssertLessThanOrEqual(deadline ?? .distantFuture, clock.now)
+
+        let recovered = try await third.resumeFromPersistedBackoff()
+        XCTAssertEqual(recovered, .recovering)
+        XCTAssertEqual(third.admission.current, .closed)
     }
 
     func testBootKeepsPersistedRemoteClosed() async throws {
@@ -391,7 +416,7 @@ final class HostStateMachineTests: XCTestCase {
 
     func testUserResetTransitionCarriesBootReason() async throws {
         let machine = try ControllerTestSupport.makeHost(for: self, clock: ManualHostClock())
-        _ = try await machine.handle(.failure(reason: "quota"))
+        _ = try await machine.handle(.failure(reason: "quota", class: .terminal))
         _ = try await machine.handle(.userReset)
         // A late subscriber receives the most recent accepted transition.
         let records = await collect(1, from: machine.transitions()) ?? []
@@ -713,7 +738,8 @@ final class HostStateMachineTests: XCTestCase {
         let machine = try ControllerTestSupport.makeHost(for: self, clock: ManualHostClock())
         _ = try await machine.verifyLease()
         XCTAssertEqual(machine.admission.current, .open)
-        let state = try await machine.handle(.failure(reason: "materialization I/O failure"))
+        let state = try await machine.handle(.failure(reason: "materialization I/O failure",
+                                                      class: .terminal))
         XCTAssertEqual(state, .failed)
         XCTAssertEqual(machine.admission.current, .closed)
         let reason = await machine.lastError
@@ -726,7 +752,7 @@ final class HostStateMachineTests: XCTestCase {
 
     func testFailedToRecoveringOnlyByExplicitUserReset() async throws {
         let machine = try ControllerTestSupport.makeHost(for: self, clock: ManualHostClock())
-        _ = try await machine.handle(.failure(reason: "quota"))
+        _ = try await machine.handle(.failure(reason: "quota", class: .terminal))
         do {
             _ = try await machine.verifyLease()
             XCTFail("Failed never opens admission through verifyLease")

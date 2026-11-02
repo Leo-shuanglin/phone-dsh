@@ -214,8 +214,14 @@ public actor HandoffCoordinator {
                 // the persisted intent keep local admission shut.
                 phase = .reclaiming
             } else {
+                // A handoff that never reached the fence CAS leaves local
+                // authority intact, but re-preparing and retrying it is a
+                // workspace decision, not a process-level probe: classify it
+                // `terminal` so the controller keeps `Failed` for this
+                // incarnation while recording the next-boot retry window.
                 _ = try? await machine.handle(
-                    .failure(reason: "handoff failed before the fence CAS"))
+                    .failure(reason: "handoff failed before the fence CAS",
+                             class: .terminal))
                 phase = .idle
             }
             throw error
