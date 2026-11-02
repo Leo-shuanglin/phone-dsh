@@ -1,56 +1,21 @@
-// Settings: the iOS five-tab settings sheet, tab for tab.
+// Settings: the PR22 grouped phone-settings index and its local child pages.
 // SPDX-License-Identifier: MIT
 //
-// Authority: `examples/probe-app/PhoneDSHProbe/SettingsPage.swift` at iOS HEAD
-// (255 lines, the post-PR-#13 rewrite). Its body is **not** the pre-#13 flat
-// index this file used to mirror:
+// The index follows `examples/probe-app/PhoneDSHProbe/SettingsPage.swift` at
+// iOS HEAD: Models and agents, Permissions and privacy, Conversation, Sessions
+// and files, Engine, About. The former segmented shell is gone; [SettingsTab]
+// survives only as the host's deep-entry key, and [tabContent] is used only for
+// that direct entry.
 //
-//   * `SettingsPage.swift:64-72` — a `Picker(.segmented)` with five tabs
-//     (通用 / 模型 / 插件 / 手机权限 / 预设), 16 pt side inset, 10 pt vertical
-//     padding, above a `List` that the tabs swap out;
-//   * `SettingsPage.swift:82-90` — the five tab bodies: 通用 is inline
-//     (`NativeGeneralSettingsPage`), 模型 is `ModelProviderSettingsPage`, 插件 is
-//     `NativePluginInventoryPage`, 手机权限 is `PhonePermissionsPage(embedded:)`,
-//     预设 is `NativeAgentPresetsPage`;
-//   * `SettingsPage.swift:99-167` — the 通用 tab's five sections: 权限 + footnote,
-//     (语言 / 外观 / 字号大小) + footnote, (工作步骤展示 / 工作步骤收起时机 /
-//     显示代码工作视图 / 快捷键), (繁忙时的发送行为 / 性能与用量), (当前版本 /
-//     开源许可). **No section headers anywhere** — only two `Text(... .footnote)`
-//     lines — and the list is iOS's default inset-grouped style, so every group
-//     is a card.
-//   * `SettingsPage.swift:75-79` — the only chrome action is 完成 in the
-//     top-bar **trailing** slot.
+// Values are copied from [SettingsFacts] and [SettingsPreferences]. A null host
+// fact is shown as unknown/unavailable, and an optional host action is disabled
+// when its caller has not supplied a real destination. The host still owns the
+// permission, provider, session-count, permission-summary, and callback wiring.
 //
-// What moved, and what left this page:
-//
-//   模型服务 → the 模型 tab (it is a whole page now, not a row);
-//   插件与模型 / MCP / 网页搜索 → the 插件 tab, whose page links on to 网页搜索;
-//   新会话默认权限 sub-page → still this sheet's child, opened from the 权限 row;
-//   网络访问 / 运行时详情 / 开源许可 / 导出诊断 → **no row on iOS HEAD**. The
-//     first two survive as preview-only pages (`NativeShell.swift:778,783`), the
-//     third is an iOS-only list Android does not ship, and 导出诊断 has no iOS
-//     counterpart at all. See the lane report for where each entry went.
-//
-// Android-only appendix: the 平台差异 card. `spec/platform/whitelist.json` rows
-// `platform.post-notifications-degraded`, `platform.battery-exemption-policy` and
-// `platform.predictive-back` require the degradation to be visible, and iOS has
-// no counterpart for any of them. It is placed last, after the five mirrored
-// cards, and it also keeps the two Android-only controls this app has and iOS
-// does not (后台运行, 导出诊断), so mirroring iOS does not quietly remove them.
-//
-// Data: every value comes from `SettingsFacts`, the host's read-only snapshot. A
-// field the host cannot report is `null`/`UNKNOWN` and renders the baseline's own
-// "unset" wording (未设置 / 未配置) or 未知, never a plausible default.
-//
-// Chrome: the nav bar, the segmented picker, the cards, the 52.33 pt rows, the
-// 1.0 pt separators, the switch and the chevrons all come from
-// `com.phonedsh.ui.surface` (`SettingsChrome.kt`), which reads its numbers from
-// `com.phonedsh.ui.SettingsMetrics`. This page re-types no length and no colour.
-//
-// Tab bodies: the four non-通用 tabs are the host's pages. [SettingsPage] takes a
-// `tabContent` slot so the shell (bar + segmented picker) owns the chrome and the
-// tab body stays a page — the shape `PdshNavHost` needs to wire a tab to a route
-// without this file depending on those pages.
+// Index rows use the PR22 48pt minimum grouped-list pitch, registered
+// [com.phonedsh.ui.icon.PdshIcons], and the shared HomeSpec semantic palette.
+// The old pure `SettingsScreenState.sections` projection remains for the shared
+// settings preference IDs consumed by the existing PreferenceStore.
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
@@ -65,6 +30,9 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -83,9 +51,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.state.EngineLifecycleFacts
@@ -341,6 +311,10 @@ public data class SettingsPreferences(
     public val fontSizeConversation: Int? = null,
     public val fontSizeCode: Int? = null,
     public val fontSizeTerminal: Int? = null,
+    /** Host-stored font names; null means the host cannot report this role. */
+    public val fontFamilyConversation: String? = null,
+    public val fontFamilyCode: String? = null,
+    public val fontFamilyTerminal: String? = null,
     public val transcriptView: TranscriptViewMode? = null,
     public val collapseTiming: CollapseTiming? = null,
     public val developerTools: FactState = FactState.UNKNOWN,
@@ -387,11 +361,18 @@ public data class SettingsFacts(
     public val didSave: Boolean = false,
     public val platform: SettingsPlatformFacts? = null,
     public val modelProviderName: String? = null,
+    /** Whether provider/key setup is required; true includes first-run and missing-key cases, null means unread. */
+    public val providerSetupRequired: Boolean? = null,
     public val mcpServerCount: Int? = null,
     public val webSearch: WebSearchSummary? = null,
     public val egressAddressCount: Int? = null,
     /** Current engine lifecycle and reset requirement; null means unread. */
     public val engineLifecycle: EngineLifecycleFacts? = null,
+    /** Counts read by the host's session manager; null means unread. */
+    public val folderCount: Int? = null,
+    public val archivedSessionCount: Int? = null,
+    /** Permission grant summary read from the host; null means unread. */
+    public val phonePermissionSummary: String? = null,
 )
 
 /** The web-search page's summary; kept for the host's snapshot, not drawn here. */
@@ -456,6 +437,15 @@ public data class SettingsSectionView(
 public data class SettingsScreenState(
     public val sections: List<SettingsSectionView>,
     public val engineLifecycle: EngineLifecycleFacts? = null,
+    public val modelProviderName: String? = null,
+    public val providerSetupRequired: Boolean? = null,
+    public val folderCount: Int? = null,
+    public val archivedSessionCount: Int? = null,
+    public val phonePermissionSummary: String? = null,
+    public val versionName: String? = null,
+    public val preferences: SettingsPreferences = SettingsPreferences(),
+    public val defaultPermissionTier: PermissionTier? = null,
+    public val busyEnterMode: BusyEnterMode? = null,
 ) {
     /** One row by id. */
     public fun row(id: String): SettingsRowView? =
@@ -803,6 +793,15 @@ public data class SettingsScreenState(
                     add(appendix)
                 },
                 engineLifecycle = facts.engineLifecycle,
+                modelProviderName = facts.modelProviderName,
+                providerSetupRequired = facts.providerSetupRequired,
+                folderCount = facts.folderCount,
+                archivedSessionCount = facts.archivedSessionCount,
+                phonePermissionSummary = facts.phonePermissionSummary,
+                versionName = facts.versionName,
+                preferences = preferences,
+                defaultPermissionTier = facts.defaultPermissionTier,
+                busyEnterMode = facts.busyEnterMode,
             )
         }
 
@@ -992,21 +991,19 @@ public data class PermissionDefaultsState(
 // ---------------------------------------------------------------------------
 
 /**
- * The settings sheet: the five-tab picker, then the selected tab's body.
+ * The grouped PR22 Settings index. A direct non-General [tab] remains a host deep-entry.
  *
- * @param state the 通用 tab's pure screen state (`SettingsScreenState.from`).
+ * @param state the immutable host snapshot (`SettingsScreenState.from`).
  * @param onNavigate a navigation row was tapped.
  * @param onToggleBackgroundKeepAlive the 后台运行 switch was flipped.
  * @param onSelectBusyEnterMode 繁忙时的发送行为 picked a mode.
  * @param onBack leave the sheet (the baseline's 完成).
- * @param tab the selected tab (host-owned, so a deep link can open 手机权限).
- * @param onSelectTab a segment was tapped.
+ * @param tab the host-owned deep-entry key; it does not render a segmented picker.
+ * @param onSelectTab retained for source compatibility with the previous host shell.
  * @param onSelectPreference one of the other four pickers reported a choice.
  * @param onToggleDeveloperTools 显示代码工作视图 was flipped.
- * @param tabContent the four non-通用 tabs' bodies. Each receives the tab and is
- *   responsible for its own page; the shell supplies the bar and the picker.
- *   `null` on a host that has not wired a tab: the shell then says so instead of
- *   drawing a page it does not have.
+ * @param tabContent the selected deep-entry page. Its caller supplies any page-specific
+ *   wiring; when absent, the page reports unavailable rather than inventing content.
  */
 @Composable
 public fun SettingsPage(
@@ -1018,83 +1015,416 @@ public fun SettingsPage(
     modifier: Modifier = Modifier,
     tab: SettingsTab = SettingsTab.GENERAL,
     onSelectTab: (SettingsTab) -> Unit = {},
-    onSelectPreference: (SettingsPreferenceChoice) -> Unit = {},
-    onToggleDeveloperTools: (Boolean) -> Unit = {},
+    onSelectPreference: ((SettingsPreferenceChoice) -> Unit)? = null,
+    onSelectFontFamily: ((rowId: String, family: String) -> Unit)? = null,
+    onToggleDeveloperTools: ((Boolean) -> Unit)? = null,
     onRestartEngine: (() -> Unit)? = null,
     tabContent: (@Composable (SettingsTab) -> Unit)? = null,
+    onOpenAgentPresets: (() -> Unit)? = null,
+    onOpenPhonePermissions: (() -> Unit)? = null,
+    onOpenPluginsTools: (() -> Unit)? = null,
+    onOpenFolders: (() -> Unit)? = null,
+    onOpenArchivedSessions: (() -> Unit)? = null,
+    onSelectDefaultPermission: ((PermissionTier) -> Unit)? = null,
+    licenseEntries: List<AndroidLicenseNotice>? = null,
 ) {
+    // The old tab enum is retained as the deep-link vocabulary used by the host.
+    // A non-General incoming tab is still rendered as the requested pushed page.
+    if (tab != SettingsTab.GENERAL) {
+        if (tabContent != null) tabContent(tab) else SettingsTabUnavailable(tab)
+        return
+    }
+
+    var page by remember { mutableStateOf(SettingsIndexPage.ROOT) }
     val tokens = LocalUiTokens.current
-    // iOS's sheet chrome is **white** from the screen's top edge down to the list's
-    // first row: the inline bar (`settings-chat.png` y 0..106 pt) and the strip
-    // that holds the segmented track (track 126..158, list starts 167.3) are
-    // `#FFFFFF`, and only the inset-grouped list below them is the grey page
-    // (`colors.groupedBackground`, #F2F2F7). The four page tabs paint their own
-    // white page, so the shell paints white and the 通用 body paints the grey one.
-    val surface = Modifier.background(tokens.colors.input)
-    Column(
+    val preferences = state.preferences
+    val lifecycle = state.engineLifecycle
+    val language = preferences.language?.label ?: UiStrings.SETTINGS_PERMISSION_UNSET
+    val appearance = preferences.appearance?.label ?: UiStrings.SETTINGS_PERMISSION_UNSET
+    val fontSize = preferences.fontSizeConversation?.let { "$it pt" } ?: UiStrings.UNKNOWN
+    val providerValue = when {
+        state.providerSetupRequired == true -> "需要设置"
+        state.modelProviderName != null -> state.modelProviderName
+        else -> UiStrings.UNAVAILABLE
+    }
+    val folderValue = state.folderCount?.toString() ?: UiStrings.UNAVAILABLE
+    val archivedValue = state.archivedSessionCount?.toString() ?: UiStrings.UNAVAILABLE
+    val permissionSummary = state.phonePermissionSummary ?: UiStrings.UNAVAILABLE
+
+    androidx.compose.foundation.layout.Column(
         modifier = modifier
             .fillMaxSize()
-            .then(surface)
+            .background(tokens.colors.page)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
     ) {
-        // The baseline's bar: the sheet's own name 设置 (`SettingsPage.swift:59`)
-        // and 完成 trailing (`:75-79`). The 通用 tab is the exception: that page
-        // carries a navigationTitle of its own, 通用设置 (`:168`), and it is the
-        // title the iOS capture of this screen shows — so the bar draws the page
-        // title there and the sheet name everywhere else. Before L74 the bar was
-        // blank on the other four tabs: a settings sheet whose only chrome was a
-        // 完成 button named nothing at all, which the title gate rightly refused to
-        // compare (`unresolved-title`, `tab.barTitle`).
-        // The bar, the picker and the 通用 body are iOS `List` chrome, so they draw
-        // the system inks (`colors.systemLabel` / `systemSecondary`); the tab bodies
-        // of the other four tabs are pages in their own right and keep their own
-        // tokens, which is why the provider stops at the 通用 branch.
-        CompositionLocalProvider(LocalSettingsRowInk provides settingsSystemInk()) {
-            SettingsNavBar(
-                title = if (tab == SettingsTab.GENERAL) {
-                    UiStrings.SETTINGS_GENERAL_TITLE
-                } else {
-                    UiStrings.SETTINGS
-                },
-                trailing = {
-                    SettingsBarAction(
-                        label = UiStrings.SETTINGS_DONE,
-                        onClick = onBack,
-                        modifier = Modifier.testTag(UiPageTags.SETTINGS_DONE),
+        SettingsNavBar(
+            title = if (page == SettingsIndexPage.ROOT) UiStrings.SETTINGS else page.title,
+            leading = if (page == SettingsIndexPage.ROOT) null else {
+                {
+                    com.phonedsh.ui.icon.PdshIconView(
+                        icon = com.phonedsh.ui.icon.PdshIcon.CHEVRON_LEFT,
+                        size = com.phonedsh.ui.HomeMetrics.composerIcon,
+                        tint = tokens.colors.textPrimary,
+                        contentDescription = UiStrings.BACK,
+                        modifier = Modifier
+                            .clickable(role = Role.Button) { page = SettingsIndexPage.ROOT }
+                            .testTag("pdsh.settings.index.back")
+                            .padding(tokens.spacing.iconText),
                     )
+                }
+            },
+            trailing = {
+                SettingsBarAction(
+                    label = UiStrings.SETTINGS_DONE,
+                    onClick = onBack,
+                    modifier = Modifier.testTag(UiPageTags.SETTINGS_DONE),
+                )
+            },
+        )
+        when (page) {
+            SettingsIndexPage.ROOT -> SettingsIndexList(
+                state = state,
+                language = language,
+                appearance = appearance,
+                fontSize = fontSize,
+                providerValue = providerValue,
+                folderValue = folderValue,
+                archivedValue = archivedValue,
+                permissionSummary = permissionSummary,
+                onNavigate = { destination ->
+                    when (destination) {
+                        SettingsDestination.PERMISSION_DEFAULTS -> page = SettingsIndexPage.PERMISSION_DEFAULTS
+                        SettingsDestination.LICENSES -> page = SettingsIndexPage.LICENSES
+                        SettingsDestination.SHORTCUTS -> onNavigate(destination)
+                        else -> onNavigate(destination)
+                    }
                 },
+                onSelectPreference = onSelectPreference,
+                onSelectDefaultPermission = onSelectDefaultPermission,
+                onToggleBackgroundKeepAlive = onToggleBackgroundKeepAlive,
+                onOpenAgentPresets = onOpenAgentPresets,
+                onOpenPhonePermissions = onOpenPhonePermissions,
+                onOpenPluginsTools = onOpenPluginsTools,
+                onOpenFolders = onOpenFolders,
+                onOpenArchivedSessions = onOpenArchivedSessions,
+                onOpenLocalPage = { page = it },
+                onRestartEngine = onRestartEngine,
             )
-            // The segmented picker is outside the tab body on purpose: it is the one
-            // control that must survive a tab switch (`SettingsPage.swift:64-72`).
-            SettingsSegmentedPicker(
-                labels = SettingsTab.order.map { it.shortTitle },
-                selected = SettingsTab.order.indexOf(tab),
-                onSelect = { index -> SettingsTab.order.getOrNull(index)?.let(onSelectTab) },
-                modifier = Modifier.padding(
-                    top = SettingsSegmentTopGap,
-                    bottom = SettingsSegmentPaddingV,
-                ),
-                tag = SETTINGS_TAB_TAG_PREFIX + tab.id,
+            SettingsIndexPage.FONT_SIZE -> FontSizeSettingsPage(
+                preferences = preferences,
+                onSelectPreference = onSelectPreference,
+                onSelectFontFamily = onSelectFontFamily,
             )
+            SettingsIndexPage.CONVERSATION -> ConversationSettingsPage(
+                preferences = preferences,
+                busyEnterMode = state.busyEnterMode,
+                onSelectPreference = onSelectPreference,
+                onSelectBusyEnterMode = onSelectBusyEnterMode,
+                onToggleDeveloperTools = onToggleDeveloperTools,
+            )
+            SettingsIndexPage.PERMISSION_DEFAULTS -> PermissionDefaultsPage(
+                state = PermissionDefaultsState.from(state.defaultPermissionTier),
+                onSelect = onSelectDefaultPermission,
+                onBack = { page = SettingsIndexPage.ROOT },
+                embedded = true,
+            )
+            SettingsIndexPage.LICENSES -> LicensesPage(entries = licenseEntries, embedded = true, onBack = { page = SettingsIndexPage.ROOT })
         }
-        if (tab == SettingsTab.GENERAL) {
-            CompositionLocalProvider(LocalSettingsRowInk provides settingsSystemInk()) {
-                GeneralTabBody(
-                    modifier = Modifier.background(tokens.colors.groupedBackground),
-                    state = state,
-                    onNavigate = onNavigate,
-                    onToggleBackgroundKeepAlive = onToggleBackgroundKeepAlive,
-                    onSelectBusyEnterMode = onSelectBusyEnterMode,
-                    onSelectPreference = onSelectPreference,
-                    onToggleDeveloperTools = onToggleDeveloperTools,
-                    onRestartEngine = onRestartEngine,
+    }
+}
+
+private enum class SettingsIndexPage(val title: String) {
+    ROOT(UiStrings.SETTINGS),
+    FONT_SIZE("字号"),
+    CONVERSATION(UiStrings.SETTINGS_ROW_WORK_DETAILS),
+    PERMISSION_DEFAULTS(UiStrings.PERMISSION_DEFAULTS_TITLE),
+    LICENSES(UiStrings.ABOUT_LICENSES),
+}
+
+@Composable
+private fun SettingsIndexList(
+    state: SettingsScreenState,
+    language: String,
+    appearance: String,
+    fontSize: String,
+    providerValue: String,
+    folderValue: String,
+    archivedValue: String,
+    permissionSummary: String,
+    onNavigate: (SettingsDestination) -> Unit,
+    onSelectPreference: ((SettingsPreferenceChoice) -> Unit)?,
+    onOpenAgentPresets: (() -> Unit)?,
+    onOpenPhonePermissions: (() -> Unit)?,
+    onOpenPluginsTools: (() -> Unit)?,
+    onOpenFolders: (() -> Unit)?,
+    onOpenArchivedSessions: (() -> Unit)?,
+    onOpenLocalPage: (SettingsIndexPage) -> Unit,
+    onRestartEngine: (() -> Unit)?,
+    onSelectDefaultPermission: ((PermissionTier) -> Unit)?,
+    onToggleBackgroundKeepAlive: (Boolean) -> Unit,
+) {
+    val sections = listOf(
+        SettingsIndexSection("modelsAgents", UiStrings.SETTINGS_SECTION_MODELS_AGENTS, listOf(
+            SettingsIndexEntry("modelProvider", "模型服务", com.phonedsh.ui.icon.PdshIcon.CPU, providerValue, callback = { onNavigate(SettingsDestination.MODEL_PROVIDER) }),
+            SettingsIndexEntry("agentPresets", "Agent 预设", com.phonedsh.ui.icon.PdshIcon.PEOPLE,
+                value = if (onOpenAgentPresets == null) UiStrings.UNAVAILABLE else null,
+                enabled = onOpenAgentPresets != null, callback = onOpenAgentPresets),
+            SettingsIndexEntry("pluginsTools", "插件与工具", com.phonedsh.ui.icon.PdshIcon.PUZZLE,
+                value = if (onOpenPluginsTools == null) UiStrings.UNAVAILABLE else null,
+                enabled = onOpenPluginsTools != null, callback = onOpenPluginsTools),
+        )),
+        SettingsIndexSection("permissionsPrivacy", UiStrings.SETTINGS_SECTION_PERMISSIONS_PRIVACY, listOf(
+            SettingsIndexEntry("permissionDefaults", "新会话默认权限", com.phonedsh.ui.icon.PdshIcon.LOCK_SHIELD,
+                state.defaultPermissionTier?.let { SettingsScreenState.tierTitle(it) } ?: UiStrings.SETTINGS_PERMISSION_UNSET, callback = { onNavigate(SettingsDestination.PERMISSION_DEFAULTS) }),
+            SettingsIndexEntry("phonePermissions", "手机权限", com.phonedsh.ui.icon.PdshIcon.HAND, permissionSummary,
+                enabled = onOpenPhonePermissions != null, callback = onOpenPhonePermissions),
+            SettingsIndexEntry("network", "网络访问", com.phonedsh.ui.icon.PdshIcon.NETWORK, callback = { onNavigate(SettingsDestination.EGRESS) }),
+        )),
+        SettingsIndexSection("conversation", UiStrings.SETTINGS_SECTION_CONVERSATION, listOf(
+            SettingsIndexEntry.menu("appearance", "外观", com.phonedsh.ui.icon.PdshIcon.GEAR, appearance,
+                listOf(SettingsMenuOption("system", "跟随系统"), SettingsMenuOption("light", "浅色"), SettingsMenuOption("dark", "深色")),
+                SettingsScreenState.APPEARANCE_ROW_ID, state.preferences.appearance?.id, onSelectPreference),
+            SettingsIndexEntry.menu("language", UiStrings.SETTINGS_ROW_LANGUAGE, com.phonedsh.ui.icon.PdshIcon.GLOBE, language,
+                listOf(SettingsMenuOption("system", "跟随系统"), SettingsMenuOption("zh", UiStrings.SETTINGS_LANGUAGE_ZH), SettingsMenuOption("en", UiStrings.SETTINGS_LANGUAGE_EN)),
+                SettingsScreenState.LANGUAGE_ROW_ID, state.preferences.language?.id, onSelectPreference),
+            SettingsIndexEntry("fontSize", "字号", com.phonedsh.ui.icon.PdshIcon.TEXT_SIZE, fontSize, callback = { onOpenLocalPage(SettingsIndexPage.FONT_SIZE) }),
+            SettingsIndexEntry("workDetails", UiStrings.SETTINGS_ROW_WORK_DETAILS, com.phonedsh.ui.icon.PdshIcon.LIST, callback = { onOpenLocalPage(SettingsIndexPage.CONVERSATION) }),
+            SettingsIndexEntry("shortcuts", "快捷键", com.phonedsh.ui.icon.PdshIcon.COMMAND, callback = { onNavigate(SettingsDestination.SHORTCUTS) }),
+        )),
+        SettingsIndexSection("sessionsFiles", UiStrings.SETTINGS_SECTION_SESSIONS_FILES, listOf(
+            SettingsIndexEntry("folders", "文件夹", com.phonedsh.ui.icon.PdshIcon.FOLDER, folderValue,
+                enabled = onOpenFolders != null, callback = onOpenFolders),
+            SettingsIndexEntry("archivedSessions", UiStrings.SETTINGS_ROW_ARCHIVED_SESSIONS, com.phonedsh.ui.icon.PdshIcon.ARCHIVE, archivedValue,
+                enabled = onOpenArchivedSessions != null, callback = onOpenArchivedSessions),
+        )),
+        SettingsIndexSection("engine", "引擎", buildList {
+            add(SettingsIndexEntry("engineStatus", "引擎状态", com.phonedsh.ui.icon.PdshIcon.BOLT,
+                state.engineLifecycle?.statusLabel ?: state.engineLifecycle?.status?.settingsLabel() ?: UiStrings.UNKNOWN))
+            if (state.engineLifecycle?.needsReset == true) {
+                add(SettingsIndexEntry("engineRestart", "重新启动引擎", com.phonedsh.ui.icon.PdshIcon.REFRESH,
+                    value = if (onRestartEngine == null) UiStrings.UNAVAILABLE else null,
+                    enabled = onRestartEngine != null, callback = onRestartEngine))
+            }
+            add(SettingsIndexEntry("runtimeDetails", "运行状态", com.phonedsh.ui.icon.PdshIcon.WAVEFORM, callback = { onNavigate(SettingsDestination.RUNTIME_DETAILS) }))
+        }, footer = if (state.engineLifecycle?.needsReset == true) UiStrings.SETTINGS_ENGINE_RESET_FOOTER else null),
+        SettingsIndexSection("about", "关于", listOf(
+            SettingsIndexEntry("about", "关于 Phone DSH", com.phonedsh.ui.icon.PdshIcon.INFO, callback = { onNavigate(SettingsDestination.ABOUT) }),
+            SettingsIndexEntry("version", "版本", com.phonedsh.ui.icon.PdshIcon.NUMBER, state.versionName ?: UiStrings.UNKNOWN),
+            SettingsIndexEntry("licenses", UiStrings.ABOUT_LICENSES, com.phonedsh.ui.icon.PdshIcon.DOCUMENT, callback = { onOpenLocalPage(SettingsIndexPage.LICENSES) }),
+        )),
+        androidSettingsSection(
+            state = state,
+            onNavigate = onNavigate,
+            onToggleBackgroundKeepAlive = onToggleBackgroundKeepAlive,
+        ),
+    )
+    androidx.compose.foundation.lazy.LazyColumn(
+        modifier = Modifier.fillMaxSize().navigationBarsPadding().testTag(SETTINGS_INDEX_LIST_TAG),
+        contentPadding = PaddingValues(top = com.phonedsh.ui.surface.SettingsSubPageGroupedTopInset),
+        verticalArrangement = Arrangement.spacedBy(SettingsCardGap),
+    ) {
+        sections.forEach { section ->
+            item(key = section.title) {
+                Column {
+                    com.phonedsh.ui.surface.SettingsSectionLabel(section.title, tag = UiPageTags.SETTINGS_INDEX_GROUP_PREFIX + section.id)
+                    SettingsGroupCard {
+                        section.entries.forEachIndexed { index, entry ->
+                            SettingsIndexRow(entry, dividerBelow = index != section.entries.lastIndex)
+                        }
+                    }
+                    section.footer?.let { com.phonedsh.ui.surface.SettingsFootnoteRow(text = it) }
+                }
+            }
+        }
+    }
+}
+
+private const val SETTINGS_INDEX_LIST_TAG: String = UiTags.SETTINGS_LIST
+
+private fun androidSettingsSection(
+    state: SettingsScreenState,
+    onNavigate: (SettingsDestination) -> Unit,
+    onToggleBackgroundKeepAlive: (Boolean) -> Unit,
+): SettingsIndexSection {
+    val background = state.row(SettingsScreenState.BACKGROUND_ROW_ID)
+    val notifications = state.row(SettingsScreenState.NOTIFICATIONS_ROW_ID)
+    val battery = state.row(SettingsScreenState.BATTERY_ROW_ID)
+    val predictiveBack = state.row(SettingsScreenState.BACK_ROW_ID)
+    val status = state.row(SettingsScreenState.STATUS_ROW_ID)?.text
+    return SettingsIndexSection(
+        id = "platform",
+        title = "平台差异",
+        entries = buildList {
+            background?.let { row ->
+                add(SettingsIndexEntry(
+                    id = "platform.backgroundKeepAlive",
+                    title = row.title,
+                    icon = com.phonedsh.ui.icon.PdshIcon.BOLT,
+                    value = if (row.kind == SettingsRowKind.TOGGLE) null else row.value,
+                    enabled = row.enabled,
+                    toggleChecked = if (row.kind == SettingsRowKind.TOGGLE) row.checked else null,
+                    onToggle = if (row.kind == SettingsRowKind.TOGGLE && row.enabled) onToggleBackgroundKeepAlive else null,
+                ))
+            }
+            add(SettingsIndexEntry(
+                id = "platform.exportDiagnostics",
+                title = UiStrings.SETTINGS_ROW_EXPORT,
+                icon = com.phonedsh.ui.icon.PdshIcon.DOCUMENT,
+                callback = { onNavigate(SettingsDestination.EXPORT_DIAGNOSTICS) },
+            ))
+            add(SettingsIndexEntry(
+                id = "platform.developerTools",
+                title = "开发者工具",
+                icon = com.phonedsh.ui.icon.PdshIcon.GEAR,
+                callback = { onNavigate(SettingsDestination.DEV_TOOLS) },
+            ))
+            notifications?.let { row -> add(platformFactEntry("platform.notifications", row, com.phonedsh.ui.icon.PdshIcon.HAND)) }
+            battery?.let { row -> add(platformFactEntry("platform.battery", row, com.phonedsh.ui.icon.PdshIcon.BOLT)) }
+            predictiveBack?.let { row -> add(platformFactEntry("platform.predictiveBack", row, com.phonedsh.ui.icon.PdshIcon.CHEVRON_LEFT)) }
+        },
+        footer = status,
+    )
+}
+
+private fun platformFactEntry(
+    id: String,
+    row: SettingsRowView,
+    icon: com.phonedsh.ui.icon.PdshIcon,
+): SettingsIndexEntry = SettingsIndexEntry(
+    id = id,
+    title = row.title,
+    icon = icon,
+    value = row.value ?: UiStrings.UNKNOWN,
+    subtitle = row.subtitle,
+    enabled = false,
+)
+
+private data class SettingsIndexSection(val id: String, val title: String, val entries: List<SettingsIndexEntry>, val footer: String? = null)
+private data class SettingsIndexEntry(
+    val id: String,
+    val title: String,
+    val icon: com.phonedsh.ui.icon.PdshIcon,
+    val value: String? = null,
+    val enabled: Boolean = true,
+    val callback: (() -> Unit)? = null,
+    val options: List<SettingsMenuOption> = emptyList(),
+    val rowId: String? = null,
+    val onSelectPreference: ((SettingsPreferenceChoice) -> Unit)? = null,
+    val selectedOptionId: String? = null,
+    val subtitle: String? = null,
+    val toggleChecked: Boolean? = null,
+    val onToggle: ((Boolean) -> Unit)? = null,
+) {
+    companion object {
+        fun menu(id: String, title: String, icon: com.phonedsh.ui.icon.PdshIcon, value: String,
+                 options: List<SettingsMenuOption>, rowId: String, selectedOptionId: String?,
+                 onSelect: ((SettingsPreferenceChoice) -> Unit)?) = SettingsIndexEntry(
+            id = id, title = title, icon = icon, value = value, options = options,
+            rowId = rowId, selectedOptionId = selectedOptionId,
+            enabled = onSelect != null, onSelectPreference = onSelect,
+        )
+    }
+}
+
+@Composable
+private fun SettingsIndexRow(entry: SettingsIndexEntry, dividerBelow: Boolean) {
+    val tokens = LocalUiTokens.current
+    var expanded by remember { mutableStateOf(false) }
+    val click: (() -> Unit)? = if (!entry.enabled) null else when {
+        entry.onToggle != null -> ({ entry.onToggle.invoke(entry.toggleChecked != true) })
+        entry.callback != null -> entry.callback
+        entry.options.isNotEmpty() -> ({ expanded = !expanded })
+        else -> null
+    }
+    androidx.compose.foundation.layout.Column {
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = com.phonedsh.ui.SettingsMetrics.GROUPED_LIST_MIN_ROW_HEIGHT_PT.dp)
+                .then(if (click != null) Modifier.clickable(
+                    enabled = entry.enabled,
+                    role = if (entry.onToggle != null) Role.Switch else Role.Button,
+                ) { click() } else Modifier)
+                .testTag(UiPageTags.SETTINGS_INDEX_ROW_PREFIX + entry.id)
+                .semantics(mergeDescendants = true) {
+                    if (entry.onToggle != null) {
+                        stateDescription = if (entry.toggleChecked == true) UiStrings.SETTINGS_BACKGROUND_ON else UiStrings.SETTINGS_BACKGROUND_OFF
+                    }
+                },
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            com.phonedsh.ui.icon.PdshIconView(
+                icon = entry.icon,
+                size = com.phonedsh.ui.HomeMetrics.composerIcon,
+                tint = tokens.colors.textPrimary,
+                contentDescription = null,
+                modifier = Modifier.padding(start = tokens.geometry.pageOuterMarginH),
+            )
+            Column(modifier = Modifier.weight(1f).padding(start = tokens.spacing.iconText)) {
+                androidx.compose.foundation.text.BasicText(
+                    text = entry.title,
+                    style = settingsLabelStyle().copy(color = if (entry.enabled) tokens.colors.textPrimary else tokens.colors.textTertiary),
+                )
+                entry.subtitle?.let { subtitle ->
+                    androidx.compose.foundation.text.BasicText(
+                        text = subtitle,
+                        style = settingsLabelStyle().copy(color = tokens.colors.textSecondary),
+                        maxLines = 2,
+                    )
+                }
+            }
+            entry.value?.let { value ->
+                androidx.compose.foundation.text.BasicText(
+                    text = value,
+                    style = settingsLabelStyle().copy(color = tokens.colors.textSecondary),
+                    maxLines = 1,
+                    modifier = Modifier.testTag(UiPageTags.SETTINGS_INDEX_VALUE_PREFIX + entry.id),
                 )
             }
-        } else if (tabContent != null) {
-            tabContent(tab)
-        } else {
-            SettingsTabUnavailable(tab = tab)
+            if (entry.onToggle != null) {
+                SettingsSwitch(checked = entry.toggleChecked == true, enabled = entry.enabled)
+            } else if (entry.options.isNotEmpty()) {
+                com.phonedsh.ui.icon.PdshIconView(
+                    icon = com.phonedsh.ui.icon.PdshIcon.CHEVRON_DOWN,
+                    size = com.phonedsh.ui.HomeMetrics.composerIcon,
+                    tint = tokens.colors.textSecondary,
+                    contentDescription = null,
+                    modifier = Modifier.padding(horizontal = tokens.spacing.iconText),
+                )
+            } else if (click != null) {
+                com.phonedsh.ui.icon.PdshIconView(
+                    icon = com.phonedsh.ui.icon.PdshIcon.CHEVRON_RIGHT,
+                    size = com.phonedsh.ui.HomeMetrics.composerIcon,
+                    tint = tokens.colors.textSecondary,
+                    contentDescription = null,
+                    modifier = Modifier.padding(horizontal = tokens.spacing.iconText),
+                )
+            } else {
+                Spacer(modifier = Modifier.width(tokens.spacing.cardInset))
+            }
         }
+        if (entry.options.isNotEmpty() && expanded) {
+            entry.options.forEachIndexed { index, option ->
+                SettingsGroupedRow(
+                    title = option.title,
+                    modifier = Modifier.testTag(UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "${entry.id}.option.${option.id}"),
+                    dividerBelow = index != entry.options.lastIndex,
+                    trailing = if (option.id == entry.selectedOptionId) ({
+                        com.phonedsh.ui.icon.PdshIconView(
+                            icon = com.phonedsh.ui.icon.PdshIcon.CHECK,
+                            size = com.phonedsh.ui.HomeMetrics.composerIcon,
+                            tint = tokens.colors.textPrimary,
+                            contentDescription = "已选择",
+                        )
+                    }) else null,
+                    onClick = {
+                        expanded = false
+                        entry.rowId?.let { rowId -> entry.onSelectPreference?.invoke(SettingsPreferenceChoice(rowId, option.id)) }
+                    },
+                )
+            }
+        }
+        if (dividerBelow) SettingsHairline()
     }
 }
 
@@ -1365,9 +1695,11 @@ private fun SettingsMenuCardRow(
                 ) {
                     SettingsRowLabel(text = option.title, modifier = Modifier.weight(1f))
                     if (selected) {
-                        BasicText(
-                            text = CHECKMARK,
-                            style = settingsLabelStyle().copy(color = tokens.colors.accent),
+                        com.phonedsh.ui.icon.PdshIconView(
+                            icon = com.phonedsh.ui.icon.PdshIcon.CHECK,
+                            size = com.phonedsh.ui.HomeMetrics.composerIcon,
+                            tint = tokens.colors.accent,
+                            contentDescription = "已选择",
                         )
                     }
                     SettingsChevronSlot(withChevron = false)
@@ -1412,67 +1744,7 @@ private fun SettingsTabUnavailable(tab: SettingsTab) {
     }
 }
 
-/**
- * The 新会话默认权限 sub-page the 权限 row opens (`SettingsPage.swift:218-245`).
- *
- * Its note is the one sentence that explains the scope of the setting, kept word
- * for word, and the three presets carry the checkmark on the current one.
- *
- * @param state the pure sub-page state (`PermissionDefaultsState.from`).
- * @param onSelect a preset was tapped; the host writes it and re-projects.
- * @param onBack leave the sub-page.
- */
-@Composable
-public fun PermissionDefaultsPage(
-    state: PermissionDefaultsState,
-    onSelect: (PermissionTier) -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    SettingsSubPageFrame(
-        modifier = modifier,
-        title = UiStrings.PERMISSION_DEFAULTS_TITLE,
-        onBack = onBack,
-        backGlyph = PAGE_BACK_GLYPH,
-        grouped = true,
-        rootTag = UiPageTags.PERMISSION_DEFAULTS_LIST,
-    ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = SettingsListTopInset),
-        ) {
-            item(key = "card.options") {
-                SettingsGroupCard {
-                    SettingsFootnoteRow(
-                        text = state.note,
-                        modifier = Modifier.testTag(UiPageTags.PERMISSION_DEFAULTS_NOTE),
-                    )
-                    state.options.forEachIndexed { index, option ->
-                        SettingsRowFrame(
-                            dividerBelow = index != state.options.lastIndex,
-                            role = Role.Button,
-                            onClick = { onSelect(option.tier) },
-                            modifier = Modifier.testTag(
-                                UiPageTags.PERMISSION_DEFAULTS_OPTION_PREFIX + option.tier.name,
-                            ),
-                        ) {
-                            SettingsRowLabel(text = option.title, modifier = Modifier.weight(1f))
-                            if (option.selected) {
-                                BasicText(
-                                    text = CHECKMARK,
-                                    style = settingsLabelStyle().copy(
-                                        color = LocalUiTokens.current.colors.accent,
-                                    ),
-                                )
-                            }
-                            SettingsChevronSlot(withChevron = false)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+
 
 /** The value ink: the baseline's secondary for a plain value, a tone for a fact. */
 private fun PageTone.settingsInk(tokens: UiTokens): Color = when (this) {
@@ -1491,7 +1763,6 @@ private val BUSY_ENTER_OPTIONS: List<SettingsMenuOption> = listOf(
 /** The 快捷键 row's value when the host does not count the bindings. */
 private const val VALUE_EDIT: String = "编辑"
 
-private const val CHECKMARK: String = "✓"
 
 /**
  * Page-level copy that `UiStrings` does not carry yet.
