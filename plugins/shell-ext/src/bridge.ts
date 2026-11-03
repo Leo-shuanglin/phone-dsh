@@ -22,12 +22,13 @@
  * approval gate) cannot take that id from its argv: `phone` is also an ordinary
  * command inside `bash`, so `phone ubuntu run --session <other>` would let the
  * model pick whose approval it spends. The dispatch request therefore has an
- * explicit [AcceleratorRequest.sessionId] field, and this module is the only
- * writer of the EXEC_REQ member that carries it: `env[TOOL_CALL_SESSION_ENV]`.
- * It is deleted from the shell's exported environment first and written only
- * from the trusted field, exactly like `XL_IDEMPOTENCY_KEY`, so a script that
- * exports the same name changes nothing. A dispatch that does not set the field
- * (every command built by {@link createAcceleratorCommands}, including a script
+ * explicit [AcceleratorRequest.sessionId] field; this module deletes the
+ * shell's exported member, writes the trusted value into the request env, and
+ * marks the request with `markTrustedToolCallSession` for the transport. The
+ * transport deletes the member on every dispatch and re-adds it only from that
+ * out-of-band mark, exactly like `XL_IDEMPOTENCY_KEY`, so a script that exports
+ * the same name changes nothing. A dispatch that does not set the field (every
+ * command built by {@link createAcceleratorCommands}, including a script
  * invoking `phone` directly) carries no session at all, which is what makes the
  * host able to refuse a dispatch the `ubuntu` command did not build.
  *
@@ -40,6 +41,7 @@
 import { defineCommand } from 'just-bash/browser'
 import type { Command } from 'just-bash/browser'
 import { currentToolCall, deriveIdemKey } from '@phone-dsh/dsh-exec-bridge'
+import { markTrustedToolCallSession } from '@phone-dsh/dsh-exec-bridge/transport'
 import { byteStringOutput, byteStringToBytes, bytesToByteString, concatBytes, decodeUtf8 } from './encoding.ts'
 import { appendShellTrailer, SHELL_MANIFEST_PATH, SHELL_REASON_EXIT } from './contract.ts'
 import { phoneProviderFailure } from './phone-errors.ts'
@@ -48,10 +50,10 @@ import type { ExecClient, ExecEvent, ExecRequest, Hello, IdemKeyFacts, ToolCallC
 /**
  * The EXEC_REQ `env` member that carries the trusted tool-call session.
  *
- * It is an envelope member, not a flag: the Worker command that owns a host tool
- * writes it from the ambient tool-call context, and no shell variable of the
- * same name is ever forwarded. The host reads it back from the request's `env`
- * map, so the wire schema of `channel.md` §4.2 does not change.
+ * It is an envelope member, not a flag: the `ubuntu` dispatch writes it from
+ * its explicit out-of-band session field, and no shell variable of the same
+ * name is ever forwarded. The host reads it back from the request's `env` map,
+ * so the wire schema of `channel.md` §4.2 does not change.
  */
 export const TOOL_CALL_SESSION_ENV = 'PDSH_TOOL_CALL_SESSION'
 
@@ -173,7 +175,8 @@ export function createExecBridgeAccelerators(options: ExecBridgeAcceleratorOptio
       // reach the approval gate).
       delete env[TOOL_CALL_SESSION_ENV]
       const session = request.sessionId
-      if (session !== undefined && SESSION_ID.test(session)) env[TOOL_CALL_SESSION_ENV] = session
+      const trustedSession = session !== undefined && SESSION_ID.test(session) ? session : undefined
+      if (trustedSession !== undefined) env[TOOL_CALL_SESSION_ENV] = trustedSession
       const identity: IdemKeyFacts = facts ?? {}
       let idemKey: string
       try {
@@ -208,6 +211,11 @@ export function createExecBridgeAccelerators(options: ExecBridgeAcceleratorOptio
           ? { mode: 'ignore' }
           : { mode: 'data', data: Buffer.from(byteStringToBytes(request.stdin)).toString('base64') },
       }
+      // The env member is only for the host's wire shape; the transport must
+      // not trust argv (a script's `phone ubuntu run` looks identical). The
+      // out-of-band mark is the one fact that says this request is the
+      // `ubuntu` command's own dispatch, so only this path sets it.
+      if (trustedSession !== undefined) markTrustedToolCallSession(execRequest, trustedSession)
       let stream
       try {
         stream = await options.client.exec(execRequest, request.signal)

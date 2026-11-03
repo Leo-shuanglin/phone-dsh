@@ -473,6 +473,16 @@ class BuildSeal(
                     failure,
                 )
             }
+            if (mode == SEALED_MODE) {
+                // A root already at 000 is a state a previous seal left behind,
+                // not an original mode. Recording it would make the boot repair
+                // write 000 again and lose the real mode permanently.
+                throw SealException(
+                    SealFailure.VERIFY_FAILED,
+                    "root \"${root.label}\" is already ${octal(mode)}; " +
+                        "run the boot repair (recoverIfNeeded) before sealing",
+                )
+            }
             entries.add(SealEntry(root.label, root.path, originalMode = mode, sealedMode = null))
         }
 
@@ -535,7 +545,9 @@ class BuildSeal(
      *
      * Idempotent: a handle that is already restored returns without touching a
      * mode. Every root is attempted even when an earlier one failed, because a
-     * single failure must not leave the other roots sealed.
+     * single failure must not leave the other roots sealed. A failed restore
+     * keeps the handle active, so [seal] refuses a second job until an explicit
+     * retry or [recoverIfNeeded] has restored every root.
      *
      * @throws SealException when any root could not be restored. The marker is
      *   kept in that case, so the next boot retries.
@@ -568,10 +580,6 @@ class BuildSeal(
             }
         }
 
-        synchronized(lock) {
-            if (active === handle) active = null
-        }
-
         if (failures.isNotEmpty()) {
             handle.restored.set(false)
             log("build-seal: restore FAILED for job \"${handle.job}\": ${failures.joinToString("; ")}")
@@ -579,6 +587,13 @@ class BuildSeal(
                 SealFailure.RESTORE_FAILED,
                 "cannot restore ${failures.joinToString("; ")}; the marker is kept for the next boot",
             )
+        }
+
+        // Only a complete restore may release the active handle. A failed one
+        // keeps it, so the same instance refuses to seal again (ALREADY_SEALED)
+        // until the retry or the boot repair has actually put every root back.
+        synchronized(lock) {
+            if (active === handle) active = null
         }
 
         try {
@@ -650,6 +665,10 @@ class BuildSeal(
         } catch (failure: IOException) {
             return SealRecovery.Failed("cannot remove the seal marker: ${failure.message}", SealFailure.RESTORE_FAILED)
         }
+        // The repair has undone the failed seal's chmods, so the handle that
+        // failed to restore must no longer block the next seal. Only a fully
+        // successful repair reaches this point; a Failed recovery keeps it.
+        synchronized(lock) { active = null }
         log(
             "build-seal: recovered job \"${marker.job}\" after a crash; " +
                 "${repaired.filter { it.modeBefore != it.modeAfter }.size} root(s) put back",
@@ -681,6 +700,18 @@ class BuildSeal(
     }
 
     private suspend fun writeMarker(job: String, sealedAtMs: Long, entries: List<SealEntry>) {
+        // A zero is the sealed state, never an original mode. Reaching this check
+        // means a caller assembled an entry without going through sealLocked's
+        // read-back guard; refuse it rather than write a line that would make
+        // the next boot restore 000.
+        val zeroMode = entries.firstOrNull { it.originalMode == SEALED_MODE }
+        if (zeroMode != null) {
+            throw SealException(
+                SealFailure.VERIFY_FAILED,
+                "refusing to record root \"${zeroMode.label}\" at ${octal(SEALED_MODE)} " +
+                    "as its original mode; run the boot repair first",
+            )
+        }
         val text = buildString {
             append(MARKER_MAGIC).append(' ').append(MARKER_VERSION).append('\n')
             append("sealed_at_ms ").append(sealedAtMs).append('\n')
