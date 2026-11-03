@@ -83,6 +83,7 @@ import com.phonedsh.ui.ChatMetrics
 import com.phonedsh.ui.icon.PdshIcon
 import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.theme.LocalUiTokens
+import com.phonedsh.ui.theme.materialSheetColors
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
 import java.util.Locale
@@ -485,9 +486,12 @@ private fun ComposerMetrics(
             }
         }
     }
+    val sheetPalette = materialSheetColors(tokens)
     androidx.compose.material3.ModalBottomSheet(
         sheetState = detailSheetState,
         onDismissRequest = { detail = null },
+        containerColor = sheetPalette.container,
+        contentColor = sheetPalette.content,
     ) {
         com.phonedsh.ui.surface.SettingsSubPageFrame(
             modifier = Modifier.fillMaxWidth().height((LocalConfiguration.current.screenHeightDp * 0.5f).dp),

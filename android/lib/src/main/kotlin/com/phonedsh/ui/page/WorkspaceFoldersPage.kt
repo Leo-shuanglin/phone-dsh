@@ -604,6 +604,7 @@ private fun WorkspaceCreateDialog(
             }
         },
         containerColor = tokens.colors.input,
+        textContentColor = tokens.colors.secondary,
     )
 }
 

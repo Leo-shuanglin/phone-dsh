@@ -136,6 +136,7 @@ import com.phonedsh.ui.icon.PdshIcon
 import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
+import com.phonedsh.ui.theme.materialDialogColors
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
 import java.time.Instant
@@ -1943,6 +1944,7 @@ private fun DialogFrame(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
+    val palette = materialDialogColors(tokens)
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = {
@@ -1954,6 +1956,8 @@ private fun DialogFrame(
         text = { text() },
         confirmButton = confirmButton,
         dismissButton = dismissButton,
+        containerColor = palette.container,
+        textContentColor = palette.content,
     )
 }
 

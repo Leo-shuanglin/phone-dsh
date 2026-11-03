@@ -76,6 +76,7 @@ import com.phonedsh.ui.surface.settingsFootnoteStyle
 import com.phonedsh.ui.surface.settingsLabelStyle
 import com.phonedsh.ui.surface.settingsValueStyle
 import com.phonedsh.ui.theme.LocalUiTokens
+import com.phonedsh.ui.theme.materialDialogColors
 import com.phonedsh.ui.theme.generated.UiTokenNames
 
 // ---------------------------------------------------------------------------
@@ -326,6 +327,8 @@ public fun WebSearchSettingsPage(
     // whose taps land in a `{}` default — the exact fake the callback defaults used
     // to hide. With this gate the control is disabled instead, and the page's own
     // reason line (or the baseline's silence) is the visible answer.
+    val tokens = LocalUiTokens.current
+    val dialogPalette = materialDialogColors(tokens)
     val writable = state.canWrite
     val modeWritable = writable && onModeChange != null
     val addressWritable = writable && onCommitAddress != null
@@ -474,6 +477,8 @@ public fun WebSearchSettingsPage(
                         Text(UiStrings.CANCEL)
                     }
                 },
+                containerColor = dialogPalette.container,
+                textContentColor = dialogPalette.content,
             )
         }
         if (pendingRemove) {
@@ -496,6 +501,8 @@ public fun WebSearchSettingsPage(
                         Text(UiStrings.CANCEL)
                     }
                 },
+                containerColor = dialogPalette.container,
+                textContentColor = dialogPalette.content,
             )
         }
     }

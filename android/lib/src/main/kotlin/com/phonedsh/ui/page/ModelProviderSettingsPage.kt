@@ -104,6 +104,7 @@ import com.phonedsh.ui.surface.settingsFootnoteStyle
 import com.phonedsh.ui.surface.settingsLabelStyle
 import com.phonedsh.ui.surface.settingsValueStyle
 import com.phonedsh.ui.theme.LocalUiTokens
+import com.phonedsh.ui.theme.materialDialogColors
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
 import java.net.URI
@@ -724,6 +725,8 @@ public fun ModelProviderSettingsPage(
     /** Existing route back chain; editor and advanced pages consume one inner level each. */
     backLevel: PdshBackLevel? = null,
 ) {
+    val tokens = LocalUiTokens.current
+    val dialogPalette = materialDialogColors(tokens)
     var draft by remember { mutableStateOf<ProviderDraft?>(null) }
     var pendingDelete by remember { mutableStateOf<ProviderRowView?>(null) }
     var saveRequestId by remember { mutableStateOf<String?>(null) }
@@ -909,6 +912,8 @@ public fun ModelProviderSettingsPage(
                         Text(UiStrings.CANCEL)
                     }
                 },
+                containerColor = dialogPalette.container,
+                textContentColor = dialogPalette.content,
             )
         }
     }

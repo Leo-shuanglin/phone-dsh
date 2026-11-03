@@ -353,12 +353,19 @@ public data class SettingsFacts(
     public val defaultPermissionTier: PermissionTier? = null,
     /** Permission modes actually reported by `permissionPresets/catalog`; null means unread. */
     public val defaultPermissionAvailableTiers: Set<PermissionTier>? = null,
-    /** Whether `settings/describe` reported a writable permission namespace. */
+    /** Whether the host reports this one field writable (not the provider-wide flag). */
     public val defaultPermissionWritable: Boolean = false,
     /** A confirmed permission default write is in flight. */
     public val defaultPermissionBusy: Boolean = false,
     /** Actual source read/write failure, if reported. */
     public val defaultPermissionFailure: String? = null,
+    /**
+     * Why the new-session default is read-only, when the host measured a lock
+     * instead of a plain refusal (the phone image's startup home patch).
+     */
+    public val defaultPermissionReadOnlyReason: String? = null,
+    /** True when the lock is the startup overlay rather than a provider-wide refusal. */
+    public val defaultPermissionStartupLocked: Boolean = false,
     public val preferences: SettingsPreferences = SettingsPreferences(),
     public val backgroundKeepAlive: FactState = FactState.UNKNOWN,
     public val busyEnterMode: BusyEnterMode? = null,
@@ -461,6 +468,8 @@ public data class SettingsScreenState(
     public val defaultPermissionWritable: Boolean = false,
     public val defaultPermissionBusy: Boolean = false,
     public val defaultPermissionFailure: String? = null,
+    public val defaultPermissionReadOnlyReason: String? = null,
+    public val defaultPermissionStartupLocked: Boolean = false,
     public val busyEnterMode: BusyEnterMode? = null,
 ) {
     /** One row by id. */
@@ -821,6 +830,8 @@ public data class SettingsScreenState(
                 defaultPermissionWritable = facts.defaultPermissionWritable,
                 defaultPermissionBusy = facts.defaultPermissionBusy,
                 defaultPermissionFailure = facts.defaultPermissionFailure,
+                defaultPermissionReadOnlyReason = facts.defaultPermissionReadOnlyReason,
+                defaultPermissionStartupLocked = facts.defaultPermissionStartupLocked,
                 busyEnterMode = facts.busyEnterMode,
             )
         }
@@ -983,6 +994,7 @@ public data class PermissionOptionView(
  *
  * @param note the baseline's one explanatory line, verbatim.
  * @param options the three presets in menu order.
+ * @param readOnlyReason why the selector is disabled, when the host measured a lock.
  */
 @Immutable
 public data class PermissionDefaultsState(
@@ -992,6 +1004,7 @@ public data class PermissionDefaultsState(
     public val writable: Boolean = false,
     public val failure: String? = null,
     public val statusMessage: String? = null,
+    public val readOnlyReason: String? = null,
 ) {
     public companion object {
         /** Projects the host's current preset into the three option rows. */
@@ -1002,46 +1015,61 @@ public data class PermissionDefaultsState(
             writable: Boolean = false,
             busy: Boolean = false,
             failure: String? = null,
-        ): PermissionDefaultsState = PermissionDefaultsState(
-            note = UiStrings.settingsNativeText(
-                languageId,
-                UiStrings.PERMISSION_DEFAULTS_NOTE,
-                UiStrings.PERMISSION_DEFAULTS_SCOPE_EN,
-            ),
-            busy = busy,
-            writable = writable,
-            failure = failure,
-            statusMessage = failure ?: when {
-                busy -> UiStrings.settingsNativeText(languageId, "正在保存…", "Saving…")
-                !writable -> UiStrings.settingsNativeText(
+            readOnlyReason: String? = null,
+            startupLocked: Boolean = false,
+        ): PermissionDefaultsState {
+            val lockReason = when {
+                writable -> null
+                startupLocked -> UiStrings.settingsNativeText(
                     languageId,
-                    "此主机未提供可写的未来会话权限默认值。",
-                    "This host does not expose a writable default for future sessions.",
+                    UiStrings.DEFAULT_PERMISSION_STARTUP_LOCKED_REASON,
+                    UiStrings.DEFAULT_PERMISSION_STARTUP_LOCKED_REASON_EN,
                 )
-                availableTiers != null && availableTiers.isEmpty() -> UiStrings.settingsNativeText(
+                !readOnlyReason.isNullOrBlank() -> readOnlyReason
+                else -> UiStrings.settingsNativeText(
                     languageId,
-                    "主机未提供本页支持的未来会话权限选项。",
-                    "The host did not offer any default permission options supported here.",
+                    UiStrings.DEFAULT_PERMISSION_READ_ONLY_FALLBACK_REASON,
+                    UiStrings.DEFAULT_PERMISSION_READ_ONLY_FALLBACK_REASON_EN,
                 )
-                else -> null
-            },
-            options = listOf(
-                PermissionTier.VIEW_ONLY,
-                PermissionTier.WORKSPACE_WRITE,
-                PermissionTier.FULL_ACCESS,
-            ).map { tier ->
-                PermissionOptionView(
-                    tier = tier,
-                    title = UiStrings.settingsNativeText(languageId, SettingsScreenState.tierTitle(tier), when (tier) {
-                        PermissionTier.VIEW_ONLY -> "Read only"
-                        PermissionTier.WORKSPACE_WRITE -> "Workspace write"
-                        PermissionTier.FULL_ACCESS -> "Full access"
-                    }),
-                    selected = tier == selected,
-                    enabled = writable && !busy && availableTiers?.contains(tier) == true,
-                )
-            },
-        )
+            }
+            return PermissionDefaultsState(
+                note = UiStrings.settingsNativeText(
+                    languageId,
+                    UiStrings.PERMISSION_DEFAULTS_NOTE,
+                    UiStrings.PERMISSION_DEFAULTS_SCOPE_EN,
+                ),
+                busy = busy,
+                writable = writable,
+                failure = failure,
+                readOnlyReason = lockReason,
+                statusMessage = failure ?: when {
+                    busy -> UiStrings.settingsNativeText(languageId, "正在保存…", "Saving…")
+                    !writable -> lockReason
+                    availableTiers != null && availableTiers.isEmpty() -> UiStrings.settingsNativeText(
+                        languageId,
+                        "主机未提供本页支持的未来会话权限选项。",
+                        "The host did not offer any default permission options supported here.",
+                    )
+                    else -> null
+                },
+                options = listOf(
+                    PermissionTier.VIEW_ONLY,
+                    PermissionTier.WORKSPACE_WRITE,
+                    PermissionTier.FULL_ACCESS,
+                ).map { tier ->
+                    PermissionOptionView(
+                        tier = tier,
+                        title = UiStrings.settingsNativeText(languageId, SettingsScreenState.tierTitle(tier), when (tier) {
+                            PermissionTier.VIEW_ONLY -> "Read only"
+                            PermissionTier.WORKSPACE_WRITE -> "Workspace write"
+                            PermissionTier.FULL_ACCESS -> "Full access"
+                        }),
+                        selected = tier == selected,
+                        enabled = writable && !busy && availableTiers?.contains(tier) == true,
+                    )
+                },
+            )
+        }
     }
 }
 
@@ -1211,8 +1239,10 @@ public fun SettingsPage(
                     writable = state.defaultPermissionWritable,
                     busy = state.defaultPermissionBusy,
                     failure = state.defaultPermissionFailure,
+                    readOnlyReason = state.defaultPermissionReadOnlyReason,
+                    startupLocked = state.defaultPermissionStartupLocked,
                 ),
-                onSelect = onSelectDefaultPermission,
+                onSelect = if (state.defaultPermissionWritable) onSelectDefaultPermission else null,
                 onBack = { page = SettingsIndexPage.ROOT },
                 embedded = true,
             )

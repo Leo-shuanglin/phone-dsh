@@ -307,6 +307,11 @@ internal fun HostShell(
             engine.refreshDefaultPermissionTier()?.let { notice = "新会话默认权限读取失败：$it" }
         }
         if (nav.current == PdshRoute.Configuration) {
+            // The plugin page's permission block reads the same measured
+            // startup-lock facts as the settings sub-page; refresh this field
+            // before the configuration walk so a writable engine keeps its
+            // write path and a locked one explains itself.
+            engine.refreshDefaultPermissionTier()
             engine.refreshConfiguration()?.let { notice = "本会话设置部分读取失败：$it" }
         }
     }
@@ -713,8 +718,24 @@ internal fun HostShell(
                 }
             }
         }
+        val readOnlyReason = when {
+            permissionDefaults.writable -> null
+            permissionDefaults.failure != null -> permissionDefaults.failure
+            permissionDefaults.startupLocked -> UiStrings.DEFAULT_PERMISSION_STARTUP_LOCKED_REASON
+            else -> permissionDefaults.readOnlyReason
+        }
+        // The plugin configuration page's permission block must read this
+        // field's measured answer, not `settingsWritable`: the phone image's
+        // startup home patch locks defaultPreset while the provider as a whole
+        // still reports writable.
+        val pageConfiguration = configurationFacts.copy(
+            snapshot = configurationFacts.snapshot?.copy(
+                defaultPermissionWritable = permissionDefaults.writable,
+                defaultPermissionReadOnlyReason = readOnlyReason,
+            ),
+        )
         measured.copy(
-            configuration = configurationFacts,
+            configuration = pageConfiguration,
             actionAvailability = com.phonedsh.ui.nav.PdshActionAvailabilities(actions),
             licenses = ANDROID_NATIVE_LICENSE_FACTS,
             sessions = if (sessionSnapshot.waiting && sessionSnapshot.sessions.isEmpty() && sessionSnapshot.archivedSessions.isEmpty()) null else
@@ -742,6 +763,8 @@ internal fun HostShell(
                 defaultPermissionWritable = permissionDefaults.writable,
                 defaultPermissionBusy = permissionDefaults.busy,
                 defaultPermissionFailure = permissionDefaults.failure,
+                defaultPermissionReadOnlyReason = readOnlyReason,
+                defaultPermissionStartupLocked = !permissionDefaults.writable && permissionDefaults.startupLocked,
                 archivedSessionCount = if (sessionSnapshot.waiting) null else sessionSnapshot.archivedSessions.size,
             ),
             automation = automationFacts.copy(currentSessionID = chatUi.workerSessionId),

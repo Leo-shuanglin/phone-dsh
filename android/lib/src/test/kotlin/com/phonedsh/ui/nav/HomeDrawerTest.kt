@@ -5,13 +5,18 @@ package com.phonedsh.ui.nav
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.theme.PdshTheme
+import com.phonedsh.ui.theme.UiTokens
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -40,6 +45,17 @@ class HomeDrawerTest {
         val controller = dialogController()
         assertTrue("light chrome needs dark status-bar glyphs", controller.isAppearanceLightStatusBars)
         assertTrue("light chrome needs dark navigation-bar glyphs", controller.isAppearanceLightNavigationBars)
+    }
+
+    @Test
+    fun `the drawer keeps the app's dark tokens instead of a forced light table`() {
+        val dark = UiTokens.resolve(true, 411.dp)
+        val light = UiTokens.resolve(false, 411.dp)
+        val drawer = homeDrawerTokens(dark)
+        assertEquals("the drawer must use the inherited dark table", dark.colors.page, drawer.colors.page)
+        assertEquals(dark.colors.surface, drawer.colors.surface)
+        assertNotEquals("the drawer must not resolve a light table in dark mode", light.colors.page, drawer.colors.page)
+        assertTrue("the dark page token must actually be dark", drawer.colors.page.luminance() < 0.5f)
     }
 
     private fun show(darkTheme: Boolean) {

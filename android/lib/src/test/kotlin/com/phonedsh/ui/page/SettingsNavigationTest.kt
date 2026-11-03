@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.PdshTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -146,6 +147,33 @@ class SettingsNavigationTest {
         compose.onNodeWithTag(PERMISSION_DEFAULTS_OPTION_PREFIX + PermissionTier.VIEW_ONLY.name).performClick()
         compose.onNodeWithTag(PERMISSION_DEFAULTS_OPTION_PREFIX + PermissionTier.WORKSPACE_WRITE.name).assertIsNotEnabled()
         compose.runOnIdle { assertEquals(listOf(PermissionTier.VIEW_ONLY), selected) }
+    }
+
+    @Test
+    fun `a startup-locked default permission disables every row and explains the lock`() {
+        var picked = 0
+        compose.setContent {
+            PdshTheme(darkTheme = false) {
+                PermissionDefaultsPage(
+                    state = PermissionDefaultsState.from(
+                        selected = PermissionTier.WORKSPACE_WRITE,
+                        languageId = "zh",
+                        availableTiers = PermissionTier.entries.toSet(),
+                        writable = false,
+                        startupLocked = true,
+                    ),
+                    onSelect = { picked += 1 },
+                    onBack = {},
+                )
+            }
+        }
+        PermissionTier.entries.forEach { tier ->
+            compose.onNodeWithTag(PERMISSION_DEFAULTS_OPTION_PREFIX + tier.name)
+                .assertIsNotEnabled()
+        }
+        compose.onNodeWithText(UiStrings.DEFAULT_PERMISSION_STARTUP_LOCKED_REASON, substring = true)
+            .assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, picked) }
     }
 
     @Test

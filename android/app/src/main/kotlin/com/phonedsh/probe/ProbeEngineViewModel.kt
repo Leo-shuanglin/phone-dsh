@@ -78,6 +78,7 @@ import com.phonedsh.log.MutationBody
 import com.phonedsh.log.VfsOp
 import com.phonedsh.log.WalPaths
 import com.phonedsh.log.WorkspaceLog
+import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.projection.UiStateNode
 import com.phonedsh.ui.surface.preview.WorkspacePreviewSource
 import com.phonedsh.ui.nav.confirms
@@ -588,13 +589,23 @@ private class DshChatQueueTransport(
     }
 }
 
-/** Permission preset catalog and write capability measured from the DSH host. */
+/**
+ * Permission preset catalog and write capability measured from the DSH host.
+ *
+ * [writable] is this **field's** capability, not `settings/describe.writable`:
+ * the phone image pins `permission.defaultPreset` in its startup home patch, so
+ * the provider-wide flag is not evidence that this value can be written.
+ * [startupLocked] distinguishes that startup overlay from a plain provider
+ * refusal so the page can name the source and the restart requirement.
+ */
 internal data class PermissionDefaultsHostState(
     val currentModeId: String? = null,
     val availableModeIds: Set<String>? = null,
     val writable: Boolean = false,
     val busy: Boolean = false,
     val failure: String? = null,
+    val startupLocked: Boolean = true,
+    val readOnlyReason: String? = com.phonedsh.ui.UiStrings.DEFAULT_PERMISSION_STARTUP_LOCKED_REASON,
 ) {
     val currentTier: com.phonedsh.ui.page.PermissionTier? get() = tierForPermissionMode(currentModeId)
     val availableTiers: Set<com.phonedsh.ui.page.PermissionTier>? get() = availableModeIds?.mapNotNull(::tierForPermissionMode)?.toSet()
@@ -605,6 +616,251 @@ private fun tierForPermissionMode(id: String?): com.phonedsh.ui.page.PermissionT
     "workspace-write", "phone" -> com.phonedsh.ui.page.PermissionTier.WORKSPACE_WRITE
     "danger-full-access", "bypassPermissions" -> com.phonedsh.ui.page.PermissionTier.FULL_ACCESS
     else -> null
+}
+
+/** One measured answer about writing the new-session default permission. */
+internal data class DefaultPermissionAccess(
+    val writable: Boolean,
+    val startupLocked: Boolean = false,
+    val readOnlyReason: String? = null,
+)
+
+/**
+ * Keys a future engine may add to report this one field's writability or the
+ * layer that owns it. Nothing here is invented by the UI: when none of these
+ * facts is present, the phone image's startup home patch is the known owner and
+ * the field is treated as locked rather than trusting the provider-wide flag.
+ */
+private val DEFAULT_PERMISSION_WRITABLE_KEYS: List<String> = listOf(
+    "defaultPermissionWritable",
+    "permissionDefaultWritable",
+    "defaultPresetWritable",
+    "permissionWritable",
+)
+
+private val DEFAULT_PERMISSION_OVERRIDE_KEYS: List<String> = listOf(
+    "defaultPermissionOverrideSource",
+    "permissionDefaultOverrideSource",
+    "defaultPresetOverrideSource",
+    "overrideSource",
+    "lockedBy",
+)
+
+/**
+ * Reads the engine's per-field write signal for the permission default.
+ *
+ * Precedence:
+ *  1. an explicit per-field writable/lock fact on the describe root or the
+ *     `permission` namespace (a future engine, used verbatim);
+ *  2. an explicit override/lock source names the startup layer;
+ *  3. no per-field fact: the phone image's home patch owns this value, so it is
+ *     locked. The provider-wide `writable` is deliberately not consulted for
+ *     this decision.
+ *
+ * @param described the `settings/describe` value, or `null` when unread.
+ * @return the measured access, always carrying a reason when not writable.
+ */
+internal fun defaultPermissionAccess(described: JsonObject?): DefaultPermissionAccess {
+    val fallback = com.phonedsh.ui.UiStrings.DEFAULT_PERMISSION_READ_ONLY_FALLBACK_REASON
+    if (described == null) {
+        return DefaultPermissionAccess(writable = false, startupLocked = false, readOnlyReason = fallback)
+    }
+    if ((described["writable"] as? JsonBool)?.value != true) {
+        return DefaultPermissionAccess(writable = false, startupLocked = false, readOnlyReason = fallback)
+    }
+    val namespace = permissionNamespaceIn(described)
+        ?: return DefaultPermissionAccess(writable = false, startupLocked = false, readOnlyReason = fallback)
+    if ((namespace["revision"] as? JsonNumber)?.asLongOrNull() == null) {
+        return DefaultPermissionAccess(writable = false, startupLocked = false, readOnlyReason = fallback)
+    }
+    val ownField = described.boolField(DEFAULT_PERMISSION_WRITABLE_KEYS)
+        ?: namespace.boolField(DEFAULT_PERMISSION_WRITABLE_KEYS)
+    val source = described.stringField(DEFAULT_PERMISSION_OVERRIDE_KEYS)
+        ?: namespace.stringField(DEFAULT_PERMISSION_OVERRIDE_KEYS)
+        ?: namespace.startupSource()
+    if (ownField != null) {
+        return if (ownField) {
+            DefaultPermissionAccess(writable = true)
+        } else {
+            DefaultPermissionAccess(
+                writable = false,
+                startupLocked = true,
+                readOnlyReason = startupLockReason(source),
+            )
+        }
+    }
+    if (source != null) {
+        return DefaultPermissionAccess(
+            writable = false,
+            startupLocked = true,
+            readOnlyReason = startupLockReason(source),
+        )
+    }
+    // No engine-provided per-field provenance. The phone image's startup layer
+    // is the known owner of this value; writing through it is refused by the
+    // engine, so the honest answer is read-only.
+    return DefaultPermissionAccess(
+        writable = false,
+        startupLocked = true,
+        readOnlyReason = com.phonedsh.ui.UiStrings.DEFAULT_PERMISSION_STARTUP_LOCKED_REASON,
+    )
+}
+
+private fun JsonObject.boolField(names: List<String>): Boolean? =
+    names.firstNotNullOfOrNull { name -> (this[name] as? JsonBool)?.value }
+
+private fun JsonObject.stringField(names: List<String>): String? =
+    names.firstNotNullOfOrNull { name -> (this[name] as? JsonString)?.value?.takeIf(String::isNotBlank) }
+
+/** A startup-layer marker: explicit flag, startup object, or a base-layer value. */
+private fun JsonObject.startupSource(): String? {
+    if ((this["startupLocked"] as? JsonBool)?.value == true ||
+        (this["locked"] as? JsonBool)?.value == true
+    ) {
+        return "启动配置（home patch / PDSH_SANDBOX_MODE）"
+    }
+    (this["startupOverride"] as? JsonObject)?.stringField(listOf("source", "lockedBy"))?.let { return it }
+    (this["startupOverride"] as? JsonString)?.value?.takeIf(String::isNotBlank)?.let { return it }
+    val base = this["base"] as? JsonObject
+    if (base?.get("defaultPreset") != null) return "启动配置（home patch）"
+    return null
+}
+
+private fun startupLockReason(source: String?): String {
+    val normalized = source?.trim().orEmpty()
+    if (normalized.isEmpty() ||
+        normalized.contains("home patch", ignoreCase = true) ||
+        normalized.contains("PDSH_SANDBOX_MODE", ignoreCase = true)
+    ) {
+        return com.phonedsh.ui.UiStrings.DEFAULT_PERMISSION_STARTUP_LOCKED_REASON
+    }
+    return "只读：新会话默认权限由${normalized}锁定。请修改启动配置并重启本地引擎；现有会话的权限不受影响。"
+}
+
+internal fun permissionNamespaceIn(described: JsonObject): JsonObject? =
+    (described["namespaces"] as? JsonArray)?.values.orEmpty()
+        .mapNotNull { it as? JsonObject }
+        .firstOrNull { (it["ns"] as? JsonString)?.value == "permission" }
+
+/** The `/api` calls this one field needs, kept injectable for the JVM tests. */
+internal interface DefaultPermissionApi {
+    suspend fun call(
+        endpoint: String,
+        args: JsonObject = JsonObject(emptyMap()),
+        timeoutMillis: Long = 5_000,
+    ): JsonValue
+}
+
+/**
+ * The real read/write state machine behind the two view-model entry points.
+ *
+ * It owns the published [PermissionDefaultsHostState] so the settings page and
+ * the plugin configuration page read the same measured answer. A locked state
+ * is refused before the first call, which is what keeps a dead `settings/update`
+ * off the wire; a writable state still writes and confirms by catalog readback.
+ */
+internal class DefaultPermissionGateway(
+    private val state: MutableStateFlow<PermissionDefaultsHostState>,
+) {
+    suspend fun refresh(api: DefaultPermissionApi): String? = try {
+        val catalog = api.call("permissionPresets/catalog") as? JsonObject
+            ?: error("permission preset catalog was unreadable")
+        val described = api.call("settings/describe") as? JsonObject
+            ?: error("settings description was unreadable")
+        val access = defaultPermissionAccess(described)
+        state.value = PermissionDefaultsHostState(
+            currentModeId = (catalog["defaultPreset"] as? JsonString)?.value,
+            availableModeIds = permissionModeIds(catalog),
+            writable = access.writable,
+            startupLocked = access.startupLocked,
+            readOnlyReason = access.readOnlyReason,
+        )
+        null
+    } catch (failure: Exception) {
+        val message = failure.message?.substringBefore('\n')?.take(180) ?: "权限默认值读取失败"
+        state.value = state.value.copy(
+            busy = false,
+            writable = false,
+            startupLocked = true,
+            readOnlyReason = message,
+            failure = message,
+        )
+        message
+    }
+
+    suspend fun write(api: DefaultPermissionApi, tier: com.phonedsh.ui.page.PermissionTier) {
+        val locked = state.value
+        if (!locked.writable) {
+            throw IllegalStateException(
+                locked.readOnlyReason
+                    ?: com.phonedsh.ui.UiStrings.DEFAULT_PERMISSION_READ_ONLY_FALLBACK_REASON,
+            )
+        }
+        state.value = locked.copy(busy = true, failure = null)
+        try {
+            val catalog = api.call("permissionPresets/catalog") as? JsonObject
+                ?: error("permission preset catalog was unreadable")
+            val candidates = when (tier) {
+                com.phonedsh.ui.page.PermissionTier.VIEW_ONLY -> setOf("read-only", "phone-read-only")
+                com.phonedsh.ui.page.PermissionTier.WORKSPACE_WRITE -> setOf("workspace-write", "phone")
+                com.phonedsh.ui.page.PermissionTier.FULL_ACCESS -> setOf("danger-full-access", "bypassPermissions")
+            }
+            val mode = ((catalog["defaultOptions"] as? JsonArray)?.values.orEmpty())
+                .mapNotNull { (it as? JsonObject)?.get("value") as? JsonString }
+                .firstOrNull { it.value in candidates }?.value
+                ?: error("this host does not offer the selected default permission")
+            val before = api.call("settings/describe") as? JsonObject
+                ?: error("settings description was unreadable")
+            val access = defaultPermissionAccess(before)
+            if (!access.writable) {
+                val reason = access.readOnlyReason
+                    ?: com.phonedsh.ui.UiStrings.DEFAULT_PERMISSION_READ_ONLY_FALLBACK_REASON
+                state.value = state.value.copy(
+                    busy = false,
+                    writable = false,
+                    startupLocked = access.startupLocked,
+                    readOnlyReason = access.readOnlyReason,
+                    failure = reason,
+                )
+                error(reason)
+            }
+            val namespace = permissionNamespaceIn(before)
+                ?: error("the permission settings namespace is unavailable")
+            val revision = ((namespace["revision"] as? JsonNumber)?.asLongOrNull())
+                ?: error("the permission settings revision is unknown")
+            api.call(
+                "settings/update",
+                JsonObject(
+                    mapOf(
+                        "ns" to JsonString("permission"),
+                        "patch" to JsonObject(mapOf("defaultPreset" to JsonString(mode))),
+                        "expectedRevision" to JsonNumber(revision.toString()),
+                    ),
+                ),
+            )
+            val after = api.call("permissionPresets/catalog") as? JsonObject
+                ?: error("permission preset readback was unreadable")
+            check((after["defaultPreset"] as? JsonString)?.value == mode) {
+                "permission default was not confirmed by permission catalog readback"
+            }
+            state.value = PermissionDefaultsHostState(
+                currentModeId = mode,
+                availableModeIds = permissionModeIds(after),
+                writable = true,
+                startupLocked = false,
+                readOnlyReason = null,
+            )
+        } catch (failure: Exception) {
+            val message = failure.message?.substringBefore('\n')?.take(180) ?: "权限默认值保存失败"
+            state.value = state.value.copy(busy = false, failure = message)
+            throw failure
+        }
+    }
+
+    private fun permissionModeIds(catalog: JsonObject): Set<String> =
+        (catalog["defaultOptions"] as? JsonArray)?.values.orEmpty().mapNotNull { raw ->
+            ((raw as? JsonObject)?.get("value") as? JsonString)?.value
+        }.toSet()
 }
 
 /**
@@ -1092,6 +1348,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     internal val preferenceState: StateFlow<Preferences> = preferenceStore.state
     private val mutablePermissionDefaults = MutableStateFlow(PermissionDefaultsHostState())
     internal val permissionDefaults: StateFlow<PermissionDefaultsHostState> = mutablePermissionDefaults.asStateFlow()
+    private val defaultPermissionGateway = DefaultPermissionGateway(mutablePermissionDefaults)
 
     /** The live settings/plugin/model/permission read behind 本会话设置. */
     private val mutableConfiguration = MutableStateFlow(ConfigurationFacts())
@@ -1315,32 +1572,27 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     /** Refreshes the source-backed permission namespace for SettingsRoute. */
     internal suspend fun refreshDefaultPermissionTier(): String? = withContext(Dispatchers.IO) {
-        try {
-            val client = DshTurnClient(host.channel, ::logTurn)
-            val catalog = client.call("permissionPresets/catalog", timeoutMillis = 5_000) as? JsonObject
-                ?: error("permission preset catalog was unreadable")
-            val described = client.call("settings/describe", timeoutMillis = 5_000) as? JsonObject
-                ?: error("settings description was unreadable")
-            val namespace = permissionNamespace(described)
-            val hasRevision = (namespace?.get("revision") as? JsonNumber)?.asLongOrNull() != null
-            val options = (catalog["defaultOptions"] as? JsonArray)?.values?.mapNotNull { raw ->
-                ((raw as? JsonObject)?.get("value") as? JsonString)?.value
-            }?.toSet()
-            mutablePermissionDefaults.value = PermissionDefaultsHostState(
-                currentModeId = (catalog["defaultPreset"] as? JsonString)?.value,
-                availableModeIds = options,
-                writable = (described["writable"] as? JsonBool)?.value == true && namespace != null && hasRevision,
-            )
-            null
-        } catch (failure: Exception) {
-            val message = failure.message?.substringBefore('\n')?.take(180) ?: "权限默认值读取失败"
-            mutablePermissionDefaults.value = mutablePermissionDefaults.value.copy(
-                busy = false,
-                writable = false,
-                failure = message,
-            )
-            message
-        }
+        defaultPermissionGateway.refresh(defaultPermissionApi())
+    }
+
+    /**
+     * The live `/api` adapter for the default-permission reads and its one
+     * confirmed write. It is a method (not a field) so a channel reopen is
+     * picked up by the next refresh instead of holding a closed connection.
+     */
+    private fun defaultPermissionApi(): DefaultPermissionApi = DshDefaultPermissionApi(
+        DshTurnClient(host.channel, ::logTurn),
+    )
+
+    /** The production wrapper around [DshTurnClient.call]. */
+    private class DshDefaultPermissionApi(
+        private val client: DshTurnClient,
+    ) : DefaultPermissionApi {
+        override suspend fun call(
+            endpoint: String,
+            args: JsonObject,
+            timeoutMillis: Long,
+        ): JsonValue = client.call(endpoint, args, timeoutMillis)
     }
 
     /**
@@ -1479,6 +1731,11 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     /** Saves the new-session permission preset through the permission namespace CAS. */
     internal suspend fun saveDefaultPermission(modeId: String): String? {
+        val access = mutablePermissionDefaults.value
+        if (!access.writable) {
+            return access.readOnlyReason
+                ?: com.phonedsh.ui.UiStrings.DEFAULT_PERMISSION_READ_ONLY_FALLBACK_REASON
+        }
         val revision = mutableConfiguration.value.snapshot?.permissionRevision
             ?: return "权限预设版本未知，请刷新后重试。"
         val receipt = saveDefaultPermissionConfirmed(modeId, revision, java.util.UUID.randomUUID().toString())
@@ -1491,6 +1748,13 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         requestId: String,
     ): ConfigurationWriteReceipt = withContext(Dispatchers.IO) {
         fun failed(message: String) = ConfigurationWriteReceipt(requestId, false, message)
+        val permissionAccess = mutablePermissionDefaults.value
+        if (!permissionAccess.writable) {
+            return@withContext failed(
+                permissionAccess.readOnlyReason
+                    ?: com.phonedsh.ui.UiStrings.DEFAULT_PERMISSION_READ_ONLY_FALLBACK_REASON,
+            )
+        }
         val snapshot = mutableConfiguration.value.snapshot ?: return@withContext failed("本会话设置尚未读取")
         if (mutableConfiguration.value.loading) return@withContext failed("设置仍在读取，请稍后重试。")
         if (snapshot.permissionModes?.any { it.id == modeId } != true) {
@@ -1512,61 +1776,16 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    /** Writes the same DSH permission namespace used by iOS and confirms by readback. */
+    /**
+     * Writes the same DSH permission namespace used by iOS and confirms by readback.
+     *
+     * The locked check happens inside [DefaultPermissionGateway.write] before
+     * the first `/api` call, so a startup-locked phone never emits the
+     * `settings/update` the engine would refuse.
+     */
     internal suspend fun writeDefaultPermissionTier(tier: com.phonedsh.ui.page.PermissionTier) {
-        val client = DshTurnClient(host.channel, ::logTurn)
-        mutablePermissionDefaults.value = mutablePermissionDefaults.value.copy(busy = true, failure = null)
-        try {
-        val catalog = client.call("permissionPresets/catalog", timeoutMillis = 5_000) as? JsonObject
-            ?: error("permission preset catalog was unreadable")
-        val candidates = when (tier) {
-            com.phonedsh.ui.page.PermissionTier.VIEW_ONLY -> setOf("read-only", "phone-read-only")
-            com.phonedsh.ui.page.PermissionTier.WORKSPACE_WRITE -> setOf("workspace-write", "phone")
-            com.phonedsh.ui.page.PermissionTier.FULL_ACCESS -> setOf("danger-full-access", "bypassPermissions")
-        }
-        val options = (catalog["defaultOptions"] as? JsonArray)?.values.orEmpty()
-        val mode = options.mapNotNull { (it as? JsonObject)?.get("value") as? JsonString }
-            .firstOrNull { it.value in candidates }?.value
-            ?: error("this host does not offer the selected default permission")
-        val before = client.call("settings/describe", timeoutMillis = 5_000) as? JsonObject
-            ?: error("settings description was unreadable")
-        check((before["writable"] as? JsonBool)?.value == true) { "DSH settings are read-only" }
-        val namespace = permissionNamespace(before) ?: error("the permission settings namespace is unavailable")
-        val revision = ((namespace["revision"] as? JsonNumber)?.asLongOrNull())
-            ?: error("the permission settings revision is unknown")
-        client.call("settings/update", JsonObject(mapOf(
-            "ns" to JsonString("permission"),
-            "patch" to JsonObject(mapOf("defaultPreset" to JsonString(mode))),
-            "expectedRevision" to JsonNumber(revision.toString()),
-        )), timeoutMillis = 5_000)
-        val after = client.call("permissionPresets/catalog", timeoutMillis = 5_000) as? JsonObject
-            ?: error("permission preset readback was unreadable")
-        check((after["defaultPreset"] as? JsonString)?.value == mode) {
-            "permission default was not confirmed by permission catalog readback"
-        }
-        val available = (after["defaultOptions"] as? JsonArray)?.values.orEmpty().mapNotNull { raw ->
-            ((raw as? JsonObject)?.get("value") as? JsonString)?.value
-        }.toSet()
-        mutablePermissionDefaults.value = PermissionDefaultsHostState(
-            currentModeId = mode,
-            availableModeIds = available,
-            writable = (before["writable"] as? JsonBool)?.value == true,
-        )
-        } catch (failure: Exception) {
-            mutablePermissionDefaults.value = mutablePermissionDefaults.value.copy(
-                busy = false,
-                writable = false,
-                failure = failure.message?.substringBefore('\n')?.take(180) ?: "权限默认值保存失败",
-            )
-            throw failure
-        }
+        defaultPermissionGateway.write(defaultPermissionApi(), tier)
     }
-
-    private fun permissionNamespace(description: JsonObject): JsonObject? =
-        (description["namespaces"] as? JsonArray)?.values.orEmpty()
-            .mapNotNull { it as? JsonObject }
-            .firstOrNull { (it["ns"] as? JsonString)?.value == "permission" }
-
 
     /** 显示代码工作视图. */
     internal fun setDeveloperTools(value: Boolean) {
