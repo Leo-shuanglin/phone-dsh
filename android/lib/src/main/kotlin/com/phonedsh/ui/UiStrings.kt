@@ -2570,6 +2570,7 @@ public object UiStrings {
     public const val CHAT_QUEUE_ACTION_PENDING: String = "等待队列操作确认"
     public const val CHAT_QUEUE_ACTION_STALE: String = "操作状态已过期，等待队列刷新"
     public const val CHAT_QUEUE_ACTION_FAILED: String = "队列操作失败"
+    public const val CHAT_QUEUE_EDIT_ITEM_GONE: String = "这条排队消息已不在队列里，编辑已关闭"
     public const val CHAT_QUEUE_HEADER_COUNT: String = "%d 条排队消息"
     public const val CHAT_QUEUE_SENDING: String = "发送中…"
     public const val CHAT_STEER_IMAGE_NOTICE_ALT: String = "补充说明不支持附带图片；请先移除图片，或改用排队发送。"

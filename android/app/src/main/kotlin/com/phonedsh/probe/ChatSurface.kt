@@ -330,7 +330,10 @@ internal fun chatScreenState(
         effortTitle = ui.sessionSnapshot.currentEffort?.let { effortTitle(it) },
         defaultEffortTitle = ui.sessionSnapshot.modelRoutes.firstOrNull { it.model == ui.sessionSnapshot.currentModel }
             ?.defaultEffort?.let { "默认强度 · ${effortTitle(it)}" } ?: com.phonedsh.ui.UiStrings.MODEL_DEFAULT_EFFORT,
-        queueItems = ui.sessionSnapshot.queueItems?.map { item -> item.copy(canSteer = ui.running) }
+        queueItems = ui.sessionSnapshot.queueItems?.map { item ->
+            // Steer is legal only for the next-turn dock lane while a turn runs.
+            item.copy(canSteer = ui.running && item.lane == "next-turn")
+        }
             ?.let { durable -> com.phonedsh.ui.state.reconcileQueueRows(durable, ui.localQueueItems) }
             ?: ui.localQueueItems.takeIf { it.isNotEmpty() },
     )

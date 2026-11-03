@@ -8,6 +8,9 @@
 // silently thinner page.
 package com.phonedsh.ui.page
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertAny
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -683,6 +686,68 @@ class ChatPageTest {
         assertEquals(item.id, removed?.id)
         assertTrue(requireNotNull(requestID).value.startsWith("ui.queue."))
         compose.onNodeWithText(item.text).assertIsDisplayed()
+    }
+
+    @Test
+    fun `durable queue steer button dispatches the exact row and a fresh request`() {
+        var steered: ManagedQueueItemState? = null
+        var requestID: StateRequestId? = null
+        val item = ManagedQueueItemState(
+            id = QueueItemId.Durable("queue-steer-1"),
+            text = "steer this queued row",
+            canEdit = true,
+            canRemove = true,
+            canSteer = true,
+            lane = "next-turn",
+        )
+        show(
+            state(case = "chat-basic", running = true).copy(queueItems = listOf(item)),
+            queueSteerAvailability = PdshActionAvailability.Available { row, request ->
+                steered = row
+                requestID = request
+            },
+        )
+        compose.onNodeWithContentDescription(UiStrings.CHAT_QUEUE_STEER_SEND).performClick()
+        assertEquals(item.id, steered?.id)
+        assertEquals("next-turn", steered?.lane)
+        assertTrue(requireNotNull(requestID).value.startsWith("ui.queue."))
+        compose.onNodeWithText(item.text).assertIsDisplayed()
+    }
+
+    @Test
+    fun `queue edit closes with a visible notice when its row leaves the inbox`() {
+        val item = ManagedQueueItemState(
+            id = QueueItemId.Durable("queue-vanish"),
+            text = "row that will be claimed",
+            canEdit = true,
+            canRemove = true,
+        )
+        var current by mutableStateOf(state(case = "chat-basic").copy(queueItems = listOf(item)))
+        compose.setContent {
+            PdshTheme {
+                ChatPage(
+                    state = current,
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    onToggleRow = {},
+                    onApprove = {},
+                    onDeny = {},
+                    onDismissBanner = {},
+                    onRetry = {},
+                    onOpenSessions = {},
+                    queueEditAvailability = PdshActionAvailability.Available { _, _, _ -> },
+                )
+            }
+        }
+        compose.onNodeWithContentDescription(UiStrings.CHAT_QUEUE_EDIT_TITLE).performClick()
+        compose.onNodeWithTag("pdsh.chat.queue-edit-dialog").assertIsDisplayed()
+
+        current = current.copy(queueItems = emptyList())
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("pdsh.chat.queue-edit-dialog").assertDoesNotExist()
+        compose.onNodeWithText(UiStrings.CHAT_QUEUE_EDIT_ITEM_GONE).assertIsDisplayed()
     }
 
     @Test
