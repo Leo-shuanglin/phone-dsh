@@ -1,5 +1,9 @@
 # Independent iPhone settings fixes — 2026-11-03
 
+Historical receipt for `edb6c419`. Its Creator BLOCKED state is superseded by
+the [Creator follow-up](iphone-creator-20261103.md); the original results below
+are retained as the record of that earlier revision.
+
 Base: `fe33f75f46e970c051668027d85e9748b8f591ce` (public main).
 Reported device baseline: `f36ad8d3084c1264c3588f45d94ae5bd506c5c42`.
 Branch: `codex/iphone-settings-fix-20261103`. PR14 is not updated by this work.

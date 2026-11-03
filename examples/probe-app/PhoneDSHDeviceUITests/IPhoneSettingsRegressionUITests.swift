@@ -54,7 +54,7 @@ final class IPhoneSettingsRegressionUITests: XCTestCase {
         app.staticTexts["Agent 预设"].tap()
         let viewStandard = app.buttons["presets.read.standard"]
         XCTAssertTrue(viewStandard.waitForExistence(timeout: 45), "Roster must come from the actual Worker")
-        XCTAssertFalse(app.buttons["presets.create"].isEnabled, "Broken cordis must not create an ordinary session")
+        XCTAssertTrue(app.buttons["presets.create"].isEnabled, "Creator must mount real inspection and profile services")
         capture("real-preset-roster")
         viewStandard.tap()
         let yaml = app.staticTexts["presets.yaml"]
@@ -79,6 +79,60 @@ final class IPhoneSettingsRegressionUITests: XCTestCase {
         XCTAssertTrue(selectedPreset.waitForExistence(timeout: 15),
                       "The real session projection must reflect the non-default preset, without a prompt. \(app.debugDescription)")
         capture("selected-preset-projection")
+    }
+
+    func testCreatorEntryUsesCordisWithoutSendingAndPreservesOldDraft() {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "dev.phone-dsh.probe")
+        app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        defer { app.terminate() }
+        let title = "Creator draft \(UUID().uuidString.prefix(8))"
+        let draft = "UNSENT_CREATOR_DRAFT_\(UUID().uuidString.prefix(8))"
+        openSettings(app)
+        app.staticTexts["Agent 预设"].tap()
+        XCTAssertTrue(app.buttons["presets.read.standard"].waitForExistence(timeout: 45))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["完成"].tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        let editor = app.textViews.matching(NSPredicate(format: "label BEGINSWITH %@", "发消息或创建任务")).firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 60))
+        let titleButton = app.buttons["chat.session-title"]
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: titleButton)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 90), .completed)
+        titleButton.tap()
+        let name = app.alerts["重命名会话"].textFields["会话名称"]
+        XCTAssertTrue(name.waitForExistence(timeout: 10))
+        name.tap()
+        if let old = name.value as? String { name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count)) }
+        name.typeText(title)
+        app.alerts["重命名会话"].buttons["保存"].tap()
+        editor.tap()
+        editor.typeText(draft)
+        let expectedDraft = editor.value as? String ?? ""
+        XCTAssertTrue(expectedDraft.contains(draft))
+        openSettings(app)
+        app.staticTexts["Agent 预设"].tap()
+        let creator = app.buttons["presets.create"]
+        XCTAssertTrue(creator.waitForExistence(timeout: 30))
+        XCTAssertTrue(creator.isEnabled)
+        creator.tap()
+        let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.navigationBars["设置"])
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 30), .completed)
+        XCTAssertFalse(app.buttons["停止执行"].exists)
+        XCTAssertFalse((editor.value as? String ?? "").contains(draft))
+        app.buttons["更多"].tap()
+        let mode = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Agent 预设：cordis")).firstMatch
+        XCTAssertTrue(mode.waitForExistence(timeout: 15))
+        capture("creator-cordis-idle")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
+        app.buttons["打开会话列表"].tap()
+        let oldSession = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+        XCTAssertTrue(oldSession.waitForExistence(timeout: 15))
+        oldSession.tap()
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expectedDraft), object: editor)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 15), .completed)
+        capture("creator-old-draft-preserved")
     }
 
     private func capture(_ name: String) {

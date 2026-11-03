@@ -236,6 +236,7 @@ struct ChatPage: View {
             }
             .buttonStyle(.plain)
             .disabled(model.currentSessionID == nil)
+            .accessibilityIdentifier("chat.session-title")
             .accessibilityHint("点按重命名会话")
             .padding(.horizontal, 16)
 

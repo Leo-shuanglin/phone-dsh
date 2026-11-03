@@ -125,6 +125,8 @@ struct NativeAgentPresetsPage: View {
                 .accessibilityIdentifier("presets.create")
                 Text(NativeText("进入创造模式但不自动发送任务，现有草稿会保留。", "Opens creator mode without sending a prompt. Your draft is preserved."))
                     .font(.system(size: 13)).foregroundStyle(.secondary)
+                Text(NativeText("可创建使用手机内建工具的本地 Agent 预设。外部套件与新 JavaScript 插件需使用桌面 DSH。", "Create local Agent presets using this phone's built-in tools. External packages and new JavaScript plugins require desktop DSH."))
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
                 if let reason = model.creatorUnavailableReason, !model.isLoading {
                     Text(NativeText("创造模式当前不可用：", "Creator mode is unavailable: ") + reason)
                         .font(.callout).foregroundStyle(.secondary)
