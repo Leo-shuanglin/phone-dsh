@@ -336,17 +336,29 @@ public fun WebSearchSettingsPage(
     var apiKey by remember { mutableStateOf("") }
     var feedback by remember { mutableStateOf<String?>(null) }
     var keyCommitPending by remember { mutableStateOf(false) }
+    // `hasCredential` is level-triggered: an already-configured host reports YES
+    // both before and after the save, so it cannot prove that *this* commit
+    // landed. Remember the host facts at the moment 保存 was pressed and only
+    // accept a change as the acknowledgement — no-key -> configured, or a new
+    // key tail. Reading the pre-commit YES would drop a replacement the host
+    // never stored.
+    var keyCommitBaselineConfigured by remember { mutableStateOf(false) }
+    var keyCommitBaselineTail by remember { mutableStateOf<String?>(null) }
     var pendingClearKey by remember { mutableStateOf(false) }
     var pendingRemove by remember { mutableStateOf(false) }
 
     // The key draft is dropped only after the host confirms it was stored. A
     // pasted credential the host never acknowledged must stay on screen: losing
     // it silently is worse than showing it. The address draft is not touched.
-    LaunchedEffect(keyCommitPending, state.hasCredential, keyWritable) {
-        if (keyCommitPending && keyWritable && state.hasCredential) {
-            apiKey = ""
-            keyCommitPending = false
-            feedback = null
+    LaunchedEffect(keyCommitPending, state.hasCredential, state.keyTailLabel, keyWritable) {
+        if (keyCommitPending && keyWritable) {
+            val acknowledged = state.hasCredential &&
+                (!keyCommitBaselineConfigured || state.keyTailLabel != keyCommitBaselineTail)
+            if (acknowledged) {
+                apiKey = ""
+                keyCommitPending = false
+                feedback = null
+            }
         }
     }
 
@@ -417,6 +429,8 @@ public fun WebSearchSettingsPage(
                             },
                             onCommit = {
                                 feedback = null
+                                keyCommitBaselineConfigured = state.hasCredential
+                                keyCommitBaselineTail = state.keyTailLabel
                                 keyCommitPending = true
                                 onCommitKey?.invoke(apiKey.trim())
                             },

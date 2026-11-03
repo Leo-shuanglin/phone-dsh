@@ -99,13 +99,18 @@ class WebSearchSettingsPageTest {
 
     /**
      * Compose with facts the host can answer: after 保存密钥, a confirming host
-     * flips [WebSearchFacts.hasCredential] to `YES`; with [confirmCredential]
-     * false it never answers, so the draft must stay in the field.
+     * applies [confirmFacts] (by default flipping [WebSearchFacts.hasCredential]
+     * to `YES`); with [confirmCredential] false it never answers, so the draft
+     * must stay in the field. [confirmFacts] is what lets a test model an
+     * already-configured host acknowledging a replacement through a new key tail.
      */
     private fun showLiveCredential(
         facts: WebSearchFacts,
         confirmCredential: Boolean = true,
         onCommitKey: (String) -> Unit = {},
+        confirmFacts: (WebSearchFacts) -> WebSearchFacts = {
+            it.copy(hasCredential = FactState.YES)
+        },
     ) {
         compose.setContent {
             var liveFacts by remember { mutableStateOf(facts) }
@@ -120,7 +125,7 @@ class WebSearchSettingsPageTest {
                     onCommitKey = { key ->
                         onCommitKey(key)
                         if (confirmCredential) {
-                            liveFacts = liveFacts.copy(hasCredential = FactState.YES)
+                            liveFacts = confirmFacts(liveFacts)
                         }
                     },
                     onClearKey = {},
@@ -277,6 +282,59 @@ class WebSearchSettingsPageTest {
         // pasted credential the host never acknowledged would be worse.
         compose.onNodeWithText(UiStrings.WEB_SEARCH_SAVE_KEY).assertIsEnabled()
         compose.onAllNodesWithText(UiStrings.WEB_SEARCH_CLEAR_KEY).assertCountEquals(0)
+    }
+
+    @Test
+    fun `an already-configured host that never answers keeps the replacement draft`() {
+        val secret = "sk-" + "replacement" + "-7c2e"
+        showLiveCredential(
+            WebSearchFacts(
+                mode = WebSearchMode.SEARCH_API,
+                hasCredential = FactState.YES,
+                keyTail = "sk-1234-9f3a",
+            ),
+            confirmCredential = false,
+        )
+        scrollToTag(UiPageTags.WEB_SEARCH_KEY_FIELD)
+        compose.onNodeWithTag(UiPageTags.WEB_SEARCH_KEY_FIELD).performTextInput(secret)
+        scrollTo(UiStrings.WEB_SEARCH_SAVE_KEY)
+        compose.onNodeWithText(UiStrings.WEB_SEARCH_SAVE_KEY).performClick()
+        // The credential was already configured before the commit, so a yes that
+        // was already there is not an acknowledgement of this replacement: the
+        // masked draft (one bullet per character) must stay and 保存密钥 stay
+        // enabled instead of silently losing the key the host never stored.
+        scrollToTag(UiPageTags.WEB_SEARCH_KEY_FIELD)
+        compose.onNodeWithTag(UiPageTags.WEB_SEARCH_KEY_FIELD).assert(
+            SemanticsMatcher.expectValue(
+                SemanticsProperties.EditableText,
+                AnnotatedString("•".repeat(secret.length)),
+            ),
+        )
+        scrollTo(UiStrings.WEB_SEARCH_SAVE_KEY)
+        compose.onNodeWithText(UiStrings.WEB_SEARCH_SAVE_KEY).assertIsEnabled()
+    }
+
+    @Test
+    fun `an already-configured host acknowledges a replacement with a new key tail`() {
+        val secret = "sk-" + "replacement" + "-7c2e"
+        showLiveCredential(
+            WebSearchFacts(
+                mode = WebSearchMode.SEARCH_API,
+                hasCredential = FactState.YES,
+                keyTail = "sk-1234-9f3a",
+            ),
+            confirmFacts = { it.copy(keyTail = "sk-" + "replacement" + "-7c2e") },
+        )
+        scrollToTag(UiPageTags.WEB_SEARCH_KEY_FIELD)
+        compose.onNodeWithTag(UiPageTags.WEB_SEARCH_KEY_FIELD).performTextInput(secret)
+        scrollTo(UiStrings.WEB_SEARCH_SAVE_KEY)
+        compose.onNodeWithText(UiStrings.WEB_SEARCH_SAVE_KEY).performClick()
+        // A stored key's new tail is the host's observable acknowledgement that
+        // this replacement landed, so the draft has done its job.
+        scrollToTag(UiPageTags.WEB_SEARCH_KEY_FIELD)
+        compose.onNodeWithTag(UiPageTags.WEB_SEARCH_KEY_FIELD).assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")),
+        )
     }
 
     @Test
