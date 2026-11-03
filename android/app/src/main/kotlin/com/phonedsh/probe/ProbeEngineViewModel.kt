@@ -3340,12 +3340,40 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     requestId = com.phonedsh.ui.state.StateRequestId("chat-content:${UUID.randomUUID()}"),
                     expectedRevision = com.phonedsh.ui.state.StateRevision(existing.revision),
                 )
-                check(receipt.outcome is ChatWriteOutcome.Persisted) { "chat content update not confirmed" }
+                if (receipt.outcome !is ChatWriteOutcome.Persisted) {
+                    val code = (receipt.outcome as? ChatWriteOutcome.Failed)?.code ?: "stale"
+                    LogcatHostLog.warn("chat: content update refused session=$chatId ($code)")
+                    // A refused transcript write must be visible, not log-only.
+                    mutableChat.update { live ->
+                        if (live.chatId != chatId) {
+                            live
+                        } else {
+                            live.copy(
+                                error = if (receipt.outcome is ChatWriteOutcome.Stale) {
+                                    "聊天记录已在别处更新，本次内容没有保存；请重试。"
+                                } else {
+                                    "聊天记录没有保存，请重试。"
+                                },
+                                bannerDismissed = false,
+                            )
+                        }
+                    }
+                    return@runCatching
+                }
                 val readback = chatStore.load(chatId)
                 check(readback?.nodes == nodes && readback.workspaceGroupId == existing.workspaceGroupId &&
                     readback.unknownFields == existing.unknownFields
                 ) { "chat metadata did not survive content update" }
-            }.onFailure { LogcatHostLog.warn("chat: save refused session=$chatId (${reasonOf(it as? Exception ?: Exception(it))})") }
+            }.onFailure {
+                LogcatHostLog.warn("chat: save refused session=$chatId (${reasonOf(it as? Exception ?: Exception(it))})")
+                mutableChat.update { live ->
+                    if (live.chatId != chatId) {
+                        live
+                    } else {
+                        live.copy(error = "聊天记录没有保存，请重试。", bannerDismissed = false)
+                    }
+                }
+            }
         }
     }
 

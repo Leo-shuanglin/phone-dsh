@@ -47,15 +47,52 @@ class ChatSessionSnapshotTest {
         assertEquals(3L, store.load("chat-a")?.revision)
     }
 
-    @Test fun `stale out of order chat write is rejected without rolling back transcript`() {
+    @Test fun `older timestamp chat write is persisted with a clamped updatedAt`() {
         val store = chatStore()
         store.save(ChatRecord("chat-a", "new", 20, emptyList(), emptyList()))
-        try {
-            store.save(ChatRecord("chat-a", "stale", 10, emptyList(), emptyList()))
-            fail("stale write should be rejected")
-        } catch (_: IllegalArgumentException) { }
-        assertEquals("new", store.load("chat-a")?.title)
-        assertEquals(20L, store.load("chat-a")?.updatedAtMs)
+        val first = store.load("chat-a")!!
+        assertEquals(1L, first.revision)
+
+        // A wall clock that moved backwards must not lose the write: the row's
+        // revision remains the concurrency authority, and the display time is
+        // clamped so the list order never regresses.
+        store.save(ChatRecord(
+            "chat-a", "older", 10, emptyList(),
+            listOf(contextLostNode("chat-a", "turn-older", "older content landed")),
+        ))
+
+        val persisted = store.load("chat-a")!!
+        assertEquals("older", persisted.title)
+        assertEquals(listOf("older content landed"), persisted.nodes.map { it.text })
+        assertEquals(20L, persisted.updatedAtMs)
+        assertEquals(2L, persisted.revision)
+    }
+
+    @Test fun `updateContent accepts an older timestamp and clamps the stored time`() {
+        val store = chatStore()
+        store.save(ChatRecord("chat-a", "new", 20, listOf("worker-a"), emptyList()))
+        val before = store.load("chat-a")!!
+
+        // The review scenario: write with a future clock, then write with an
+        // earlier one. Revision CAS, not the timestamp, decides acceptance.
+        val receipt = store.updateContent(
+            id = "chat-a",
+            title = "older content",
+            updatedAtMs = 10,
+            workerSessionIds = listOf("worker-a", "worker-b"),
+            nodes = listOf(contextLostNode("chat-a", "turn-older", "still persisted")),
+            requestId = StateRequestId("older-content-write"),
+            expectedRevision = StateRevision(before.revision),
+        )
+
+        assertEquals(ChatWriteOutcome.Persisted, receipt.outcome)
+        assertEquals(StateRevision(before.revision + 1), receipt.revision)
+        val persisted = store.load("chat-a")!!
+        assertEquals("older content", persisted.title)
+        assertEquals(listOf("worker-a", "worker-b"), persisted.workerSessionIds)
+        assertEquals(listOf("still persisted"), persisted.nodes.map { it.text })
+        assertEquals(20L, persisted.updatedAtMs)
+        assertEquals(before.revision + 1, persisted.revision)
     }
 
     @Test fun `workspace group rename and delete preserve assigned conversation`() {
