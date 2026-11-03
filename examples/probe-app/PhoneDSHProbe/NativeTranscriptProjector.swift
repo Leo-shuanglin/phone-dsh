@@ -42,6 +42,10 @@ enum NativeTranscriptProjector {
                 item.turn = turn
                 item.step = step
                 item.attachments = attachments
+                if kind == .user {
+                    item.promptRequestID = data["source"]?["rpcId"]?.stringValue
+                    item.promptJournalSeq = seq
+                }
                 result.append(item)
             case "assistant/message":
                 let message = data["message"] ?? .null
@@ -150,6 +154,99 @@ enum NativeTranscriptProjector {
             }
         }
         return result
+    }
+
+    /// A queue acknowledgement precedes its durable user/message. Keep those
+    /// accepted inputs across a snapshot, without reviving older journal rows
+    /// outside the snapshot's bounded page or deduplicating by message text.
+    static func restoring(_ history: [ChatItem], preservingInputsFrom current: [ChatItem],
+                          inputReceipts: [String: Int] = [:]) -> [ChatItem] {
+        var represented = Set(history.compactMap(\.promptRequestID))
+        let pending = current.filter { item in
+            guard item.kind == .user, item.promptJournalSeq == nil,
+                  let requestID = item.promptRequestID,
+                  inputReceipts[requestID] == nil else { return false }
+            return represented.insert(requestID).inserted
+        }
+        return history + pending
+    }
+
+    /// A long interruption may move a missed receipt outside the visible tail
+    /// page. Look backwards only for unresolved local inputs that the same
+    /// snapshot's inbox does not still contain. Do not widen the visible page.
+    static func inputReceipts(for current: [ChatItem], historyPage: JSONValue, inbox: JSONValue?,
+                              loadEarlier: (Int) async throws -> JSONValue) async throws -> [String: Int] {
+        var unresolved = Set(current.filter { $0.promptJournalSeq == nil }.compactMap(\.promptRequestID))
+        for target in ["next-turn", "next-step"] {
+            for message in inbox?[target]?.arrayValue ?? [] where message["source"]?["kind"]?.stringValue == "user" {
+                if let requestID = message["source"]?["rpcId"]?.stringValue { unresolved.remove(requestID) }
+            }
+        }
+        var receipts: [String: Int] = [:]
+        var page = historyPage
+        var previousBefore: Int?
+        while !unresolved.isEmpty {
+            try Task.checkCancellation()
+            let records = (page["records"]?.arrayValue ?? []).compactMap { $0["event"] }
+            for record in records where record["type"]?.stringValue == "user/message"
+                && record["data"]?["source"]?["kind"]?.stringValue == "user" {
+                if let requestID = record["data"]?["source"]?["rpcId"]?.stringValue,
+                   let seq = record["seq"]?.intValue, unresolved.remove(requestID) != nil {
+                    receipts[requestID] = seq
+                }
+            }
+            guard !unresolved.isEmpty, page["hasMore"]?.boolValue == true,
+                  let before = records.compactMap({ $0["seq"]?.intValue }).min() else { break }
+            if let previousBefore, before >= previousBefore {
+                throw ProviderError.invalidResponse("input receipt history did not advance")
+            }
+            previousBefore = before
+            page = try await loadEarlier(before)
+        }
+        return receipts
+    }
+
+    /// The event stream can deliver the durable echo before the prompt RPC
+    /// returns. Both paths update the same row by request identity.
+    static func acceptInput(_ input: ChatItem, in items: inout [ChatItem]) {
+        let matches = items.indices.filter {
+            items[$0].id == input.id || (input.promptRequestID != nil && items[$0].promptRequestID == input.promptRequestID)
+        }
+        guard let first = matches.first else {
+            items.append(input)
+            return
+        }
+        var accepted = input
+        if let echo = matches.map({ items[$0] }).first(where: { $0.promptRequestID == input.promptRequestID }) {
+            // A retry can reuse an older row while a new durable echo already
+            // exists separately. Preserve the echo's facts and collapse both.
+            accepted.promptJournalSeq = echo.promptJournalSeq
+            accepted.timestamp = echo.timestamp
+            accepted.messageID = echo.messageID
+            accepted.turn = echo.turn
+            accepted.step = echo.step
+            accepted.attachments = echo.attachments
+        }
+        for index in matches.dropFirst().reversed() { items.remove(at: index) }
+        items[first] = accepted
+    }
+
+    static func acknowledgeInput(_ event: HarnessEvent, sessionID: String, in items: inout [ChatItem]) {
+        guard case .userMessage(_, let source) = event.kind, source == "user",
+              let data = event.userMessageData,
+              let requestID = data["source"]?["rpcId"]?.stringValue,
+              let seq = event.seq else { return }
+        let journalSeq = DSHEventMapper.position(of: seq).dshSeq
+        if let index = items.firstIndex(where: { $0.promptRequestID == requestID }) {
+            items[index].promptJournalSeq = journalSeq
+            items[index].timestamp = event.time
+        } else {
+            let record: JSONValue = .object([
+                "type": .string("user/message"), "seq": .number(Double(journalSeq)),
+                "time": .number(event.time.timeIntervalSince1970 * 1_000), "data": data,
+            ])
+            items.append(contentsOf: Self.items(from: [record], sessionID: sessionID))
+        }
     }
 
     static func changes(forTurn turn: Int, in items: [ChatItem]) -> NativeChangedFiles? {

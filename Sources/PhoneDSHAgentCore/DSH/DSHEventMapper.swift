@@ -60,10 +60,13 @@ public enum DSHEventMapper {
         var toolResultErrorCode: String?
         var rawTurnEndKind: String?
         var rawTurnEndCause: String?
+        var userMessageData: JSONValue?
         switch type {
         case "user/message":
             let text = texts(data["content"])
-            if !text.isEmpty {
+            userMessageData = data
+            // Attachment-only prompts still acknowledge the local submission.
+            if !text.isEmpty || data["source"]?["rpcId"]?.stringValue != nil {
                 kinds.append(.userMessage(text: text, source: userInputSource(data)))
             }
         case "agent/inbox/spliced":
@@ -124,7 +127,8 @@ public enum DSHEventMapper {
                                 rawTurnEndKind: rawTurnEndKind,
                                 rawTurnEndCause: rawTurnEndCause,
                                 toolResultMeta: isToolResult ? toolResultMeta : nil,
-                                toolResultErrorCode: isToolResult ? toolResultErrorCode : nil)
+                                toolResultErrorCode: isToolResult ? toolResultErrorCode : nil,
+                                userMessageData: userMessageData)
         }
     }
 

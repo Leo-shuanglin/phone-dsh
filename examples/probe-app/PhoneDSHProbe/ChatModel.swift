@@ -1376,6 +1376,8 @@ final class ChatModel {
     /// 归档的正好是当前打开的那个会话:把它从页面上摘掉,回到空屏,
     /// 不让用户停在一个已经不在列表里的对话上。不关宿主、不动别的会话。
     func detachArchivedSession() async {
+        pumpTask?.cancel(); pumpTask = nil
+        eventStreamRecovering = false
         if let harness, let sessionID { await harness.closeSession(sessionID) }
         harness = nil
         sessionID = nil
@@ -1820,14 +1822,10 @@ final class ChatModel {
             SessionTitleHints.remember(prompt, for: sessionID)
             let attachmentLabel = attachments.map { "[\($0.name)]" }.joined(separator: " ")
             let visiblePrompt = [prompt, attachmentLabel].filter { !$0.isEmpty }.joined(separator: "\n")
-            if itemID == nil {
-                let newID = "\(sessionID):prompt:\(requestID)"
-                // 同一个 requestID 是同一句话(重发时逐字相同),那一条已经在列表里了。
-                // 再追加一条同 id 的行,界面会把两条挤进同一块,新字就像拼进了旧气泡。
-                if !items.contains(where: { $0.id == newID }) {
-                    items.append(ChatItem(id: newID, kind: .user, title: "You", text: visiblePrompt))
-                }
-            }
+            var input = ChatItem(id: itemID ?? "\(sessionID):prompt:\(requestID)",
+                                 kind: .user, title: "You", text: visiblePrompt)
+            input.promptRequestID = requestID
+            NativeTranscriptProjector.acceptInput(input, in: &items)
             turnRunning = true
             syncIdleTimer()
             clearError()
@@ -1851,7 +1849,10 @@ final class ChatModel {
         do {
             try await harness.send(.steer(text: guidance, requestID: requestID), to: sessionID)
             Self.completeRetryableRequest(fingerprint: fingerprint, requestID: requestID)
-            items.append(ChatItem(id: "\(sessionID):steer:\(requestID)", kind: .user, title: "You (steering)", text: guidance))
+            var input = ChatItem(id: "\(sessionID):steer:\(requestID)", kind: .user,
+                                 title: "You (steering)", text: guidance)
+            input.promptRequestID = requestID
+            NativeTranscriptProjector.acceptInput(input, in: &items)
             clearError()
             return true
         } catch {
@@ -1953,6 +1954,7 @@ final class ChatModel {
         var beforeSeq: Int?
         var throughSeq: Int?
         var turnFacts: TurnFacts
+        var inputReceipts: [String: Int]
     }
 
     /// Durable turn/start + turn/end facts, kept beside (not inside) ChatItem so
@@ -1967,10 +1969,12 @@ final class ChatModel {
     /// projected by AgentHarness.events, appear in their original position.
     private func loadSessionHistory(sessionID: String,
                                    transport: any DSHRemoteTransport,
-                                   requireRunningState: Bool = false) async throws -> SessionHistory {
+                                   requireRunningState: Bool = false,
+                                   pendingInputs: [ChatItem] = []) async throws -> SessionHistory {
         let mux = try await transport.openMux()
         let streamID = "phone-chat-history-\(UUID().uuidString)"
         let cursor: Int
+        let snapshot: JSONValue
         do {
             try await mux.send(.object([
                 "type": .string("open"),
@@ -1982,7 +1986,11 @@ final class ChatModel {
                     "assistantStream": .bool(false),
                 ])])]),
             ]))
-            cursor = try await receiveHistoryCursor(from: mux, streamID: streamID)
+            snapshot = try await receiveHistorySnapshot(from: mux, streamID: streamID)
+            guard let snapshotCursor = snapshot["cursor"]?.intValue else {
+                throw ProviderError.invalidResponse("session/follow snapshot has no cursor")
+            }
+            cursor = snapshotCursor
             await mux.close()
         } catch {
             await mux.close()
@@ -1992,6 +2000,7 @@ final class ChatModel {
         var records: [JSONValue] = []
         var hasMore = false
         var beforeSeq: Int?
+        var historyPage: JSONValue = .object([:])
         if cursor >= 0 {
             let page = try await transport.call("session/page", args: .object(["request": .object([
                 "address": .object(["kind": .string("session"), "sessionId": .string(sessionID)]),
@@ -2001,6 +2010,16 @@ final class ChatModel {
             records = (page["records"]?.arrayValue ?? []).compactMap { $0["event"] }
             hasMore = page["hasMore"]?.boolValue ?? false
             beforeSeq = records.compactMap { $0["seq"]?.intValue }.min()
+            historyPage = page
+        }
+        let inputReceipts = try await NativeTranscriptProjector.inputReceipts(
+            for: pendingInputs, historyPage: historyPage, inbox: snapshot["projections"]?["values"]?["inbox"]
+        ) { before in
+            try await transport.call("session/page", args: .object(["request": .object([
+                "address": .object(["kind": .string("session"), "sessionId": .string(sessionID)]),
+                "throughSeq": .number(Double(cursor)), "beforeSeq": .number(Double(before)),
+                "maxMessages": .number(60),
+            ])]))
         }
         let after = cursor >= 0
             ? UInt64(cursor + 1) * DSHEventMapper.partsPerEvent - 1
@@ -2022,7 +2041,7 @@ final class ChatModel {
                               turnRunning: running ?? Self.isTurnRunning(in: records),
                               hasMore: hasMore, beforeSeq: beforeSeq,
                               throughSeq: cursor >= 0 ? cursor : nil,
-                              turnFacts: Self.turnFacts(in: records))
+                              turnFacts: Self.turnFacts(in: records), inputReceipts: inputReceipts)
     }
 
     /// Loads one older message-aligned page and prepends unseen durable events.
@@ -2064,7 +2083,15 @@ final class ChatModel {
     }
 
     private func receiveHistoryCursor(from mux: any DSHMuxConnection, streamID: String) async throws -> Int {
-        try await withThrowingTaskGroup(of: Int.self) { group in
+        let snapshot = try await receiveHistorySnapshot(from: mux, streamID: streamID)
+        guard let cursor = snapshot["cursor"]?.intValue else {
+            throw ProviderError.invalidResponse("session/follow snapshot has no cursor")
+        }
+        return cursor
+    }
+
+    private func receiveHistorySnapshot(from mux: any DSHMuxConnection, streamID: String) async throws -> JSONValue {
+        try await withThrowingTaskGroup(of: JSONValue.self) { group in
             group.addTask {
                 while !Task.isCancelled {
                     guard let frame = try await mux.receive() else {
@@ -2079,10 +2106,10 @@ final class ChatModel {
                     case "item":
                         let value = frame["value"] ?? .null
                         if value["type"]?.stringValue == "snapshot" {
-                            guard let cursor = value["cursor"]?.intValue else {
+                            guard value["cursor"]?.intValue != nil else {
                                 throw ProviderError.invalidResponse("session/follow snapshot has no cursor")
                             }
-                            return cursor
+                            return value
                         }
                     default:
                         continue
@@ -2378,10 +2405,11 @@ final class ChatModel {
     private func synchronizeInterruptedSession(sessionID: String) async throws -> UInt64? {
         let transport = try await transportForManagement()
         let history = try await loadSessionHistory(sessionID: sessionID, transport: transport,
-                                                   requireRunningState: true)
+                                                   requireRunningState: true, pendingInputs: items)
         try Task.checkCancellation()
         guard self.sessionID == sessionID else { throw CancellationError() }
-        items = history.items
+        items = NativeTranscriptProjector.restoring(history.items, preservingInputsFrom: items,
+                                                    inputReceipts: history.inputReceipts)
         turnStartTimes = history.turnFacts.starts
         turnEndReasons = history.turnFacts.endReasons
         turnEndTimes = history.turnFacts.ends
@@ -2464,6 +2492,9 @@ final class ChatModel {
             }
             scheduleNativeMetricsRefresh()
         case .userMessage(let text, let source):
+            if let sessionID {
+                NativeTranscriptProjector.acknowledgeInput(event, sessionID: sessionID, in: &items)
+            }
             // Human prompts are already appended optimistically by the
             // composer. Every non-human producer (subagent-settled, goal,
             // schedule, tool-jobs, webhook, plugin) must still surface; it is
