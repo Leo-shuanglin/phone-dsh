@@ -539,6 +539,88 @@ class HostProviderConnectionTest {
     }
 
     @Test
+    fun `deleting one of two provider services succeeds and keeps the other selected`() {
+        val file = File(Files.createTempDirectory("provider-delete-one-of-two").toFile(), ProviderConfigStore.FILE_NAME)
+        val store = ProviderConfigStore(file) { }
+        val removed = ProviderRecord(
+            id = "delete-one", name = "Remove me", model = "m", endpoint = "https://one.example.test/v1",
+            credentialRef = "provider.delete-one",
+        )
+        val kept = ProviderRecord(
+            id = "keep-me", name = "Keep me", model = "m", endpoint = "https://keep.example.test/v1",
+            credentialRef = "provider.keep-me",
+        )
+        assertEquals(ProviderWriteOutcome.Saved, store.save(removed))
+        assertEquals(ProviderWriteOutcome.Saved, store.save(kept, selectAsDefault = true))
+        val keyStore = ApiKeyStore(MapSecureStore())
+        keyStore.save("sk-delete-removed-0000", removed.credentialAccount())
+        keyStore.save("sk-delete-kept-0000", kept.credentialAccount())
+
+        val receipt = deleteProviderRecord(removed.id, store, keyStore)
+
+        assertTrue(receipt.profileRemoved)
+        assertTrue(receipt.keyRemoved)
+        assertEquals("已删除本机保存的模型服务与密钥", receipt.message)
+        val snapshot = requireNotNull(store.snapshot())
+        assertEquals(listOf(kept), snapshot.profiles)
+        assertEquals(kept.id, snapshot.selectedId)
+        assertNull(keyStore.readKey(removed.credentialAccount()))
+        assertEquals("sk-delete-kept-0000", keyStore.readKey(kept.credentialAccount()))
+    }
+
+    @Test
+    fun `deleting the last provider service still succeeds`() {
+        val file = File(Files.createTempDirectory("provider-delete-last").toFile(), ProviderConfigStore.FILE_NAME)
+        val store = ProviderConfigStore(file) { }
+        val record = ProviderRecord(
+            id = "only-one", name = "Only one", model = "m", endpoint = "https://only.example.test/v1",
+            credentialRef = "provider.only-one",
+        )
+        assertEquals(ProviderWriteOutcome.Saved, store.save(record))
+        val keyStore = ApiKeyStore(MapSecureStore())
+        keyStore.save("sk-delete-only-0000", record.credentialAccount())
+
+        val receipt = deleteProviderRecord(record.id, store, keyStore)
+
+        assertTrue(receipt.profileRemoved)
+        assertTrue(receipt.keyRemoved)
+        assertEquals("已删除本机保存的模型服务与密钥", receipt.message)
+        assertNull(store.current())
+        assertNull(store.snapshot())
+        assertNull(keyStore.readKey(record.credentialAccount()))
+    }
+
+    @Test
+    fun `provider deletion fails when readback still contains the profile`() {
+        val directory = Files.createTempDirectory("provider-delete-stale-readback").toFile()
+        val file = File(directory, ProviderConfigStore.FILE_NAME)
+        val store = ProviderConfigStore(file) { }
+        val removed = ProviderRecord(
+            id = "stale-delete", name = "Still here", model = "m", endpoint = "https://stale.example.test/v1",
+            credentialRef = "provider.stale-delete",
+        )
+        val kept = ProviderRecord(
+            id = "stale-keep", name = "Other", model = "m", endpoint = "https://other.example.test/v1",
+            credentialRef = "provider.stale-keep",
+        )
+        assertEquals(ProviderWriteOutcome.Saved, store.save(removed))
+        assertEquals(ProviderWriteOutcome.Saved, store.save(kept, selectAsDefault = true))
+        val staleFile = File(directory, "stale-readback.properties")
+        staleFile.writeBytes(file.readBytes())
+        val staleStore = ProviderConfigStore(StaleReadbackFile(file.path, staleFile.path)) { }
+        val keyStore = ApiKeyStore(MapSecureStore())
+        keyStore.save("sk-delete-stale-0000", removed.credentialAccount())
+
+        val receipt = deleteProviderRecord(removed.id, staleStore, keyStore)
+
+        assertFalse(receipt.profileRemoved)
+        assertTrue(receipt.keyRemoved)
+        assertEquals("密钥已删除；模型服务配置删除结果无法确认，请刷新后检查", receipt.message)
+        assertEquals(listOf(kept), ProviderConfigStore(file) { }.snapshot()?.profiles)
+        assertNull(keyStore.readKey(removed.credentialAccount()))
+    }
+
+    @Test
     fun `provider save rejection retains request identity and writes no record`() = runBlocking {
         val file = File(Files.createTempDirectory("provider-bound-reject").toFile(), ProviderConfigStore.FILE_NAME)
         val store = ProviderConfigStore(file) { }
@@ -652,6 +734,28 @@ class HostProviderConnectionTest {
             val index = requests.lastIndex
             return ProviderProbeResponse(statuses[index], bodies.getOrNull(index).orEmpty())
         }
+    }
+
+    /**
+     * A [File] view that starts reading the live document and switches to a
+     * pre-delete copy on the readback after the third existence check. It models
+     * the failure this regression covers: the delete write returns Saved, but
+     * the following readback still observes the profile.
+     */
+    private class StaleReadbackFile(
+        livePath: String,
+        private val stalePath: String,
+    ) : File(livePath) {
+        private var fileChecks = 0
+        private var servingStale = false
+
+        override fun isFile(): Boolean {
+            fileChecks++
+            if (fileChecks >= 3) servingStale = true
+            return super.isFile()
+        }
+
+        override fun getPath(): String = if (servingStale) stalePath else super.getPath()
     }
 
     private class MapSecureStore(

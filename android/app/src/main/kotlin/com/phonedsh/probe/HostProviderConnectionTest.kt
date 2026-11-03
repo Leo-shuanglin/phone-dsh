@@ -328,8 +328,12 @@ internal fun deleteProviderRecord(
     } catch (_: Exception) {
         return ProviderDeleteReceipt(false, false, "密钥删除没有确认；模型服务未删除，请重试")
     }
+    // Removing one of several profiles writes the remaining document, so the
+    // store reports Saved; it reports Deleted only when the last row went away.
+    // Both mean the write was accepted. The readback below, not the outcome
+    // variant, decides whether the profile is really gone.
     when (store.delete(id)) {
-        ProviderWriteOutcome.Deleted -> Unit
+        ProviderWriteOutcome.Saved, ProviderWriteOutcome.Deleted -> Unit
         else -> return ProviderDeleteReceipt(false, true, "密钥已删除；模型服务配置未删除，请刷新后重试")
     }
     val profileRemains = when (val readback = store.read()) {
