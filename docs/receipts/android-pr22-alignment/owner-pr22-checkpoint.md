@@ -1,3 +1,11 @@
+# Latest integration pointer — 2026-11-03
+
+The core provider/configuration repairs are now integrated. See [owner-core-final.md](owner-core-final.md) for the current 2369-test, 10-device-case, APK/AAR/R8 acceptance and explicit remaining states. Product source commit `8c4fd72b` and owner merge `a084b80b` have identical trees. The merge resolved only the baseline-record conflict by retaining the tested, smaller 13-record set.
+
+The older a06 checkpoint below is historical; its rejected446 candidate was subsequently repaired and independently re-reviewed. Its counts and open-work statements are not the latest completion state.
+
+---
+
 # PR14 Android / PR22 owner checkpoint
 
 Date: 2026-11-03. Status: in progress; keep PR14 draft.
