@@ -1,6 +1,6 @@
 {
  "schema": "pdsh.ui.page-structure-baseline/1",
- "note": "Reconciled against iOS PR22 and current Android source. This ratchet holds 33 observed divergences on 4 pages and only shrinks. The two implemented About findings and the nine previously resolved plugin-inventory, Shell and session-artifact records were removed. No divergence, waiver or whitelist entry was added. Remaining strict findings stay visible; source provenance does not establish complete UI/pixel or interaction acceptance.",
+ "note": "Reconciled against iOS PR22 and current Android source. This ratchet holds 30 observed divergences on 2 pages and only shrinks. The two implemented About findings, nine previously resolved plugin-inventory, Shell and session-artifact records, two automation save-label records, and one obsolete workspace-folder switch record were removed. No divergence, waiver or whitelist entry was added. Remaining strict findings stay visible; source provenance does not establish complete UI/pixel or interaction acceptance.",
  "contracts": 34,
  "divergences": [
   {
@@ -93,20 +93,6 @@
    "name": "生效方式",
    "lane": "F",
    "reason": "PR22 rewrote ModelProviderSettingsPage as 服务/密钥/模型目录/生效方式 with a separate editor (embedded ModelProviderEditorPage) and explicit test/save receipts. Android ModelProviderSettingsPage.kt still renders the pre-PR22 form (add/edit/delete/default/test), so the section titles and controls differ. Lane F rebuilds the provider form and get-models flow. This row is `生效方式` (extra-section)."
-  },
-  {
-   "page": "native-automation",
-   "kind": "missing-action",
-   "name": "保存",
-   "lane": "G",
-   "reason": "PR22's NativeAutomationPage + ScheduleEditorPage save through an explicit editor state (保存 / 保存中…). Android NativeAutomationPage.kt still labels the save control differently, so the schedule editor interaction is not the PR22 one. Lane G owns schedules. This row is `保存` (missing-action)."
-  },
-  {
-   "page": "native-automation",
-   "kind": "unresolved-action",
-   "name": "if (editor.saving) AUTOMATION_EDITOR_SAVING_LABEL else UiStr",
-   "lane": "G",
-   "reason": "PR22's NativeAutomationPage + ScheduleEditorPage save through an explicit editor state (保存 / 保存中…). Android NativeAutomationPage.kt still labels the save control differently, so the schedule editor interaction is not the PR22 one. Lane G owns schedules. This row is `if (editor.saving) AUTOMATION_EDITOR_SAVING_LABEL else UiStr` (unresolved-action)."
   },
   {
    "page": "native-configuration",
@@ -226,13 +212,6 @@
    "name": "<untitled: settingField(field, namespace: group.namespace, writable: group.writable)>",
    "lane": "F",
    "reason": "PR22 restructured NativeConfigurationPage into 本机管理范围/iPhone Worker 限制/工具/新会话默认权限/实验插件/已加载插件 plus data-driven settings groups. Android NativeConfigurationPage.kt still renders the pre-PR22 内置插件设置 index and its older actions, so this section/action is a real current difference. Lane F rebuilds the page. This row is `<untitled: settingField(field, namespace: group.namespace, writable: group.writable)>` (unresolved-section)."
-  },
-  {
-   "page": "workspace-folders",
-   "kind": "android-only-stale",
-   "name": "切换",
-   "lane": "E",
-   "reason": "PR22 WorkspaceFoldersPage still gives Android a 切换 action (the iOS page creates/switches via folder rows but the Android host creates sessions elsewhere). Android WorkspaceFoldersPage.kt now declares only 删除/重试, so the registered Android-only item is stale. Lane E must restore the switch or the contract must record why it is no longer needed. This row is `切换` (android-only-stale)."
   }
  ]
 }

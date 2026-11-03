@@ -70,6 +70,155 @@ struct NativeWorkbenchPage: View {
         self.assertEqual(toolbar[0]["style"], "segmented")
 
 
+CHAT_HELPER_PLAN = '''import SwiftUI
+struct ChatPage: View {
+    var body: some View {
+        VStack {
+            PermissionCardView(onAllow: { respond(.allowOnce) }, onDeny: { respond(.deny) })
+            NativePlanReviewCard(onApprove: { submitPlanApproval(item) },
+                                 onRequestChanges: { model.dismissQuestion() })
+            NativeQuestionComposer(onSubmit: { submitQuestion($0) },
+                                   onDiscard: { model.dismissQuestion() })
+            if !model.todoDockItems.isEmpty {
+                NativeTodoDock(todos: model.todoDockItems)
+            }
+        }
+    }
+}
+struct PermissionCardView: View {
+    var onAllow: () -> Void
+    var onDeny: () -> Void
+    var body: some View {
+        VStack {
+            Button { onAllow() } label: { Text("允许一次") }
+            Button { onDeny() } label: { Text("拒绝") }
+        }
+    }
+}
+'''
+
+PLAN_HELPER = '''import SwiftUI
+struct NativePlanReviewCard: View {
+    static let requestChangesText = "要求修改"
+    static let approveText = "同意执行"
+    var onRequestChanges: () -> Void
+    var onApprove: () -> Void
+    var body: some View {
+        VStack {
+            Button(action: onRequestChanges) { Text(Self.requestChangesText) }
+            Button(action: onApprove) { Text(Self.approveText) }
+        }
+    }
+}
+'''
+
+QUESTION_HELPER = '''import SwiftUI
+enum NativeQuestionCopy { static let skip = "跳过" }
+struct NativeQuestionComposer: View {
+    var onSubmit: (String) -> Void
+    var onDiscard: () -> Void
+    var body: some View {
+        NativeQuestionActionButton(title: NativeQuestionCopy.skip,
+                                   enabled: !isSubmitting) { skipCurrent() }
+    }
+    private func skipCurrent() { drafts[index].skipped = true; submitDrafts() }
+}
+'''
+
+TODO_HELPER = '''import SwiftUI
+struct NativeTodoDock: View {
+    public static let title = "任务"
+    private var header: some View {
+        Button { collapsed.toggle() } label: {
+            HStack { Text(Self.title) }
+        }
+    }
+}
+'''
+
+
+class VerifiedChatHelperActionTests(unittest.TestCase):
+    def _extract(self, chat: str = CHAT_HELPER_PLAN, plan: str = PLAN_HELPER,
+                 question: str = QUESTION_HELPER, todo: str = TODO_HELPER) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "examples/probe-app/PhoneDSHProbe"
+            source_dir.mkdir(parents=True)
+            (source_dir / "ChatPage.swift").write_text(chat, encoding="utf-8")
+            (source_dir / "NativePlanReviewCard.swift").write_text(plan, encoding="utf-8")
+            (source_dir / "NativeQuestionComposer.swift").write_text(question, encoding="utf-8")
+            (source_dir / "NativeTodoDock.swift").write_text(todo, encoding="utf-8")
+            source = E.Source(source_dir / "ChatPage.swift", root)
+            return E.PageExtractor(source, "ChatPage").run(E.page_structs(source))
+
+    def test_only_mounted_helpers_with_forwarded_callbacks_are_inlined(self) -> None:
+        page = self._extract()
+        labels = {action["label"] for action in page["actions"]}
+        self.assertTrue({"允许一次", "拒绝", "要求修改", "同意执行", "跳过", "任务"}.issubset(labels))
+        sources = {action["label"]: action["provenance"] for action in page["actions"]}
+        self.assertEqual("NativePlanReviewCard.swift:3", sources["要求修改"])
+        self.assertEqual("NativeQuestionComposer.swift:2", sources["跳过"])
+        self.assertEqual("NativeTodoDock.swift:3", sources["任务"])
+
+    def test_unmounted_helper_and_missing_callback_do_not_promote_actions(self) -> None:
+        no_permission_call = CHAT_HELPER_PLAN.replace(
+            "PermissionCardView(onAllow: { respond(.allowOnce) }, onDeny: { respond(.deny) })", "")
+        labels = {action["label"] for action in self._extract(chat=no_permission_call)["actions"]}
+        self.assertNotIn("允许一次", labels)
+        self.assertNotIn("拒绝", labels)
+
+        no_permission_handler = CHAT_HELPER_PLAN.replace(
+            "onAllow: { respond(.allowOnce) }", "onAllow: { }")
+        labels = {action["label"] for action in self._extract(chat=no_permission_handler)["actions"]}
+        self.assertNotIn("允许一次", labels)
+        self.assertNotIn("拒绝", labels)
+
+        no_question_call = CHAT_HELPER_PLAN.replace(
+            "NativeQuestionComposer(onSubmit: { submitQuestion($0) },\n                                   onDiscard: { model.dismissQuestion() })", "")
+        labels = {action["label"] for action in self._extract(chat=no_question_call)["actions"]}
+        self.assertNotIn("跳过", labels)
+
+        no_plan_handler = CHAT_HELPER_PLAN.replace(
+            "onRequestChanges: { model.dismissQuestion() }", "onRequestChanges: { }")
+        labels = {action["label"] for action in self._extract(chat=no_plan_handler)["actions"]}
+        self.assertNotIn("要求修改", labels)
+        self.assertNotIn("同意执行", labels)
+
+    def test_missing_helper_controls_stay_missing(self) -> None:
+        no_deny_button = CHAT_HELPER_PLAN.replace(
+            'Button { onDeny() } label: { Text("拒绝") }', 'Text("拒绝")')
+        labels = {action["label"] for action in self._extract(chat=no_deny_button)["actions"]}
+        self.assertNotIn("拒绝", labels)
+
+        no_plan_approve = PLAN_HELPER.replace(
+            'Button(action: onApprove) { Text(Self.approveText) }', 'Text(Self.approveText)')
+        labels = {action["label"] for action in self._extract(plan=no_plan_approve)["actions"]}
+        self.assertNotIn("同意执行", labels)
+
+        no_skip = QUESTION_HELPER.replace(
+            'NativeQuestionActionButton(title: NativeQuestionCopy.skip,\n                                   enabled: !isSubmitting) { skipCurrent() }',
+            "Text(NativeQuestionCopy.skip)")
+        labels = {action["label"] for action in self._extract(question=no_skip)["actions"]}
+        self.assertNotIn("跳过", labels)
+
+        no_skip_handler = QUESTION_HELPER.replace(
+            "private func skipCurrent() { drafts[index].skipped = true; submitDrafts() }", "")
+        labels = {action["label"] for action in self._extract(question=no_skip_handler)["actions"]}
+        self.assertNotIn("跳过", labels)
+
+        no_todo_toggle = TODO_HELPER.replace(
+            'Button { collapsed.toggle() } label: {\n            HStack { Text(Self.title) }\n        }',
+            'Text(Self.title)')
+        labels = {action["label"] for action in self._extract(todo=no_todo_toggle)["actions"]}
+        self.assertNotIn("任务", labels)
+
+        no_todo_guard = CHAT_HELPER_PLAN.replace(
+            "if !model.todoDockItems.isEmpty {\n                NativeTodoDock(todos: model.todoDockItems)\n            }",
+            "NativeTodoDock(todos: model.todoDockItems)")
+        labels = {action["label"] for action in self._extract(chat=no_todo_guard)["actions"]}
+        self.assertNotIn("任务", labels)
+
+
 class TitledSectionHelperTests(unittest.TestCase):
     def _extract(self, swift: str) -> dict:
         with tempfile.TemporaryDirectory() as directory:
