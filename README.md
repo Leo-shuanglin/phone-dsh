@@ -206,6 +206,14 @@ Android 版本位于 [`android/`](android/README.md)，支持 **Android 8.0（AP
 
 原生界面包含会话内容、目标/任务输入、文件浏览、模型服务配置、插件清单和设置等页面，持续跟进 iOS 基线。开发者可构建示例 APK，也可通过 `com.phonedsh:lib:0.1.0` AAR 集成宿主能力。
 
+### 设计取向：与 iOS 同一套实现，手机侧专注轻办公
+
+Android 没有另起一套运行方式，而是沿用 iOS 的实现：DSH Worker 跑在系统 WebView 里，原生宿主管资源、凭据和安全边界，会话、工具编排、上下文和 WAL 的行为与 iOS 基线一致。这样选择是因为手机端的主要场景是**轻办公**——文档、表格、PDF、日程、联系人、文件整理、网页搜索和轻量的数据处理——这些任务在 WebView 内的 Worker 和宿主只读加速器（`rg`、`jq`、tree-sitter 等）上就能完成，不需要常驻一个完整的 Linux 环境，从而把内存、存储和耗电压在手机可以长期承受的水平。
+
+遇到确实需要完整 Linux 用户态的任务（例如编译、跑构建或测试工具链），由会话内按需调起 **Ubuntu** 处理：Agent 在会话中发起 `ubuntu` 请求，宿主先征得用户同意，再把这一条命令交给本地 Ubuntu 环境异步执行，取回输出和产物文件。Ubuntu 按会话申请、用完即弃，平时不运行、不挂载；它只是“命令的执行地点”，DSH 本身和会话状态不会搬进去，构建期间宿主会封住 App 内部的会话与存储目录。设计细节见 [本地挂载运行时（Ubuntu）方案](docs/design/android-local-build-runtime-2026-11-01.md)。
+
+**当前进度（如实）**：会话内的 `ubuntu` 命令、异步任务记录、用户审批和构建期间的目录封存已在 Android 宿主落地，但本构建接的是 **mock 适配器**——尚未挂接真实的 Ubuntu 环境，输出会标明 `backend=mock`，退出码是模拟值，不能当作真实编译结果。iOS 暂无这条路径；对应的页面桥方法 `ubuntu.exec / status / fetch` 在 [`spec/v1/bridge.md`](spec/v1/bridge.md) §12 中仍标为未实现。
+
 - [Android 构建与模块说明](android/README.md)：工具链引导、Gradle 模块、AAR 消费和测试命令。
 - [Worker 资源与 WebView 要求](android/engine/README.md)：Worker bundle 打包与运行环境。
 - [当前验证记录](docs/receipts/android-pr22-alignment/owner-core-final.md)：已完成 debug/release APK、AAR、R8 消费者构建及 API 35 ARM64 模拟器上的部分原生交互验证；物理手机、真实模型服务、16 KB 页大小运行环境及完整 iOS 交互/像素对齐仍未完成验收，PR14 保持 Draft。
