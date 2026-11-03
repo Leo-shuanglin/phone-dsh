@@ -1,6 +1,6 @@
 {
  "schema": "pdsh.ui.page-structure-baseline/1",
- "note": "Reconciled against iOS PR22 and the current Android source inventory. This ratchet now holds 44 observed divergences on 9 pages; it only shrinks. Removed the obsolete HomeDrawer comparison against legacy SessionsPage, the resolved grouped Settings index labels, NativeWorkbench picker options now represented by its source-extracted Picker, and source-resolved chat drawer action. No divergence or whitelist entry was added. Newly exposed HomeDrawer source gaps and other strict findings remain visible until their owning lane closes them. Current header menu now uses the actual PR22 工作区/插件与工具 labels; the four resolved old-label entries were removed.",
+ "note": "Reconciled against iOS PR22 and current Android source. This ratchet holds 35 observed divergences on 5 pages and only shrinks. Nine resolved plugin-inventory, Shell and session-artifact labels were removed after source-backed UI fixes. No divergence, waiver or whitelist entry was added; the 16 new strict findings remain visible. UI/pixel and live interaction acceptance are separate.",
  "contracts": 34,
  "divergences": [
   {
@@ -226,69 +226,6 @@
    "name": "<untitled: settingField(field, namespace: group.namespace, writable: group.writable)>",
    "lane": "F",
    "reason": "PR22 restructured NativeConfigurationPage into 本机管理范围/iPhone Worker 限制/工具/新会话默认权限/实验插件/已加载插件 plus data-driven settings groups. Android NativeConfigurationPage.kt still renders the pre-PR22 内置插件设置 index and its older actions, so this section/action is a real current difference. Lane F rebuilds the page. This row is `<untitled: settingField(field, namespace: group.namespace, writable: group.writable)>` (unresolved-section)."
-  },
-  {
-   "page": "native-plugin-inventory",
-   "kind": "extra-action",
-   "name": "插件配置",
-   "lane": "F",
-   "reason": "PR22 reaches NativePluginInventoryPage from 插件与工具 and titles it 已加载插件; Android NativePluginInventoryPage.kt still has the older 内置插件 title and 插件列表 header/插件配置 action. Lane F aligns the plugin inventory entry and chrome. This row is `插件配置` (extra-action)."
-  },
-  {
-   "page": "native-plugin-inventory",
-   "kind": "extra-section",
-   "name": "插件列表",
-   "lane": "F",
-   "reason": "PR22 reaches NativePluginInventoryPage from 插件与工具 and titles it 已加载插件; Android NativePluginInventoryPage.kt still has the older 内置插件 title and 插件列表 header/插件配置 action. Lane F aligns the plugin inventory entry and chrome. This row is `插件列表` (extra-section)."
-  },
-  {
-   "page": "native-plugin-inventory",
-   "kind": "title-mismatch",
-   "name": "已加载插件",
-   "lane": "F",
-   "reason": "PR22 reaches NativePluginInventoryPage from 插件与工具 and titles it 已加载插件; Android NativePluginInventoryPage.kt still has the older 内置插件 title and 插件列表 header/插件配置 action. Lane F aligns the plugin inventory entry and chrome. This row is `已加载插件` (title-mismatch)."
-  },
-  {
-   "page": "pdsh-shell",
-   "kind": "extra-action",
-   "name": "取消",
-   "lane": "G",
-   "reason": "PR22's PDSHShellPage renders 运行/运行中… and 停止运行 with the toolbar 取消. Android PDSHShellPage.kt still has the older run/stop labels (取消 extra, 停止运行 missing). Lane G owns the command pane. This row is `取消` (extra-action)."
-  },
-  {
-   "page": "pdsh-shell",
-   "kind": "missing-action",
-   "name": "停止运行",
-   "lane": "G",
-   "reason": "PR22's PDSHShellPage renders 运行/运行中… and 停止运行 with the toolbar 取消. Android PDSHShellPage.kt still has the older run/stop labels (取消 extra, 停止运行 missing). Lane G owns the command pane. This row is `停止运行` (missing-action)."
-  },
-  {
-   "page": "session-artifacts",
-   "kind": "extra-section",
-   "name": "本 session",
-   "lane": "G",
-   "reason": "PR22 renamed the artifacts page to 本会话产物 / 本会话 and added the attributed-artifacts empty copy. Android SessionArtifactsPage.kt still says 本 session and 本 session 产物, so the title and rows differ. Lane G owns artifacts/preview/share. This row is `本 session` (extra-section)."
-  },
-  {
-   "page": "session-artifacts",
-   "kind": "missing-section",
-   "name": "本会话",
-   "lane": "G",
-   "reason": "PR22 renamed the artifacts page to 本会话产物 / 本会话 and added the attributed-artifacts empty copy. Android SessionArtifactsPage.kt still says 本 session and 本 session 产物, so the title and rows differ. Lane G owns artifacts/preview/share. This row is `本会话` (missing-section)."
-  },
-  {
-   "page": "session-artifacts",
-   "kind": "missing-section",
-   "name": "本会话 还没有已确认归属的产物",
-   "lane": "G",
-   "reason": "PR22 renamed the artifacts page to 本会话产物 / 本会话 and added the attributed-artifacts empty copy. Android SessionArtifactsPage.kt still says 本 session and 本 session 产物, so the title and rows differ. Lane G owns artifacts/preview/share. This row is `本会话 还没有已确认归属的产物` (missing-section)."
-  },
-  {
-   "page": "session-artifacts",
-   "kind": "title-mismatch",
-   "name": "本会话产物",
-   "lane": "G",
-   "reason": "PR22 renamed the artifacts page to 本会话产物 / 本会话 and added the attributed-artifacts empty copy. Android SessionArtifactsPage.kt still says 本 session and 本 session 产物, so the title and rows differ. Lane G owns artifacts/preview/share. This row is `本会话产物` (title-mismatch)."
   },
   {
    "page": "settings-about",

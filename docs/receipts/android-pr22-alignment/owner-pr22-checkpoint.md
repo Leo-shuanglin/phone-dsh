@@ -30,7 +30,7 @@ Date: 2026-11-03. Status: in progress; keep PR14 draft.
 - Model-provider multi-profile storage/selection, secure editor/source navigation and GetModels UI binding still require implementation and review.
 - Configuration namespace loading/schema/CAS/reset callbacks and plugin inventory loading/partial errors still require live host integration. Phone plugin installation/enabling remains unsupported by the iOS source.
 - Session metrics/details and subagent catalog/history candidates are under owner review; they are not included in checkpoint 2d0ea322.
-- Source page checks: strict FAIL (60), ratchet FAIL (16 new outside 44 existing baseline). Baseline only shrank; no new waivers.
+- Latest owner page checks at 167cf654: strict FAIL (51), ratchet FAIL (16 new outside 35 remaining baseline). Nine resolved baseline entries were removed; no entries were added. Baseline only shrank; no new waivers.
 - iOS live Picker/interaction acceptance: NOT_RUN because Mac remains locked; user chose to continue existing verification.
 - Physical iPhone/Android, live provider/model requests, complete paired-state pixel acceptance and 16 KB runtime validation: NOT_RUN.
 - HTML/3D preview remains the documented process/cookie-isolation limitation.
