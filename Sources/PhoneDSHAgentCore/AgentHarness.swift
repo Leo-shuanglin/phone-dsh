@@ -458,6 +458,10 @@ public struct HarnessEvent: Codable, Equatable, Sendable {
     /// `interrupted` / `AUTO_REVIEW_DENIED`. Kept beside the bounded summary so
     /// the row can distinguish stopped from failed.
     public var toolResultErrorCode: String?
+    /// Durable `user/message.data`, including source RPC identity and
+    /// attachment references, for reconciling a local input with its echo.
+    /// Nil for other events and older producers.
+    public var userMessageData: JSONValue?
 
     public init(seq: UInt64?, time: Date, kind: Kind) {
         self.init(seq: seq, time: time, kind: kind, toolResultDetail: nil,
@@ -470,7 +474,8 @@ public struct HarnessEvent: Codable, Equatable, Sendable {
                 rawTurnEndKind: String? = nil,
                 rawTurnEndCause: String? = nil,
                 toolResultMeta: JSONValue? = nil,
-                toolResultErrorCode: String? = nil) {
+                toolResultErrorCode: String? = nil,
+                userMessageData: JSONValue? = nil) {
         self.seq = seq
         self.time = time
         self.kind = kind
@@ -479,6 +484,7 @@ public struct HarnessEvent: Codable, Equatable, Sendable {
         self.rawTurnEndCause = rawTurnEndCause
         self.toolResultMeta = toolResultMeta
         self.toolResultErrorCode = toolResultErrorCode
+        self.userMessageData = userMessageData
     }
 
     public var isDurable: Bool { seq != nil }
