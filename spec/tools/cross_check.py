@@ -205,8 +205,15 @@ def _check_baseline_links(root, res):
             elif not resolved.exists():
                 res.fail("{} -> {} (missing baseline link)".format(where, target))
     alias = root / "CLAUDE.md"
-    if not alias.is_symlink() or alias.readlink() != Path("AGENTS.md"):
-        res.fail("CLAUDE.md must be a symlink to AGENTS.md (one collaboration source)")
+    if alias.is_symlink() or not alias.is_file():
+        res.fail("CLAUDE.md must be a regular file importing @AGENTS.md")
+    else:
+        try:
+            lines = [line.strip() for line in alias.read_text(encoding="utf-8").splitlines() if line.strip()]
+            if not lines or lines[0] != "@AGENTS.md":
+                res.fail("CLAUDE.md first nonempty line must be @AGENTS.md")
+        except (OSError, UnicodeError):
+            res.fail("CLAUDE.md must be readable UTF-8")
     return count
 
 

@@ -21,8 +21,8 @@ Exit code 0 means all eight hold; 1 means at least one failed; 2 is a usage/root
    Catches a renamed/deleted contract file that another tree still cites by path.
    It also checks local Markdown links in the protocol index (`spec/README.md`)
    and `AGENTS.md`, including source/test paths and directories. These entrypoints
-   must exist, links must stay within the repository, and `CLAUDE.md` must remain
-   a symlink to `AGENTS.md`. External URLs and section anchors are not fetched or
+   must exist, links must stay within the repository, and `CLAUDE.md` must be a regular file
+   whose first nonempty line is `@AGENTS.md` (symlinks and copied rules fail). External URLs and section anchors are not fetched or
    validated. This prevents a stale index or two diverging agent rulebooks; it
    does not prove that the linked implementation conforms to its contract.
 2. **Platform whitelist ↔ contract.** Every `spec_ref` target exists, and every

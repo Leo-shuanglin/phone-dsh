@@ -19,7 +19,7 @@
 
 - MCP commit `3c4d91b7e832d9b74338d56eed03403ccc662123`：[`CLAUDE.md`](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/3c4d91b7e832d9b74338d56eed03403ccc662123/CLAUDE.md) 的 tree mode 是 `120000`，blob `47dc3e3d863cfb5727b87d785d09abf9743c0a72` 內容是 `AGENTS.md`。
 - Zed commit `504a7f2cf25b817cda3998cab93473adef15f93c`：[`AGENTS.md`](https://github.com/zed-industries/zed/blob/504a7f2cf25b817cda3998cab93473adef15f93c/AGENTS.md) 與 `CLAUDE.md` 的 mode 都是 `120000`，共同 blob `8a63b64bdb0afcda986ba715cb39849ac574e096` 內容是 `.rules`。
-- 這證明兩者使用 symlink 共享規則，並不證明所有 agent 工具或 Windows checkout 都支持同一讀取方式。建議 phoneDSH `AGENTS.md` 為主，`CLAUDE.md` symlink 或極短轉介；若需要兩個普通檔，主規則仍只一份，檢查連結與引用不漂移。
+- 這證明兩者使用 symlink 共享規則，並不證明所有 agent 工具或 Windows checkout 都支持同一讀取方式。phoneDSH 現以 `AGENTS.md` 為主，`CLAUDE.md` 普通檔首行 `@AGENTS.md` import；若需要兩個普通檔，主規則仍只一份，檢查連結與引用不漂移。
 
 ## 建議的最小協議基線（本報告的推論）
 
@@ -63,7 +63,7 @@
 | 來源 | 做法 | phoneDSH 採用 |
 | --- | --- | --- |
 | [openai/agents.md](https://github.com/openai/agents.md) | 最近的 AGENTS.md 優先，用戶對話指令優先於檔案 | AGENTS.md 開頭寫明優先順序 |
-| Claude Code 官方文檔 memory 頁 | 建議 CLAUDE.md 用 `@AGENTS.md` import 再加 Claude 專屬內容；symlink 可用但在 Windows／未開 `core.symlinks` 時失效；單檔建議 200 行內 | 現維持 symlink（`cross_check.py` 強制），§9 第 6 項計劃改為 import |
+| Claude Code 官方文檔 memory 頁 | 建議 CLAUDE.md 用 `@AGENTS.md` import 再加 Claude 專屬內容；symlink 可用但在 Windows／未開 `core.symlinks` 時失效；單檔建議 200 行內 | 已改為普通檔首行 `@AGENTS.md` import；`cross_check.py` 強制同源入口，實際工具載入仍待驗證 |
 | openai/codex、Kubernetes、MCP 的 AGENTS.md | 觸發條件寫成「改了路徑 X → 必須做 Y」；具體 NEVER 規則；分層驗證命令 | AGENTS.md §1 觸發表、§2 規則、§5 驗證；基線 §4 完整 glob |
 | Claude Code 官方文檔 best practices 頁 | 每次都必須發生的事交給 hook／CI，指令檔只放指導 | 基線 §9：觸發檢查與 breaking diff 進 CI |
 | CircleCI 部落格〈parallel coding agents〉（2026-10-30）、Claude Code 官方文檔 agent teams 頁 | 先凍結契約再並行；每個 agent 獨占檔案範圍；agent 不自行改契約 | AGENTS.md §3 contract freeze、獨占路徑、CONTRACT CHANGE REQUEST |

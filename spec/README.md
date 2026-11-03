@@ -6,7 +6,7 @@ Baseline revision: 2（2026-11-03）。初次盤點 public main `fe33f75f46e970c
 
 本頁回答四個問題：**哪些東西算協議**、**每個協議的唯一權威在哪**、**改了哪些路徑就碰到哪個協議**、
 **改協議時誰做什麼、交什麼證據**。協作規則的唯一來源是 [AGENTS.md](../AGENTS.md)；`CLAUDE.md`
-指向同一份。本頁不複製任何協議內容，只登記與連結。
+透過 `@AGENTS.md` 匯入同一份。本頁不複製任何協議內容，只登記與連結。
 
 ## 1. 什麼算協議
 
@@ -54,8 +54,8 @@ ID 是 review 與交接的索引，**不是 wire 欄位或能力名稱**。「�
 
 | ID／角色 | Owning contract | 實作端 | Runtime 證據（真正讀 golden 的測試） |
 | --- | --- | --- | --- |
-| P01 channel／wire owner | [v1/channel.md](v1/channel.md)、[v1/schema](v1/schema)、[golden/frames](v1/golden/frames) | Swift [PhoneDSHWire](../Sources/PhoneDSHWire/)、[ChannelServer](../Sources/PhoneDSHLoopback/ChannelServer.swift)、[PhoneDSHChannel](../Sources/PhoneDSH/PhoneDSHChannel.swift)；TS [channel](../plugins/channel/src/)；Rust [pdsh-wire](../shell/crates/pdsh-wire/) 經 [pdsh-jni](../shell/crates/pdsh-jni/) 供 Android；Kotlin [core/wire](../android/core/src/main/kotlin/com/phonedsh/wire/)（JNI 殼）、[dsh/host](../android/dsh/src/main/kotlin/com/phonedsh/dsh/host/) 的 HostHello／HostChannel／VfsFrames | [Swift](../Tests/PhoneDSHWireTests/GoldenFrameTests.swift)、[TS](../plugins/channel/src/golden-frames.test.ts)、[Kotlin](../android/core/src/test/kotlin/com/phonedsh/wire/WireGoldenFramesTest.kt)、[Rust](../shell/crates/pdsh-wire/tests/golden_frames.rs)（**CI 未跑**，見 GAP-08） |
-| P02 VFS／WAL owner | [v1/wal.md](v1/wal.md)、[manifest schema](v1/schema/manifest.schema.json)、[golden/wal](v1/golden/wal) | Swift [PhoneDSHLog](../Sources/PhoneDSHLog/)、[WAL.swift](../Sources/PhoneDSHWire/WAL.swift)；Rust [pdsh-wal](../shell/crates/pdsh-wal/)；Kotlin [core/log](../android/core/src/main/kotlin/com/phonedsh/log/)、`dsh/host/{HostWal,WalUplink}.kt`；TS `plugins/channel/src/wal.ts` 只是**對拍 codec**，無生產消費者 | Swift `WALTests`、`PhoneDSHLogTests`；Kotlin `NativeWalGoldenTest`；Rust [golden_wal.rs](../shell/crates/pdsh-wal/tests/golden_wal.rs)（CI 未跑） |
+| P01 channel／wire owner | [v1/channel.md](v1/channel.md)、[v1/schema](v1/schema)、[golden/frames](v1/golden/frames) | Swift [PhoneDSHWire](../Sources/PhoneDSHWire/)、[ChannelServer](../Sources/PhoneDSHLoopback/ChannelServer.swift)、[PhoneDSHChannel](../Sources/PhoneDSH/PhoneDSHChannel.swift)；TS [channel](../plugins/channel/src/)；Rust [pdsh-wire](../shell/crates/pdsh-wire/) 經 [pdsh-jni](../shell/crates/pdsh-jni/) 供 Android；Kotlin [core/wire](../android/core/src/main/kotlin/com/phonedsh/wire/)（JNI 殼）、[dsh/host](../android/dsh/src/main/kotlin/com/phonedsh/dsh/host/) 的 HostHello／HostChannel／VfsFrames | [Swift](../Tests/PhoneDSHWireTests/GoldenFrameTests.swift)、[TS](../plugins/channel/src/golden-frames.test.ts)、[Kotlin](../android/core/src/test/kotlin/com/phonedsh/wire/WireGoldenFramesTest.kt)、[Rust](../shell/crates/pdsh-wire/tests/golden_frames.rs)（`phone-rust-tests`；GAP-08 的其餘證據仍開放） |
+| P02 VFS／WAL owner | [v1/wal.md](v1/wal.md)、[manifest schema](v1/schema/manifest.schema.json)、[golden/wal](v1/golden/wal) | Swift [PhoneDSHLog](../Sources/PhoneDSHLog/)、[WAL.swift](../Sources/PhoneDSHWire/WAL.swift)；Rust [pdsh-wal](../shell/crates/pdsh-wal/)；Kotlin [core/log](../android/core/src/main/kotlin/com/phonedsh/log/)、`dsh/host/{HostWal,WalUplink}.kt`；TS `plugins/channel/src/wal.ts` 只是**對拍 codec**，無生產消費者 | Swift `WALTests`、`PhoneDSHLogTests`；Kotlin `NativeWalGoldenTest`；Rust [golden_wal.rs](../shell/crates/pdsh-wal/tests/golden_wal.rs)（`phone-rust-tests`） |
 | P03 exec／journal／handoff owner | [v1/exec.md](v1/exec.md)、[v1/handoff.md](v1/handoff.md)、[v1/budgets.md](v1/budgets.md)、[golden/perturbations](v1/golden/perturbations) | Swift [PhoneDSHController](../Sources/PhoneDSHController/)、[Handoff](../Sources/PhoneDSH/Handoff/)、[Background](../Sources/PhoneDSH/Background/)、`PhoneDSHLedger.swift`、`PhoneDSHHost.swift`；TS `plugins/{exec-bridge,tool-journal,lifecycle-gate,subprocess-xl}`；Kotlin [android/controller](../android/controller/src/main/)、`android/dsh/.../dsh/{exec,journal,background}` | `StepMachineJournalContractTests`、`SideEffectLedgerTests`、`PhoneDSHDrainRecoveryContractTests`、`plugins/tests/journal-sync.test.ts`、Kotlin `PerturbationFixtureTest` |
 | P04 page bridge owner | [v1/bridge.md](v1/bridge.md)、[bridge schema](v1/schema/bridge-message.schema.json)、[golden/bridge](v1/golden/bridge) | **規範大半是 `target`**。現行 handler：`pdshNativePreview`（Swift `Sources/PhoneDSHEngine/WebEngineNativePreview.swift` ↔ [protocol.ts](../plugins/phone-native-preview/src/protocol.ts)，`legacy` 形狀）、directory import、`xlEngine` console、`pdshMcpControl`（↔ `examples/probe-app/ProbeKit/MCPControlBridge.swift`）、`pdshOpenModelSettings`（**倉內無接收端**）；Kotlin `android/engine/.../{WebViewEngine,NavigationPolicy}.kt` | bridge goldens **沒有任何 runtime 消費者**，只有 `bridge_check.py` |
 | P05 HTTP／MCP gateway owner | [v1/gateway-security.md](v1/gateway-security.md)、[gateway schema](v1/schema/gateway-vector.schema.json)、[golden/gateway](v1/golden/gateway) | Swift [PhoneDSHGateway](../Sources/PhoneDSHGateway/)、Loopback 中的 HTTP 部分（`HTTPTransport`、`StreamingForward` 等；ChannelServer／WebSocket 屬 P01）；TS `plugins/llm-bridge`、`plugins/phone-mcp/src/{manager,schema}.ts`；Kotlin [android/net](../android/net/src/main/) | 只有 Kotlin `GatewayVectorConformanceTest` 讀 golden；Swift `Tests/PhoneDSHGatewayTests` 不讀 |
@@ -114,7 +114,7 @@ diff 觸及下列任一路徑，就必須在任務／PR 中寫出對應 ID 的 `
 | P21 | `spec/v1/render-media-v1.md`、`spec/v1/office-ir-v1.json`、`Sources/PhoneDSHEngine/{PageSchemeHandler,PageSurface}.swift`、`examples/probe-app/ProbeKit/Office/**` |
 | P22 | `spec/v1/schema/{scenario-*,perturbation,upstream-script}.schema.json`、`spec/v1/golden/upstream/**`、`scripts/ci/scenarios/**`、`Sources/PhoneDSH{Scenario,Harness}/**`、`android/testkit/**` |
 
-此表目前由人和 agent 對照執行，尚無 CI 強制（見 §9）。路徑改名或新增實作檔時，同一變更更新此表。
+此表由 `registry_check.py` 校驗與 registry 的一致性；`protocol_impact.py` 可在本地校驗 diff 與描述（見 §9）。路徑改名或新增實作檔時，同一變更更新此表。
 
 ## 5. 相容性規則
 
@@ -164,7 +164,7 @@ diff 觸及下列任一路徑，就必須在任務／PR 中寫出對應 ID 的 `
 
 ## 7. 已知差異：維護債，不是實作許可
 
-以下來自 source review，不是 runtime 實驗。本基線沒有修改任何訊息格式，也沒有宣稱它們已修好。
+以下保留 revision 2 的原始 source review，不是 runtime 實驗；後續工具進度見 §9，本輪不關閉任何 GAP。本基線沒有修改任何訊息格式，也沒有宣稱它們已修好。
 修正時附 contract delta 與 regression；**不得為了消除差異把規範改成寬鬆的實作現狀**。
 
 | ID／邊界 | 觀測 | 關閉條件 |
@@ -188,24 +188,24 @@ diff 觸及下列任一路徑，就必須在任務／PR 中寫出對應 ID 的 `
 | 實際變動 | 命令與證據範圍 |
 | --- | --- |
 | spec／schema／golden／本頁 | `bash scripts/ci/check.sh --only phone-spec,phone-p0-conformance,phone-cross-tree`：規範與 fixtures 一致，本頁與 AGENTS 的連結存在；**不是 runtime conformance** |
-| P01／P02 codec | `swift test --filter PhoneDSHWireTests`（持久化加 `PhoneDSHLogTests`）；TS 同一 golden 測試；`cd shell && cargo test -p pdsh-wire -p pdsh-wal`（**CI 未覆蓋，必須手動跑並記錄**）；Android `phone-android-tests` |
+| P01／P02 codec | `swift test --filter PhoneDSHWireTests`（持久化加 `PhoneDSHLogTests`）；TS 同一 golden 測試；`bash scripts/ci/check.sh --only phone-rust-tests`（cargo 缺失為 SKIP／INCOMPLETE，記錄實際結果）；Android `phone-android-tests` |
 | Worker／TS | `cd plugins && npm run typecheck && npm test`；`phone-compat`。依賴未安裝是 `NOT_RUN`，不是通過 |
 | host／controller／gateway／harness | 對應 Swift test target 與回歸；host path 跑 `bash scripts/ci/smoke.sh`。需要 Worker bundle／image／模型的項目分別記錄是否真的執行 |
 | Android／native ABI | `phone-android-structure`、`phone-android-tests`；影響產物時加 `phone-android-release`。JVM 測試不等於 WebView／真機 |
 | 公倉交付 | hygiene／license／no-dsh-patch 與受影響 gates；完整清單以 `bash scripts/ci/check.sh --list` 為準 |
 
-`phone-cross-tree` 只檢查本頁與 AGENTS 的 **Markdown 連結**；反引號中的路徑與 glob 不受檢查。
+`phone-cross-tree` 檢查本頁與 AGENTS 的本地連結、CLAUDE import、registry 與 §3／§4 逐字投影及路徑／glob、schema breaking diff；不是 runtime conformance。
 結果用 `PASS／FAIL／SKIP／INCOMPLETE` 原樣記錄；沒跑記 `NOT_RUN`，沒有測量證據記 `NOT_VERIFIED`。
 
-## 9. 機器強制路線圖（planned，尚未實作）
+## 9. 機器強制路線圖與進度
 
 文件只能指引；能擋住「各改各的」的是 CI。下列項目按收益排序，實作前各自走變更流程：
 
-1. **機器可讀登記表**：把 §3／§4 抽成 `spec/` 下的 `registry.json`（ID、權威、兩端、觸發 glob、狀態），本頁由它生成或被它校驗。
-2. **觸發檢查**：PR 觸及 §4 路徑而描述中沒有對應 ID 的 `Protocol impact` 時失敗。
-3. **兩端讀同一批 golden**：補 Rust `cargo test` gate；Swift 讀 gateway／host golden；正反例向量命名 `<id>-valid|invalid`。
-4. **schema breaking diff**：對 `spec/**/schema/*.json` 與 base 比較，按 §5.1 判斷 breaking；豁免只能來自變更單中的 `breaking: true` 與版本決定。
-5. **CODEOWNERS** 保護 `spec/`、§3 的權威源檔，並啟用 code owner review。
-6. **CLAUDE.md 改為 `@AGENTS.md` import**（現為 symlink；Windows／未開 `core.symlinks` 的 checkout 會失效），同步更新 `cross_check.py` 的檢查。
+1. **已完成：機器可讀登記表**。`registry.json` 逐條保留 §3／§4 的來源與結構化投影；`registry_check.py` 校驗 schema、ID、來源、觸發條件及路徑，在 `phone-cross-tree` 執行。
+2. **已完成本地工具：觸發檢查**。`protocol_impact.py --base <ref> --body-file <path>` 校驗 §4 的 ID；`none` 必須有理由。尚未接入 hosted workflow；理由真實性仍由審查者判斷。
+3. **partial：兩端讀同一批 golden**。已接 `phone-rust-tests` 跑 pdsh-wire／pdsh-wal；Swift 讀 gateway／host golden 與正反例命名仍未實作。GAP-08 不因 Rust gate 通過而關閉。
+4. **已完成：schema breaking diff**。`schema_diff.py --base <ref>` 對 schema 做保守結構比較，在 `phone-cross-tree` 執行；breaking 需本次變更單的 `breaking: true`、contracts、匹配 base、frozen 狀態及版本決定。
+5. **未做：CODEOWNERS** 與 code owner review；本輪明確不新增，也不調整 GitHub 設定。
+6. **已完成：CLAUDE.md 改為 `@AGENTS.md` import**。普通檔首行為 `@AGENTS.md`，不另寫規則；`cross_check.py` 拒絕 symlink、缺失檔與錯誤 import。Windows／Claude 實際載入尚未驗證。
 
 [研究依據](../docs/research/protocol-baseline-2026-11-03.md)說明借鑑來源與不採用的做法；它是研究紀錄，不覆寫本頁。

@@ -1,7 +1,7 @@
 # Agent collaboration
 
-Applies to the whole repository (Swift, TypeScript, Kotlin, Rust). `CLAUDE.md` is
-the same file. A nearer `AGENTS.md` in a subdirectory adds rules for that subtree;
+Applies to the whole repository (Swift, TypeScript, Kotlin, Rust). `CLAUDE.md`
+imports this file through `@AGENTS.md`. A nearer `AGENTS.md` in a subdirectory adds rules for that subtree;
 the user's explicit instructions in the conversation take precedence over both.
 
 The one thing this file exists to prevent: **two agents changing the two ends of a

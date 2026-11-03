@@ -68,7 +68,7 @@ class ReferenceTests(Fixture):
         super().setUp()
         self.write("spec/README.md", "# Protocol baseline\n")
         self.write("AGENTS.md", "# Collaboration\n")
-        (self.root / "CLAUDE.md").symlink_to("AGENTS.md")
+        self.write("CLAUDE.md", "@AGENTS.md\n")
 
     def test_reachable_reference_and_placeholder(self):
         self.write("spec/a/README.md", "See spec/a/b.md and spec/v1/file.md.\n")
@@ -158,7 +158,24 @@ class ReferenceTests(Fixture):
     def test_copied_claude_rules_fail_even_if_content_is_identical(self):
         (self.root / "CLAUDE.md").unlink()
         self.write("CLAUDE.md", (self.root / "AGENTS.md").read_text())
-        self.assert_fail(cross_check.check_references(self.root), "CLAUDE.md must be a symlink")
+        self.assert_fail(cross_check.check_references(self.root), "first nonempty line must be @AGENTS.md")
+
+
+    def test_claude_import_allows_initial_blank_lines(self):
+        self.write("CLAUDE.md", "\n\n@AGENTS.md\n")
+        self.assert_ok(cross_check.check_references(self.root))
+
+    def test_claude_symlink_is_rejected(self):
+        (self.root / "CLAUDE.md").unlink()
+        self.write("import.md", "@AGENTS.md\n")
+        (self.root / "CLAUDE.md").symlink_to("import.md")
+        self.assert_fail(cross_check.check_references(self.root), "must be a regular file")
+
+    def test_missing_or_empty_claude_fails(self):
+        (self.root / "CLAUDE.md").unlink()
+        self.assert_fail(cross_check.check_references(self.root), "must be a regular file")
+        self.write("CLAUDE.md", "\n")
+        self.assert_fail(cross_check.check_references(self.root), "first nonempty line")
 
 
 class PlatformContractTests(Fixture):
