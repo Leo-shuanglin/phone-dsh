@@ -20,6 +20,9 @@
   `phone-image`, `phone-gate-contracts`, `phone-hygiene`, `phone-license` and `phone-no-dsh-patch` green; changes to
   the host path also run `scripts/ci/smoke.sh` (macOS, real WKWebView). The Xcode package-resolution stage is optional
   on developer machines without XcodeGen/Xcode; a run with any skipped stage exits as `INCOMPLETE`, never `PASS`.
+- **Rust codec evidence.** `phone-rust-tests` runs `cargo test -p pdsh-wire -p pdsh-wal`
+  from `shell/`. Missing cargo is SKIP and makes the aggregate INCOMPLETE; a cargo
+  test failure is FAIL. This does not certify Swift/Kotlin interoperability.
 - **Public-repo hygiene.** No credentials, no personal paths, no private hostnames; `scripts/ci/hygiene.py` scans for
   them and `scripts/ci/hygiene-allow.txt` holds the deliberate exceptions.
 - **Licences.** MIT only for first-party code (SPDX header on every source file); third-party code must be MIT,

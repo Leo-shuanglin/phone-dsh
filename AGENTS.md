@@ -152,8 +152,9 @@ authorize delegation. These rules describe how to coordinate authorized work.
 - Use the baseline's verification matrix (§8). `bash scripts/ci/check.sh --list`
   is the command inventory. Run what the actual diff affects.
 - Contract edits: `bash scripts/ci/check.sh --only phone-spec,phone-p0-conformance,phone-cross-tree`.
-- P01/P02 codec edits also need the Rust tests, which no CI gate runs today:
-  `cd shell && cargo test -p pdsh-wire -p pdsh-wal`. Record them explicitly.
+- P01/P02 codec edits also need `bash scripts/ci/check.sh --only phone-rust-tests`
+  (runs `cd shell && cargo test -p pdsh-wire -p pdsh-wal`). Missing cargo is SKIP /
+  INCOMPLETE, never PASS. Record the actual result explicitly.
 - Behaviour changes need a regression on the real owning boundary, reusing the
   shared golden vectors, including invalid input and the changed failure path.
   Keep checker mutation tests effective.
