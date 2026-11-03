@@ -30,7 +30,7 @@ stage_desc() {
     case "$1" in
         phone-spec)            echo "spec/v1 --full golden vectors, schemas and the spec tool unit tests" ;;
         phone-p0-conformance)  echo "Android-port P0 contract trees: catalog, bridge, gateway, trajectory, fixtures, host, platform, ui, page structure" ;;
-        phone-cross-tree)      echo "spec/tools/cross_check.py: 8 cross-tree invariants + registry + schema diff + mutation tests" ;;
+        phone-cross-tree)      echo "spec/tools/cross_check.py: 8 cross-tree invariants + registry build/check + schema diff + mutation tests" ;;
         phone-rust-tests)      echo "cargo test -p pdsh-wire -p pdsh-wal (SKIP without cargo; aggregate INCOMPLETE)" ;;
         phone-compat)          echo "M99 build-time compatibility gate over the shared TypeScript (PDSH_NODE or node)" ;;
         phone-plugins)         echo "plugins npm run typecheck + npm test (SKIP without node_modules)" ;;
@@ -193,6 +193,8 @@ stage_phone_cross_tree() {
     done
     [ -f "$ROOT/spec/tools/cross_check.py" ] || { echo "missing checker: spec/tools/cross_check.py"; return 1; }
     ( cd "$ROOT" && "$PYTHON" spec/tools/cross_check.py --root "$ROOT" ) || return 1
+    [ -f "$ROOT/spec/tools/registry_build.py" ] || { echo "missing registry builder"; return 1; }
+    ( cd "$ROOT" && "$PYTHON" spec/tools/registry_build.py --root "$ROOT" --check ) || return 1
     [ -f "$ROOT/spec/tools/registry_check.py" ] || { echo "missing registry checker"; return 1; }
     ( cd "$ROOT" && "$PYTHON" spec/tools/registry_check.py --root "$ROOT" ) || return 1
     [ -f "$ROOT/spec/tools/schema_diff.py" ] || { echo "missing schema diff checker"; return 1; }

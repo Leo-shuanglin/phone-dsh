@@ -77,6 +77,17 @@ Exit code 0 means all eight hold; 1 means at least one failed; 2 is a usage/root
 
 ## Protocol registry (same CI stage)
 
+`spec/README.md` §3/§4 修改後，執行 `python3 spec/tools/registry_build.py --write`，
+並把生成的 registry 一起提交。`phone-cross-tree` 執行 `registry_build.py --check`：
+重新生成的 UTF-8、縮排、key 順序與結尾換行必須和 `spec/registry.json` 逐字節相同。
+`--check` 不寫檔；正式生成器不讀現有 registry 作為輸入，也不依賴 evidence 目錄。
+
+Sections 3/4 supply source cells, roles and trigger predicates. Reviewed expansions
+of abbreviated paths/language groupings and explicit status assertions live in
+`registry_build.py`'s `PATH_PROJECTIONS`; update that metadata when changing a
+row's path meaning or adding/removing IDs. The builder does not infer runtime
+implementation status or prove that a path is the semantic authority.
+
 `phone-cross-tree` also runs `registry_check.py --root .` and discovers its mutation
 tests with the existing tool suite. The embedded schema in `spec/registry.json`
 validates each entry; all references must exist, each glob must reach a file, and

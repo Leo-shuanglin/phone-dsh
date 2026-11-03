@@ -118,7 +118,7 @@ base 分支單邊前進不算本分支改動。一個檔案可同時屬於多個
 | P21 | `spec/v1/render-media-v1.md`、`spec/v1/office-ir-v1.json`、`Sources/PhoneDSHEngine/{PageSchemeHandler,PageSurface}.swift`、`examples/probe-app/ProbeKit/Office/**` |
 | P22 | `spec/v1/schema/{scenario-*,perturbation,upstream-script}.schema.json`、`spec/v1/golden/upstream/**`、`scripts/ci/scenarios/**`、`Sources/PhoneDSH{Scenario,Harness}/**`、`android/testkit/**` |
 
-此表由 `registry_check.py` 校驗與 registry 的一致性；`protocol_impact.py` 可在本地校驗 diff 與描述（見 §9）。路徑改名或新增實作檔時，同一變更更新此表。
+此表由 `registry_check.py` 校驗與 registry 的一致性；`protocol_impact.py` 可在本地校驗 diff 與描述（見 §9）。路徑改名或新增實作檔時，同一變更更新此表，再執行 `python3 spec/tools/registry_build.py --write`。
 
 ## 5. 相容性規則
 
@@ -205,7 +205,7 @@ base 分支單邊前進不算本分支改動。一個檔案可同時屬於多個
 
 文件只能指引；能擋住「各改各的」的是 CI。下列項目按收益排序，實作前各自走變更流程：
 
-1. **已完成：機器可讀登記表**。`registry.json` 逐條保留 §3／§4 的來源與結構化投影；`registry_check.py` 校驗 schema、ID、來源、觸發條件及路徑，在 `phone-cross-tree` 執行。
+1. **已完成：機器可讀登記表**。`registry.json` 逐條保留 §3／§4 的來源與結構化投影；`registry_build.py --write` 生成 JSON，`--check` 要求逐字節可重現；`registry_check.py` 校驗 schema、ID、來源、觸發條件及路徑，兩者在 `phone-cross-tree` 執行。
 2. **已完成本地工具：觸發檢查**。`protocol_impact.py --base <ref> --body-file <path>` 校驗 §4 的所有觸發 ID；支援 `P01; P09: none — 理由` 逐項聲明，只有零觸發才接受整體 `none`。尚未接入 hosted workflow；理由真實性仍由審查者判斷。
 3. **partial：兩端讀同一批 golden**。已接 `phone-rust-tests` 跑 pdsh-wire／pdsh-wal；Swift 讀 gateway／host golden 與正反例命名仍未實作。GAP-08 不因 Rust gate 通過而關閉。
 4. **已完成：schema breaking diff**。`schema_diff.py --base <ref>` 對 schema 做保守結構比較，在 `phone-cross-tree` 執行；breaking 需本次變更單的 `breaking: true`、contracts、匹配 merge-base（變更單 base 也用同一規則解析）、frozen 狀態及版本決定。
