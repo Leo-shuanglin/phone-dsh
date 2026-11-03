@@ -115,3 +115,8 @@ learn\.microsoft\.com
 # invalid_request" vector, so its input really is `https://:443/v1/models` and
 # URL_RE yields an empty host for it. Scoped to that file and that URL.
 spec/v1/golden/gateway/fail-003\.json:.*https://:443
+
+# Public official Protobuf documentation repository name in pinned research
+# links (github.com/protocolbuffers/protocolbuffers.github.io), not a private
+# hostname. Exact matched spelling only; credentials/home paths remain checked.
+^protocolbuffers\.github\.io$

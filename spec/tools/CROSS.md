@@ -19,6 +19,12 @@ Exit code 0 means all eight hold; 1 means at least one failed; 2 is a usage/root
    is matched longest-first behind a non-extension lookahead, so `expected.jsonl` stays
    `expected.jsonl` instead of being truncated to `expected.json` (a path that never exists).
    Catches a renamed/deleted contract file that another tree still cites by path.
+   It also checks local Markdown links in the protocol index (`spec/README.md`)
+   and `AGENTS.md`, including source/test paths and directories. These entrypoints
+   must exist, links must stay within the repository, and `CLAUDE.md` must remain
+   a symlink to `AGENTS.md`. External URLs and section anchors are not fetched or
+   validated. This prevents a stale index or two diverging agent rulebooks; it
+   does not prove that the linked implementation conforms to its contract.
 2. **Platform whitelist ↔ contract.** Every `spec_ref` target exists, and every
    `platform.<id>` mention in the host/UI trees is a whitelist id. Catches an invented or
    misspelled platform divergence name before an Android owner implements it.

@@ -1,5 +1,12 @@
 # Contributing
 
+- **Agent collaboration.** Start at [AGENTS.md](AGENTS.md) (also `CLAUDE.md`) and the
+  [protocol baseline](spec/README.md): it maps each boundary to its owning contract,
+  implementations, compatibility policy, existing checks and known gaps. Protocol-impacting
+  changes record the delta and producer/consumer coordination using
+  [the change template](docs/protocol-change-template.md) in the task or PR. Behaviour-preserving
+  refactors only need `Protocol impact: none` with a reason. Target/draft clauses are not
+  evidence that a feature is implemented.
 - **Zero DSH source patches.** The pinned DeepSeek Harness checkout is never modified or vendored
   (`scripts/ci/check.sh --only phone-no-dsh-patch` enforces that on the source tree). The image packer has one controlled
   exception: it stages DSH's built `@deepseek-ai/dsh-tool-subagent` and `@deepseek-ai/dsh-file-reference-local` packages
