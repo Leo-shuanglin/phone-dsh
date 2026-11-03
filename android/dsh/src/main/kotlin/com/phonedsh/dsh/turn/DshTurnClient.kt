@@ -215,13 +215,23 @@ class DshTurnClient(
         return result["value"] ?: JsonNull
     }
 
-    /** `session/create`; returns the Worker's new session id. */
+    /**
+     * `session/create`; returns the Worker's new session id.
+     *
+     * @param cwd the Worker working directory, or `null` to let the Worker decide.
+     * @param agentPreset the preset the new session starts with, or `null` for the
+     *   Worker's configured default. The value is carried as `request.agentPreset`
+     *   (`plugins/worker-entry` and the real Worker both read it there); an absent
+     *   argument leaves the request body exactly as it was before presets existed.
+     */
     suspend fun createSession(
         cwd: String? = null,
+        agentPreset: String? = null,
         timeoutMillis: Long = CALL_TIMEOUT_MILLIS,
     ): String {
         val request = LinkedHashMap<String, JsonValue>()
         if (cwd != null) request["cwd"] = JsonString(cwd)
+        if (agentPreset != null) request["agentPreset"] = JsonString(agentPreset)
         val args = JsonObject(linkedMapOf("request" to JsonObject(request)))
         val value = call("session/create", args, timeoutMillis) as? JsonObject
             ?: throw DshTurnException("invalid_response", "session/create returned no object")
@@ -243,6 +253,7 @@ class DshTurnClient(
      */
     suspend fun createSessionWhenReady(
         cwd: String? = null,
+        agentPreset: String? = null,
         totalTimeoutMillis: Long = CREATE_RETRY_TIMEOUT_MILLIS,
         perAttemptMillis: Long = FIRST_CALL_TIMEOUT_MILLIS,
     ): String {
@@ -253,7 +264,11 @@ class DshTurnClient(
         while (System.currentTimeMillis() < deadline) {
             attempt++
             try {
-                return createSession(cwd = cwd, timeoutMillis = perAttemptMillis)
+                return createSession(
+                    cwd = cwd,
+                    agentPreset = agentPreset,
+                    timeoutMillis = perAttemptMillis,
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {

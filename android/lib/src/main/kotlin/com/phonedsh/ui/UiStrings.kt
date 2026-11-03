@@ -1707,14 +1707,27 @@ public object UiStrings {
     public const val AGENT_PRESETS_CREATE: String = "让 Agent 创建预设"
     public const val AGENT_PRESETS_CREATE_NOTE: String =
         "进入创造模式但不自动发送任务，现有草稿会保留。"
+    public const val AGENT_PRESETS_CREATE_NOTE_BUILTIN: String =
+        "可创建使用手机内建工具的本地 Agent 预设。外部套件与新 JavaScript 插件需使用桌面 DSH。"
     public const val AGENT_PRESETS_CREATE_UNAVAILABLE: String =
         "宿主没有可用的新建会话动作，无法进入创造模式。"
+    public const val AGENT_PRESETS_CREATOR_UNAVAILABLE_PREFIX: String = "创造模式当前不可用："
+    public const val AGENT_PRESETS_CREATOR_MISSING: String = "当前引擎没有提供创造模式预设。"
     public const val AGENT_PRESETS_LOADING: String = "正在读取预设…"
     public const val AGENT_PRESETS_UNREAD: String = "宿主还没有返回预设清单，暂不判断有没有预设。"
+    public const val AGENT_PRESETS_EMPTY: String = "当前引擎没有预设。"
     public const val AGENT_PRESETS_DEFAULT: String = "默认"
     public const val AGENT_PRESETS_CUSTOM: String = "自定义"
     public const val AGENT_PRESETS_VIEW_CONFIG: String = "查看配置"
-    public const val AGENT_PRESETS_MAKE_DEFAULT: String = "设为默认"
+    public const val AGENT_PRESETS_USE_PRESET: String = "使用预设"
+    public const val AGENT_PRESETS_DEFAULT_LOCKED: String = "默认已锁定"
+    public const val AGENT_PRESETS_DEFAULT_READ_ONLY_REASON: String =
+        "默认预设由此 Worker 的启动配置锁定。可用“使用预设”创建指定预设的新会话。"
+    public const val AGENT_PRESETS_RELOAD: String = "重新读取"
+    public const val AGENT_PRESETS_PRESET_GONE: String = "这个预设已不可用，请刷新后重试。"
+    public const val AGENT_PRESETS_SESSION_FAILED: String = "会话没有创建成功，请稍后重试。"
+    @Deprecated("The roster verb is 使用预设 (the PR26 iOS rename).", ReplaceWith("AGENT_PRESETS_USE_PRESET"))
+    public const val AGENT_PRESETS_MAKE_DEFAULT: String = AGENT_PRESETS_USE_PRESET
 
     // 已加载插件 (`NativePluginInventoryPage.swift`).
     public const val PLUGIN_INVENTORY_TITLE: String = "已加载插件"

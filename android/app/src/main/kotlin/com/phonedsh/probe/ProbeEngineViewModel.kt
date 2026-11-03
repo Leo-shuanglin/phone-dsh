@@ -112,6 +112,8 @@ import com.phonedsh.ui.page.ShellSnapshot
 import com.phonedsh.ui.nav.PdshNavFacts
 import com.phonedsh.ui.page.BusyEnterMode
 import com.phonedsh.ui.page.ChatSubagentEntry
+import com.phonedsh.ui.page.AgentPresetReadOutcome
+import com.phonedsh.ui.page.NativeAgentPresetsFacts
 import com.phonedsh.ui.page.ConfigurationFacts
 import com.phonedsh.ui.page.ConfigurationFieldKind
 import com.phonedsh.ui.page.ConfigurationWriteReceipt
@@ -1355,6 +1357,40 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     internal val configuration: StateFlow<ConfigurationFacts> = mutableConfiguration.asStateFlow()
     private val configurationRefreshMutex = Mutex()
 
+    /**
+     * `agentPresets/list`'s last reading behind the 预设 page.
+     *
+     * `presets == null` is "not reported" (the page's 未知 line), while an empty
+     * list is a real "the engine has no presets". An error keeps the presets that
+     * were already read, exactly like iOS's `refresh()` catch.
+     */
+    private val mutableAgentPresets = MutableStateFlow(NativeAgentPresetsFacts())
+    internal val agentPresets: StateFlow<NativeAgentPresetsFacts> = mutableAgentPresets.asStateFlow()
+    private val agentPresetsRefreshMutex = Mutex()
+    private val agentPresetLauncher: AgentPresetSessionLauncher by lazy {
+        AgentPresetSessionLauncher(
+            readPresets = {
+                val failure = refreshAgentPresets()
+                mutableAgentPresets.value.copy(
+                    error = failure ?: mutableAgentPresets.value.error,
+                )
+            },
+            createWorkerSession = { presetId ->
+                DshTurnClient(host.channel, ::logTurn).createSessionWhenReady(
+                    agentPreset = presetId,
+                    totalTimeoutMillis = AGENT_PRESET_SESSION_TIMEOUT_MILLIS,
+                    perAttemptMillis = AGENT_PRESET_SESSION_ATTEMPT_TIMEOUT_MILLIS,
+                )
+            },
+            createChatSession = { requestId, workerSessionId ->
+                newChatSessionConfirmed(
+                    requestId = requestId,
+                    workerSessionId = workerSessionId,
+                )
+            },
+        )
+    }
+
     private val host: DefaultPhoneDshHost = DefaultPhoneDshHost(
         engine = engine,
         controller = controller,
@@ -1627,6 +1663,89 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 failure.message?.substringBefore('\n')?.take(180) ?: "本会话设置读取失败"
             } finally {
                 mutableConfiguration.update { if (it.loading) it.copy(loading = false) else it }
+            }
+        }
+    }
+
+    /**
+     * Re-reads `agentPresets/list` and publishes the roster behind 预设.
+     *
+     * Runs on the IO lane; the page only ever sees the resulting facts. A failed
+     * re-read keeps the roster that was already read (iOS `refresh()`'s catch)
+     * and sets only `error`, so a transient channel loss cannot turn a known
+     * roster into "unknown".
+     *
+     * @return the `code: message` failure, or `null` when the read succeeded.
+     */
+    internal suspend fun refreshAgentPresets(): String? = withContext(Dispatchers.IO) {
+        agentPresetsRefreshMutex.withLock {
+            val previous = mutableAgentPresets.value
+            mutableAgentPresets.update { it.copy(isLoading = true) }
+            try {
+                val read = readAgentPresets(DshTurnClient(host.channel, ::logTurn))
+                val merged = read.copy(
+                    presets = read.presets ?: previous.presets,
+                    isLoading = false,
+                )
+                mutableAgentPresets.value = merged
+                merged.error
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val message = presetErrorText(failure)
+                mutableAgentPresets.value = previous.copy(isLoading = false, error = message)
+                message
+            } finally {
+                mutableAgentPresets.update { if (it.isLoading) it.copy(isLoading = false) else it }
+            }
+        }
+    }
+
+    /**
+     * 查看配置: `agentPresets/read` for one id, on the IO lane.
+     *
+     * The page gets either the document or the Worker's `code: message`; the
+     * static 引擎没有返回… sentence is now only the empty-content answer.
+     */
+    internal suspend fun readAgentPresetDocument(presetId: String): AgentPresetReadOutcome =
+        withContext(Dispatchers.IO) {
+            val title = mutableAgentPresets.value.presets
+                ?.firstOrNull { it.id == presetId }?.title
+                ?: presetId
+            readPresetDocument(
+                client = DshTurnClient(host.channel, ::logTurn),
+                presetId = presetId,
+                title = title,
+            )
+        }
+
+    /**
+     * 使用预设: re-read the roster, then create a Worker session with
+     * `session/create.request.agentPreset` and the durable App chat that owns it.
+     *
+     * The host shell closes the settings sheet only on `null`; a failure leaves the
+     * page open with the same text returned here and stored in [agentPresets].
+     */
+    internal suspend fun useAgentPreset(
+        presetId: String,
+        requestId: com.phonedsh.ui.state.StateRequestId,
+    ): String? = withContext(Dispatchers.IO) {
+        mutableAgentPresets.update { it.copy(isLoading = true) }
+        try {
+            val result = agentPresetLauncher.use(presetId, requestId)
+            if (result.failure != null) {
+                mutableAgentPresets.update { it.copy(error = result.failure) }
+            }
+            result.failure
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            val message = presetErrorText(failure)
+            mutableAgentPresets.update { it.copy(error = message) }
+            message
+        } finally {
+            mutableAgentPresets.update {
+                if (it.isLoading) it.copy(isLoading = false) else it
             }
         }
     }
@@ -2781,10 +2900,19 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         return id
     }
 
-    /** Create a conversation only after its durable record has been read back. */
+    /**
+     * Create a conversation only after its durable record has been read back.
+     *
+     * @param workerSessionId a Worker session that was already created for this
+     *   conversation (使用预设's `session/create` with `agentPreset`), or `null`
+     *   to let [prepareChatSession] create one lazily as before. Passing it avoids
+     *   a second, preset-less `session/create` racing the one the preset path
+     *   just made.
+     */
     internal suspend fun newChatSessionConfirmed(
         requestId: com.phonedsh.ui.state.StateRequestId,
         workspaceGroupId: String? = ChatSessionStore.DEFAULT_WORKSPACE_GROUP_ID,
+        workerSessionId: String? = null,
     ):
         com.phonedsh.ui.nav.PdshActionReceipt {
         val at = clock.nowMillis()
@@ -2802,7 +2930,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             )
         }
         mutableChat.value = ChatUiState(chatId = id, updatedAtMs = at)
-        prepareChatSession()
+        if (workerSessionId != null) claimWorkerSession(id, workerSessionId) else prepareChatSession()
         LogcatHostLog.info("chat: new session confirmed $id")
         return receipt
     }
@@ -4277,6 +4405,9 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
         const val HOST_READY_TIMEOUT_MILLIS = 180_000L
         const val ENGINE_READY_TIMEOUT_MILLIS = 180_000L
+        /** 使用预设: one bounded `session/create`, not the 3-minute generic wait. */
+        const val AGENT_PRESET_SESSION_TIMEOUT_MILLIS = 30_000L
+        const val AGENT_PRESET_SESSION_ATTEMPT_TIMEOUT_MILLIS = 10_000L
         /** One source-aligned Worker page; older pages remain explicitly loadable. */
         const val SUBAGENT_HISTORY_PAGE_SIZE = 60
         /** A stalled cursor/page read leaves the currently selected conversation intact. */
