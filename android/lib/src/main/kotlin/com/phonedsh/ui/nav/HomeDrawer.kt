@@ -51,8 +51,10 @@ import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.SessionsMetrics
 import com.phonedsh.ui.icon.PdshIcon
 import com.phonedsh.ui.icon.PdshIconView
+import com.phonedsh.ui.theme.LocalUiDarkTheme
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
+import com.phonedsh.ui.theme.applySystemBarAppearance
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -108,6 +110,9 @@ public fun HomeDrawer(
 ) {
     // NativeShell.swift explicitly forces the drawer panel to light appearance.
     val inheritedTokens = LocalUiTokens.current
+    // The dialog's status-bar strip is the scrim over the page, not the panel
+    // below it: its glyphs follow the app theme, never a fixed light chrome.
+    val darkTheme = LocalUiDarkTheme.current
     val width = LocalConfiguration.current.screenWidthDp.dp
     val tokens = if (!inheritedTokens.dark) inheritedTokens else com.phonedsh.ui.theme.UiTokens.resolve(false, width)
     val type = LocalUiType.current
@@ -258,7 +263,7 @@ public fun HomeDrawer(
               window.statusBarColor = android.graphics.Color.TRANSPARENT
               window.navigationBarColor = android.graphics.Color.TRANSPARENT
               window.setLayout(android.view.WindowManager.LayoutParams.MATCH_PARENT, android.view.WindowManager.LayoutParams.MATCH_PARENT)
-              androidx.core.view.WindowCompat.getInsetsController(window, dialogView).isAppearanceLightStatusBars = true
+              applySystemBarAppearance(window, dialogView, darkTheme)
           }
       }
       CompositionLocalProvider(LocalUiTokens provides tokens) {

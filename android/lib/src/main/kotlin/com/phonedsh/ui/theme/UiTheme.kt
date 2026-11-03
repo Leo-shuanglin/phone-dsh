@@ -9,20 +9,29 @@
 // `spec/ui/v1/README.md` §5.
 package com.phonedsh.ui.theme
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.view.View
+import android.view.Window
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import com.phonedsh.ui.theme.generated.TokenType
 import com.phonedsh.ui.theme.generated.UiTokenData
 import kotlin.math.max
@@ -195,6 +204,47 @@ public val LocalUiType: ProvidableCompositionLocal<UiType> =
     compositionLocalOf { error("PdshTheme is missing: no UiType in the composition") }
 
 /**
+ * Whether the active [PdshTheme] resolved its dark token table.
+ *
+ * The app's own appearance choice can differ from the platform theme, so bars
+ * owned by a secondary window (the drawer dialog) read this instead of the OS
+ * answer. It defaults to the light answer outside a host theme.
+ */
+public val LocalUiDarkTheme: ProvidableCompositionLocal<Boolean> =
+    compositionLocalOf { false }
+
+/**
+ * Whether the platform should paint dark system-bar glyphs ("light bars").
+ *
+ * `isAppearanceLightStatusBars` names the *background*, not the icons: true is
+ * the light chrome that needs dark glyphs. The app's effective [darkTheme]
+ * decides it, so an explicit 深色/淺色 choice also reaches the status and
+ * navigation bars instead of only `enableEdgeToEdge`'s system-theme answer.
+ */
+public fun useLightSystemBars(darkTheme: Boolean): Boolean = !darkTheme
+
+/**
+ * Applies [darkTheme]'s glyph appearance to a window's status/navigation bars.
+ *
+ * Both the activity window ([PdshTheme]) and the drawer's dialog window call
+ * this, so neither keeps a second copy of the rule.
+ */
+internal fun applySystemBarAppearance(window: Window, view: View, darkTheme: Boolean) {
+    WindowCompat.getInsetsController(window, view).apply {
+        val light = useLightSystemBars(darkTheme)
+        isAppearanceLightStatusBars = light
+        isAppearanceLightNavigationBars = light
+    }
+}
+
+/** The hosting activity of a Compose view, walking theme wrappers; null in previews. */
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+/**
  * Provides the PDSH tokens to the tree.
  *
  * There is deliberately no MaterialTheme wrapper: the spec's chrome is drawn
@@ -210,9 +260,18 @@ public fun PdshTheme(
     val viewportWidth = LocalConfiguration.current.screenWidthDp.dp
     val tokens = remember(darkTheme, viewportWidth) { UiTokens.resolve(darkTheme, viewportWidth) }
     val type = remember(typePreferences) { UiType.fromSpec().applyPreferences(typePreferences) }
+    val view = LocalView.current
+    val hostActivity = view.context.findActivity()
+    if (!LocalInspectionMode.current && hostActivity != null) {
+        SideEffect {
+            val window = hostActivity.window ?: return@SideEffect
+            applySystemBarAppearance(window, view, darkTheme)
+        }
+    }
     androidx.compose.runtime.CompositionLocalProvider(
         LocalUiTokens provides tokens,
         LocalUiType provides type,
+        LocalUiDarkTheme provides darkTheme,
         content = content,
     )
 }
