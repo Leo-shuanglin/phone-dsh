@@ -74,7 +74,8 @@ struct NativeSubagentCatalogSheet: View {
     var currentSessionID: String? = nil
     var availableSize: CGSize? = nil
     var onOpenSession: (NativeSubagentCatalogEntry) -> Void = { _ in }
-    var onOpenAside: (NativeSubagentCatalogEntry) -> Void = { _ in }
+    /// Only non-nil when the host has a distinct aside destination for the entry.
+    var onOpenAside: ((NativeSubagentCatalogEntry) -> Void)? = nil
     var onExpand: ((NativeSubagentCatalogEntry) -> Void)? = nil
     var onRetry: (() -> Void)? = nil
 
@@ -92,7 +93,7 @@ struct NativeSubagentCatalogSheet: View {
                         isExpanded: expanded.contains(row.entry.id),
                         isCurrent: row.entry.isCurrent || row.entry.id == currentSessionID,
                         onOpen: { onOpenSession(row.entry) },
-                        onOpenAside: { onOpenAside(row.entry) },
+                        onOpenAside: onOpenAside.map { action in { action(row.entry) } },
                         onToggle: { toggle(row.entry) }
                     )
                 }
@@ -229,14 +230,14 @@ private struct NativeSubagentCatalogRow: View {
     let isExpanded: Bool
     let isCurrent: Bool
     let onOpen: () -> Void
-    let onOpenAside: () -> Void
+    let onOpenAside: (() -> Void)?
     let onToggle: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
             disclosure
             openButton
-            if !isCurrent && !entry.isExternal {
+            if !isCurrent && !entry.isExternal && onOpenAside != nil {
                 sidebarButton.padding(.top, 4)
             }
         }
@@ -249,7 +250,9 @@ private struct NativeSubagentCatalogRow: View {
         .contextMenu {
             if !entry.isExternal {
                 Button("打开子会话", action: onOpen)
-                Button("在侧边栏打开", action: onOpenAside)
+                if let onOpenAside {
+                    Button("在侧边栏打开", action: onOpenAside)
+                }
             }
         }
     }
@@ -356,17 +359,20 @@ private struct NativeSubagentCatalogRow: View {
         .accessibilityHidden(true)
     }
 
+    @ViewBuilder
     private var sidebarButton: some View {
-        Button(action: onOpenAside) {
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(NativeParityTokens.labelTertiary)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
+        if let onOpenAside {
+            Button(action: onOpenAside) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(NativeParityTokens.labelTertiary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("在侧边栏打开 \(entry.title)"))
+            .help("在侧边栏打开")
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(Text("在侧边栏打开 \(entry.title)"))
-        .help("在侧边栏打开")
     }
 
     private var modeText: String {
@@ -397,7 +403,7 @@ extension View {
         state: NativeSubagentCatalogState = .ready,
         currentSessionID: String? = nil,
         onOpenSession: @escaping (NativeSubagentCatalogEntry) -> Void = { _ in },
-        onOpenAside: @escaping (NativeSubagentCatalogEntry) -> Void = { _ in },
+        onOpenAside: ((NativeSubagentCatalogEntry) -> Void)? = nil,
         onExpand: ((NativeSubagentCatalogEntry) -> Void)? = nil,
         onRetry: (() -> Void)? = nil
     ) -> some View {
@@ -412,9 +418,11 @@ extension View {
                         isPresented.wrappedValue = false
                         onOpenSession(entry)
                     },
-                    onOpenAside: { entry in
-                        isPresented.wrappedValue = false
-                        onOpenAside(entry)
+                    onOpenAside: onOpenAside.map { action in
+                        { entry in
+                            isPresented.wrappedValue = false
+                            action(entry)
+                        }
                     },
                     onExpand: onExpand,
                     onRetry: onRetry

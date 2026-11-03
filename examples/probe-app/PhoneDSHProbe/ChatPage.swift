@@ -472,10 +472,6 @@ struct ChatPage: View {
                     onOpenSession: { entry in
                         showSubagentCatalog = false
                         Task { await model.selectSession(entry.id) }
-                    },
-                    onOpenAside: { entry in
-                        showSubagentCatalog = false
-                        Task { await model.selectSession(entry.id) }
                     })
                     .padding(.horizontal, HomeSpec.chromeInset)
                     .padding(.top, 20)
