@@ -1716,6 +1716,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
+                logTurn("CHAT_SNAPSHOT_REFRESH_FAILED reason=${reasonOf(failure)}")
                 mutableChat.update { live -> if (live.chatId != current.chatId) live else live.copy(
                     sessionSnapshot = live.sessionSnapshot.copy(
                         accessError = "没读到权限,再试一次。", commandsError = "没读到命令,再试一次。",
