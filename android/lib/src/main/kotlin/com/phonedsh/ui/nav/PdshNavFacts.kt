@@ -317,6 +317,32 @@ public sealed interface PdshHostAction {
         override val wire: String = "configuration.refresh"
     }
 
+    /** Save one staged namespace patch with the host's revision CAS. */
+    public data class SaveConfigurationGroup(
+        public val namespace: String,
+        public val patch: Map<String, String>,
+        public val requestId: String = "",
+    ) : PdshHostAction {
+        override val wire: String = "configuration.save"
+    }
+
+    /** Reset one overridden field to the DSH default. */
+    public data class ResetConfigurationField(
+        public val namespace: String,
+        public val field: String,
+        public val requestId: String = "",
+    ) : PdshHostAction {
+        override val wire: String = "configuration.reset"
+    }
+
+    /** Save the new-session permission preset with the permission CAS. */
+    public data class SaveDefaultPermission(
+        public val modeId: String,
+        public val requestId: String = "",
+    ) : PdshHostAction {
+        override val wire: String = "configuration.permission"
+    }
+
     /** Open the model-service editor; `null` means a new service. */
     public data class OpenProviderEditor(public val id: String?) : PdshHostAction {
         override val wire: String = "provider.editor"
@@ -346,6 +372,19 @@ public sealed interface PdshHostAction {
     /** Persist the removal of one service, by id. */
     public data class DeleteProvider(public val id: String) : PdshHostAction {
         override val wire: String = "provider.delete"
+    }
+
+    /** Make one stored service the default for the next host start. */
+    public data class SelectProvider(public val id: String) : PdshHostAction {
+        override val wire: String = "provider.select"
+    }
+
+    /** Read the real `/models` catalog for one draft, bound to this request id. */
+    public data class GetProviderModels(
+        public val draft: ProviderDraft,
+        public val requestId: String = "",
+    ) : PdshHostAction {
+        override val wire: String = "provider.models"
     }
 
     /**

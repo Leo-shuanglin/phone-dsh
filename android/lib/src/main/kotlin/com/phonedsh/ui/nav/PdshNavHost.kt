@@ -46,6 +46,8 @@ import com.phonedsh.ui.surface.MarkdownImageSource
 import com.phonedsh.ui.page.ConfigurationLocalState
 import com.phonedsh.ui.page.ConfigurationScreenState
 import com.phonedsh.ui.page.ConfigurationUiEvent
+import com.phonedsh.ui.page.ConfigurationWriteReceipt
+import com.phonedsh.ui.page.ConfigurationWriteRequest
 import com.phonedsh.ui.page.EgressAllowListLocalState
 import com.phonedsh.ui.page.EgressAllowListPage
 import com.phonedsh.ui.page.EgressAllowListScreenState
@@ -427,6 +429,8 @@ public fun PdshNavHost(
     onOpenSubagentSession: (suspend (ChatSubagentEntry) -> String?)? = null,
     /** Loads an older page of the open subagent's durable Worker transcript. */
     onLoadEarlierChatTranscript: (() -> Unit)? = null,
+    /** Confirmed DSH configuration read/write path; absent hosts keep actions unavailable. */
+    onConfigurationWrite: (suspend (ConfigurationWriteRequest) -> ConfigurationWriteReceipt)? = null,
 ) {
     val route = nav.current
     if (route == PdshRoute.Home) {
@@ -473,7 +477,9 @@ public fun PdshNavHost(
             )
             is PdshRoute.Preview -> PreviewRoute(route, onBack, workspaceRoot)
             PdshRoute.Automation -> AutomationRoute(facts, onBack, onHostAction, backLevel)
-            PdshRoute.Configuration -> ConfigurationRoute(facts, onBack, onNavigate)
+            PdshRoute.Configuration -> ConfigurationRoute(
+                facts, onBack, onNavigate, onHostAction, onConfigurationWrite,
+            )
             PdshRoute.Settings -> SettingsRoute(
                 facts = facts,
                 onBack = onBack,
@@ -487,7 +493,7 @@ public fun PdshNavHost(
                 onPhonePermissionRequest = onPhonePermissionRequest,
                 onPhonePermissionSettings = onPhonePermissionSettings,
             )
-            PdshRoute.ModelProvider -> ModelProviderRoute(facts, onBack, onHostAction)
+            PdshRoute.ModelProvider -> ModelProviderRoute(facts, onBack, onHostAction, backLevel = backLevel)
             PdshRoute.WebSearch -> WebSearchRoute(facts, onBack, onHostAction)
             PdshRoute.Mcp -> McpRoute(facts, onBack, onHostAction, onNavigate)
             is PdshRoute.McpEditor -> McpEditorRoute(route, facts, onBack, onHostAction)
@@ -507,7 +513,12 @@ public fun PdshNavHost(
             is PdshRoute.SessionArtifacts ->
                 SessionArtifactsRoute(route.sessionId, artifacts, workspaceRoot, onBack, backLevel)
             PdshRoute.AgentPresets -> AgentPresetsRoute(onBack)
-            PdshRoute.PluginInventory -> PluginInventoryRoute(facts, onBack, onNavigate)
+            PdshRoute.PluginInventory -> PluginInventoryRoute(
+                facts = facts,
+                onBack = onBack,
+                onNavigate = onNavigate,
+                onRefresh = { onHostAction(PdshHostAction.RefreshConfiguration) },
+            )
             PdshRoute.PhonePermissions -> PhonePermissionsRoute(
                 facts = facts,
                 onBack = onBack,
@@ -1130,6 +1141,8 @@ private fun ConfigurationRoute(
     facts: PdshNavFacts,
     onBack: () -> Unit,
     onNavigate: (PdshRoute) -> Unit,
+    onHostAction: (PdshHostAction) -> Unit,
+    onConfigurationWrite: (suspend (ConfigurationWriteRequest) -> ConfigurationWriteReceipt)?,
 ) {
     var local by remember { mutableStateOf(ConfigurationLocalState()) }
     NativeConfigurationPage(
@@ -1137,6 +1150,19 @@ private fun ConfigurationRoute(
         onDone = onBack,
         onToggleSection = { id -> local = local.apply(ConfigurationUiEvent.ToggleSection(id)) },
         onOpenWebSearch = { onNavigate(PdshRoute.WebSearch) },
+        onRefresh = { onHostAction(PdshHostAction.RefreshConfiguration) },
+        onRetry = { onHostAction(PdshHostAction.RefreshConfiguration) },
+        onSaveGroupDrafts = { namespace, patch ->
+            onHostAction(PdshHostAction.SaveConfigurationGroup(namespace, patch))
+        },
+        onResetField = { namespace, field ->
+            onHostAction(PdshHostAction.ResetConfigurationField(namespace, field))
+        },
+        onApplyDefaultPermission = { id ->
+            onHostAction(PdshHostAction.SaveDefaultPermission(id))
+        },
+        onConfigurationWrite = onConfigurationWrite,
+        onOpenPluginInventory = { onNavigate(PdshRoute.PluginInventory) },
     )
 }
 
@@ -1446,7 +1472,7 @@ private fun SettingsRoute(
             onSelectFontFamily = onSelectFontFamily,
             onOpenAgentPresets = { onNavigate(PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.AGENT_PRESETS)) },
             onOpenPhonePermissions = { onNavigate(PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.PHONE_PERMISSIONS)) },
-            onOpenPluginsTools = { onNavigate(PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.PLUGINS_TOOLS)) },
+            onOpenPluginsTools = { onNavigate(PdshRoute.Configuration) },
             onOpenFolders = { onNavigate(PdshSettingsRows.targetOf(PdshSettingsRows.HostRow.FOLDERS)) },
             onOpenArchivedSessions = { archivedSessions = true },
             onSelectDefaultPermission = { tier -> onSettingsWrite(SettingsWrite.DefaultPermissionTier(tier)) },
@@ -1466,12 +1492,14 @@ private fun SettingsRoute(
                         onBack = onBack,
                         onHostAction = onHostAction,
                         embedded = true,
+                        backLevel = backLevel,
                     )
                     // 插件: 插件配置 inside the body pushes the configuration page.
                     SettingsTab.PLUGINS -> PluginInventoryRoute(
                         facts = facts,
                         onBack = onBack,
                         onNavigate = onNavigate,
+                        onRefresh = { onHostAction(PdshHostAction.RefreshConfiguration) },
                         embedded = true,
                     )
                     SettingsTab.PERMISSIONS ->
@@ -1496,16 +1524,19 @@ private fun ModelProviderRoute(
     onBack: () -> Unit,
     onHostAction: (PdshHostAction) -> Unit,
     embedded: Boolean = false,
+    backLevel: PdshBackLevel? = null,
 ) {
     var local by remember { mutableStateOf(ModelProviderLocalState()) }
     ModelProviderSettingsPage(
         state = ModelProviderScreenState.from(facts.modelProvider, local),
         onAdd = { onHostAction(PdshHostAction.OpenProviderEditor(null)) },
         onEdit = { id -> onHostAction(PdshHostAction.OpenProviderEditor(id)) },
+        onSelect = { id -> onHostAction(PdshHostAction.SelectProvider(id)) },
         onToggleSection = { id -> local = local.apply(ModelProviderUiEvent.ToggleSection(id)) },
         onBack = onBack,
         // The settings sheet's 模型 tab draws the same page without its own header.
         embedded = embedded,
+        backLevel = backLevel,
         // The page's editor is its own inline form; these four are the writes it
         // cannot perform itself. Each is handed over as one host action and the
         // page still never mutates its facts: the host re-reads them after a save,
@@ -1514,6 +1545,7 @@ private fun ModelProviderRoute(
         onSave = { draft, requestId -> onHostAction(PdshHostAction.SaveProvider(draft, requestId)) },
         onTest = { draft -> onHostAction(PdshHostAction.TestProvider(draft)) },
         onDelete = { id -> onHostAction(PdshHostAction.DeleteProvider(id)) },
+        onGetModels = { draft, requestId -> onHostAction(PdshHostAction.GetProviderModels(draft, requestId)) },
     )
 }
 
@@ -2070,6 +2102,7 @@ private fun PluginInventoryRoute(
     facts: PdshNavFacts,
     onBack: () -> Unit,
     onNavigate: (PdshRoute) -> Unit,
+    onRefresh: (() -> Unit)? = null,
     embedded: Boolean = false,
 ) {
     var local by remember { mutableStateOf(PluginInventoryLocalState()) }
@@ -2078,7 +2111,7 @@ private fun PluginInventoryRoute(
         state = PluginInventoryScreenState.from(
             facts = PluginInventoryFacts(
                 plugins = snapshot?.plugins,
-                isLoading = false,
+                isLoading = facts.configuration.loading,
                 failure = snapshot?.inventoryFailure ?: facts.configuration.failure,
                 managementNotice = snapshot?.pluginManagementMessage,
             ),
@@ -2088,6 +2121,7 @@ private fun PluginInventoryRoute(
         onQueryChange = { query -> local = local.apply(PluginInventoryUiEvent.SetQuery(query)) },
         onToggleRow = { id -> local = local.apply(PluginInventoryUiEvent.ToggleRow(id)) },
         onBack = onBack,
+        onRefresh = onRefresh,
         embedded = embedded,
     )
 }

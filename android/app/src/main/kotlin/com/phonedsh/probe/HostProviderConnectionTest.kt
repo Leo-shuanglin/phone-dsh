@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.util.UUID
 
 /** A user-safe result for the provider editor; it never contains a key or response body. */
 internal sealed interface ProviderConnectionTestResult {
@@ -56,6 +57,7 @@ internal data class HostProviderSaveResult(
     val message: String,
     val requestId: String = "",
     val profileId: String? = null,
+    val isNew: Boolean = false,
 )
 
 /** Native HTTP connection test bound to the editor request that started it. */
@@ -76,16 +78,18 @@ internal fun interface ProviderProbeTransport {
  */
 internal suspend fun testProviderConnection(
     draft: ProviderDraft,
-    keyProvider: () -> String? = { ApiKeyStore.active()?.readKey() },
-    storedEndpointProvider: () -> String? = { ProviderConfigStore.active()?.current()?.endpoint },
+    keyProvider: () -> String? = {
+        val store = ApiKeyStore.active()
+        val account = providerAccountFor(draft)
+        if (store == null || account == null) null else store.readKey(account)
+    },
+    storedEndpointProvider: () -> String? = { storedProviderFor(draft)?.endpoint },
     launchEndpointProvider: () -> String? = { ProbeLaunchConfig.active().deepseekBaseUrl },
     transport: ProviderProbeTransport = UrlConnectionProviderProbeTransport,
 ): ProviderConnectionTestResult = withContext(Dispatchers.IO) {
-    val endpointText = draft.endpoint.trim().ifEmpty {
-        if (draft.isNew) "" else storedEndpointProvider()?.trim().orEmpty().ifEmpty {
-            launchEndpointProvider()?.trim().orEmpty()
-        }
-    }
+    val endpointText = providerEndpointForDraft(
+        draft, storedEndpointProvider, launchEndpointProvider,
+    ).orEmpty()
     val endpoint = validateProbeEndpoint(endpointText)
         ?: return@withContext ProviderConnectionTestResult.Failure(endpointFailure(endpointText))
 
@@ -153,8 +157,12 @@ internal suspend fun testProviderConnection(
 internal suspend fun testProviderConnectionBound(
     draft: ProviderDraft,
     requestId: String,
-    keyProvider: () -> String? = { ApiKeyStore.active()?.readKey() },
-    storedEndpointProvider: () -> String? = { ProviderConfigStore.active()?.current()?.endpoint },
+    keyProvider: () -> String? = {
+        val store = ApiKeyStore.active()
+        val account = providerAccountFor(draft)
+        if (store == null || account == null) null else store.readKey(account)
+    },
+    storedEndpointProvider: () -> String? = { storedProviderFor(draft)?.endpoint },
     launchEndpointProvider: () -> String? = { ProbeLaunchConfig.active().deepseekBaseUrl },
     transport: ProviderProbeTransport = UrlConnectionProviderProbeTransport,
 ): HostProviderTestResult = HostProviderTestResult(
@@ -171,80 +179,188 @@ internal suspend fun saveProviderDraft(
     keyStore: ApiKeyStore? = ApiKeyStore.active(),
     launch: ProbeLaunchConfig = ProbeLaunchConfig.active(),
 ): HostProviderSaveResult = withContext(Dispatchers.IO) {
-    fun failed(
-        message: String,
-        written: Boolean = false,
-        profileId: String? = draft.id.takeIf { it.isNotBlank() },
-    ) = HostProviderSaveResult(written, false, message, requestId, profileId)
+    var resultProfileId = draft.id.trim().takeIf(String::isNotEmpty)
+    fun failed(message: String, written: Boolean = false) = HostProviderSaveResult(
+        recordWritten = written,
+        succeeded = false,
+        message = message,
+        requestId = requestId,
+        profileId = resultProfileId,
+        isNew = draft.isNew,
+    )
 
     if (store == null) return@withContext failed("本宿主没有安装模型服务存储，本次未保存")
     val keyReason = if (draft.apiKey.isBlank()) null else ProviderDraftRules.keyRejection(draft.apiKey)
     if (keyReason != null) return@withContext failed(keyReason)
     if ((draft.apiKey.isNotBlank() || draft.removeStoredKey) && keyStore == null) {
-        return@withContext failed("本宿主没有安装密钥存储，本次未保存")
+        return@withContext failed("本宿主没有安装密钥存储，本次未保存密钥")
     }
     draft.modelValidationError?.let { return@withContext failed(it) }
 
-    val previous = store.current()
-    val record = ProviderConfigStore.recordOf(draft, previous, launch.deepseekBaseUrl, launch.modelName)
-    ProviderDraftRules.endpointRejection(record.endpoint)?.let {
-        return@withContext failed(it, profileId = record.id)
+    val existingSnapshot = when (val read = store.read()) {
+        is ProviderStoreRead.Stored -> read.snapshot
+        ProviderStoreRead.Empty -> ProviderSnapshot.EMPTY
+        ProviderStoreRead.Unreadable -> return@withContext failed(
+            "现有模型服务配置无法读取；为避免覆盖，本次未保存",
+        )
     }
-    if (record.name.isEmpty()) return@withContext failed("模型服务名不能为空，本次未保存", profileId = record.id)
-    when (val outcome = store.save(record)) {
+    val requestedId = draft.id.trim()
+    val previous = if (draft.isNew) {
+        if (requestedId.isNotEmpty() && existingSnapshot.profiles.any { it.id == requestedId }) {
+            return@withContext failed("这个模型服务标识已存在；本次未覆盖现有服务")
+        }
+        null
+    } else {
+        existingSnapshot.profiles.firstOrNull { it.id == requestedId }
+            ?: if (existingSnapshot.profiles.isEmpty() && requestedId == ProviderConfigStore.DEFAULT_ID) {
+                // The empty store's `local` row is a view of the process launch,
+                // not a persisted profile. Editing it creates the first record
+                // while retaining its exact launch binding, or allocating an
+                // isolated account when an explicit launch override was unbound.
+                ProviderRecord(
+                    id = requestedId,
+                    name = draft.name,
+                    model = launch.modelName,
+                    endpoint = launch.deepseekBaseUrl.orEmpty(),
+                    credentialRef = launch.credentialAccount
+                        ?: ProviderRecord.providerCredentialRef("local-${UUID.randomUUID()}"),
+                )
+            } else {
+                return@withContext failed("这个模型服务已不存在；请重新载入后再保存")
+            }
+    }
+    val normalizedDraft = if (draft.isNew) {
+        val id = if (requestedId.isNotEmpty()) requestedId else {
+            var generated: String
+            do {
+                generated = UUID.randomUUID().toString().lowercase()
+            } while (existingSnapshot.profiles.any { it.id == generated })
+            generated
+        }
+        draft.copy(id = id)
+    } else {
+        draft.copy(id = previous!!.id)
+    }
+    resultProfileId = normalizedDraft.id
+    val record = ProviderConfigStore.recordOf(
+        normalizedDraft,
+        previous,
+        launch.deepseekBaseUrl,
+        launch.modelName,
+    )
+    ProviderDraftRules.endpointRejection(record.endpoint)?.let { return@withContext failed(it) }
+    if (record.name.isEmpty()) return@withContext failed("模型服务名不能为空，本次未保存")
+
+    // Unknown key-store state is never a request to delete the credential. A
+    // typed replacement is deliberate and remains allowed, as on iOS. A stale
+    // delete toggle must fail before the service document is written at all.
+    val unreadableRemovalRequested = !draft.isNew && draft.removeStoredKey &&
+        draft.apiKey.isBlank() && keyStore?.read(record.credentialAccount()) is ApiKeyState.Unreadable
+    if (unreadableRemovalRequested) {
+        return@withContext failed("无法读取此设备的密钥，不能删除服务或密钥。请解锁设备后重新载入页面再试。")
+    }
+    val removeStoredKey = draft.removeStoredKey
+    when (val outcome = store.save(record, selectAsDefault = draft.isNew)) {
         ProviderWriteOutcome.Saved -> Unit
-        is ProviderWriteOutcome.Rejected -> return@withContext failed(outcome.reason, profileId = record.id)
-        else -> return@withContext failed("本机存储不可写，本次未保存", profileId = record.id)
+        is ProviderWriteOutcome.Rejected -> return@withContext failed(outcome.reason)
+        else -> return@withContext failed("本机存储不可写，本次未保存")
     }
     val keyLine = try {
         when {
-            draft.removeStoredKey -> {
-                keyStore?.clear()
-                if (keyStore?.read() != ApiKeyState.Absent) throw IllegalStateException("key readback failed")
+            removeStoredKey -> {
+                keyStore?.clear(record.credentialAccount())
                 "，密钥已删除"
             }
             draft.apiKey.isNotBlank() -> {
-                keyStore?.save(draft.apiKey)
-                if (keyStore?.readKey() != draft.apiKey.trim()) throw IllegalStateException("key readback failed")
+                keyStore?.save(draft.apiKey, record.credentialAccount())
+                if (keyStore?.readKey(record.credentialAccount()) != draft.apiKey.trim()) {
+                    throw IllegalStateException("key readback failed")
+                }
                 "，密钥已保存"
             }
             else -> ""
         }
     } catch (_: IllegalArgumentException) {
-        return@withContext failed("配置已保存；密钥未通过校验，本次未保存密钥", true, record.id)
+        return@withContext failed("配置已保存；密钥未通过校验，本次未保存密钥", true)
     } catch (_: Exception) {
-        return@withContext failed("配置已保存；密钥写入失败，本次未保存密钥", true, record.id)
+        return@withContext failed("配置已保存；密钥写入失败或读取确认失败，本次未确认密钥变更", true)
     }
-    val readback = store.read() as? ProviderStoreRead.Stored
-    if (readback?.record != record) {
-        return@withContext failed("保存请求已完成，但模型服务记录没有读回；请刷新确认结果。", true, record.id)
+    val readback = store.snapshot()
+    val savedProfile = readback?.profiles?.firstOrNull { it.id == record.id }
+    if (savedProfile != record || (draft.isNew && readback?.selectedId != record.id)) {
+        return@withContext failed("保存请求已完成，但模型服务记录没有读回；请刷新确认结果。", true)
     }
     HostProviderSaveResult(
         recordWritten = true,
         succeeded = true,
         message = if (keyLine.isEmpty()) "已保存到本机：模型服务（下次启动 App 时生效）"
-            else "已保存到本机：模型服务$keyLine（下次启动 App 时生效；密钥即刻生效）",
+            else "已保存到本机：模型服务$keyLine（模型服务在下次启动 App 时生效）",
         requestId = requestId,
         profileId = record.id,
+        isNew = draft.isNew,
     )
+}
+
+internal data class ProviderDeleteReceipt(
+    val profileRemoved: Boolean,
+    val keyRemoved: Boolean,
+    val message: String,
+)
+
+/** Deletes only after a readable key and a confirmed key-store removal. */
+internal fun deleteProviderRecord(
+    id: String,
+    store: ProviderConfigStore?,
+    keyStore: ApiKeyStore?,
+): ProviderDeleteReceipt {
+    if (store == null) return ProviderDeleteReceipt(false, false, "本宿主没有安装模型服务存储，本次未删除")
+    val record = store.snapshot()?.profiles?.firstOrNull { it.id == id }
+        ?: return ProviderDeleteReceipt(false, false, "只能删除本机保存的模型服务；启动配置的服务不能删除")
+    if (keyStore == null) {
+        return ProviderDeleteReceipt(false, false, "无法读取此设备的密钥，不能删除服务或密钥。请解锁设备后重新载入页面再试。")
+    }
+    val account = record.credentialAccount()
+    if (keyStore.read(account) is ApiKeyState.Unreadable) {
+        return ProviderDeleteReceipt(false, false, "无法读取此设备的密钥，不能删除服务或密钥。请解锁设备后重新载入页面再试。")
+    }
+    try {
+        keyStore.clear(account)
+    } catch (_: Exception) {
+        return ProviderDeleteReceipt(false, false, "密钥删除没有确认；模型服务未删除，请重试")
+    }
+    when (store.delete(id)) {
+        ProviderWriteOutcome.Deleted -> Unit
+        else -> return ProviderDeleteReceipt(false, true, "密钥已删除；模型服务配置未删除，请刷新后重试")
+    }
+    val profileRemains = when (val readback = store.read()) {
+        is ProviderStoreRead.Stored -> readback.snapshot.profiles.any { it.id == id }
+        ProviderStoreRead.Empty -> false
+        ProviderStoreRead.Unreadable -> true
+    }
+    if (profileRemains) {
+        return ProviderDeleteReceipt(false, true, "密钥已删除；模型服务配置删除结果无法确认，请刷新后检查")
+    }
+    return ProviderDeleteReceipt(true, true, "已删除本机保存的模型服务与密钥")
 }
 
 internal suspend fun getProviderModels(
     draft: ProviderDraft,
     requestId: String,
-    keyProvider: () -> String? = { ApiKeyStore.active()?.readKey() },
-    storedEndpointProvider: () -> String? = { ProviderConfigStore.active()?.current()?.endpoint },
+    keyProvider: () -> String? = {
+        val store = ApiKeyStore.active()
+        val account = providerAccountFor(draft)
+        if (store == null || account == null) null else store.readKey(account)
+    },
+    storedEndpointProvider: () -> String? = { storedProviderFor(draft)?.endpoint },
     launchEndpointProvider: () -> String? = { ProbeLaunchConfig.active().deepseekBaseUrl },
     transport: ProviderProbeTransport = UrlConnectionProviderProbeTransport,
 ): HostProviderModelsResult = withContext(Dispatchers.IO) {
     fun result(models: List<String>?, message: String) =
         HostProviderModelsResult(requestId, draft.id.takeIf { it.isNotBlank() }, models, message)
 
-    val endpointText = draft.endpoint.trim().ifEmpty {
-        if (draft.isNew) "" else storedEndpointProvider()?.trim().orEmpty().ifEmpty {
-            launchEndpointProvider()?.trim().orEmpty()
-        }
-    }
+    val endpointText = providerEndpointForDraft(
+        draft, storedEndpointProvider, launchEndpointProvider,
+    ).orEmpty()
     val endpoint = validateProbeEndpoint(endpointText)
         ?: return@withContext result(null, endpointFailure(endpointText))
     if (endpoint.scheme.lowercase() != "https") {
@@ -253,7 +369,11 @@ internal suspend fun getProviderModels(
     val key = when {
         draft.apiKey.isNotBlank() -> draft.apiKey.trim()
         draft.isNew || draft.removeStoredKey -> ""
-        else -> try { keyProvider().orEmpty() } catch (_: Exception) { "" }
+        else -> try {
+            keyProvider().orEmpty()
+        } catch (_: Exception) {
+            return@withContext result(null, "读不到已保存的密钥，请解锁设备后重试。")
+        }
     }
     if (key.isEmpty()) return@withContext result(null, "还没有可用于读取模型列表的密钥。")
     if (key.length < ApiKeyStore.MIN_KEY_LENGTH || key.any { it !in '!'..'~' }) {
@@ -316,6 +436,43 @@ private fun parseProviderModelCatalog(body: String): List<String>? {
         ids.distinct().sorted().takeIf { it.size <= MAX_PROVIDER_MODEL_COUNT }
     } catch (_: Exception) {
         null
+    }
+}
+
+/** Resolve only the exact draft profile, except the explicit ephemeral local launch row. */
+private fun providerEndpointForDraft(
+    draft: ProviderDraft,
+    storedEndpointProvider: () -> String?,
+    launchEndpointProvider: () -> String?,
+): String? {
+    draft.endpoint.trim().takeIf(String::isNotEmpty)?.let { return it }
+    if (draft.isNew) return null
+    storedEndpointProvider()?.trim()?.takeIf(String::isNotEmpty)?.let { return it }
+    if (draft.id.trim() != ProviderConfigStore.DEFAULT_ID) return null
+    return when (ProviderConfigStore.active()?.read()) {
+        ProviderStoreRead.Empty, null -> launchEndpointProvider()?.trim()?.takeIf(String::isNotEmpty)
+        is ProviderStoreRead.Stored, ProviderStoreRead.Unreadable -> null
+    }
+}
+
+/** The selected record for this draft id, or null for a new profile. */
+internal fun storedProviderFor(draft: ProviderDraft): ProviderRecord? {
+    val store = ProviderConfigStore.active() ?: return null
+    return store.snapshot()?.profiles?.firstOrNull { it.id == draft.id.trim() }
+}
+
+/** The key account this draft reads/writes; new profiles get their own account. */
+internal fun providerAccountFor(
+    draft: ProviderDraft,
+    providerRead: ProviderStoreRead? = ProviderConfigStore.active()?.read(),
+    launchAccount: String? = ProbeLaunchConfig.active().credentialAccount,
+): String? {
+    val id = draft.id.trim()
+    if (draft.isNew) return ProviderRecord.providerCredentialRef(id)
+    return when (providerRead) {
+        is ProviderStoreRead.Stored -> providerRead.snapshot.profiles.firstOrNull { it.id == id }?.credentialAccount()
+        ProviderStoreRead.Empty, null -> if (id == ProviderConfigStore.DEFAULT_ID) launchAccount else null
+        ProviderStoreRead.Unreadable -> null
     }
 }
 

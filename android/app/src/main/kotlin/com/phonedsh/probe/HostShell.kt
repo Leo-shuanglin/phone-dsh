@@ -213,6 +213,7 @@ internal fun HostShell(
     // The store is the view model's; this shell never reads the file itself.
     val preferences by engine.preferenceState.collectAsState()
     val permissionDefaults by engine.permissionDefaults.collectAsState()
+    val configurationFacts by engine.configuration.collectAsState()
     val context = LocalContext.current
     val systemDark = isSystemInDarkTheme()
     // L69: the chat page's one state. Collected here so a Worker event rebuilds the
@@ -263,6 +264,9 @@ internal fun HostShell(
     var providerModels by remember {
         mutableStateOf<com.phonedsh.ui.nav.PdshProviderOperationFact?>(null)
     }
+    var providerCatalog by remember {
+        mutableStateOf<com.phonedsh.ui.page.ProviderCatalogFact?>(null)
+    }
     var activeProviderTestRequest by remember { mutableStateOf<String?>(null) }
     var activeProviderSaveRequest by remember { mutableStateOf<String?>(null) }
     val providerProbeScope = rememberCoroutineScope()
@@ -273,6 +277,9 @@ internal fun HostShell(
     LaunchedEffect(nav.current) {
         if (nav.current == PdshRoute.Settings) {
             engine.refreshDefaultPermissionTier()?.let { notice = "新会话默认权限读取失败：$it" }
+        }
+        if (nav.current == PdshRoute.Configuration) {
+            engine.refreshConfiguration()?.let { notice = "本会话设置部分读取失败：$it" }
         }
     }
     LaunchedEffect(state is EngineHostState.Running, chatUi.workerSessionId) {
@@ -302,7 +309,9 @@ internal fun HostShell(
         providerConnectionTest,
         providerSave,
         providerModels,
+        providerCatalog,
         permissionDefaults,
+        configurationFacts,
         sessionSnapshot,
         nav,
     ) {
@@ -575,13 +584,28 @@ internal fun HostShell(
                     profileId = draft.id.takeIf(String::isNotBlank),
                     receipt = null,
                 )
+                providerCatalog = com.phonedsh.ui.page.ProviderCatalogFact(
+                    requestId = requestId,
+                    profileId = draft.id.takeIf(String::isNotBlank),
+                    isNew = draft.isNew,
+                    isLoading = true,
+                )
                 providerProbeScope.launch {
                     val result = getProviderModels(draft, requestId)
-                    val current = providerModels
-                    if (current?.requestId?.value != result.requestId ||
-                        current.profileId != result.profileId
+                    val currentModels = providerModels
+                    if (currentModels?.requestId?.value == result.requestId &&
+                        currentModels.profileId == result.profileId
+                    ) providerModels = currentModels.copy(models = result.models, message = result.message)
+                    val current = providerCatalog
+                    if (current?.requestId != result.requestId ||
+                        current.profileId != result.profileId ||
+                        current.isNew != draft.isNew
                     ) return@launch
-                    providerModels = current.copy(models = result.models, message = result.message)
+                    providerCatalog = current.copy(
+                        isLoading = false,
+                        models = result.models,
+                        message = result.message,
+                    )
                 }
             }
         }
@@ -618,9 +642,9 @@ internal fun HostShell(
                 )
                 providerProbeScope.launch {
                     val result = saveProviderDraft(draft, requestId)
-                    if (activeProviderSaveRequest != result.requestId || result.profileId != draft.id.takeIf(String::isNotBlank)) {
-                        return@launch
-                    }
+                    if (activeProviderSaveRequest != result.requestId ||
+                        !providerSaveResultMatchesDraft(result, draft)
+                    ) return@launch
                     if (result.recordWritten) settingsRevision++
                     providerSave = com.phonedsh.ui.page.ProviderSaveFact(
                         requestId = result.requestId,
@@ -642,6 +666,7 @@ internal fun HostShell(
             }
         }
         measured.copy(
+            configuration = configurationFacts,
             actionAvailability = com.phonedsh.ui.nav.PdshActionAvailabilities(actions),
             licenses = ANDROID_NATIVE_LICENSE_FACTS,
             sessions = if (sessionSnapshot.waiting && sessionSnapshot.sessions.isEmpty() && sessionSnapshot.archivedSessions.isEmpty()) null else
@@ -675,6 +700,7 @@ internal fun HostShell(
             modelProvider = measured.modelProvider.copy(
                 connectionTest = providerConnectionTest,
                 providerSave = providerSave,
+                catalog = providerCatalog,
             ),
             shell = shellFacts,
             providerOperations = listOfNotNull(providerModels),
@@ -706,7 +732,7 @@ internal fun HostShell(
     // Keystore per frame would be a per-frame cost for a value that only a write
     // can change.
     val providerConfigured = remember(settingsRevision) {
-        ApiKeyStore.activeFact().status == ProviderKeyStatus.CONFIGURED
+        ProbeLaunchConfig.active().keyFact().status == ProviderKeyStatus.CONFIGURED
     }
 
     // The host's own voice. A page owns its controls, so this host cannot render
@@ -823,6 +849,64 @@ internal fun HostShell(
                             } else if (action == PdshHostAction.RestartRuntime) {
                                 engine.restartChatEngine()
                                 notice = null
+                            } else if (action == PdshHostAction.RefreshConfiguration) {
+                                providerProbeScope.launch {
+                                    notice = engine.refreshConfiguration()
+                                        ?: "已重新读取本会话设置"
+                                }
+                            } else if (action is PdshHostAction.SaveConfigurationGroup) {
+                                providerProbeScope.launch {
+                                    val error = engine.saveConfigurationGroup(action.namespace, action.patch)
+                                    notice = error ?: "已保存本会话设置"
+                                }
+                            } else if (action is PdshHostAction.ResetConfigurationField) {
+                                providerProbeScope.launch {
+                                    val error = engine.resetConfigurationField(action.namespace, action.field)
+                                    notice = error ?: "已恢复 DSH 默认值"
+                                }
+                            } else if (action is PdshHostAction.SaveDefaultPermission) {
+                                providerProbeScope.launch {
+                                    val error = engine.saveDefaultPermission(action.modeId)
+                                    notice = error ?: "已更新新会话默认权限"
+                                }
+                            } else if (action is PdshHostAction.SelectProvider) {
+                                providerProbeScope.launch {
+                                    val store = ProviderConfigStore.active()
+                                    if (store == null) {
+                                        notice = "本宿主没有安装模型服务存储"
+                                    } else {
+                                        when (val outcome = withContext(Dispatchers.IO) { store.select(action.id) }) {
+                                            ProviderWriteOutcome.Saved -> {
+                                                settingsRevision++
+                                                notice = "已选择默认模型服务；下次启动 App 时生效"
+                                            }
+                                            is ProviderWriteOutcome.Rejected -> notice = outcome.reason
+                                            else -> notice = "本机存储不可写，本次未选择"
+                                        }
+                                    }
+                                }
+                            } else if (action is PdshHostAction.GetProviderModels) {
+                                val draft = action.draft
+                                val requestId = action.requestId.ifBlank { UUID.randomUUID().toString() }
+                                providerCatalog = com.phonedsh.ui.page.ProviderCatalogFact(
+                                    requestId = requestId,
+                                    profileId = draft.id.takeIf(String::isNotBlank),
+                                    isNew = draft.isNew,
+                                    isLoading = true,
+                                )
+                                providerProbeScope.launch {
+                                    val result = getProviderModels(draft, requestId)
+                                    val current = providerCatalog
+                                    if (current?.requestId != result.requestId ||
+                                        current.profileId != result.profileId ||
+                                        current.isNew != draft.isNew
+                                    ) return@launch
+                                    providerCatalog = current.copy(
+                                        isLoading = false,
+                                        models = result.models,
+                                        message = result.message,
+                                    )
+                                }
                             } else if (action is PdshHostAction.TestProvider) {
                                 if (providerConnectionTest?.isTesting != true) {
                                     val draft = action.draft
@@ -858,7 +942,7 @@ internal fun HostShell(
                                     providerProbeScope.launch {
                                         val result = saveProviderDraft(draft, requestId)
                                         if (activeProviderSaveRequest != result.requestId ||
-                                            result.profileId != draft.id.takeIf { it.isNotBlank() }
+                                            !providerSaveResultMatchesDraft(result, draft)
                                         ) return@launch
                                         if (result.recordWritten) settingsRevision++
                                         providerSave = com.phonedsh.ui.page.ProviderSaveFact(
@@ -984,6 +1068,36 @@ internal fun HostShell(
                         onSpeakText = onSpeakText?.let { speaker ->
                             { text ->
                                 if (!speaker(text)) speechNotice = "系统语音服务未能启动朗读。"
+                            }
+                        },
+                        onConfigurationWrite = { request ->
+                            when (request) {
+                                is com.phonedsh.ui.page.ConfigurationWriteRequest.SaveGroup ->
+                                    engine.saveConfigurationGroupConfirmed(
+                                        request.namespace,
+                                        request.patch,
+                                        request.expectedRevision,
+                                        request.requestId,
+                                    )
+                                is com.phonedsh.ui.page.ConfigurationWriteRequest.ResetField ->
+                                    engine.resetConfigurationFieldConfirmed(
+                                        request.namespace,
+                                        request.field,
+                                        request.expectedRevision,
+                                        request.requestId,
+                                    )
+                                is com.phonedsh.ui.page.ConfigurationWriteRequest.SaveDefaultPermission ->
+                                    engine.saveDefaultPermissionConfirmed(
+                                        request.modeId, request.expectedRevision, request.requestId,
+                                    )
+                                is com.phonedsh.ui.page.ConfigurationWriteRequest.Refresh -> {
+                                    val failure = engine.refreshConfiguration()
+                                    com.phonedsh.ui.page.ConfigurationWriteReceipt(
+                                        requestId = request.requestId,
+                                        success = failure == null,
+                                        message = failure,
+                                    )
+                                }
                             }
                         },
 
@@ -1330,7 +1444,7 @@ private fun handleHostAction(
             result.message
         }
 
-        is PdshHostAction.DeleteProvider -> deleteProvider(onSettingsChanged)
+        is PdshHostAction.DeleteProvider -> deleteProvider(action.id, onSettingsChanged)
 
         // A connectivity test would have to reach the endpoint from this device,
         // through the same gateway the turn uses; this build has no such probe, so
@@ -1379,69 +1493,11 @@ private fun handleHostAction(
 }
 
 /** A failed result keeps the editor open; `recordWritten` separately tells the host to refresh facts. */
-private suspend fun saveProvider(draft: ProviderDraft): HostProviderSaveResult = withContext(Dispatchers.IO) {
-    fun reject(message: String) = HostProviderSaveResult(recordWritten = false, succeeded = false, message = message)
-    val store = ProviderConfigStore.active() ?: return@withContext reject("本宿主没有安装模型服务存储，本次未保存")
-    val keyStore = ApiKeyStore.active()
-    val keyReason = if (draft.apiKey.isBlank()) null else ProviderDraftRules.keyRejection(draft.apiKey)
-    if (keyReason != null) return@withContext reject(keyReason)
-    if ((draft.apiKey.isNotBlank() || draft.removeStoredKey) && keyStore == null) {
-        return@withContext reject("本宿主没有安装密钥存储，本次未保存")
-    }
-    draft.modelValidationError?.let { return@withContext reject(it) }
+private suspend fun saveProvider(draft: ProviderDraft): HostProviderSaveResult =
+    saveProviderDraft(draft, requestId = "")
 
-    val launch = ProbeLaunchConfig.active()
-    val previous = store.current()
-    val record = ProviderConfigStore.recordOf(
-        draft = draft,
-        previous = previous,
-        launchEndpoint = launch.deepseekBaseUrl,
-        launchModel = launch.modelName,
-    )
-    ProviderDraftRules.endpointRejection(record.endpoint)?.let { return@withContext reject(it) }
-    if (record.name.isEmpty()) return@withContext reject("模型服务名不能为空，本次未保存")
-    when (val outcome = store.save(record)) {
-        ProviderWriteOutcome.Saved -> Unit
-        is ProviderWriteOutcome.Rejected -> return@withContext reject(outcome.reason)
-        else -> return@withContext reject("本机存储不可写，本次未保存")
-    }
-
-    // The non-secret profile has landed. The secret is still written only to the
-    // Keystore-backed store; a failure leaves the editor open and reports that the
-    // profile record may already exist so the user can repair the key deliberately.
-    val keyLine = try {
-        when {
-            draft.removeStoredKey -> {
-                keyStore?.clear()
-                "，密钥已删除"
-            }
-            draft.apiKey.isNotBlank() -> {
-                keyStore?.save(draft.apiKey)
-                "，密钥已保存"
-            }
-            else -> ""
-        }
-    } catch (_: IllegalArgumentException) {
-        return@withContext HostProviderSaveResult(
-            recordWritten = true,
-            succeeded = false,
-            message = "配置已保存；密钥未通过校验，本次未保存密钥",
-        )
-    } catch (_: Exception) {
-        return@withContext HostProviderSaveResult(
-            recordWritten = true,
-            succeeded = false,
-            message = "配置已保存；密钥写入失败，本次未保存密钥",
-        )
-    }
-    val effect = if (keyLine.isEmpty()) "下次启动 App 时生效" else "下次启动 App 时生效；密钥即刻生效"
-    val replaceLine = if (draft.isNew && previous != null) "；本宿主只保存一个模型服务，本次替换了原有的" else ""
-    HostProviderSaveResult(
-        recordWritten = true,
-        succeeded = true,
-        message = "已保存到本机：模型服务$keyLine（$effect）$replaceLine",
-    )
-}
+internal fun providerSaveResultMatchesDraft(result: HostProviderSaveResult, draft: ProviderDraft): Boolean =
+    result.isNew == draft.isNew && (draft.isNew || result.profileId == draft.id.takeIf(String::isNotBlank))
 
 /**
  * Removes what this host really owns: the saved record and its key.
@@ -1452,26 +1508,10 @@ private suspend fun saveProvider(draft: ProviderDraft): HostProviderSaveResult =
  *
  * @param onSettingsChanged bumped only after the record really changed.
  */
-private fun deleteProvider(onSettingsChanged: () -> Unit): String {
-    val store = ProviderConfigStore.active()
-        ?: return "本宿主没有安装模型服务存储，本次未删除"
-    val hasRecord = store.current() != null
-    if (hasRecord) {
-        when (store.delete()) {
-            ProviderWriteOutcome.Deleted -> Unit
-            else -> return "本机存储不可写，本次未删除"
-        }
-    }
-    val keyStore = ApiKeyStore.active()
-    keyStore?.clear()
-    onSettingsChanged()
-    return when {
-        !hasRecord && keyStore == null -> "本宿主没有安装密钥存储：没有可删除的内容"
-        hasRecord && keyStore == null ->
-            "已删除本机保存的模型服务；密钥存储未安装，密钥未删除"
-        hasRecord -> "已删除本机保存的模型服务与密钥；引擎退回启动配置的那个服务"
-        else -> "已删除密钥；模型服务本身来自启动配置，本宿主不能删除"
-    }
+private fun deleteProvider(id: String, onSettingsChanged: () -> Unit): String {
+    val result = deleteProviderRecord(id, ProviderConfigStore.active(), ApiKeyStore.active())
+    if (result.profileRemoved || result.keyRemoved) onSettingsChanged()
+    return result.message
 }
 
 /** The person-facing name of one handed-off action; every action has one. */
@@ -1488,10 +1528,15 @@ private fun actionLabel(action: PdshHostAction): String = when (action) {
     PdshHostAction.LoadMoreAutomationHistory -> "加载更多定时任务历史"
     is PdshHostAction.OpenAutomationEditor -> "定时任务编辑器"
     PdshHostAction.RefreshConfiguration -> "重新读取会话配置"
+    is PdshHostAction.SaveConfigurationGroup -> "保存会话配置"
+    is PdshHostAction.ResetConfigurationField -> "恢复配置默认值"
+    is PdshHostAction.SaveDefaultPermission -> "保存新会话默认权限"
     is PdshHostAction.OpenProviderEditor -> "模型服务编辑器"
     PdshHostAction.RefreshModelProvider -> "重新读取模型服务"
     is PdshHostAction.SaveProvider -> "保存模型服务"
     is PdshHostAction.DeleteProvider -> "删除模型服务"
+    is PdshHostAction.SelectProvider -> "选择默认模型服务"
+    is PdshHostAction.GetProviderModels -> "获取模型列表"
     is PdshHostAction.TestProvider -> "测试模型服务"
     PdshHostAction.RevokeUbuntuApproval -> "撤销本地 Ubuntu 授权"
     is PdshHostAction.SetWebSearchEnabled -> "网页搜索开关"
@@ -1545,9 +1590,7 @@ private fun hostRouteNote(route: PdshRoute): String? = when (route) {
     is PdshRoute.McpEditor ->
         "保存不会落盘：本宿主没有 phone/mcpUpsert 这个 host tool"
 
-    PdshRoute.Configuration ->
-        "只读：本宿主未实现会话配置的读取与写入"
-
+    PdshRoute.Configuration -> null
     PdshRoute.Automation -> null
 
     // The rules are real: they are the App's own /v1/http policy. The note is

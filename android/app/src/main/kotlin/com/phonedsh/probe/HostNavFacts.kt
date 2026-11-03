@@ -53,6 +53,7 @@ import com.phonedsh.ui.page.NewSessionBlock
 import com.phonedsh.ui.page.PhoneCapability
 import com.phonedsh.ui.page.ProviderFailureReason
 import com.phonedsh.ui.page.ProviderKeyStatus
+import com.phonedsh.ui.page.ProviderModelDraft
 import com.phonedsh.ui.page.ProviderProfile
 import com.phonedsh.ui.page.ModelProviderFacts
 import com.phonedsh.ui.page.RuntimeLastError
@@ -150,7 +151,7 @@ internal fun buildNavFacts(
     val backgroundWindow = readings.background.window
     val foregroundService = backgroundWindow.state
     val notifications = notificationFact(readings.background.capability)
-    val providerKey = ApiKeyStore.activeFact()
+    val providerKey = ProbeLaunchConfig.active().keyFact()
     val engineFact = when (state) {
         EngineHostState.Stopped, is EngineHostState.Failed -> FactState.NO
         is EngineHostState.Running -> FactState.YES
@@ -317,7 +318,7 @@ internal fun buildNavFacts(
             // device record names it, or — when nothing is saved — the launch's
             // service does. A stored key (even one the service rejected) is a
             // configured provider; the store saying "none" is 未配置.
-            modelProviderName = ProviderConfigStore.active()?.current()?.name
+            modelProviderName = activeProviderName(ProbeLaunchConfig.active())
                 ?: when (providerKey.status) {
                     ProviderKeyStatus.CONFIGURED, ProviderKeyStatus.INVALID -> LOCAL_PROVIDER_NAME
                     ProviderKeyStatus.NOT_CONFIGURED, ProviderKeyStatus.UNKNOWN -> null
@@ -665,15 +666,22 @@ private const val EGRESS_GRANT_ID: String = "pdsh.launch.grant"
  * otherwise — a page that cannot read them must say 未知 rather than show a default.
  * The key fact carries only the masked suffix; the store never hands out the key.
  */
-private fun localProviderProfile(): ProviderProfile {
-    val fact = ApiKeyStore.activeFact()
+private fun activeProviderName(launch: ProbeLaunchConfig): String? {
+    val profiles = ProviderConfigStore.active()?.snapshot()?.profiles.orEmpty()
+    return launch.providerProfileId?.let { activeId -> profiles.firstOrNull { it.id == activeId }?.name }
+        ?: if (launch.providerProfileId == null && launch.deepseekBaseUrl != null) LOCAL_PROVIDER_NAME else null
+}
+
+private fun localProviderProfile(launch: ProbeLaunchConfig, engineStarted: FactState): ProviderProfile {
+    val fact = launch.keyFact()
     return ProviderProfile(
         id = "local",
         name = LOCAL_PROVIDER_NAME,
-        model = ProbeLaunchConfig.active().modelName,
-        endpoint = ProbeLaunchConfig.active().deepseekBaseUrl,
+        model = launch.modelName,
+        endpoint = launch.deepseekBaseUrl,
         key = fact,
-        selected = true,
+        selected = false,
+        active = if (engineStarted == FactState.YES) launch.deepseekBaseUrl != null else null,
     )
 }
 
@@ -694,34 +702,68 @@ private fun localProviderProfile(): ProviderProfile {
 private fun modelProviderFacts(engineStarted: FactState): ModelProviderFacts {
     val store = ProviderConfigStore.active()
         ?: return ModelProviderFacts(writable = FactState.NO)
-    return when (val read = store.read()) {
-        is ProviderStoreRead.Stored -> ModelProviderFacts(
-            profiles = listOf(profileOf(read.record)),
-            writable = FactState.YES,
-            engineStarted = engineStarted,
-        )
-        ProviderStoreRead.Empty -> ModelProviderFacts(
-            profiles = listOf(localProviderProfile()),
-            writable = FactState.YES,
-            engineStarted = engineStarted,
-        )
-        ProviderStoreRead.Unreadable -> ModelProviderFacts(
-            profiles = null,
-            failure = ProviderFailureReason.CONFIG_UNREADABLE,
-            writable = FactState.YES,
-            engineStarted = engineStarted,
-        )
-    }
+    return modelProviderFactsFrom(store.read(), ProbeLaunchConfig.active(), engineStarted)
 }
 
-/** One stored record as the page's row, with the key fact read from the Keystore. */
-private fun profileOf(record: ProviderRecord): ProviderProfile = ProviderProfile(
+/** Pure provider facts projection, including persisted-next and process-active identity. */
+internal fun modelProviderFactsFrom(
+    read: ProviderStoreRead,
+    launch: ProbeLaunchConfig,
+    engineStarted: FactState,
+): ModelProviderFacts = when (read) {
+    is ProviderStoreRead.Stored -> ModelProviderFacts(
+        profiles = read.snapshot.profiles.map { record ->
+            profileOf(
+                record,
+                selected = record.id == read.snapshot.selectedId,
+                active = if (engineStarted == FactState.YES) record.id == launch.providerProfileId else null,
+            )
+        },
+        writable = FactState.YES,
+        engineStarted = engineStarted,
+    )
+    ProviderStoreRead.Empty -> ModelProviderFacts(
+        // The ephemeral local row is meaningful only when this process has a
+        // concrete launch endpoint. With no route there is no provider to
+        // manufacture; the page shows its authoritative empty state.
+        profiles = if (launch.deepseekBaseUrl != null) {
+            listOf(localProviderProfile(launch, engineStarted))
+        } else {
+            emptyList()
+        },
+        writable = FactState.YES,
+        engineStarted = engineStarted,
+    )
+    ProviderStoreRead.Unreadable -> ModelProviderFacts(
+        profiles = null,
+        failure = ProviderFailureReason.CONFIG_UNREADABLE,
+        writable = FactState.YES,
+        engineStarted = engineStarted,
+    )
+}
+
+/** One stored record as the page's row, with its own key account read from the Keystore. */
+private fun profileOf(record: ProviderRecord, selected: Boolean, active: Boolean?): ProviderProfile = ProviderProfile(
     id = record.id,
     name = record.name,
     model = record.model.takeIf { it.isNotBlank() },
     endpoint = record.endpoint,
-    key = ApiKeyStore.activeFact(),
-    selected = true,
+    key = ApiKeyStore.activeFact(record.credentialAccount()),
+    selected = selected,
+    reasoningEffort = record.reasoningEffort,
+    models = record.models.map { model ->
+        ProviderModelDraft(
+            id = model.id,
+            name = model.name,
+            contextWindow = model.contextWindow,
+            maxTokens = model.maxTokens,
+            textInput = model.textInput,
+            imageInput = model.imageInput,
+            reasoningEffort = model.reasoningEffort,
+        )
+    },
+    credentialRef = record.credentialAccount(),
+    active = active,
 )
 
 /**

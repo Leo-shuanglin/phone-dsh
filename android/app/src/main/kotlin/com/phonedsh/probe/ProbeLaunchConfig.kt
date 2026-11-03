@@ -118,6 +118,10 @@ internal data class ProbeLaunchConfig(
      * `ls /dsh/workspace` must see nothing. It is a diagnostic, not a setting.
      */
     val bootOverlay: Boolean = true,
+    /** Credential account captured with this process's endpoint at launch. Null means no key binding. */
+    val credentialAccount: String? = null,
+    /** Stored provider that supplied this launch's endpoint/model, if any. */
+    val providerProfileId: String? = null,
 ) {
     /**
      * The `env` object the engine merges with `PDSH_DSH_LAUNCH_TOKEN`.
@@ -181,10 +185,10 @@ internal data class ProbeLaunchConfig(
         // state variable below is the honest part of the answer. A Worker that needs the real
         // credential asks the host for it one request at a time at the network edge.
         env.put(DEEPSEEK_API_KEY, WORKER_KEY_PLACEHOLDER)
-        when (val state = ApiKeyStore.activeState()) {
+        when (val state = credentialAccount?.let { ApiKeyStore.activeState(it) } ?: ApiKeyState.Absent) {
             is ApiKeyState.Valid -> env.put(MODEL_KEY_STATE, KEY_STATE_CONFIGURED)
             ApiKeyState.Absent -> env.put(MODEL_KEY_STATE, KEY_STATE_ABSENT)
-            is ApiKeyState.Invalid -> env.put(MODEL_KEY_STATE, KEY_STATE_INVALID)
+            is ApiKeyState.Invalid, is ApiKeyState.Unreadable -> env.put(MODEL_KEY_STATE, KEY_STATE_INVALID)
         }
         // The endpoint facts stay gated: they are only true when the launch named a base URL.
         if (base != null) {
@@ -215,8 +219,9 @@ internal data class ProbeLaunchConfig(
     fun modelCredentialProvider(): GatewayCredentialProvider? {
         val base = deepseekBaseUrl ?: return null
         val store = ApiKeyStore.active() ?: return null
+        val account = credentialAccount ?: return null
         val anonymous = egressGrant()?.host?.let { setOf(it) } ?: emptySet()
-        return store.credentialProvider(base, anonymous)
+        return store.credentialProvider(base, anonymous, account)
     }
 
     /**
@@ -227,7 +232,8 @@ internal data class ProbeLaunchConfig(
      * injection paths above use [ApiKeyStore] directly, so a page cannot obtain
      * plaintext from a fact.
      */
-    fun keyFact(): ProviderKeyFact = ApiKeyStore.activeFact()
+    fun keyFact(): ProviderKeyFact = credentialAccount?.let { ApiKeyStore.activeFact(it) }
+        ?: ProviderKeyFact(com.phonedsh.ui.page.ProviderKeyStatus.NOT_CONFIGURED, null)
 
     /** The parsed egress grant, or `null` when the launch supplied none/wildcard. */
     fun egressGrant(): GatewayHostRule? {
@@ -329,25 +335,47 @@ internal data class ProbeLaunchConfig(
         fun active(): ProbeLaunchConfig = current.get()
 
         /** Parses [intent] without trusting any value: a malformed one is ignored. */
-        fun from(intent: Intent?): ProbeLaunchConfig {
-            // The model service the settings page saved (ProviderConfigStore) is a
-            // device record, so the next host boot applies it: its endpoint and model
-            // id are overlaid here, with an explicit launch extra still winning. That
-            // is what makes the page's 下次启动主机时生效 sentence true; without this
-            // read the save would only repaint the row.
-            val stored = ProviderConfigStore.active()?.current()
-            val base = intent?.getStringExtra(EXTRA_BASE_URL)?.trim()
+        fun from(intent: Intent?): ProbeLaunchConfig = from(intent, ProviderConfigStore.active()?.current())
+
+        /** Pure launch resolver for tests; the selected profile and its key account are captured together. */
+        internal fun from(intent: Intent?, storedProfile: ProviderRecord?): ProbeLaunchConfig = fromValues(
+            extraBaseUrl = intent?.getStringExtra(EXTRA_BASE_URL),
+            extraEgressOrigin = intent?.getStringExtra(EXTRA_EGRESS_ORIGIN),
+            extraPrompt = intent?.getStringExtra(EXTRA_PROMPT),
+            extraModelName = intent?.getStringExtra(EXTRA_MODEL_NAME),
+            egressProbe = intent?.getBooleanExtra(EXTRA_EGRESS_PROBE, false) ?: false,
+            modelProxy = intent?.getBooleanExtra(EXTRA_MODEL_PROXY, true) ?: true,
+            webFace = intent?.getBooleanExtra(EXTRA_WEB_FACE, false) ?: false,
+            probeFace = intent?.getBooleanExtra(EXTRA_PROBE_FACE, false) ?: false,
+            bootOverlay = intent?.getBooleanExtra(EXTRA_BOOT_OVERLAY, true) ?: true,
+            storedProfile = storedProfile,
+        )
+
+        /** Pure value resolver shared by the Intent adapter and loopback regression tests. */
+        internal fun fromValues(
+            extraBaseUrl: String?,
+            extraEgressOrigin: String? = null,
+            extraPrompt: String? = null,
+            extraModelName: String? = null,
+            egressProbe: Boolean = false,
+            modelProxy: Boolean = true,
+            webFace: Boolean = false,
+            probeFace: Boolean = false,
+            bootOverlay: Boolean = true,
+            storedProfile: ProviderRecord? = null,
+        ): ProbeLaunchConfig {
+            val explicitBase = extraBaseUrl?.trim()
                 ?.takeIf { it.isNotEmpty() }
                 ?.takeIf { parseHttpUrl(it) != null }
-                ?: stored?.endpoint
-            val egress = intent?.getStringExtra(EXTRA_EGRESS_ORIGIN)?.trim()
+            // An explicit endpoint override is not a provider selection. Never attach
+            // the saved profile's credential (or model) to an unrelated launch origin.
+            val stored = storedProfile.takeIf { explicitBase == null }
+            val base = explicitBase ?: stored?.endpoint
+            val egress = extraEgressOrigin?.trim()
                 ?.takeIf { it.isNotEmpty() && !it.contains('*') }
                 ?.takeIf { parseHttpUrl(it) != null }
-            val prompt = intent?.getStringExtra(EXTRA_PROMPT)?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?: DEFAULT_PROMPT
-            val model = intent?.getStringExtra(EXTRA_MODEL_NAME)?.trim()
-                ?.takeIf { it.isNotEmpty() }
+            val prompt = extraPrompt?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_PROMPT
+            val model = extraModelName?.trim()?.takeIf { it.isNotEmpty() }
                 ?: stored?.model?.takeIf { it.isNotEmpty() }
                 ?: DEFAULT_MODEL
             return ProbeLaunchConfig(
@@ -355,11 +383,17 @@ internal data class ProbeLaunchConfig(
                 egressOrigin = egress,
                 prompt = prompt,
                 modelName = model,
-                egressProbe = intent?.getBooleanExtra(EXTRA_EGRESS_PROBE, false) ?: false,
-                modelProxy = intent?.getBooleanExtra(EXTRA_MODEL_PROXY, true) ?: true,
-                webFace = intent?.getBooleanExtra(EXTRA_WEB_FACE, false) ?: false,
-                probeFace = intent?.getBooleanExtra(EXTRA_PROBE_FACE, false) ?: false,
-                bootOverlay = intent?.getBooleanExtra(EXTRA_BOOT_OVERLAY, true) ?: true,
+                egressProbe = egressProbe,
+                modelProxy = modelProxy,
+                webFace = webFace,
+                probeFace = probeFace,
+                bootOverlay = bootOverlay,
+                credentialAccount = when {
+                    explicitBase != null -> null
+                    stored != null -> stored.credentialAccount()
+                    else -> null
+                },
+                providerProfileId = stored?.id,
             )
         }
 
