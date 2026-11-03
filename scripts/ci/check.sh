@@ -288,6 +288,7 @@ stage_phone_gate_contracts() {
     "$PYTHON" "$ROOT/scripts/ci/scenario_evidence_test.py" || return 1
     "$PYTHON" "$ROOT/scripts/ci/scenario_batch_test.py" || return 1
     "$PYTHON" "$ROOT/scripts/ci/gates_test.py" || return 1
+    "$PYTHON" "$ROOT/scripts/ci/test_protocol_impact.py" || return 1
     "$PYTHON" "$ROOT/scripts/ci/selftest.py" || return 1
 }
 
