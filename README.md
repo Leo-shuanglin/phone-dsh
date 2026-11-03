@@ -212,7 +212,7 @@ Android 没有另起一套运行方式，而是沿用 iOS 的实现：DSH Worker
 
 遇到确实需要完整 Linux 用户态的任务（例如编译、跑构建或测试工具链），由会话内按需调起 **Ubuntu** 处理：Agent 在会话中发起 `ubuntu` 请求，宿主先征得用户同意，再把这一条命令交给本地 Ubuntu 环境异步执行，取回输出和产物文件。Ubuntu 按会话申请、用完即弃，平时不运行、不挂载；它只是“命令的执行地点”，DSH 本身和会话状态不会搬进去，构建期间宿主会封住 App 内部的会话与存储目录。设计细节见 [本地挂载运行时（Ubuntu）方案](docs/design/android-local-build-runtime-2026-11-01.md)。
 
-**当前进度（如实）**：会话内的 `ubuntu` 命令、异步任务记录、用户审批和构建期间的目录封存已在 Android 宿主落地，但本构建接的是 **mock 适配器**——尚未挂接真实的 Ubuntu 环境，输出会标明 `backend=mock`，退出码是模拟值，不能当作真实编译结果。iOS 暂无这条路径；对应的页面桥方法 `ubuntu.exec / status / fetch` 在 [`spec/v1/bridge.md`](spec/v1/bridge.md) §12 中仍标为未实现。
+**当前进度（如实）**：Android 已接通真实的本地 Ubuntu 最小路径——Termux 版 proot（带应用进程 seccomp 所需的 SIGSYS 处理）从 `nativeLibraryDir` 运行，Ubuntu Base 24.04.5 arm64 rootfs 在首次使用、经用户同意后按需下载（约 30 MB，解压约 150 MB，固定 SHA-256 校验），`ubuntu run` 的输出标明 `backend=proot`。已在 API 35 arm64 模拟器上验证 `ubuntu run -- uname -a` 真实执行成功（见 [验收记录](docs/receipts/android-ubuntu-proot-slice.md)）。尚未包含：用 apt 安装 gcc 等工具链并编译、产物取回（`ubuntu fetch`）、设置页的 rootfs 管理、网络隔离和物理手机/16 KB 真机验证；proot 与 rootfs 的来源与许可见 [NOTICE](NOTICE)。proot 资产缺失或不可执行时，启动探测会报告不可用并给出原因，不会注册一个无法真正执行的 `ubuntu` 命令；mock 只用于 JVM 测试。iOS 暂无这条路径；页面桥方法 `ubuntu.exec / status / fetch` 在 [`spec/v1/bridge.md`](spec/v1/bridge.md) §12 中仍标为未实现。
 
 - [Android 构建与模块说明](android/README.md)：工具链引导、Gradle 模块、AAR 消费和测试命令。
 - [Worker 资源与 WebView 要求](android/engine/README.md)：Worker bundle 打包与运行环境。
