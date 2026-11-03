@@ -199,6 +199,35 @@ class ChatTurnRunnerTest {
         }
         running.cancelAndJoin()
         assertTrue(running.isCancelled)
+        assertEquals("cancel cleanup must close the Worker mux", 1, peer.muxCloseIds.size)
+        assertEquals(peer.openMuxId, peer.muxCloseIds.single())
+    }
+
+    @Test
+    fun chatRunnerBoundsCancellationCleanupWhenMuxCloseSendStalls() = runBlocking<Unit> {
+        val peer = ScriptedRunnerPeer(this).apply { stallMuxCloseSend = true }
+        val host = testHost()
+        peer.attach(host)
+        peer.connect()
+        val turnStarted = CompletableDeferred<Unit>()
+        val runner = ChatTurnRunner(
+            channel = host,
+            client = DshTurnClient(host),
+            firstEventTimeoutMillis = 500,
+            nextReadTimeoutMillis = 20,
+        )
+        val running = async(SupervisorJob() + Dispatchers.Default) {
+            runner.run("session-existing", "cancel with stalled close", {},
+                { if (it.kind == HostEventKind.TURN_STARTED) turnStarted.complete(Unit) }, {})
+        }
+        withTimeout(2_000) { turnStarted.await() }
+        val startedAt = System.nanoTime()
+        running.cancel()
+        withTimeout(6_500) { running.cancelAndJoin() }
+        val elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L
+        assertTrue("mux close request was sent before it stalled", peer.closeSendEntered.isCompleted)
+        assertTrue("cancel cleanup should respect its 5s API timeout: ${elapsedMillis}ms", elapsedMillis < 6_500)
+        assertEquals(peer.openMuxId, peer.muxCloseIds.single())
     }
 
     @Test
@@ -277,6 +306,11 @@ class ChatTurnRunnerTest {
         var turnEndDelayMillis: Long? = null
         val promptRequestIds = mutableListOf<String>()
         val promptModes = mutableListOf<String>()
+        var openMuxId: String? = null
+        val muxCloseIds = mutableListOf<String>()
+        var stallMuxCloseSend: Boolean = false
+        val closeSendEntered = CompletableDeferred<Unit>()
+        private val neverFinishCloseSend = CompletableDeferred<Unit>()
         var lastFailure: Throwable? = null
         private var workerSeq = 2L
         private var followRequestId: Int? = null
@@ -323,11 +357,21 @@ class ChatTurnRunnerTest {
             }.getOrNull()?.value
             when {
                 path == "/api/remote.mux" && (headers["x-pdsh-mux-op"] as? JsonString)?.value == "receive" -> {
+                    openMuxId = (headers["x-pdsh-mux-id"] as? JsonString)?.value
                     followRequestId = reqId
                     sendApiRes(reqId, ByteArray(0), withHead = true)
                     sendFollowLine(
                         """{"type":"item","streamId":"events","value":{"type":"ready","clientId":"client-stream-test"}}""",
                     )
+                }
+                path == "/api/remote.mux" && (headers["x-pdsh-mux-op"] as? JsonString)?.value == "close" -> {
+                    (headers["x-pdsh-mux-id"] as? JsonString)?.value?.let(muxCloseIds::add)
+                    if (stallMuxCloseSend) {
+                        closeSendEntered.complete(Unit)
+                        neverFinishCloseSend.await()
+                    } else {
+                        sendUnaryResponse(reqId, rpcId)
+                    }
                 }
                 path == "/api/session/prompt" -> {
                     val request = (((JsonValue.parse(String(body, Charsets.UTF_8)) as JsonObject)["payload"] as JsonObject)

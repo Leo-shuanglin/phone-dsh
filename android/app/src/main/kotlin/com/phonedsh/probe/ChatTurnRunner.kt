@@ -66,7 +66,9 @@ import java.security.SecureRandom
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -462,17 +464,23 @@ internal class ChatTurnRunner(
         /** Closes the receive stream and the logical mux. */
         suspend fun close() {
             stream.close()
-            runCatching {
-                channel.apiRequest(
-                    method = "POST",
-                    path = MUX_PATH,
-                    headers = mapOf(
-                        "content-type" to "application/json",
-                        "x-pdsh-mux-id" to muxId,
-                        "x-pdsh-mux-op" to "close",
-                    ),
-                    timeoutMillis = CLOSE_TIMEOUT_MILLIS,
-                )
+            withContext(NonCancellable) {
+                try {
+                    withTimeoutOrNull(CLOSE_TIMEOUT_MILLIS) {
+                        channel.apiRequest(
+                            method = "POST",
+                            path = MUX_PATH,
+                            headers = mapOf(
+                                "content-type" to "application/json",
+                                "x-pdsh-mux-id" to muxId,
+                                "x-pdsh-mux-op" to "close",
+                            ),
+                            timeoutMillis = CLOSE_TIMEOUT_MILLIS,
+                        )
+                    }
+                } catch (_: Exception) {
+                    // Cleanup is best-effort; never replace the caller's turn result.
+                }
             }
         }
     }

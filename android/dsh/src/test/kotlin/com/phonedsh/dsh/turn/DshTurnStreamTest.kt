@@ -24,8 +24,10 @@ import com.phonedsh.dsh.host.HostHello
 import com.phonedsh.dsh.host.HostLog
 import com.phonedsh.dsh.host.WalUplink
 import com.phonedsh.hostevents.HostEventKind
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -187,5 +189,47 @@ class DshTurnStreamTest {
         delay(50)
         withTimeout(2_000) { job.cancelAndJoin() }
         assertTrue("the read loop must end cancelled", job.isCancelled)
+    }
+
+    @Test
+    fun `follow close sends mux cleanup even when its owner is cancelled`() = runBlocking {
+        val follow = follow(HostApiExchange(1))
+        val closeStarted = CompletableDeferred<Unit>()
+        val closeFinished = CompletableDeferred<Unit>()
+        follow.apiClose = {
+            closeStarted.complete(Unit)
+            delay(1)
+            closeFinished.complete(Unit)
+        }
+
+        val job = launch {
+            try {
+                awaitCancellation()
+            } finally {
+                follow.close()
+            }
+        }
+        kotlinx.coroutines.yield()
+        job.cancelAndJoin()
+
+        assertTrue("the close callback must start during cancellation cleanup", closeStarted.isCompleted)
+        assertTrue("NonCancellable cleanup must finish the mux-close request", closeFinished.isCompleted)
+    }
+
+    @Test
+    fun `follow close bounds an api close callback that never completes`() = runBlocking {
+        val follow = follow(HostApiExchange(1))
+        val closeStarted = CompletableDeferred<Unit>()
+        val neverFinishes = CompletableDeferred<Unit>()
+        follow.apiClose = {
+            closeStarted.complete(Unit)
+            neverFinishes.await()
+        }
+
+        val startedAt = System.nanoTime()
+        withTimeout(7_000) { follow.close() }
+        val elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L
+        assertTrue("the close callback was attempted", closeStarted.isCompleted)
+        assertTrue("close should use its 5 second budget, not wait indefinitely: ${elapsedMillis}ms", elapsedMillis < 6_500)
     }
 }

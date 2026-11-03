@@ -44,8 +44,10 @@ import java.security.SecureRandom
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** A typed `/api` failure raised by this client; [code] is stable and token-free. */
@@ -504,8 +506,14 @@ class DshTurnClient(
         /** Closes the logical mux and forgets the receive stream. */
         suspend fun close() {
             stream.close()
-            runCatching {
-                apiClose?.invoke(muxId)
+            withContext(NonCancellable) {
+                try {
+                    withTimeoutOrNull(CLOSE_TIMEOUT_MILLIS) {
+                        apiClose?.invoke(muxId)
+                    }
+                } catch (_: Exception) {
+                    // A best-effort close must not replace the caller's turn result.
+                }
             }
         }
 
