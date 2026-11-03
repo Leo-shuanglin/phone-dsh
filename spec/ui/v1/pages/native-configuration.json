@@ -13,7 +13,7 @@
   "source": {
     "file": "NativeConfigurationPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/NativeConfigurationPage.swift",
-    "lines": 417,
+    "lines": 420,
     "structLine": 6,
     "renderedFrom": [
       "body",
@@ -491,7 +491,7 @@
       "collection": null,
       "rows": [
         {
-          "id": "text-307",
+          "id": "text-310",
           "label": null,
           "labelExpr": "title",
           "kind": "text",
@@ -501,13 +501,13 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeConfigurationPage.swift:307",
+          "provenance": "NativeConfigurationPage.swift:310",
           "anchor": "Text(title)",
           "extraction": "manual",
           "collection": "model.experimentalPlugins"
         },
         {
-          "id": "text-308",
+          "id": "text-311",
           "label": null,
           "labelExpr": "nativeExperimentalPluginStatus(plugin)",
           "kind": "text",
@@ -517,7 +517,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeConfigurationPage.swift:308",
+          "provenance": "NativeConfigurationPage.swift:311",
           "anchor": "Text(nativeExperimentalPluginStatus(plugin))",
           "extraction": "manual",
           "collection": "model.experimentalPlugins"
@@ -533,26 +533,26 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeConfigurationPage.swift:313",
+          "provenance": "NativeConfigurationPage.swift:316",
           "anchor": "HomeTag(text: plugin.loaded ? NativeText(\"已加载\", \"Loaded\") : NativeText(\"未加载\", \"N",
           "extraction": "syntax",
           "template": "HomeTag",
           "collection": "model.experimentalPlugins"
         }
       ],
-      "provenance": "NativeConfigurationPage.swift:318",
+      "provenance": "NativeConfigurationPage.swift:321",
       "anchor": "Text(NativeText(\"实验插件\", \"Experimental Plugins\"))",
       "extraction": "syntax",
       "hasHeader": true,
       "footer": {
         "text": "This iPhone Worker has no pnpm, execa or subprocess installation environment. Plugins and bundles can be viewed here; install, enable and disable them in desktop DSH.",
         "labelExpr": null,
-        "provenance": "NativeConfigurationPage.swift:320",
+        "provenance": "NativeConfigurationPage.swift:323",
         "anchor": "Text(nativePluginManagementMessage(\"This iPhone Worker has no pnpm, execa or sub"
       }
     },
     {
-      "id": "section-325",
+      "id": "section-328",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
@@ -572,7 +572,7 @@
           "destination": null,
           "writes": false,
           "condition": "model.inventoryError != nil",
-          "provenance": "NativeConfigurationPage.swift:327",
+          "provenance": "NativeConfigurationPage.swift:330",
           "anchor": "Text(NativeText(\"暂时读不到插件状态。\", \"Plugin status is temporarily unavailable.\"))",
           "extraction": "syntax"
         },
@@ -587,28 +587,28 @@
           "destination": "NativePluginInventoryPage",
           "writes": false,
           "condition": "!(model.inventoryError != nil)",
-          "provenance": "NativeConfigurationPage.swift:333",
+          "provenance": "NativeConfigurationPage.swift:336",
           "anchor": "SettingsRowLabel(title: NativeText(\"已加载插件\", \"Loaded Plugins\"), icon: \"puzzlepiec",
           "extraction": "syntax"
         }
       ],
-      "provenance": "NativeConfigurationPage.swift:325",
+      "provenance": "NativeConfigurationPage.swift:328",
       "anchor": "Section {",
       "extraction": "syntax",
       "criterion": {
         "kind": "first-clickable-row",
         "label": "已加载插件",
-        "provenance": "NativeConfigurationPage.swift:333"
+        "provenance": "NativeConfigurationPage.swift:336"
       },
       "footer": {
         "text": "显示的是引擎里真实加载的插件,手机上不会另外记一份。",
         "labelExpr": null,
-        "provenance": "NativeConfigurationPage.swift:338",
+        "provenance": "NativeConfigurationPage.swift:341",
         "anchor": "Text(NativeText(\"显示的是引擎里真实加载的插件,手机上不会另外记一份。\", \"Shows the plugins the engine actu"
       }
     },
     {
-      "id": "section-343",
+      "id": "section-346",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
@@ -628,24 +628,24 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "NativeConfigurationPage.swift:344",
+          "provenance": "NativeConfigurationPage.swift:347",
           "anchor": "Text(NativeText(\"暂不可用\", \"Unavailable\"))",
           "extraction": "syntax"
         }
       ],
-      "provenance": "NativeConfigurationPage.swift:347",
+      "provenance": "NativeConfigurationPage.swift:350",
       "anchor": "Text(title)",
       "extraction": "syntax",
       "criterion": {
         "kind": "first-row",
         "label": "暂不可用",
-        "provenance": "NativeConfigurationPage.swift:344"
+        "provenance": "NativeConfigurationPage.swift:347"
       },
       "hasHeader": true,
       "footer": {
         "text": null,
         "labelExpr": "detail",
-        "provenance": "NativeConfigurationPage.swift:349",
+        "provenance": "NativeConfigurationPage.swift:352",
         "anchor": "Text(detail)"
       }
     }
@@ -708,7 +708,7 @@
       "writes": false,
       "destination": "NativePluginInventoryPage",
       "condition": null,
-      "provenance": "NativeConfigurationPage.swift:333",
+      "provenance": "NativeConfigurationPage.swift:336",
       "anchor": "SettingsRowLabel(title: NativeText(\"已加载插件\", \"Loaded Plugins\"), icon: \"puzzlepiec",
       "extraction": "syntax"
     },
@@ -836,7 +836,7 @@
       ],
       "data": [
         {
-          "renders": "untitled section at 16 | untitled section at 25 | 本机管理范围 | iPhone Worker 限制 | 工具 | untitled section at 137 | untitled section at 176 | 新会话默认权限 | 实验插件 | untitled section at 325 | untitled section at 347",
+          "renders": "untitled section at 16 | untitled section at 25 | 本机管理范围 | iPhone Worker 限制 | 工具 | untitled section at 137 | untitled section at 176 | 新会话默认权限 | 实验插件 | untitled section at 328 | untitled section at 350",
           "when": null,
           "provenance": "NativeConfigurationPage.swift:6",
           "anchor": "struct NativeConfigurationPage: View {",
@@ -853,7 +853,7 @@
         {
           "renders": "暂时读不到插件状态。",
           "when": "model.inventoryError != nil",
-          "provenance": "NativeConfigurationPage.swift:327",
+          "provenance": "NativeConfigurationPage.swift:330",
           "anchor": "Text(NativeText(\"暂时读不到插件状态。\", \"Plugin status is temporarily unavailable.\"))"
         }
       ],
@@ -868,7 +868,7 @@
         {
           "renders": "只影响之后新开的会话。正在聊的这个,权限在输入框里的盾牌菜单里改。",
           "when": null,
-          "provenance": "NativeConfigurationPage.swift:291",
+          "provenance": "NativeConfigurationPage.swift:294",
           "anchor": "Text(NativeText(\"只影响之后新开的会话。正在聊的这个,权限在输入框里的盾牌菜单里改。\", \"Only new sessions are affe"
         },
         {
