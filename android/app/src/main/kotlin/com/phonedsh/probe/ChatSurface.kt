@@ -391,6 +391,155 @@ internal fun turnNode(chatId: String, turnId: String): UiStateNode = UiStateNode
     seq = 0,
 )
 
+/**
+ * Applies one Worker event to the chat state.
+ *
+ * This is the state half of `onChatEvent`, kept here so the JVM suite can drive
+ * the real projection (TURN_STARTED -> TURN node, tool rows, turn-end STATUS)
+ * without an Android ViewModel.
+ */
+internal fun ChatUiState.applyChatEvent(chatId: String, event: HostEvent, ordinal: Int): ChatUiState {
+    if (this.chatId != chatId) return this
+    if (event.kind == HostEventKind.TURN_STARTED) {
+        val id = turnIdOf(event.turnId)
+        val turn = turnNode(chatId, id).copy(props = JsonObject(mapOf(
+            "startedAtMs" to (event.raw["time"] ?: com.phonedsh.agentcore.JsonNull),
+        )))
+        return copy(activeTurnNodeId = id,
+            nodes = nodes.filterNot { it.nodeID == turn.nodeID } + turn)
+    }
+    val node = chatNodeOf(chatId, turnToken, event, ordinal) ?: return this
+    if (nodes.any { it.nodeID == node.nodeID }) return this
+    return copy(
+        nodes = nodes + node,
+        reasoningStreaming = if (event.kind == HostEventKind.ASSISTANT_MESSAGE) "" else reasoningStreaming,
+    )
+}
+
+/**
+ * Closes every turn that has no turn-end, without guessing which one was live.
+ *
+ * A stopped turn is still in [nodes] as a `TURN` node; the transcript only
+ * leaves RUNNING when a matching turn-end STATUS closes it. The previous stop
+ * path wrote an end for `turnIdOf("stopped")`, so the real turn stayed open
+ * forever, including across a cold start. This adds one `cancelled` end per open
+ * turn, using that turn's own nodeID/turnID/child seq.
+ *
+ * @param activeTurnNodeId the in-flight id when the state still has one; it is
+ *   closed too even if its TURN node was not stored yet. Never the only source:
+ *   the nodes are authoritative.
+ * @param fallbackTurnId the id of a turn the Worker had not announced; used only
+ *   when no TURN node is open, so a stop before TURN_STARTED still shows one
+ *   cancelled row and cannot come back as RUNNING.
+ */
+internal fun closeOpenTurns(
+    chatId: String,
+    nodes: List<UiStateNode>,
+    activeTurnNodeId: String?,
+    fallbackTurnId: String?,
+    atMs: Long,
+): List<UiStateNode> {
+    val ended = nodes.asSequence()
+        .filter {
+            it.kind == UiStateKind.STATUS &&
+                (it.props["reason"] as? JsonString)?.value in CLOSING_TURN_REASONS
+        }
+        .map { it.nodeID.substringBefore("/event/") }
+        .toSet()
+    val open = LinkedHashSet<String>()
+    nodes.filter { it.kind == UiStateKind.TURN }.forEach { turn ->
+        if (turn.nodeID !in ended) open += turn.nodeID
+    }
+    activeTurnNodeId?.takeIf { it.isNotBlank() }?.let { id ->
+        val turnNodeID = "session/$chatId/turn/$id"
+        if (turnNodeID !in ended) open += turnNodeID
+    }
+    if (open.isEmpty() && fallbackTurnId != null) {
+        val turnNodeID = "session/$chatId/turn/$fallbackTurnId"
+        if (turnNodeID !in ended) open += turnNodeID
+    }
+    if (open.isEmpty()) return nodes
+    val result = nodes.toMutableList()
+    for (turnNodeID in open) {
+        val turnId = turnNodeID.substringAfterLast("/turn/")
+        // The old stop path also left a synthetic `<token>-stopped` cancelled row
+        // next to the still-open real turn. Now that the real turn gets its own
+        // end, drop that orphan so the person sees one 回合已取消, not two.
+        val token = turnId.substringBeforeLast("-turn-", missingDelimiterValue = "")
+        if (token.isNotEmpty()) {
+            val orphan = "session/$chatId/turn/$token-stopped/"
+            result.removeAll { node ->
+                node.kind == UiStateKind.STATUS &&
+                    (node.props["reason"] as? JsonString)?.value == STOPPED_REASON &&
+                    node.nodeID.startsWith(orphan)
+            }
+        }
+        var seq = ((result.filter { it.nodeID == turnNodeID || it.nodeID.startsWith("$turnNodeID/") }
+            .maxOfOrNull { it.seq } ?: -1) + 1).coerceAtLeast(0)
+        while (result.any { it.nodeID == "$turnNodeID/event/$seq/turn-end" }) seq++
+        result += UiStateNode(
+            kind = UiStateKind.STATUS,
+            nodeID = "$turnNodeID/event/$seq/turn-end",
+            parentID = turnNodeID,
+            sessionID = chatId,
+            turnID = turnId,
+            seq = seq,
+            text = STOPPED_REASON,
+            props = JsonObject(
+                linkedMapOf(
+                    "reason" to JsonString(STOPPED_REASON),
+                    "detail" to JsonString(""),
+                    "endedAtMs" to com.phonedsh.agentcore.JsonNumber(atMs.toString()),
+                ),
+            ),
+        )
+    }
+    return result
+}
+
+/** The chat state after the person pressed 停止. */
+internal fun ChatUiState.markStopped(atMs: Long): ChatUiState = copy(
+    running = false,
+    streaming = "",
+    reasoningStreaming = "",
+    activeTurnNodeId = null,
+    pendingNodes = emptyList(),
+    nodes = closeOpenTurns(
+        chatId = chatId,
+        nodes = nodes,
+        activeTurnNodeId = activeTurnNodeId,
+        fallbackTurnId = turnIdOf("stopped"),
+        atMs = atMs,
+    ),
+    updatedAtMs = atMs,
+)
+
+/** A stored chat cannot reopen a turn this process is not running. */
+internal fun ChatRecord.closeStaleTurns(): ChatRecord {
+    val closed = closeOpenTurns(
+        chatId = id,
+        nodes = nodes,
+        activeTurnNodeId = null,
+        fallbackTurnId = null,
+        atMs = updatedAtMs,
+    )
+    return if (closed == nodes) this else copy(nodes = closed)
+}
+
+/**
+ * Repairs and persists one stored chat's stale open turns.
+ *
+ * [liveTurn] is the one exception: the conversation this process is really
+ * running keeps its open turn untouched. Every other record is safe to close,
+ * so a conversation damaged by the old stop path opens IDLE after an update.
+ */
+internal fun ChatSessionStore.repairStaleChatTurns(record: ChatRecord, liveTurn: Boolean): ChatRecord {
+    if (liveTurn) return record
+    val repaired = record.closeStaleTurns()
+    if (repaired.nodes != record.nodes) save(repaired)
+    return repaired
+}
+
 /** The transient fail-loud banner of a send failure; never persisted. */
 private fun bannerNode(chatId: String, message: String, retryable: Boolean): UiStateNode = UiStateNode(
     kind = UiStateKind.FAIL_LOUD_BANNER,
@@ -678,3 +827,11 @@ internal const val PENDING_CHAT_ID: String = "pending"
 
 /** The one turn-end reason that closes a turn without a visible row. */
 private const val COMPLETED: String = "completed"
+
+/** The status reason this lane writes when the person stops a turn. */
+private const val STOPPED_REASON: String = "cancelled"
+
+/** The reasons a STATUS row closes its turn (mirrors ChatScreenState). */
+private val CLOSING_TURN_REASONS = setOf(
+    "completed", "error", "failed", "cancelled", "aborted", "interrupted", "max_tokens", "max-tokens",
+)
