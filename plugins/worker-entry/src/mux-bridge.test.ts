@@ -243,7 +243,7 @@ test('receive ends when the mux closes and still delivers queued frames first', 
   }
 })
 
-test('receive frames are canonical JSON and split at the 4 MiB API_RES bound', async () => {
+test('receive frames are JSON and split at the 4 MiB API_RES bound', async () => {
   const factory = createFakeFactory()
   const pair = connectPair()
   const bridge = new WorkerEntryMuxBridge({ createSession: factory.createSession })
@@ -278,7 +278,7 @@ test('receive frames are canonical JSON and split at the 4 MiB API_RES bound', a
   }
 })
 
-test('server frames are canonical JSON (sorted keys, no whitespace)', async () => {
+test('server frames are stable JSON (sorted keys, no whitespace)', async () => {
   const factory = createFakeFactory()
   const pair = connectPair()
   const bridge = new WorkerEntryMuxBridge({ createSession: factory.createSession })
@@ -306,7 +306,7 @@ test('server frames are canonical JSON (sorted keys, no whitespace)', async () =
   }
 })
 
-test('a jittered retry reaches the phone instead of aborting the turn', async () => {
+test('retry and business floats reach the phone unchanged instead of aborting the turn', async () => {
   // Field regression: one retry with a fractional wait used to make the whole
   // receive fail with
   //   API_ABORT reason=canonical JSON accepts integers only
@@ -386,23 +386,25 @@ test('a jittered retry reaches the phone instead of aborting the turn', async ()
         },
       },
     })
+    session.emit({ type: 'item', streamId: 'follow', value: { temperature: 0.7, tool: { ratio: 0.5, coords: [12.25, -3.75] } } })
     await settle()
     await collectRequest(pair, muxHead(MUX_A, 'close'))
-    // Without the projection this await rejects with a ChannelRequestError
+    // Without application JSON this await rejects with a ChannelRequestError
     // whose reason is 'canonical JSON accepts integers only'.
     const chunks = await receive
     assert.equal(statusOf(chunks), 200)
     const lines = linesOf(chunks)
-    assert.equal(lines.length, 2, 'both the attempt and the retry event reached the phone')
+    assert.equal(lines.length, 3, 'attempt, retry and business data reached the phone')
+    assert.deepEqual(JSON.parse(lines[2]!).value, { temperature: 0.7, tool: { ratio: 0.5, coords: [12.25, -3.75] } })
     const attempt = JSON.parse(lines[0]!)
     assert.equal(
       attempt.value.event.data.stream[0].chunk.reason.failure.providerRetryAfterMs,
-      1005,
-      'the failed attempt stream is rounded too',
+      1004.9999999999999,
+      'the failed attempt stream preserves the provider wait',
     )
     const retry = JSON.parse(lines[1]!)
-    assert.equal(retry.value.event.data.delayMs, 482, 'the wait is rounded to whole milliseconds')
-    for (const line of lines) assert.equal(canonicalStringify(JSON.parse(line)), line, 'still canonical JSON')
+    assert.equal(retry.value.event.data.delayMs, 481.7056, 'the wait keeps its precision')
+    for (const line of lines) assert.doesNotThrow(() => JSON.parse(line))
   } finally {
     dispose()
   }

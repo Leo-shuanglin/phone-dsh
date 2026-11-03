@@ -363,6 +363,7 @@ final class ChatModel {
     private(set) var goal: HarnessGoal?
     private(set) var busy = false
     private(set) var turnRunning = false
+    private(set) var eventStreamRecovering = false
     private(set) var userFacingError: String?
     /// Non-secret, user-facing explanation of the last search launch decision.
     /// A normal first launch without a model service leaves this nil.
@@ -536,7 +537,7 @@ final class ChatModel {
     private var autoRecoveryAttempted = false
     private var foregroundResumeRequested = false
     private var backgroundParkRequested = false
-    var canSend: Bool { harness != nil && sessionID != nil && transcriptReady && !busy && !parked && !hostLifecycleTransition }
+    var canSend: Bool { harness != nil && sessionID != nil && transcriptReady && !eventStreamRecovering && !busy && !parked && !hostLifecycleTransition }
     var canStartBySending: Bool {
         ChatEngineLifecycle.canStartBySending(hostIsStopped: host == nil,
                                               busy: busy,
@@ -563,16 +564,17 @@ final class ChatModel {
     }
 
     var displayStatus: String {
+        if eventStreamRecovering { return "重新同步中" }
         if parked { return "已暂停" }
         if host == nil { return "已停止" }
         if userFacingError != nil || hostState.lowercased().contains("fail") { return "失败" }
         if busy || hostLifecycleTransition { return "处理中" }
         if pendingQuestion != nil || pendingPermission != nil { return "等待回复" }
         if turnRunning { return "运行中" }
-        if transcriptReady { return "运行中" }
+        if transcriptReady { return "就绪" }
         return "未连接"
     }
-    var canSteer: Bool { harness != nil && sessionID != nil && transcriptReady && turnRunning && !busy && !parked && !hostLifecycleTransition }
+    var canSteer: Bool { harness != nil && sessionID != nil && transcriptReady && !eventStreamRecovering && turnRunning && !busy && !parked && !hostLifecycleTransition }
     private var pumpTask: Task<Void, Never>?
     private var hostEventTask: Task<Void, Never>?
     private var lastSeq: UInt64?
@@ -1394,6 +1396,7 @@ final class ChatModel {
         busy = true
         defer { busy = false }
         pumpTask?.cancel(); pumpTask = nil
+        eventStreamRecovering = false
         if let harness, let sessionID { await harness.closeSession(sessionID) }
         harness = nil; sessionID = nil
         transcriptReady = false
@@ -1423,6 +1426,7 @@ final class ChatModel {
         contextPressure = nil
         contextBreakdown = nil
         projectionValues = nil
+        eventStreamRecovering = false
         activeTurn = nil
         activeStep = nil
         activeTurnStartedAt = nil
@@ -1703,6 +1707,7 @@ final class ChatModel {
     private func hostDidFail(_ failed: PhoneDSHHost) {
         guard host === failed else { return }
         pumpTask?.cancel(); pumpTask = nil
+        eventStreamRecovering = false
         hostEventTask?.cancel(); hostEventTask = nil
         host = nil
         failedHost = failed
@@ -1961,7 +1966,8 @@ final class ChatModel {
     /// Reads DSH's durable event log directly so user prompts, which are not
     /// projected by AgentHarness.events, appear in their original position.
     private func loadSessionHistory(sessionID: String,
-                                   transport: any DSHRemoteTransport) async throws -> SessionHistory {
+                                   transport: any DSHRemoteTransport,
+                                   requireRunningState: Bool = false) async throws -> SessionHistory {
         let mux = try await transport.openMux()
         let streamID = "phone-chat-history-\(UUID().uuidString)"
         let cursor: Int
@@ -2000,8 +2006,16 @@ final class ChatModel {
             ? UInt64(cursor + 1) * DSHEventMapper.partsPerEvent - 1
             : nil
         let running: Bool?
-        if let sessions = try? await transport.call("session/list", args: .object([:])),
-           let row = sessions["items"]?.arrayValue?.first(where: { $0["sessionId"]?.stringValue == sessionID }) {
+        if requireRunningState {
+            let sessions = try await transport.call("session/list", args: .object([:]))
+            guard let confirmed = sessions["items"]?.arrayValue?.first(where: {
+                $0["sessionId"]?.stringValue == sessionID
+            })?["running"]?.boolValue else {
+                throw PhoneDSHError.invalidResponse("session running state is unavailable")
+            }
+            running = confirmed
+        } else if let sessions = try? await transport.call("session/list", args: .object([:])),
+                  let row = sessions["items"]?.arrayValue?.first(where: { $0["sessionId"]?.stringValue == sessionID }) {
             running = row["running"]?.boolValue
         } else { running = nil }
         return SessionHistory(items: Self.transcriptItems(from: records, sessionID: sessionID), after: after,
@@ -2333,25 +2347,68 @@ final class ChatModel {
 
     private func startPump(harness: any AgentHarness, sessionID: String, after initialSeq: UInt64? = nil) {
         pumpTask?.cancel()
+        eventStreamRecovering = false
         pumpTask = Task { [weak self] in
-            var after = initialSeq
-            while !Task.isCancelled {
-                do {
-                    for try await event in harness.events(sessionID: sessionID, after: after) {
-                        guard !Task.isCancelled, let self, self.sessionID == sessionID else { break }
-                        if let seq = event.seq, let current = after, seq <= current { continue }
-                        if let seq = event.seq { after = seq }
-                        self.handle(event)
-                        if event.seq != nil { self.scheduleTrajectoryRefresh(sessionID: sessionID) }
-                    }
-                } catch {
-                    guard !Task.isCancelled, let self, self.sessionID == sessionID else { break }
-                    self.reportError("Event stream interrupted: \(error)")
-                }
-                if Task.isCancelled { break }
-                try? await Task.sleep(for: .milliseconds(300))
+            await ChatEventPump.run(
+                after: initialSeq,
+                isCurrent: { self?.sessionID == sessionID },
+                events: { harness.events(sessionID: sessionID, after: $0) },
+                synchronize: { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    return try await self.synchronizeInterruptedSession(sessionID: sessionID)
+                },
+                handle: { [weak self] event in
+                    self?.handle(event)
+                    if event.seq != nil { self?.scheduleTrajectoryRefresh(sessionID: sessionID) }
+                },
+                interrupted: { [weak self] error in
+                    guard let self else { return }
+                    self.eventStreamRecovering = true
+                    self.statusLine = "事件流中断，正在重新同步会话"
+                    self.appendStatus("Event stream interrupted: \(error)")
+                },
+                recovered: { [weak self] in
+                    guard let self else { return }
+                    self.eventStreamRecovering = false
+                    self.statusLine = self.turnRunning ? "会话已同步，任务仍在运行" : "会话已同步，任务已结束"
+                })
+        }
+    }
+
+    private func synchronizeInterruptedSession(sessionID: String) async throws -> UInt64? {
+        let transport = try await transportForManagement()
+        let history = try await loadSessionHistory(sessionID: sessionID, transport: transport,
+                                                   requireRunningState: true)
+        try Task.checkCancellation()
+        guard self.sessionID == sessionID else { throw CancellationError() }
+        items = history.items
+        turnStartTimes = history.turnFacts.starts
+        turnEndReasons = history.turnFacts.endReasons
+        turnEndTimes = history.turnFacts.ends
+        transcriptHasMore = history.hasMore
+        transcriptBeforeSeq = history.beforeSeq
+        transcriptThroughSeq = history.throughSeq
+        isShowingCachedTranscript = false
+        lastSeq = history.after
+        turnRunning = history.turnRunning
+        activeTurn = history.turnRunning ? history.turnFacts.starts.keys.max() : nil
+        activeStep = nil
+        activeTurnStartedAt = activeTurn.flatMap { history.turnFacts.starts[$0] }
+        if !history.turnRunning {
+            finishStreamingAssistant()
+            finishStreamingReasoning()
+            clearQueueLines()
+            pendingQuestion = nil
+            pendingPermission = nil
+            for index in items.indices where items[index].toolState == .running {
+                items[index].toolState = .stopped
             }
         }
+        syncIdleTimer()
+        persistTranscriptSnapshot()
+        scheduleNativeMetricsRefresh()
+        if !turnRunning, keepingAlive { Task { await self.finishBackgroundKeepAlive() } }
+        return history.after
     }
 
     private func handle(_ event: HarnessEvent) {

@@ -194,6 +194,36 @@ final class ChannelDSHTransportTests: XCTestCase {
         await mux.close()
     }
 
+    func testMuxPreservesFractionalBusinessDataAcrossSplitResponseChunks() async throws {
+        let frame = JSONValue.object([
+            "type": .string("item"), "streamId": .string("follow"),
+            "value": .object([
+                "delayMs": .number(481.7056), "temperature": .number(0.7),
+                "coordinates": .array([.number(12.25), .number(-3.75)]),
+            ]),
+        ])
+        var body = try frame.encoded()
+        body.append(0x0A)
+        let split = body.count / 2
+        let channel = FakeChannel { head, _ in
+            if head.headers[PhoneDSHMuxProtocol.operationHeader] == PhoneDSHMuxProtocol.receiveOperation {
+                return [.response(reqID: 1, status: 200,
+                                  headers: ["content-type": PhoneDSHMuxProtocol.ndjsonContentType],
+                                  body: body.prefix(split)),
+                        .response(reqID: 1, status: nil, headers: [:], body: body.suffix(from: split)),
+                        .end(reqID: 1)]
+            }
+            return Self.responseEvents(status: 204, body: Data())
+        }
+        let transport = ChannelDSHTransport(channelProvider: { _ in channel })
+        let mux = try await transport.openMux()
+        try await mux.send(frame)
+        XCTAssertEqual(try JSONValue.parse(try XCTUnwrap(channel.requests.first).body), frame)
+        let received = try await mux.receive()
+        XCTAssertEqual(received, frame)
+        await mux.close()
+    }
+
     func testMuxReceiveReturnsNilOnConnectionClosed() async throws {
         let channel = FakeChannel { _, _ in
             [.abort(reqID: 1, reason: "connection_closed")]

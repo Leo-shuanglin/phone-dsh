@@ -137,7 +137,7 @@ The response is complete.
 Terminates an in-flight request. The frame is idempotent after termination. When a connection dies, each side aborts its own in-flight requests with `{"reason":"connection_closed"}`; that frame is delivered to the local handler and is never written to the dead socket.
 ## 4. JSON payloads
 
-All JSON payloads are canonical JSON (§5). Field tables are normative; matching schemas are in
+Channel JSON payloads and API heads are canonical JSON (§5). API_REQ/API_RES bodies (§3.7–§3.8) are opaque bytes, not channel JSON payloads. In particular, `/api/remote.mux` bodies carry application JSON/NDJSON and preserve finite fractional numbers without rounding. Field tables are normative; matching schemas are in
 `schema/`. Decoders MAY ignore unknown members.
 ### 4.1 HELLO (`0x01`, both)
 

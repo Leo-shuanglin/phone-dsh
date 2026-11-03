@@ -9,9 +9,9 @@
  *   x-pdsh-mux-id: <32 lowercase hex>
  *   x-pdsh-mux-op: send | receive | close
  *
- * `send` carries one canonical JSON mux frame (the same client frames the DSH
+ * `send` carries one JSON mux frame (the same client frames the DSH
  * gateway's `RemoteStreamMuxServer` consumes); `receive` answers a stream of
- * newline-delimited canonical JSON mux frames and ends when the logical mux
+ * newline-delimited JSON mux frames and ends when the logical mux
  * closes; `close` closes the session.
  *
  * The real mux endpoint is an HTTP upgrade route and the Worker runtime's `ws`
@@ -22,22 +22,16 @@
  * (see `./mux-tunnel.ts`), which is the handler the WebSocket mux server calls
  * after decoding a frame.
  *
- * Every response body frame is canonical JSON (D5) and receive chunks are at
- * most 4 MiB, the API_RES body limit of channel.md §3.8. Canonical JSON keeps
- * refusing floats; the one place a DSH value is normalized for it is the phone
- * mux projection (`./mux-projection.ts`), which rounds the jittered `llm/retry`
- * waits and the provider retry-after embedded in a recorded failure to whole
- * milliseconds, and logs every round it performs.
+ * Mux frames are application JSON inside the opaque API_RES body (§3.8),
+ * not channel control JSON (§5). Finite fractional values are preserved,
+ * including retry timings, sampling configuration and structured tool data.
+ * Receive chunks are at most 4 MiB, the API_RES body limit.
  * @module @phone-dsh/dsh-worker-entry/mux-bridge
  */
 import { MAX_API_BODY_BYTES } from '../../channel/src/api-frames.ts'
 import { decodeUtf8, encodeUtf8 } from '../../channel/src/bytes.ts'
 import { canonicalStringify } from '../../channel/src/canonical-json.ts'
-import {
-  projectMuxServerFrame,
-  type MuxProjectionReport,
-  type MuxProjectionRounding,
-} from './mux-projection.ts'
+import { stringifyMuxJson } from './mux-json.ts'
 import type { WorkerEntryResponseSink, WorkerEntrySyntheticRequest } from './entry.ts'
 
 /** Path of the DSH Remote stream mux WebSocket. */
@@ -330,7 +324,7 @@ export class WorkerEntryMuxBridge {
 }
 
 /**
- * Validate one canonical JSON mux client frame against the DSH stream
+ * Validate one application JSON mux client frame against the DSH stream
  * protocol's exact-key rules (`stream-protocol.ts`).
  * @param text - Request body of a `send` operation.
  * @returns The validated frame.
@@ -365,32 +359,14 @@ export function parseMuxClientFrame(text: string): WorkerEntryMuxClientFrame {
   throw new Error('the mux frame is not a legal open, item, end or cancel frame')
 }
 
-/**
- * Encode one server frame as a canonical newline-delimited record.
- *
- * The frame passes through the phone mux projection first (see
- * `./mux-projection.ts`): DSH's jittered `llm/retry` waits are rounded to whole
- * milliseconds so the canonical encoder can carry them, while canonical JSON
- * itself keeps refusing floats. The projection is the only place that rounds —
- * it reads DSH's original number, so pre-rounding a wait here would put the
- * same integer on the wire but hide the round from `report`, and the console
- * log is the only evidence that the host rewrote a model event. `report`
- * therefore observes every round that changes a value; the receive path passes
- * a console logger.
- */
-export function encodeMuxFrameLine(
-  frame: WorkerEntryMuxServerFrame,
-  report?: MuxProjectionReport,
-): Uint8Array {
-  return encodeUtf8(`${canonicalStringify(projectMuxServerFrame(muxWireFrame(frame), report))}\n`)
+/** Encode one application JSON frame without rounding its business values. */
+export function encodeMuxFrameLine(frame: WorkerEntryMuxServerFrame): Uint8Array {
+  return encodeUtf8(`${stringifyMuxJson(muxWireFrame(frame))}\n`)
 }
 
 function muxWireFrame(frame: WorkerEntryMuxServerFrame): Record<string, unknown> {
   switch (frame.type) {
     case 'item':
-      // The value reaches the projection unmodified: rounding belongs to
-      // `./mux-projection.ts` alone, which needs DSH's original number to
-      // report the round (see `encodeMuxFrameLine`).
       return frame.value !== undefined
         ? { type: frame.type, streamId: frame.streamId, value: frame.value }
         : { type: frame.type, streamId: frame.streamId }
@@ -410,29 +386,13 @@ function muxWireFrame(frame: WorkerEntryMuxServerFrame): Record<string, unknown>
 }
 
 function writeMuxFrame(sink: WorkerEntryResponseSink, frame: WorkerEntryMuxServerFrame): void {
-  const bytes = encodeMuxFrameLine(frame, rounding => { reportMuxRounding(frame.streamId, rounding) })
+  const bytes = encodeMuxFrameLine(frame)
   let offset = 0
   while (offset < bytes.byteLength) {
     const end = Math.min(offset + MAX_API_BODY_BYTES, bytes.byteLength)
     sink.chunk(bytes.subarray(offset, end))
     offset = end
   }
-}
-
-/**
- * Report one projection round on the Worker console stream.
- *
- * The log names only the event type, the field and both millisecond values —
- * never the event payload — so it can never quote session content. It fires
- * only when the round actually changed the value: an already-integral wait
- * (a `retry-after: 2` header becomes 2000) stays silent because nothing was
- * rewritten, while `481.7056 -> 482` is visible.
- */
-function reportMuxRounding(streamId: string, rounding: MuxProjectionRounding): void {
-  console.info(
-    `worker entry: mux projection rounded ${rounding.eventType} ${rounding.field} `
-    + `${String(rounding.from)} -> ${String(rounding.to)} ms (stream ${streamId})`,
-  )
 }
 
 function respondOk(sink: WorkerEntryResponseSink): void {
