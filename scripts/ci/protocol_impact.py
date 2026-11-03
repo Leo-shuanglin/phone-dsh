@@ -77,6 +77,13 @@ def triggered_contracts(root, base, contracts, paths):
     return hits
 
 
+def none_reason(value):
+    match = re.fullmatch(r'none\s*(?:—|–|-|:)\s*(.+)', value, re.IGNORECASE)
+    if not match or not any(c.isalnum() for c in match[1]):
+        raise SpecError('none requires a reason')
+    return match[1].strip()
+
+
 def check_declaration(body, triggered, known):
     # Accept the inline-code label in the repository PR template as well as plain text.
     lines = re.findall(r'^[ \t]*`?Protocol impact:`?[ \t]*(.*?)[ \t]*$', body, re.MULTILINE | re.IGNORECASE)
@@ -84,19 +91,35 @@ def check_declaration(body, triggered, known):
         raise SpecError('exactly one Protocol impact: line is required')
     value = lines[0].strip('` ')
     if re.match(r'^none\b', value, re.IGNORECASE):
-        match = re.fullmatch(r'none\s*(?:—|–|-|:)\s*(.+)', value, re.IGNORECASE)
-        if not match or not any(c.isalnum() for c in match[1]) or re.search(r'\bP\d{2}\b', match[1]):
-            raise SpecError('none requires a reason and cannot be mixed with contract IDs')
-        return 'none — ' + match[1]
-    if re.search(r'\bnone\b', value, re.IGNORECASE):
-        raise SpecError('none cannot be mixed with contract IDs')
-    declared = set(re.findall(r'\bP\d{2}\b', value))
-    if not declared or declared - set(known):
-        raise SpecError('declaration has no valid IDs or contains unknown IDs')
-    missing = set(triggered) - declared
+        if triggered:
+            raise SpecError('global none cannot cover triggered IDs: ' + ', '.join(sorted(triggered)))
+        # Semicolons delimit declarations, never part of a global-none reason.
+        if ';' in value:
+            raise SpecError('global none cannot be mixed with contract declarations')
+        return 'none — ' + none_reason(value)
+    declared = {}
+    for clause in value.split(';'):
+        clause = clause.strip()
+        scoped_none = re.fullmatch(r'(P\d{2})\s*:\s*(none\b.*)', clause, re.IGNORECASE)
+        if scoped_none:
+            items = [scoped_none[1].upper()]
+            description = 'none — ' + none_reason(scoped_none[2])
+        elif re.fullmatch(r'P\d{2}(?:\s*,\s*P\d{2})*', clause):
+            items = [item.strip() for item in clause.split(',')]
+            description = 'affected'
+        else:
+            raise SpecError('invalid impact clause; use P01, P02; P09: none — reason')
+        for ident in items:
+            if ident not in known:
+                raise SpecError('unknown contract ID ' + ident)
+            if ident in declared:
+                raise SpecError('duplicate/contradictory declaration for ' + ident)
+            declared[ident] = description
+    missing = set(triggered) - set(declared)
     if missing:
         raise SpecError('Protocol impact missing ' + ', '.join(sorted(missing)))
-    return ', '.join(sorted(declared))
+    return '; '.join(ident if description == 'affected' else ident + ': ' + description
+                     for ident, description in sorted(declared.items()))
 
 
 def main(argv=None):

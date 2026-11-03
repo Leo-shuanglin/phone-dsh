@@ -97,10 +97,12 @@ python3 scripts/ci/protocol_impact.py --base origin/main --body-file pr-body.md
 The base-to-worktree diff includes staged/unstaged/untracked files and both paths
 of renames. Conditional bridge triggers inspect both old and new content, so
 removing a call is still covered. A single `Protocol impact: P01, P02` line must
-cover all triggered IDs. `Protocol impact: none — reason` is an explicit justified
-no-behaviour-change declaration permitted by baseline section 4; the tool cannot
-judge whether that reason is truthful. Missing lines/IDs, unknown IDs, bare none
-and contradictory declarations fail. Tests run in `phone-gate-contracts`; this
+cover all triggered IDs. `Protocol impact: P01; P09: none — UI comments only`
+declares P01 affected and justifies no impact for P09 only. Every triggered ID must
+have its own declaration; IDs inside reasons do not count. A global
+`Protocol impact: none — reason` is accepted only with zero triggered IDs. The tool
+cannot judge whether a reason is truthful. Missing lines/IDs, unknown IDs, bare
+none and duplicate/contradictory declarations fail. Tests run in `phone-gate-contracts`; this
 checker is local-only until a caller supplies a real PR body. No hosted workflow
 is added.
 

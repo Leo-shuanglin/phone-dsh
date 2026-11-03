@@ -5,7 +5,8 @@
   implementations, compatibility policy, existing checks and known gaps. Protocol-impacting
   changes record the delta and producer/consumer coordination using
   [the change template](docs/protocol-change-template.md) in the task or PR. Behaviour-preserving
-  refactors only need `Protocol impact: none` with a reason. Target/draft clauses are not
+  refactors must justify each triggered ID with `ID: none — reason`; a global
+  `Protocol impact: none — reason` is allowed only when no IDs trigger. Target/draft clauses are not
   evidence that a feature is implemented.
 - **Zero DSH source patches.** The pinned DeepSeek Harness checkout is never modified or vendored
   (`scripts/ci/check.sh --only phone-no-dsh-patch` enforces that on the source tree). The image packer has one controlled

@@ -28,8 +28,11 @@ its **path → contract trigger table (§4)**. Quick guide:
 | a file another module, language, process or **older on-disk data** reads | a protocol — register it if it is not listed |
 
 - **Yes** → follow §3 below. Write `Protocol impact: P0x …` in the task/PR.
-- **No** (private refactor, identical observable behaviour) → write
-  `Protocol impact: none — <one-line reason>` and continue normally.
+- **No** (private refactor, identical observable behaviour) → name every triggered
+  ID with its own reason, e.g. `Protocol impact: P01; P09: none — UI comments only`.
+  Bare IDs declare impact; `P09: none — reason` justifies no impact for P09 only.
+  A global `Protocol impact: none — <reason>` is accepted only when no ID triggers.
+  Do not count an ID mentioned inside a reason as a declaration.
 - **Unsure** → treat it as yes. A wrong "none" is the failure this file prevents.
 
 ## 2. Non-negotiable rules
@@ -121,7 +124,7 @@ fallback, or platform-only branch in the meantime.
 
 ```
 Base / head:        <sha> / <sha>
-Protocol impact:    P0x, P0y | none — <reason>
+Protocol impact:    P01; P09: none — <P09-specific reason> | global none only if no IDs trigger
 Contract revision:  <sha or file@rev>
 Changed files:      <by end>
 Status per end:     implemented | partial | not started

@@ -48,6 +48,33 @@ class ImpactTests(unittest.TestCase):
         self.assertIn('missing P01', fail.stdout)
         self.assertEqual(self.run_check('Protocol impact: P01').returncode, 0)
 
+    def test_triggered_p09_cannot_use_global_none(self):
+        self.write('examples/probe-app/PhoneDSHProbe/review.swift', '// comment only\n')
+        fail = self.run_check('Protocol impact: none — comment refactor')
+        self.assertEqual(fail.returncode, 1, fail.stdout)
+        self.assertIn('global none cannot cover triggered IDs: P09', fail.stdout)
+        self.assertEqual(self.run_check('Protocol impact: P09: none — comment refactor').returncode, 0)
+
+    def test_per_id_affected_and_none_cover_every_trigger(self):
+        self.write('Sources/PhoneDSHWire/Frame.swift', '// changed\n')
+        self.write('examples/probe-app/PhoneDSHProbe/review.swift', '// comment only\n')
+        result = self.run_check('Protocol impact: P01; P09: none — UI comments only')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.run_check('Protocol impact: P09: none — UI comments only').returncode, 1)
+
+    def test_ids_in_none_reasons_do_not_count_as_declarations(self):
+        self.write('Sources/PhoneDSHWire/Frame.swift', '// changed\n')
+        fail = self.run_check('Protocol impact: P09: none — P01 is discussed here')
+        self.assertEqual(fail.returncode, 1, fail.stdout)
+        self.assertIn('missing P01', fail.stdout)
+
+    def test_scoped_none_requires_reason_and_cannot_conflict(self):
+        for value in ['P09: none', 'P09: none — ...', 'P01; P01: none — comments',
+                      'P09: none — comments; P09', 'P99: none — comments',
+                      'P01, P09: none — shared reason', 'P09: none — comments;']:
+            with self.subTest(value=value):
+                self.assertEqual(self.run_check('Protocol impact: ' + value).returncode, 1)
+
     def test_missing_line_fails(self):
         self.assertEqual(self.run_check('Only a description').returncode, 1)
 
@@ -60,8 +87,7 @@ class ImpactTests(unittest.TestCase):
         self.assertEqual(self.run_check('`Protocol impact:` none — docs only').returncode, 0)
 
     def test_unknown_or_contradictory_declaration_fails(self):
-        for body in ['Protocol impact: P99', 'Protocol impact: none — P01',
-                     'Protocol impact: none — docs\nProtocol impact: P01',
+        for body in ['Protocol impact: P99', 'Protocol impact: none — docs\nProtocol impact: P01',
                      'Protocol impact: P01, none — docs', 'Protocol impact:\nP01']:
             self.assertEqual(self.run_check(body).returncode, 1)
 

@@ -2,7 +2,7 @@
 
 協調者在**任何依賴它的實作開始之前**填寫本單，它就是 [AGENTS.md](../AGENTS.md) §3.1 所說的
 contract freeze。放進任務或 PR 正文即可；跨多個 PR 的變更另存為 `docs/protocol-changes/<change-id>.md`
-並互相連結。無邊界行為變更的重構只寫 `Protocol impact: none — <理由>`，不填本單。
+並互相連結。無邊界行為變更的重構不填本單，但每個觸發 ID 仍須寫 `ID: none — <理由>`；只有零觸發可寫整體 `Protocol impact: none — <理由>`。
 
 ## 0. 摘要（機器可讀，保持這個格式）
 

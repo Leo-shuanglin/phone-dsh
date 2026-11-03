@@ -6,9 +6,13 @@ Concrete trigger, previous behaviour, and the resulting behaviour.
 
 <!-- Required. Match your diff against the path → contract table in spec/README.md §4. -->
 
-`Protocol impact:` P0x, P0y | none — <one-line reason>
+`Protocol impact:` P01; P09: none — <reason specific to P09>
 
-If not `none`:
+List every triggered ID: bare IDs declare impact; each `ID: none — reason` only
+justifies no impact for that ID. Use semicolons between clauses. A single global
+`Protocol impact: none — reason` is allowed only when no IDs trigger.
+
+For IDs declared as affected:
 
 - [ ] Change record (contract freeze) filled in here or linked:
       [template](https://github.com/launsion-boop/phone-dsh/blob/main/docs/protocol-change-template.md)
