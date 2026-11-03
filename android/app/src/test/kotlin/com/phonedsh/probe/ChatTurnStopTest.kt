@@ -7,11 +7,10 @@
 // `TURN` node stayed open. The composer therefore kept saying 排入下一轮 and the
 // record persisted that open node, which is why a cold start did not recover.
 //
-// These tests drive the production seams the ViewModel calls on stop and on
-// restore/open (`stopChatTurnState`, `persistStoppedChat`,
-// `repairStoredChatsForRestore`, `repairStoredChatForOpen`) plus the real
-// `ChatSessionStore`, so persistence, the in-flight send gate and the screen
-// projection are all exercised rather than a mock's internal flag.
+// These tests drive the production objects the ViewModel calls on stop and on
+// restore/open (`ChatStopWiring`, `ChatRecordRepair`) plus the real
+// `ChatSessionStore`, so the shared writer invocation, persistence, the
+// in-flight send gate and the screen projection are all exercised.
 package com.phonedsh.probe
 
 import com.phonedsh.agentcore.JsonObject
@@ -31,6 +30,7 @@ import com.phonedsh.ui.state.ChatRow
 import com.phonedsh.ui.state.ChatTurnState
 import com.phonedsh.ui.surface.ComposerMode
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -90,11 +90,16 @@ class ChatTurnStopTest {
                 nodes = ui.nodes,
             ),
         )
+        val chat = MutableStateFlow(ui)
         val turnRunning = AtomicBoolean(true)
-        val stopped = stopChatTurnState(ui, 1_790_000_000_000L, turnRunning)
-        persistStoppedChat(store, stopped)
+        val persistedIds = mutableListOf<String>()
+        val stopped = ChatStopWiring(chat, turnRunning) { id ->
+            persistedIds += id
+            persistThroughSharedWriter(store, chat, id)
+        }.stop(chatId, 1_790_000_000_000L)
         val after = screen(stopped.copy(draft = "继续"))
 
+        assertEquals("stop must invoke the one shared writer", listOf(chatId), persistedIds)
         assertFalse("停止 must clear the in-flight gate for the next send", turnRunning.get())
         assertEquals("the Worker session is kept for model context", "worker-1", stopped.workerSessionId)
         val persisted = requireNotNull(store.load(chatId))
@@ -124,10 +129,14 @@ class ChatTurnStopTest {
 
     @Test
     fun `stopping before TURN_STARTED is not RUNNING either`() {
+        val chat = MutableStateFlow(runningState())
         val turnRunning = AtomicBoolean(true)
-        val stopped = stopChatTurnState(runningState(), 1_790_000_000_001L, turnRunning)
+        val writerCalls = mutableListOf<String>()
+        val stopped = ChatStopWiring(chat, turnRunning) { writerCalls += it }
+            .stop(chatId, 1_790_000_000_001L)
         val after = screen(stopped.copy(draft = "继续"))
 
+        assertEquals(listOf(chatId), writerCalls)
         assertFalse(turnRunning.get())
         assertEquals("worker-1", stopped.workerSessionId)
         assertNotEquals(ChatPhase.RUNNING, after.phase)
@@ -186,13 +195,11 @@ class ChatTurnStopTest {
         val loaded = requireNotNull(store.load(chatId))
         assertEquals(ChatPhase.RUNNING, screen(loaded.toUiState().copy(running = true)).phase)
 
-        val restored = repairStoredChatsForRestore(
-            store = store,
+        val repaired = ChatRecordRepair(store).restore(
             records = listOf(loaded),
             liveChatId = "",
             turnRunning = false,
-        )
-        val repaired = restored.single()
+        ).single()
         val persisted = requireNotNull(store.load(chatId))
 
         assertNotEquals("the repair must be written back", loaded.nodes, persisted.nodes)
@@ -225,8 +232,7 @@ class ChatTurnStopTest {
         )
         val loaded = requireNotNull(store.load(chatId))
 
-        val untouched = repairStoredChatsForRestore(
-            store = store,
+        val untouched = ChatRecordRepair(store).restore(
             records = listOf(loaded),
             liveChatId = chatId,
             turnRunning = true,
@@ -245,7 +251,8 @@ class ChatTurnStopTest {
             event("""{"type":"turn/start","seq":1,"data":{"turn":1}}"""),
             0,
         )
-        val stopped = stopChatTurnState(ui, 1_790_000_000_002L, AtomicBoolean(true))
+        val chat = MutableStateFlow(ui)
+        val stopped = ChatStopWiring(chat, AtomicBoolean(true)) {}.stop(chatId, 1_790_000_000_002L)
         val lateStart = event("""{"type":"turn/start","seq":2,"data":{"turn":2}}""")
 
         // The state transition itself rejects it; no stopChat re-entry is needed.
@@ -294,8 +301,7 @@ class ChatTurnStopTest {
             requireNotNull(store.load(liveId)),
         )
 
-        val restored = repairStoredChatsForRestore(
-            store = store,
+        val restored = ChatRecordRepair(store).restore(
             records = records,
             liveChatId = liveId,
             turnRunning = true,
@@ -309,6 +315,35 @@ class ChatTurnStopTest {
         assertEquals(ChatPhase.RUNNING, screen(untouched.toUiState().copy(running = true)).phase)
         assertEquals(repaired.nodes, requireNotNull(store.load(damagedId)).nodes)
         assertEquals(untouched.nodes, requireNotNull(store.load(liveId)).nodes)
+    }
+
+    @Test
+    fun `stop does not overwrite a rename committed before it`() {
+        val store = store()
+        val openTurn = turnNode(chatId, realTurnId)
+        store.save(
+            ChatRecord(
+                id = chatId,
+                title = "改名后",
+                updatedAtMs = 10L,
+                workerSessionIds = listOf("worker-1"),
+                nodes = listOf(openTurn),
+            ),
+        )
+        val staleUi = runningState().copy(title = "旧标题", nodes = listOf(openTurn))
+        val chat = MutableStateFlow(staleUi)
+        val turnRunning = AtomicBoolean(true)
+
+        ChatStopWiring(chat, turnRunning) { id ->
+            // The shared writer (persistChat) reads the stored title; stop must
+            // not carry a stale UI title into the store.
+            persistThroughSharedWriter(store, chat, id)
+        }.stop(chatId, 1_790_000_000_003L)
+
+        val persisted = requireNotNull(store.load(chatId))
+        assertEquals("改名后", persisted.title)
+        assertTrue(persisted.nodes.any { it.kind == UiStateKind.STATUS && it.props.string("reason") == "cancelled" })
+        assertFalse(turnRunning.get())
     }
 
     @Test
@@ -339,8 +374,7 @@ class ChatTurnStopTest {
             ),
         )
         val loaded = requireNotNull(store.load(chatId))
-        val repaired = repairStoredChatForOpen(
-            store = store,
+        val repaired = ChatRecordRepair(store).open(
             record = loaded,
             liveChatId = "",
             turnRunning = false,
@@ -350,6 +384,27 @@ class ChatTurnStopTest {
         assertEquals(loaded.nodes, requireNotNull(store.load(chatId)).nodes)
         assertEquals(loaded.revision, requireNotNull(store.load(chatId)).revision)
         assertTrue(repaired.nodes.none { it.kind == UiStateKind.STATUS && it.props.string("reason") == "cancelled" })
+    }
+
+    /** Test-side implementation of the shared writer's contract: metadata from store. */
+    private fun persistThroughSharedWriter(
+        store: ChatSessionStore,
+        chat: MutableStateFlow<ChatUiState>,
+        id: String,
+    ) {
+        val latest = requireNotNull(store.load(id))
+        val ui = chat.value
+        val receipt = store.updateContent(
+            id = id,
+            title = latest.title,
+            updatedAtMs = ui.updatedAtMs,
+            workerSessionIds = latest.workerSessionIds + listOfNotNull(ui.workerSessionId),
+            nodes = ui.nodes,
+            requestId = com.phonedsh.ui.state.StateRequestId("test-stop:$id"),
+            expectedRevision = com.phonedsh.ui.state.StateRevision(latest.revision),
+        )
+        assertTrue(receipt.outcome is ChatWriteOutcome.Persisted)
+        assertEquals(ui.nodes, requireNotNull(store.load(id)).nodes)
     }
 
     private fun JsonObject.string(key: String): String? = (this[key] as? JsonString)?.value

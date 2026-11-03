@@ -564,33 +564,6 @@ internal fun ChatSessionStore.repairStaleChatTurns(record: ChatRecord, liveTurn:
     return repaired
 }
 
-/**
- * The open-session half of the stale-turn repair.
- *
- * The caller supplies the live conversation's id and whether a real turn is
- * running; only that exact record is left alone. This is the same decision
- * `openChatSession` and `restoreChatSessions` use.
- */
-internal fun repairStoredChatForOpen(
-    store: ChatSessionStore,
-    record: ChatRecord,
-    liveChatId: String,
-    turnRunning: Boolean,
-): ChatRecord = store.repairStaleChatTurns(
-    record,
-    liveTurn = turnRunning && liveChatId == record.id,
-)
-
-/** The restore half: repair every stored record except the one really running. */
-internal fun repairStoredChatsForRestore(
-    store: ChatSessionStore,
-    records: List<ChatRecord>,
-    liveChatId: String,
-    turnRunning: Boolean,
-): List<ChatRecord> = records.map { record ->
-    repairStoredChatForOpen(store, record, liveChatId, turnRunning)
-}
-
 /** The transient fail-loud banner of a send failure; never persisted. */
 private fun bannerNode(chatId: String, message: String, retryable: Boolean): UiStateNode = UiStateNode(
     kind = UiStateKind.FAIL_LOUD_BANNER,
