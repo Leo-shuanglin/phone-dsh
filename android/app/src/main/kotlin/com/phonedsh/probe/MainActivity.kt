@@ -459,20 +459,45 @@ private fun UbuntuApprovalDialog(
 ) {
     if (pending == null) return
     val request = pending.request
+    // The backend is the only fact that separates "a synthetic exit 0" from
+    // "a real local process ran". The title, the purpose and the residual-risk
+    // paragraph are therefore selected by it, never written once for both.
+    val real = request.backend != "mock"
     AlertDialog(
         onDismissRequest = { onAnswer(false) },
-        title = { Text("允许使用本地 Ubuntu 环境？") },
+        title = { Text(if (real) "允许使用真实本地 Ubuntu 环境？" else "允许使用本地 Ubuntu 环境（MOCK）？") },
         text = {
             Column {
                 Text("环境：${request.env}（backend=${request.backend}）")
                 request.label?.let { Text("用途：$it") }
                 Text("会话：${UbuntuApprovalGate.summary(request.sessionId)}")
                 Text("")
-                Text(
-                    "它能读到的只有工作区；job 期间三个内部根真的被 chmod 000 密封，" +
-                        "同 UID 的代码仍可 chmod 回来——但那会触发绊线（internalAccessObserved），" +
-                        "并在 job 结束时告诉你。",
-                )
+                if (real) {
+                    Text(
+                        "这是一个真实的本地 Linux 环境（Ubuntu Base 24.04.5 + Termux proot）。" +
+                            "首次使用会从 Ubuntu 官方镜像下载约 30 MB，解压后约占 150 MB 磁盘。" +
+                            "命令以 fakeroot 的 root 运行，exit code 是真实进程的。",
+                    )
+                    Text("")
+                    Text(
+                        "它不是安全沙箱：guest 与 App 同 UID，job 期间只有 " +
+                            "materialized/home/{sessions,storages,tool-journal} 被 chmod 000 密封；" +
+                            "rootfs、工作区、数据库和 API 密钥文件不在 seal 内。guest 共享本机网络，" +
+                            "执行的命令可以联网。同 UID 的代码仍可 chmod 回 seal 根，但那会触发绊线" +
+                            "（internalAccessObserved）并在 job 结束时告诉你。",
+                    )
+                } else {
+                    Text(
+                        "这是 MOCK 环境：不会启动真实 Linux，也不会下载 rootfs。" +
+                            "所有输出都是合成的（backend=mock），exit 0 不代表任何真实编译或运行。",
+                    )
+                    Text("")
+                    Text(
+                        "它能读到的只有工作区；job 期间三个内部根真的被 chmod 000 密封，" +
+                            "同 UID 的代码仍可 chmod 回来——但那会触发绊线（internalAccessObserved），" +
+                            "并在 job 结束时告诉你。",
+                    )
+                }
                 Text("")
                 Text("一次批准覆盖上面这个 session 内后续的 ubuntu run；停止本地引擎或 session 结束后失效。")
                 Text("摘要变了，就说明是另一个 session 在请求，不是刚才那个。")

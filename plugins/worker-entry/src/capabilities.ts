@@ -37,7 +37,7 @@ import { getCommandNames } from 'just-bash/browser'
 import {
   createWorkerCommands,
   getUbuntuCapability,
-  UBUNTU_DESCRIPTION,
+  ubuntuDescription,
   WORKER_EXECUTION_LIMITS,
 } from '../../shell-ext/src/index.ts'
 import type { UbuntuCapability } from '../../shell-ext/src/index.ts'
@@ -869,7 +869,7 @@ export function ubuntuCapability(
     env: capability.env,
     invocation: `${UBUNTU_COMMAND_NAME} run [--env <id>] [--cwd <path>] [--label <text>] [--timeout-ms <n>] -- <command...>`,
     commands: ['run', 'status', 'close', 'fetch'],
-    description: UBUNTU_DESCRIPTION,
+    description: ubuntuDescription(capability.backend),
     cost: [
       'starting the environment takes time, disk space and battery',
       "the first use in a session needs the user's approval; later jobs in the same session do not",

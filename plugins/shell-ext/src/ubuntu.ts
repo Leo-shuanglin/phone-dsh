@@ -120,58 +120,81 @@ interface UbuntuRefusal {
 }
 
 /**
- * The Agent-facing description.
+ * The Agent-facing description, selected by the backend the probe reported.
  *
  * This exact text is what the model reads twice: the boot-published
  * `/dsh/home/AGENTS.md` carries it in its `## Local Ubuntu environment`
- * section, and `ubuntu --help` prints it. One constant, one wording, so the two
- * surfaces cannot drift.
+ * section, and `ubuntu --help` prints it. One builder, one wording per backend,
+ * so a `backend=proot` build can never tell the model it is a mock and a
+ * `backend=mock` build keeps the warning that its exit 0 is synthetic.
  *
- * It has to carry the cost, because a description that only says "runs
- * commands" invites the Agent to use it as `bash` — which would start an
- * environment for `ls`. It also states the mock plainly: this build's adapter
- * runs no real command, and a synthetic exit 0 must not be reported as a
- * compile. And it states the approval gate as the build actually behaves: the
- * first `run` of a session asks the user, one approval covers that session, and
- * a refusal starts nothing.
+ * @param backend - the probe's backend string (`mock`, `proot`, or a future id).
+ * @returns the complete description for that backend.
  */
-export const UBUNTU_DESCRIPTION = [
-  '`ubuntu` runs **one command in a separate local Linux environment**. It is for tasks that need',
-  'a full Linux userland: a toolchain (`gcc`, `make`, ...), a package manager, or a program that',
-  'only runs on Linux.',
-  '',
-  '**It does not run DSH.** The turn, the context, the session and every file stay in DSH.',
-  'Ordinary work — `ls`, `cat`, `grep`, `git`, `python3`, reading, editing, searching — runs in the',
-  'existing `bash` and must not start this environment.',
-  '',
-  '**It costs.** Starting the environment takes time, uses disk and battery. **Close it when you',
-  'are done** (`ubuntu close`): files inside it are not kept, and the next use starts a fresh',
-  'environment and waits again.',
-  '',
-  '**The first `run` of a session asks the user to approve it, and this command waits for that',
-  'answer.** One approval covers every later `run` in the same session; ending the session (or the',
-  'user revoking it) ends the approval. **A refusal is a real failure**: the run comes back',
-  '`cause=approval_denied` and nothing starts. Do not retry a refused `run` in the same session —',
-  'ask the user why instead. An approval is permission to use the environment, not permission to use',
-  'it casually: the cost rules above still apply.',
-  '',
-  '```',
-  'ubuntu run [--env <id>] [--cwd <path>] [--label <text>] [--timeout-ms <n>] -- <command...>',
-  'ubuntu status <jobId>',
-  'ubuntu fetch <jobId> <name> [--offset <n>] [--path <path>]',
-  'ubuntu close',
-  '```',
-  '',
-  '`ubuntu fetch` writes one artifact into the workspace (`/dsh/workspace/.ubuntu/<jobId>/<name>`',
-  'by default). It fetches in 512 KiB chunks and writes with the same one-complete-write-plus-append',
-  'shape every Worker write uses. An artifact over the environment\'s declared `fileLimitBytes` — or',
-  'over this Worker\'s single-file budget — is refused with `VFS_REFUSED` / `file-too-large`, and',
-  'nothing is written: a refusal is never a truncated file.',
-  '',
-  '**This build is wired to a MOCK adapter.** The job protocol is real; the environment is not.',
-  'Its output says `backend=mock` and its exit code is synthetic, so a mock `exit=0` is not a real',
-  'compile or run — never present one as if it were.',
-].join('\n')
+export function ubuntuDescription(backend: string): string {
+  const mock = backend === 'mock'
+  return [
+    '`ubuntu` runs **one command in a separate local Linux environment**. It is for tasks that need',
+    'a full Linux userland: a toolchain (`gcc`, `make`, ...), a package manager, or a program that',
+    'only runs on Linux.',
+    '',
+    '**It does not run DSH.** The turn, the context, the session and every file stay in DSH.',
+    'Ordinary work — `ls`, `cat`, `grep`, `git`, `python3`, reading, editing, searching — runs in the',
+    'existing `bash` and must not start this environment.',
+    '',
+    '**It costs.** Starting the environment takes time, uses disk and battery. **Close it when you',
+    'are done** (`ubuntu close`).',
+    '',
+    '**The first `run` of a session asks the user to approve it, and this command waits for that',
+    'answer.** One approval covers every later `run` in the same session; ending the session (or the',
+    'user revoking it) ends the approval. **A refusal is a real failure**: the run comes back',
+    '`cause=approval_denied` and nothing starts. Do not retry a refused `run` in the same session —',
+    'ask the user why instead. An approval is permission to use the environment, not permission to use',
+    'it casually: the cost rules above still apply.',
+    '',
+    '```',
+    'ubuntu run [--env <id>] [--cwd <path>] [--label <text>] [--timeout-ms <n>] -- <command...>',
+    'ubuntu status <jobId>',
+    'ubuntu fetch <jobId> <name> [--offset <n>] [--path <path>]',
+    'ubuntu close',
+    '```',
+    '',
+    '`ubuntu fetch` writes one artifact into the workspace (`/dsh/workspace/.ubuntu/<jobId>/<name>`',
+    'by default). It fetches in 512 KiB chunks and writes with the same one-complete-write-plus-append',
+    'shape every Worker write uses. An artifact over the environment\'s declared `fileLimitBytes` — or',
+    'over this Worker\'s single-file budget — is refused with `VFS_REFUSED` / `file-too-large`, and',
+    'nothing is written: a refusal is never a truncated file.',
+    '',
+    ...mock
+      ? [
+          '**This build is wired to a MOCK adapter.** The job protocol is real; the environment is not.',
+          'Its output says `backend=mock` and its exit code is synthetic, so a mock `exit=0` is not a real',
+          'compile or run — never present one as if it were. Files inside it are not kept, and the next',
+          'use starts a fresh environment and waits again.',
+        ]
+      : [
+          '**This build runs commands in a real local Ubuntu environment (Ubuntu Base 24.04.5 under',
+          'Termux proot).** Its output says `backend=proot`; the exit code and both streams come from the',
+          'real guest process. The first use downloads the official Ubuntu tarball (~30 MB, SHA-256',
+          'pinned) and extracts roughly 150 MB of disk; `ubuntu close` stops every running job and keeps',
+          'that cached rootfs for the next run.',
+          '',
+          'The environment is not a security boundary: the guest shares this device\'s UID and network,',
+          'so a command that uses the network sends bytes off the device, and `/dsh/workspace` is the',
+          'only host tree bound into it. The seal covers the three internal roots for the duration of',
+          'each job, not the rootfs, the workspace, the database or the API-key file.',
+        ],
+  ].join('\n')
+}
+
+/**
+ * The mock backend's description.
+ *
+ * Kept as a constant because the existing help/manifest tests and the boot
+ * document pin this exact text for a mock build; every other backend goes
+ * through {@link ubuntuDescription}.
+ */
+export const UBUNTU_DESCRIPTION = ubuntuDescription('mock')
 
 /** Usage alone, for a malformed invocation. */
 export const UBUNTU_USAGE = [
@@ -1017,6 +1040,7 @@ export function createUbuntuCommand(
   options: UbuntuCommandOptions = {},
 ): CustomCommand {
   const sessionIdOf = options.sessionId ?? (() => currentToolCall()?.sessionId)
+  const description = ubuntuDescription(capability.backend)
   return defineCommand('ubuntu', async (args, ctx) => {
     // The session id is identity, so it is read here — inside the invocation,
     // from the trusted tool-call context — and handed to the host as an
@@ -1081,10 +1105,10 @@ export function createUbuntuCommand(
 
     const verb = args[0]
     if (verb === undefined) {
-      return { stdout: `${UBUNTU_DESCRIPTION}\n`, stderr: `${UBUNTU_USAGE}\n`, exitCode: 2 }
+      return { stdout: `${description}\n`, stderr: `${UBUNTU_USAGE}\n`, exitCode: 2 }
     }
     if (verb === '--help' || verb === '-h' || verb === 'help') {
-      return { stdout: `${UBUNTU_DESCRIPTION}\n${UBUNTU_USAGE}\n`, stderr: '', exitCode: 0 }
+      return { stdout: `${description}\n${UBUNTU_USAGE}\n`, stderr: '', exitCode: 0 }
     }
 
     if (verb === 'run') {
@@ -1138,7 +1162,10 @@ export function createUbuntuCommand(
         }
       }
       return {
-        stdout: 'ubuntu: closed. Files inside the environment are not kept; the next run starts fresh.\n',
+        stdout: capability.backend === 'mock'
+          ? 'ubuntu: closed. Files inside the environment are not kept; the next run starts fresh.\n'
+          : 'ubuntu: closed. Every running job was stopped; the cached Ubuntu rootfs stays on disk for '
+            + 'the next run.\n',
         stderr: answer.stderr,
         exitCode: 0,
       }

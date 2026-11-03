@@ -37,6 +37,7 @@ import com.phonedsh.dsh.host.HostStateStore
 import com.phonedsh.dsh.host.ModelRoute
 import com.phonedsh.dsh.host.ModelRouteFact
 import com.phonedsh.dsh.host.asHostWal
+import com.phonedsh.dsh.localexec.UbuntuSessionFactory
 import com.phonedsh.domain.DomainStore
 import com.phonedsh.domain.DomainStoreCore
 import com.phonedsh.domain.QuotaPolicy
@@ -104,6 +105,8 @@ import com.phonedsh.platform.NotifierAvailability
 import com.phonedsh.platform.android.AndroidClock
 import com.phonedsh.platform.android.AndroidDurability
 import com.phonedsh.platform.android.AndroidLifecycleSignals
+import com.phonedsh.platform.android.ProotRuntime
+import com.phonedsh.platform.android.UbuntuRootfsStore
 import com.phonedsh.shell.AcceleratorMount
 import com.phonedsh.shell.AcceleratorLimits
 import com.phonedsh.ui.page.ShellLimits
@@ -1282,6 +1285,61 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         clock = clock,
     )
 
+    /**
+     * The local Ubuntu environment's on-demand rootfs.
+     *
+     * `<filesDir>/ubuntu/{downloads,rootfs/<version>}` — outside the WAL's
+     * workspace root on purpose: the rootfs is a tool cache, not workspace
+     * state, and a WAL restore must never try to reconcile 100 MB of guest
+     * binaries. The download starts inside the first admitted job, after the
+     * approval gate and the seal, never at boot.
+     */
+    private val ubuntuRootfsStore = UbuntuRootfsStore(
+        filesDir = File(application.filesDir, "ubuntu").toPath(),
+        logger = { line -> LogcatHostLog.info(line) },
+    )
+
+    /** The four Termux binaries PackageManager extracted into nativeLibraryDir. */
+    private val ubuntuProot = ProotRuntime(
+        nativeLibraryDir = File(application.applicationInfo.nativeLibraryDir).toPath(),
+        prootTmpDir = File(application.cacheDir, "proot-tmp").toPath(),
+    )
+
+    /** Durable job records and per-job stdout/stderr/artifact directories. */
+    private val ubuntuJobsDir = File(application.filesDir, "ubuntu/jobs").toPath()
+
+    /**
+     * The real environment the host tool asks for: proot adapter, durable store,
+     * the real seal and `backend=proot`.
+     *
+     * A factory, not a constructed session: the first `run` builds it, so a
+     * host that never uses `ubuntu` downloads nothing, starts no process and
+     * pays no recovery cost. `available` is answered by the three binaries'
+     * presence, so a build whose generated jniLibs are missing reports
+     * `available=false` instead of registering a command that cannot start.
+     */
+    private val ubuntuSessionFactory: UbuntuSessionFactory = UbuntuSessionFactory(
+        backend = ProotUbuntuSession.BACKEND,
+    ) {
+        ProotUbuntuSession(
+            clock = clock,
+            adapter = ProotUbuntuAdapter(
+                rootfs = ubuntuRootfsStore,
+                runtime = ubuntuProot,
+                hostWorkspace = walPaths.materializedWorkspace,
+                jobsRoot = ubuntuJobsDir,
+                clock = clock,
+                logger = { line -> LogcatHostLog.info(line) },
+            ),
+            seal = ubuntuSeal,
+            storeRoot = ubuntuJobsDir,
+            durability = durability,
+            admissionOpen = { controller.admission == Admission.OPEN },
+            budgets = deviceBudgets,
+            logger = LogcatHostLog,
+        )
+    }
+
     /** The one registered read-only accelerator bridge shared by Worker and shell-page runs. */
     private val execBridge = HostExec.defaultTools(
         clock = clock,
@@ -1294,6 +1352,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             AcceleratorMount(AcceleratorMount.HOME, walPaths.materializedHome.toString()),
         ),
         seal = ubuntuSeal,
+        ubuntuSessionFactory = ubuntuSessionFactory,
     )
 
     /**

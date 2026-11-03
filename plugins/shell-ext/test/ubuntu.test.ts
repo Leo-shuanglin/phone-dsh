@@ -82,6 +82,7 @@ const roots: string[] = []
 async function fixture(options: {
   readonly withUbuntu: boolean
   readonly host?: AcceleratorHost
+  readonly capability?: UbuntuCapability
 }): Promise<{ shell: WorkerShell; calls: AcceleratorRequest[] }> {
   const root = mkdtempSync(join(tmpdir(), 'pdsh-shell-ubuntu-'))
   roots.push(root)
@@ -101,7 +102,7 @@ async function fixture(options: {
     curl: false,
     gzip: false,
     toolbox: false,
-    ...options.withUbuntu ? { ubuntu: CAPABILITY } : { ubuntu: false },
+    ...options.withUbuntu ? { ubuntu: options.capability ?? CAPABILITY } : { ubuntu: false },
   })
   return { shell: new WorkerShell({ fs, commands }), calls }
 }
@@ -168,6 +169,20 @@ test('the description states the cost, the approval gate and the mock backend', 
   assert.doesNotMatch(text, /no approval/u)
 })
 
+test('a proot backend description states the real environment and never claims a mock', async () => {
+  const { shell } = await fixture({
+    withUbuntu: true,
+    capability: { ...CAPABILITY, backend: 'proot' },
+  })
+  const result = await shell.run(['ubuntu', '--help'], { cwd: CWD })
+  assert.equal(result.exitCode, 0)
+  assert.match(result.stdout, /real local Ubuntu environment/u)
+  assert.match(result.stdout, /backend=proot/u)
+  assert.match(result.stdout, /Ubuntu Base 24\.04\.5/u)
+  assert.doesNotMatch(result.stdout, /MOCK adapter/u)
+  assert.doesNotMatch(result.stdout, /exit code is synthetic/u)
+})
+
 test('ubuntu --help prints the description and usage, exit 0', async () => {
   const { shell } = await fixture({ withUbuntu: true })
   const result = await shell.run(['ubuntu', '--help'], { cwd: CWD })
@@ -212,6 +227,17 @@ test('run requires the -- separator and a command', async () => {
   assert.equal(noCommand.exitCode, 2)
   assert.match(noCommand.stderr, /needs a command after `--`/u)
   assert.equal(calls.length, 0)
+})
+
+test('a proot close says the cached rootfs stays, never that files were discarded', async () => {
+  const { shell } = await fixture({
+    withUbuntu: true,
+    capability: { ...CAPABILITY, backend: 'proot' },
+  })
+  const result = await asToolCall(() => shell.run(['ubuntu', 'close'], { cwd: CWD }))
+  assert.equal(result.exitCode, 0)
+  assert.match(result.stdout, /cached Ubuntu rootfs stays on disk/u)
+  assert.doesNotMatch(result.stdout, /not kept/u)
 })
 
 test('status sends exactly the job id and renders the record', async () => {

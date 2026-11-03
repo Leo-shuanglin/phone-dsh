@@ -43,11 +43,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The `Durability` SPI over real files, for the mock's job store.
@@ -120,7 +115,8 @@ class MockUbuntuSeal : UbuntuSeal {
 }
 
 /**
- * One mock environment session: the lane, its adapter and its volatile store.
+ * One mock environment session: the same lane wiring as [HostUbuntuSession],
+ * with the mock adapter, seal, volatile store and backend name.
  *
  * @param clock wall time for the lane and the adapter's delay.
  * @param budgets the tier numbers the JobRef publishes; the host passes its own
@@ -137,129 +133,34 @@ class MockUbuntuSeal : UbuntuSeal {
  * @param storeRoot the job store; a per-process temp directory when omitted.
  */
 class MockUbuntuSession(
-    private val clock: Clock,
-    private val budgets: ControllerBudgets = ControllerBudgets.forTier(ControllerBudgets.DEFAULT_TIER),
-    private val logger: HostLog = HostLog.None,
+    clock: Clock,
+    budgets: ControllerBudgets = ControllerBudgets.forTier(ControllerBudgets.DEFAULT_TIER),
+    logger: HostLog = HostLog.None,
     // The mock's own manifest sits on both sides of the 15 MiB mutation bound
     // by design (`tiny.txt`, `mid.bin`, `huge.bin`). The Agent-facing session
     // declares a 20 MiB artifact limit so the ordinary answer is `succeeded`
     // with the manifest visible; the ingest-refusal path stays covered by the
     // lane's own tests, which build their own adapter.
-    private val adapter: UbuntuAdapter = MockUbuntuAdapter(
+    adapter: UbuntuAdapter = MockUbuntuAdapter(
         clock = clock,
         fileLimitBytes = MockUbuntuAdapter.HUGE_BYTES,
     ),
-    private val seal: UbuntuSeal = MockUbuntuSeal(),
-    private val admissionOpen: () -> Boolean = { true },
-    private val storeRoot: Path? = null,
+    seal: UbuntuSeal = MockUbuntuSeal(),
+    admissionOpen: () -> Boolean = { true },
+    storeRoot: Path? = null,
+) : HostUbuntuSession(
+    clock = clock,
+    budgets = budgets,
+    logger = logger,
+    adapter = adapter,
+    seal = seal,
+    backend = BACKEND,
+    admissionOpen = admissionOpen,
+    storeRoot = storeRoot ?: Files.createTempDirectory("pdsh-ubuntu-jobs"),
+    durability = MockRecordDurability(),
 ) {
-    /** The mock's declared environment id; also the adapter registry key. */
-    val env: String get() = adapter.env
-
-    /** The one backend name every answer carries. */
-    val backend: String = BACKEND
-
-    /**
-     * `true` while the lane's seal is the mock one.
-     *
-     * The host tool copies this into `sealMock`; it is the difference between "a
-     * job ran inside a real `chmod 000` window" and "a job ran inside a seam that
-     * opens nothing", and the audit is not allowed to guess which.
-     */
-    val sealIsMock: Boolean get() = seal.isMock
-
-    private val jobsDir: Path = storeRoot ?: Files.createTempDirectory("pdsh-ubuntu-jobs")
-
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    private var started: UbuntuJobLane? = null
-
-    /** True once `close` ran; a later `run` opens a fresh session lazily. */
-    var closed: Boolean = false
-        private set
-
-    /**
-     * The lane, recovering the volatile store on first use.
-     *
-     * Recovery is idempotent and cheap on an empty directory. A store this
-     * process wrote in an earlier session is not reused: the mock adapter that
-     * owned those jobs is gone, so the boot table's `remote → failed` row is
-     * the honest outcome and the lane applies it.
-     */
-    suspend fun lane(): UbuntuJobLane {
-        started?.let { return it }
-        val lane = UbuntuJobLane(
-            scope = scope,
-            clock = clock,
-            store = UbuntuJobStore(jobsDir, MockRecordDurability(), logger),
-            adapters = mapOf(adapter.env to adapter),
-            seal = seal,
-            budgets = budgets,
-            vfsRoot = jobsDir,
-            sink = { _, _, _ -> Unit },
-            admissionOpen = admissionOpen,
-            logger = logger,
-        )
-        lane.recover()
-        started = lane
-        closed = false
-        return lane
-    }
-
-    /**
-     * Submit one job (bridge.md §12.2).
-     *
-     * @param approval the session decision that admitted it, written into the
-     *   record's audit line; `null` for a caller with no gate (tests).
-     */
-    suspend fun submit(
-        request: UbuntuExecRequest,
-        approval: UbuntuJobApproval? = null,
-    ): UbuntuSubmit = lane().submit(request, approval)
-
-    /** The current record, or null for an id this process never knew. */
-    suspend fun status(jobId: String): UbuntuJobRecord? = lane().status(jobId)
-
-    /**
-     * Wait for a job to become terminal, bounded.
-     *
-     * @param jobId the job.
-     * @param timeoutMs how long to wait; the caller passes the request deadline.
-     * @returns the last record seen, terminal or not.
-     */
-    suspend fun awaitTerminal(jobId: String, timeoutMs: Long): UbuntuJobRecord? {
-        val lane = lane()
-        return withTimeoutOrNull(timeoutMs.coerceAtLeast(1L)) {
-            while (true) {
-                val record = lane.status(jobId) ?: return@withTimeoutOrNull null
-                if (record.terminal) return@withTimeoutOrNull record
-                delay(POLL_INTERVAL_MS)
-            }
-            @Suppress("UNREACHABLE_CODE")
-            null
-        } ?: lane.status(jobId)
-    }
-
-    /**
-     * Close the environment (the Agent's `ubuntu close`).
-     *
-     * Every non-terminal job is cancelled first, so a close never leaves a job
-     * in flight that the next answer would still call `remote`.
-     * @returns the ids that were stopped.
-     */
-    suspend fun close(): List<String> {
-        val lane = started ?: return emptyList()
-        val stopped = lane.jobs().filter { !it.terminal }.map { it.jobId }
-        for (jobId in stopped) lane.cancel(jobId)
-        closed = true
-        return stopped
-    }
-
     companion object {
         /** The backend name reported in every answer. */
         const val BACKEND: String = "mock"
-
-        /** How often the host tool polls a running mock job. */
-        private const val POLL_INTERVAL_MS: Long = 20L
     }
 }

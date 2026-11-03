@@ -173,6 +173,17 @@ class CheckAndroid16kTest(unittest.TestCase):
         path.write_bytes(data)
         return path, offsets
 
+    def write_manifest(self, extracted):
+        path = self.root / "android/app/src/main/AndroidManifest.xml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        value = "true" if extracted else "false"
+        path.write_text(
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+            f'<application android:extractNativeLibs="{value}" />'
+            "</manifest>",
+            encoding="utf-8",
+        )
+
     def assert_rc(self, result, expected):
         self.assertEqual(
             result.returncode,
@@ -265,6 +276,42 @@ class CheckAndroid16kTest(unittest.TestCase):
         self.assert_rc(result, 2)
         self.assertIn("[SKIP]", result.stdout)
         self.assertIn("NOT a pass", result.stdout)
+
+    # ------------------------------------------------------- extracted mode
+    def test_extracted_manifest_skips_zip_rules_but_checks_the_elf(self):
+        # extractNativeLibs=true means PackageManager materializes the .so, so a
+        # compressed or misaligned zip entry is not the bytes the loader maps.
+        self.write_manifest(True)
+        self.write_apk([(JNI_MEMBER, elf64(PAGE_16K), True, 4096)])
+        result = run_checker("--root", str(self.root))
+        self.assert_rc(result, 0)
+        self.assertIn("extracted mode", result.stdout)
+
+    def test_extracted_manifest_still_rejects_a_4k_elf(self):
+        self.write_manifest(True)
+        self.write_apk([(JNI_MEMBER, elf64(4096), True, 4096)])
+        result = run_checker("--root", str(self.root))
+        self.assert_rc(result, 1)
+        self.assertIn("p_align=0x1000", result.stdout)
+
+    def test_extracted_manifest_false_keeps_the_packaged_rules(self):
+        self.write_manifest(False)
+        self.write_apk([(JNI_MEMBER, elf64(PAGE_16K), True, 4096)])
+        result = run_checker("--root", str(self.root))
+        self.assert_rc(result, 1)
+        self.assertIn("compressed", result.stdout)
+
+    def test_explicit_extracted_flag_works_without_a_manifest(self):
+        self.write_apk([(JNI_MEMBER, elf64(PAGE_16K), True, 4096)])
+        result = run_checker("--root", str(self.root), "--extracted")
+        self.assert_rc(result, 0)
+
+    def test_no_extracted_flag_overrides_a_true_manifest(self):
+        self.write_manifest(True)
+        self.write_apk([(JNI_MEMBER, elf64(PAGE_16K), True, 4096)])
+        result = run_checker("--root", str(self.root), "--no-extracted")
+        self.assert_rc(result, 1)
+        self.assertIn("compressed", result.stdout)
 
     # ------------------------------------------------------------ bare .so mode
     def test_bare_so_mode_passes_and_fails(self):
