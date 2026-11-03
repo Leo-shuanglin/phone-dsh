@@ -363,6 +363,13 @@ final class ChatModel {
     private(set) var goal: HarnessGoal?
     private(set) var busy = false
     private(set) var turnRunning = false
+    /// Bumped on every turn boundary. The composer queue re-reads the durable
+    /// inbox from this even when `turnRunning` flips false→true between two
+    /// observations and no intermediate render is guaranteed.
+    private(set) var turnBoundaryRevision = 0
+    /// Bumped for every mapped `agent/inbox/spliced` event. Claims/removals do
+    /// not map to an event kind, so turn boundaries cover those separately.
+    private(set) var inboxSplicedRevision = 0
     private(set) var eventStreamRecovering = false
     private(set) var userFacingError: String?
     /// Non-secret, user-facing explanation of the last search launch decision.
@@ -2524,6 +2531,7 @@ final class ChatModel {
             guard source != "user", source != "compact-checkpoint", !text.isEmpty else { break }
             appendIncoming(text: text, source: source, event: event)
         case .inboxSpliced(let messages):
+            inboxSplicedRevision += 1
             // One splice can carry several admitted messages. Keep their order
             // and give each a stable id suffix; human steering is already in
             // the local transcript, so only non-human producers are added here.
@@ -2591,6 +2599,7 @@ final class ChatModel {
             activeTurnStartedAt = event.time
             turnStartTimes[turnNumber] = event.time
             promoteQueuedToSending()
+            turnBoundaryRevision += 1
             turnRunning = true
             syncIdleTimer()
             statusLine = "Turn running…"
@@ -2600,6 +2609,7 @@ final class ChatModel {
             finishStreamingReasoning()
             clearSendingLabels()
             turnRunning = false
+            turnBoundaryRevision += 1
             activeTurnStartedAt = nil
             let finishedTurn = Int(turnID) ?? activeTurn ?? 0
             turnEndReasons[finishedTurn] = event.rawTurnEndKind ?? Self.rawTurnEndKind(reason)
