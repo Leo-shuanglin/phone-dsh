@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -55,6 +56,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -176,6 +178,8 @@ public data class PluginInventoryScreenState(
     /** The footer sentence: the host's own, or this platform's default. */
     public val notice: String = UiStrings.PLUGIN_INVENTORY_MANAGEMENT_NOTICE,
     public val query: String = "",
+    /** True while refreshing existing rows as well as during the initial read. */
+    public val refreshing: Boolean = false,
 ) {
     public companion object {
         /** Projects the facts into the four groups. */
@@ -199,6 +203,7 @@ public data class PluginInventoryScreenState(
                 error = facts.failure,
                 notice = facts.managementNotice ?: UiStrings.PLUGIN_INVENTORY_MANAGEMENT_NOTICE,
                 query = local.query,
+                refreshing = facts.isLoading,
             )
         }
 
@@ -237,7 +242,9 @@ public fun NativePluginInventoryPage(
     onBack: () -> Unit = {},
     modifier: Modifier = Modifier,
     embedded: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
 ) {
+    LaunchedEffect(Unit) { onRefresh?.invoke() }
     if (embedded) {
         Box(
             modifier = modifier
@@ -252,6 +259,7 @@ public fun NativePluginInventoryPage(
                 state = state,
                 onQueryChange = onQueryChange,
                 onToggleRow = onToggleRow,
+                onRefresh = onRefresh,
             )
         }
     } else {
@@ -264,6 +272,7 @@ public fun NativePluginInventoryPage(
                 state = state,
                 onQueryChange = onQueryChange,
                 onToggleRow = onToggleRow,
+                onRefresh = onRefresh,
             )
         }
     }
@@ -271,28 +280,35 @@ public fun NativePluginInventoryPage(
 
 /** The untitled source section: search, one inventory state, and its footer. */
 @Composable
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 private fun PluginInventoryBody(
     state: PluginInventoryScreenState,
     onQueryChange: (String) -> Unit,
     onToggleRow: (String) -> Unit,
+    onRefresh: (() -> Unit)?,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            // The search field is an early row of this list; the IME must shrink the
-            // viewport so the rows below it stay reachable, not just leave the field
-            // visible (spec §5 row `insets`).
-            .imePadding()
-            .testTag(UiPageTags.PLUGIN_INVENTORY_LIST)
-            .padding(horizontal = tokens.geometry.pageOuterMarginH),
-        // unverified geometry: `spec/ui/v1/tokens.json` declares no page-level card
-        // gap, so the approval card's outer vertical margin carries the gap between
-        // this page's cards (and the list's own top/bottom inset).
-        verticalArrangement = Arrangement.spacedBy(tokens.geometry.cardOuterMarginV),
-        contentPadding = PaddingValues(vertical = tokens.geometry.cardOuterMarginV),
+    PullToRefreshBox(
+        isRefreshing = state.refreshing,
+        onRefresh = onRefresh ?: {},
+        modifier = Modifier.fillMaxSize(),
     ) {
+      LazyColumn(
+          modifier = Modifier
+              .fillMaxSize()
+              // The search field is an early row of this list; the IME must shrink the
+              // viewport so the rows below it stay reachable, not just leave the field
+              // visible (spec §5 row `insets`).
+              .imePadding()
+              .testTag(UiPageTags.PLUGIN_INVENTORY_LIST)
+              .padding(horizontal = tokens.geometry.pageOuterMarginH),
+          // unverified geometry: `spec/ui/v1/tokens.json` declares no page-level card
+          // gap, so the approval card's outer vertical margin carries the gap between
+          // this page's cards (and the list's own top/bottom inset).
+          verticalArrangement = Arrangement.spacedBy(tokens.geometry.cardOuterMarginV),
+          contentPadding = PaddingValues(vertical = tokens.geometry.cardOuterMarginV),
+      ) {
         item(key = "search") {
             PluginSearchField(query = state.query, onQueryChange = onQueryChange)
         }
@@ -334,17 +350,32 @@ private fun PluginInventoryBody(
                 }
             }
         }
-        // 3. the failure line: untitled, no retry (the baseline has none).
+        // 3. the failure line can retry through the host's actual inventory read.
         state.error?.let { error ->
             item(key = "error") {
-                BasicText(
-                    text = error,
-                    style = type.caption.copy(color = tokens.colors.danger),
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag(UiPageTags.PLUGIN_INVENTORY_FAILURE)
                         .padding(horizontal = tokens.spacing.cardInset),
-                )
+                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    BasicText(
+                        text = error,
+                        style = type.caption.copy(color = tokens.colors.danger),
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (onRefresh != null) {
+                        SessionTextAction(
+                            label = UiStrings.RETRY,
+                            onClick = onRefresh,
+                            tone = SessionActionTone.SECONDARY,
+                            enabled = !state.refreshing,
+                            modifier = Modifier.testTag(UiPageTags.PLUGIN_INVENTORY_RETRY),
+                        )
+                    }
+                }
             }
         }
         // 4. the platform footer: untitled.
@@ -358,6 +389,7 @@ private fun PluginInventoryBody(
                     .padding(horizontal = tokens.spacing.cardInset),
             )
         }
+      }
     }
 }
 

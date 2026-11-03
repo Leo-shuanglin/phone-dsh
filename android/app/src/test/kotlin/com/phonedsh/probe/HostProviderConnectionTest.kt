@@ -10,6 +10,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -84,6 +86,42 @@ class HostProviderConnectionTest {
         )
         assertTrue(result is ProviderConnectionTestResult.Success)
         assertEquals("Bearer $key", transport.requests.single().headers["Authorization"])
+    }
+
+    @Test
+    fun `nonselected profile uses its own credential account instead of the selected profile key`() = runBlocking {
+        val profileA = ProviderRecord(
+            id = "profile-a", name = "A", model = "model-a", endpoint = "https://a.example.test/v1",
+            credentialRef = "provider.profile-a",
+        )
+        val profileB = ProviderRecord(
+            id = "profile-b", name = "B", model = "model-b", endpoint = "https://b.example.test/v1",
+            credentialRef = "provider.profile-b",
+        )
+        val snapshot = ProviderSnapshot(listOf(profileA, profileB), selectedId = profileA.id)
+        val providerRead = ProviderStoreRead.Stored(profileA, snapshot)
+        val secure = ApiKeyStore(MapSecureStore())
+        val keyA = "sk-profile-a-secret-0000"
+        val keyB = "sk-profile-b-secret-1111"
+        secure.save(keyA, profileA.credentialAccount())
+        secure.save(keyB, profileB.credentialAccount())
+        val draft = draft(endpoint = "https://b.example.test/v1", key = "", isNew = false)
+            .copy(id = profileB.id, model = profileB.model)
+        val transport = RecordingTransport(listOf(200))
+
+        val result = testProviderConnection(
+            draft = draft,
+            keyProvider = {
+                secure.readKey(requireNotNull(providerAccountFor(draft, providerRead, profileA.credentialAccount())))
+            },
+            storedEndpointProvider = { profileB.endpoint },
+            launchEndpointProvider = { profileA.endpoint },
+            transport = transport,
+        )
+
+        assertTrue(result is ProviderConnectionTestResult.Success)
+        assertEquals("Bearer $keyB", transport.requests.single().headers["Authorization"])
+        assertFalse(transport.requests.single().headers["Authorization"].orEmpty().contains(keyA))
     }
 
     @Test
@@ -178,6 +216,22 @@ class HostProviderConnectionTest {
     }
 
     @Test
+    fun `generated new profile receipt matches its original blank-id draft`() {
+        val draft = ProviderDraft(id = "", name = "New", isNew = true)
+        val result = HostProviderSaveResult(
+            recordWritten = true,
+            succeeded = true,
+            message = "saved",
+            requestId = "request-1",
+            profileId = "generated-id",
+            isNew = true,
+        )
+        assertTrue(providerSaveResultMatchesDraft(result, draft))
+        assertFalse(providerSaveResultMatchesDraft(result.copy(isNew = false), draft))
+        assertFalse(providerSaveResultMatchesDraft(result, draft.copy(isNew = false, id = "existing")))
+    }
+
+    @Test
     fun `provider save receipt follows a real store write and readback`() = runBlocking {
         val file = File(Files.createTempDirectory("provider-bound-save").toFile(), ProviderConfigStore.FILE_NAME)
         val store = ProviderConfigStore(file) { }
@@ -195,7 +249,10 @@ class HostProviderConnectionTest {
         assertTrue(result.succeeded)
         assertTrue(result.recordWritten)
         assertEquals("save-request-9", result.requestId)
-        assertEquals("local", result.profileId)
+        assertNotNull(result.profileId)
+        assertTrue(result.isNew)
+        assertEquals(result.profileId, store.current()?.id)
+        assertEquals(result.profileId, store.snapshot()?.selectedId)
         assertEquals("fixture-model", store.current()?.model)
     }
 
@@ -217,9 +274,268 @@ class HostProviderConnectionTest {
         assertFalse(result.succeeded)
         assertTrue("profile write is called out separately", result.recordWritten)
         assertEquals("save-request-partial", result.requestId)
-        assertEquals("local", result.profileId)
+        assertNotNull(result.profileId)
+        assertTrue(result.isNew)
+        assertEquals(result.profileId, store.current()?.id)
         assertEquals("Fixture service", store.current()?.name)
         assertTrue(result.message.contains("密钥写入失败"))
+    }
+
+    @Test
+    fun `blank new profile is added without replacing selected service or sharing its key`() = runBlocking {
+        val file = File(Files.createTempDirectory("provider-profile-isolation").toFile(), ProviderConfigStore.FILE_NAME)
+        val store = ProviderConfigStore(file) { }
+        val secure = MapSecureStore()
+        val keyStore = ApiKeyStore(secure)
+        val oldAccount = "provider.existing"
+        val oldKey = "sk-existing-key-0000"
+        val newKey = "sk-newprofile-key-1111"
+        keyStore.save(oldKey, oldAccount)
+        val old = ProviderRecord(
+            id = "existing", name = "Existing", model = "existing-model",
+            endpoint = "https://existing.example.test/v1", credentialRef = oldAccount,
+        )
+        assertEquals(ProviderWriteOutcome.Saved, store.save(old))
+
+        val result = saveProviderDraft(
+            draft = ProviderDraft(
+                id = "", name = "Added", endpoint = "https://added.example.test/v1",
+                model = "added-model", models = listOf(com.phonedsh.ui.page.ProviderModelDraft("added-model")),
+                apiKey = newKey, isNew = true,
+            ),
+            requestId = "new-profile-request",
+            store = store,
+            keyStore = keyStore,
+            launch = ProbeLaunchConfig(modelName = "launch-model"),
+        )
+
+        val snapshot = requireNotNull(store.snapshot())
+        assertTrue(result.succeeded)
+        assertTrue(result.isNew)
+        assertEquals("new-profile-request", result.requestId)
+        assertNotNull(result.profileId)
+        assertNotEquals(old.id, result.profileId)
+        assertEquals(listOf("existing", result.profileId), snapshot.profiles.map { it.id })
+        assertEquals(result.profileId, snapshot.selectedId)
+        assertEquals(old, snapshot.profiles.first { it.id == old.id })
+        val newRecord = snapshot.profiles.first { it.id == result.profileId }
+        assertEquals(ProviderRecord.providerCredentialRef(newRecord.id), newRecord.credentialAccount())
+        assertNotEquals(old.credentialAccount(), newRecord.credentialAccount())
+        assertEquals(oldKey, keyStore.readKey(oldAccount))
+        assertEquals(newKey, keyStore.readKey(newRecord.credentialAccount()))
+    }
+
+    @Test
+    fun `editing the empty store local launch row creates its first profile with the captured key account`() = runBlocking {
+        val file = File(Files.createTempDirectory("provider-local-launch-edit").toFile(), ProviderConfigStore.FILE_NAME)
+        val store = ProviderConfigStore(file) { }
+        val launch = ProbeLaunchConfig(
+            deepseekBaseUrl = "https://legacy.example.test/v1",
+            modelName = "legacy-model",
+            credentialAccount = ApiKeyStore.ACCOUNT,
+        )
+        val secure = MapSecureStore()
+        val keyStore = ApiKeyStore(secure)
+        val key = "sk-legacy-local-0000"
+        keyStore.save(key, ApiKeyStore.ACCOUNT)
+        val result = saveProviderDraft(
+            draft = ProviderDraft(
+                id = "local", name = "Legacy edited", endpoint = "", model = "",
+                models = listOf(com.phonedsh.ui.page.ProviderModelDraft(id = "legacy-model")),
+                isNew = false,
+            ),
+            requestId = "edit-local-launch",
+            store = store,
+            keyStore = keyStore,
+            launch = launch,
+        )
+
+        assertTrue(result.succeeded)
+        assertEquals("local", result.profileId)
+        assertEquals("https://legacy.example.test/v1", store.current()?.endpoint)
+        assertEquals("legacy-model", store.current()?.model)
+        assertEquals(ApiKeyStore.ACCOUNT, store.current()?.credentialAccount())
+        assertEquals(key, keyStore.readKey(ApiKeyStore.ACCOUNT))
+    }
+
+    @Test
+    fun `updating a nonselected profile reads back by profile id and preserves selection`() = runBlocking {
+        val file = File(Files.createTempDirectory("provider-nonselected-update").toFile(), ProviderConfigStore.FILE_NAME)
+        val store = ProviderConfigStore(file) { }
+        val selected = ProviderRecord("one", "One", "m1", "https://one.example.test/v1")
+        val edited = ProviderRecord("two", "Two", "m2", "https://two.example.test/v1")
+        assertEquals(ProviderWriteOutcome.Saved, store.save(selected))
+        assertEquals(ProviderWriteOutcome.Saved, store.save(edited))
+        val result = saveProviderDraft(
+            draft = ProviderDraft(
+                id = "two", name = "Two updated", endpoint = "", model = "m2",
+                models = listOf(com.phonedsh.ui.page.ProviderModelDraft("m2")), isNew = false,
+            ),
+            requestId = "update-two",
+            store = store,
+            keyStore = null,
+            launch = ProbeLaunchConfig(modelName = "launch-model"),
+        )
+        assertTrue(result.succeeded)
+        assertFalse(result.isNew)
+        assertEquals("two", result.profileId)
+        assertEquals("one", store.snapshot()?.selectedId)
+        assertEquals("Two updated", store.snapshot()?.profiles?.first { it.id == "two" }?.name)
+    }
+
+    @Test
+    fun `new blank id never falls back to selected endpoint or stored key for test or catalog reads`() = runBlocking {
+        var endpointReads = 0
+        var keyReads = 0
+        val request = draft(endpoint = "", key = "", isNew = true)
+        val transport = RecordingTransport(listOf(200), listOf("{\"data\":[{\"id\":\"wrong\"}]"))
+        val test = testProviderConnection(
+            draft = request,
+            keyProvider = { keyReads++; key },
+            storedEndpointProvider = { endpointReads++; "https://selected.example.test/v1" },
+            launchEndpointProvider = { "https://launch.example.test/v1" },
+            transport = transport,
+        )
+        assertTrue(test is ProviderConnectionTestResult.Failure)
+        assertEquals(0, endpointReads)
+        assertEquals(0, keyReads)
+        assertTrue(transport.requests.isEmpty())
+
+        val catalog = getProviderModels(
+            draft = request,
+            requestId = "new-catalog",
+            keyProvider = { keyReads++; key },
+            storedEndpointProvider = { endpointReads++; "https://selected.example.test/v1" },
+            launchEndpointProvider = { "https://launch.example.test/v1" },
+            transport = transport,
+        )
+        assertNull(catalog.models)
+        assertEquals(0, endpointReads)
+        assertEquals(0, keyReads)
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
+    fun `explicit override endpoint does not bind a stored selected profile key`() {
+        val selected = ProviderRecord(
+            id = "profile-b", name = "B", model = "model-b",
+            endpoint = "https://b.example.test/v1", credentialRef = "provider.profile-b",
+        )
+        val launch = ProbeLaunchConfig.fromValues(
+            extraBaseUrl = "https://override.example.test/v1",
+            storedProfile = selected,
+        )
+        assertEquals("https://override.example.test/v1", launch.deepseekBaseUrl)
+        assertNull(launch.providerProfileId)
+        assertNull(launch.credentialAccount)
+        assertNull(launch.modelCredentialProvider())
+    }
+
+    @Test
+    fun `stale unreadable key removal fails before changing service metadata`() = runBlocking {
+        val file = File(Files.createTempDirectory("provider-save-unreadable-key").toFile(), ProviderConfigStore.FILE_NAME)
+        val store = ProviderConfigStore(file) { }
+        val record = ProviderRecord(
+            id = "locked", name = "Before", model = "m", endpoint = "https://locked.example.test/v1",
+            credentialRef = "provider.locked",
+        )
+        assertEquals(ProviderWriteOutcome.Saved, store.save(record))
+        val before = file.readBytes()
+        val secure = MapSecureStore(unreadable = true)
+        val result = saveProviderDraft(
+            draft = ProviderDraft(
+                id = "locked", name = "After", endpoint = "", model = "m",
+                models = listOf(com.phonedsh.ui.page.ProviderModelDraft(id = "m")),
+                removeStoredKey = true, isNew = false,
+            ),
+            requestId = "stale-delete",
+            store = store,
+            keyStore = ApiKeyStore(secure),
+        )
+        assertFalse(result.succeeded)
+        assertFalse(result.recordWritten)
+        assertFalse(result.isNew)
+        assertEquals("stale-delete", result.requestId)
+        assertEquals(record, store.current())
+        assertTrue(before.contentEquals(file.readBytes()))
+        assertEquals(0, secure.deleteCalls)
+    }
+
+    @Test
+    fun `save rejects query fragment and public cleartext before any config or key write`() = runBlocking {
+        val file = File(Files.createTempDirectory("provider-save-url-policy").toFile(), ProviderConfigStore.FILE_NAME)
+        val store = ProviderConfigStore(file) { }
+        val original = ProviderRecord(
+            id = "existing", name = "Existing", model = "m", endpoint = "https://api.example.test/v1",
+            credentialRef = "provider.existing",
+        )
+        assertEquals(ProviderWriteOutcome.Saved, store.save(original))
+        val secure = MapSecureStore()
+        val keyStore = ApiKeyStore(secure)
+        val invalidUrls = listOf(
+            "https://api.example.test/v1?token=query-secret",
+            "https://api.example.test/v1#fragment-secret",
+            "http://public.example.test/v1",
+        )
+        for ((index, endpoint) in invalidUrls.withIndex()) {
+            val before = file.readBytes()
+            val result = saveProviderDraft(
+                draft = ProviderDraft(
+                    id = original.id, name = "Changed", endpoint = endpoint, model = "m",
+                    models = listOf(com.phonedsh.ui.page.ProviderModelDraft(id = "m")),
+                    apiKey = "sk-valid-replacement-0000", isNew = false,
+                ),
+                requestId = "unsafe-url-$index",
+                store = store,
+                keyStore = keyStore,
+                launch = ProbeLaunchConfig(modelName = "launch-model"),
+            )
+            assertFalse(result.succeeded)
+            assertFalse(result.recordWritten)
+            assertTrue(before.contentEquals(file.readBytes()))
+            assertFalse(result.message.contains("query-secret"))
+            assertFalse(result.message.contains("fragment-secret"))
+        }
+        assertEquals(0, secure.putCalls)
+        assertEquals(original, store.current())
+    }
+
+    @Test
+    fun `provider deletion blocks unreadable keys and leaves both profile and key untouched`() {
+        val file = File(Files.createTempDirectory("provider-delete-unreadable").toFile(), ProviderConfigStore.FILE_NAME)
+        val store = ProviderConfigStore(file) { }
+        val record = ProviderRecord(
+            id = "locked", name = "Locked", model = "m", endpoint = "https://locked.example.test/v1",
+            credentialRef = "provider.locked",
+        )
+        assertEquals(ProviderWriteOutcome.Saved, store.save(record))
+        val secure = MapSecureStore(unreadable = true)
+        val result = deleteProviderRecord(record.id, store, ApiKeyStore(secure))
+        assertFalse(result.profileRemoved)
+        assertFalse(result.keyRemoved)
+        assertEquals(1, store.snapshot()?.profiles?.size)
+        assertEquals(0, secure.deleteCalls)
+    }
+
+    @Test
+    fun `provider deletion keeps the profile when credential removal is not confirmed`() {
+        val file = File(Files.createTempDirectory("provider-delete-write-failure").toFile(), ProviderConfigStore.FILE_NAME)
+        val store = ProviderConfigStore(file) { }
+        val record = ProviderRecord(
+            id = "delete-fail", name = "Keep me", model = "m", endpoint = "https://delete.example.test/v1",
+            credentialRef = "provider.delete-fail",
+        )
+        assertEquals(ProviderWriteOutcome.Saved, store.save(record))
+        val secure = MapSecureStore(failDelete = true)
+        val keyStore = ApiKeyStore(secure)
+        keyStore.save("sk-delete-failure-0000", record.credentialAccount())
+
+        val receipt = deleteProviderRecord(record.id, store, keyStore)
+
+        assertFalse(receipt.profileRemoved)
+        assertFalse(receipt.keyRemoved)
+        assertEquals(record, store.snapshot()?.profiles?.single())
+        assertEquals("sk-delete-failure-0000", keyStore.readKey(record.credentialAccount()))
     }
 
     @Test
@@ -335,6 +651,30 @@ class HostProviderConnectionTest {
             failure?.let { throw it }
             val index = requests.lastIndex
             return ProviderProbeResponse(statuses[index], bodies.getOrNull(index).orEmpty())
+        }
+    }
+
+    private class MapSecureStore(
+        private val unreadable: Boolean = false,
+        private val failDelete: Boolean = false,
+    ) : SecureStore {
+        override val level: SecurityLevel = SecurityLevel.SOFTWARE
+        private val values = mutableMapOf<String, ByteArray>()
+        var deleteCalls: Int = 0
+            private set
+        var putCalls: Int = 0
+            private set
+
+        override suspend fun put(key: String, value: ByteArray) { putCalls++; values[key] = value.copyOf() }
+        override suspend fun get(key: String): SecureLookup = when {
+            unreadable -> SecureLookup.Unreadable("fixture")
+            values[key] == null -> SecureLookup.Absent
+            else -> SecureLookup.Found(requireNotNull(values[key]).copyOf())
+        }
+        override suspend fun delete(key: String) {
+            deleteCalls++
+            if (failDelete) throw IllegalStateException("fixture delete failure")
+            values.remove(key)
         }
     }
 

@@ -364,6 +364,47 @@ fun HomeDrawer() { IconAction("新建文件夹") { create() } }
         self.assertEqual(["新建文件夹"], labels)
         self.assertEqual([], unresolved)
 
+
+class VerifiedChatHelperProvenanceTests(unittest.TestCase):
+    def _check(self, label: str, provenance: str, anchor: str) -> list[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            probe = root / "examples/probe-app/PhoneDSHProbe"
+            probe.mkdir(parents=True)
+            (probe / "ChatPage.swift").write_text("struct ChatPage: View {}\n", encoding="utf-8")
+            (probe / "NativePlanReviewCard.swift").write_text(
+                'struct NativePlanReviewCard {\n    public static let requestChangesText = "要求修改"\n}\n',
+                encoding="utf-8")
+            contract = {
+                "pageId": "chat", "page": "ChatPage",
+                "source": {"file": "ChatPage.swift", "path": "examples/probe-app/PhoneDSHProbe/ChatPage.swift"},
+                "sections": [],
+                "actions": [{"id": label, "label": label, "provenance": provenance, "anchor": anchor}],
+            }
+            stale = []
+            check.check_provenance(root, contract, stale)
+            return stale
+
+    def test_only_allowlisted_chat_helper_source_and_anchor_are_accepted(self):
+        self.assertEqual([], self._check(
+            "要求修改", "NativePlanReviewCard.swift:2", 'public static let requestChangesText = "要求修改"'))
+        with self.assertRaises(check.CheckError):
+            self._check("未验证", "NativePlanReviewCard.swift:2", 'public static let requestChangesText = "要求修改"')
+        with self.assertRaises(check.CheckError):
+            self._check("要求修改", "Other.swift:2", 'public static let requestChangesText = "要求修改"')
+
+    def test_removed_workspace_folder_switch_is_not_reintroduced_as_android_only_debt(self):
+        root = Path(__file__).resolve().parents[4]
+        android_only = json.loads((root / "spec/ui/v1/pages/_android-only-items.json").read_text())
+        baseline = json.loads((root / "spec/ui/v1/pages/_baseline.json").read_text())
+        self.assertFalse(any(entry.get("page") == "workspace-folders"
+                             and entry.get("label") == "切换"
+                             for entry in android_only["entries"]))
+        self.assertFalse(any(entry.get("page") == "workspace-folders"
+                             and entry.get("name") == "切换"
+                             and entry.get("kind") == "android-only-stale"
+                             for entry in baseline["divergences"]))
+
     def test_clickable_row_reads_positional_child_text(self):
         source = 'Row(Modifier.clickable { open() }) { Text("设置") }'
         labels, _, _ = check.android_actions(source, check.mask_kotlin(source), {}, {})
@@ -374,6 +415,49 @@ fun HomeDrawer() { IconAction("新建文件夹") { create() } }
             'when (dialog) { "create" -> "创建"; "delete" -> "删除"; else -> "保存" }', {}, {}))
         self.assertEqual(["归档"], check.kotlin_label_variants(
             'if (onArchive == null) "归档不可用" else "归档"', {}, {}))
+
+    def test_verified_automation_save_conditional_resolves_steady_action_only(self):
+        strings = {"AUTOMATION_EDITOR_SAVE": "保存"}
+        consts = {"AUTOMATION_EDITOR_SAVING_LABEL": "保存中…"}
+        expression = "if (editor.saving) AUTOMATION_EDITOR_SAVING_LABEL else UiStrings.AUTOMATION_EDITOR_SAVE"
+        self.assertEqual(["保存"], check.kotlin_label_variants(expression, strings, consts))
+        component = f'''SessionTextAction(
+    label = {expression},
+    onClick = {{ onSubmit(draft, UUID.randomUUID().toString()) }},
+    enabled = editor.canSubmit,
+)'''
+        positions = []
+        labels, unresolved, _ = check.android_actions(
+            component, check.mask_kotlin(component), strings, consts, positions=positions)
+        self.assertEqual(["保存"], labels)
+        self.assertEqual([], unresolved)
+        self.assertEqual(["保存"], [label for label, _ in positions])
+        no_callback = f'''SessionTextAction(
+    label = {expression},
+    enabled = editor.canSubmit,
+)'''
+        _, unresolved, _ = check.android_actions(
+            no_callback, check.mask_kotlin(no_callback), strings, consts)
+        self.assertEqual([expression[:check.DYN_EXPR_MAX]], unresolved)
+        arbitrary = 'SessionTextAction(label = if (toggle) "保存" else "取消")'
+        labels, unresolved, _ = check.android_actions(
+            arbitrary, check.mask_kotlin(arbitrary), {}, {})
+        self.assertEqual([], labels)
+        self.assertEqual(['if (toggle) "保存" else "取消"'], unresolved)
+        wrong_enabled = component.replace("editor.canSubmit", "true")
+        labels, unresolved, _ = check.android_actions(
+            wrong_enabled, check.mask_kotlin(wrong_enabled), strings, consts)
+        self.assertNotIn("保存", labels)
+        self.assertEqual([expression[:check.DYN_EXPR_MAX]], unresolved)
+        self.assertEqual([], check.kotlin_label_variants(
+            "if (editor.saving) AUTOMATION_EDITOR_SAVING_LABEL else UiStrings.CANCEL",
+            {"CANCEL": "取消"}, consts))
+        self.assertEqual([], check.kotlin_label_variants(
+            "if (state.saving) AUTOMATION_EDITOR_SAVING_LABEL else UiStrings.AUTOMATION_EDITOR_SAVE",
+            strings, consts))
+        self.assertEqual([], check.kotlin_label_variants(
+            "if (editor.saving) AUTOMATION_EDITOR_SAVING_LABEL else UiStrings.AUTOMATION_EDITOR_SAVE",
+            strings, {"AUTOMATION_EDITOR_SAVING_LABEL": "处理中…"}))
 
 
 FONT_SIZE_ROLE_MODEL = '''

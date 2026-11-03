@@ -16,21 +16,28 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.activity.ComponentActivity
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.nav.PdshBackLevel
 import com.phonedsh.ui.theme.PdshTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -45,7 +52,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], qualifiers = "w411dp-h640dp")
 class ModelProviderSettingsPageTest {
     @get:Rule
-    val compose = createComposeRule()
+    val compose = createAndroidComposeRule<ComponentActivity>()
 
     /** Test-only key material; never asserted as a visible string. */
     private val fullKey: String = "sk-" + "test-only" + "-" + "never-render" + "-" + "9f3a"
@@ -57,7 +64,19 @@ class ModelProviderSettingsPageTest {
         endpoint = "https://" + "api.deepseek.com" + "/v1",
         key = ProviderKeyFact(ProviderKeyStatus.CONFIGURED, "sk-1234-9f3a"),
         selected = true,
+        active = true,
     )
+
+    private fun assertInlineTitle(text: String) {
+        val title = compose.onNodeWithText(text).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val back = compose.onNodeWithContentDescription(UiStrings.BACK)
+            .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val density = compose.activity.resources.displayMetrics.density
+        // Inline means the title shares the navigation row with Back/Cancel.
+        // Robolectric's synthetic font metrics double CJK glyph height, so raw
+        // text height is not an on-device typography measurement.
+        assertEquals("$text belongs to the navigation bar", back.center.y, title.center.y, density)
+    }
 
     private fun show(
         facts: ModelProviderFacts,
@@ -68,6 +87,8 @@ class ModelProviderSettingsPageTest {
         onRetry: (() -> Unit)? = null,
         onStartEngine: () -> Unit = {},
         onDelete: (String) -> Unit = {},
+        onSelect: (String) -> Unit = {},
+        onGetModels: (ProviderDraft, String) -> Unit = { _, _ -> },
     ) {
         val state = ModelProviderScreenState.from(facts)
         compose.setContent {
@@ -83,6 +104,8 @@ class ModelProviderSettingsPageTest {
                     onTest = onTest,
                     onSave = onSave,
                     onDelete = onDelete,
+                    onSelect = onSelect,
+                    onGetModels = onGetModels,
                 )
             }
         }
@@ -120,10 +143,12 @@ class ModelProviderSettingsPageTest {
         // The source keeps Test disabled until the new provider has a name, URL,
         // model and valid model row; fill the required name before exercising it.
         nameField.performTextInput("测试服务")
-        compose.onNodeWithText(UiStrings.PROVIDER_TEST).performClick()
+        compose.onNodeWithTag("pdsh.provider.advanced").performScrollTo().performClick()
+        compose.onNodeWithTag("pdsh.provider.test").performScrollTo().assertIsEnabled().performClick()
         assertTrue(requireNotNull(testedDraft).isNew)
-        compose.onNodeWithText("测试中…").assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.CANCEL).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_TESTING).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription(UiStrings.BACK).performClick()
+        compose.onNodeWithText("测试服务").performScrollTo().assertIsDisplayed()
 
         // The host publishes only a safe result fact. Recomposition must retain
         // the inline editor and its typed draft; the key field is never replaced
@@ -166,6 +191,7 @@ class ModelProviderSettingsPageTest {
     @Test
     fun `an empty snapshot shows the empty state inside the service group`() {
         show(ModelProviderFacts(profiles = emptyList()))
+        assertInlineTitle(UiStrings.MODEL_PROVIDER_TITLE)
         compose.onNodeWithTag(UiPageTags.PROVIDER_ROOT).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.PROVIDER_EMPTY).assertIsDisplayed()
@@ -206,7 +232,34 @@ class ModelProviderSettingsPageTest {
     }
 
     @Test
-    fun `the contract's 生效方式 group renders its hint and the start action`() {
+    fun `saved next-launch default is not marked as the active provider`() {
+        val active = deepSeek.copy(selected = false, active = true)
+        val next = ProviderProfile(
+            id = "next",
+            name = "Next service",
+            model = "next-model",
+            endpoint = "https://next.example.test/v1",
+            key = ProviderKeyFact(ProviderKeyStatus.NOT_CONFIGURED),
+            selected = true,
+            active = false,
+        )
+        val facts = ModelProviderFacts(profiles = listOf(active, next), engineStarted = FactState.YES)
+        val state = ModelProviderScreenState.from(facts)
+        assertTrue(state.rows.first { it.id == "deepseek" }.active == true)
+        assertFalse(state.rows.first { it.id == "deepseek" }.selected)
+        assertTrue(state.rows.first { it.id == "next" }.selected)
+        assertFalse(state.rows.first { it.id == "next" }.active == true)
+        assertTrue(state.restartHint.contains("重新打开 App"))
+
+        show(facts)
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ROW_PREFIX + "next"))
+        compose.onNodeWithText("下次默认").assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_DEFAULT).assertDoesNotExist()
+    }
+
+    @Test
+    fun `the apply footer renders only its hint and start action`() {
         var started = 0
         show(
             ModelProviderFacts(profiles = listOf(deepSeek), engineStarted = FactState.NO),
@@ -214,12 +267,10 @@ class ModelProviderSettingsPageTest {
         )
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
             .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
+        compose.onNodeWithText(UiStrings.PROVIDER_SECTION_APPLY).assertDoesNotExist()
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
-            .performScrollToNode(hasText(UiStrings.PROVIDER_SECTION_APPLY))
-        compose.onNodeWithText(UiStrings.PROVIDER_SECTION_APPLY).assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
-            .performScrollToNode(hasText(UiStrings.PROVIDER_RESTART_HINT_IDLE))
-        compose.onNodeWithText(UiStrings.PROVIDER_RESTART_HINT_IDLE).assertIsDisplayed()
+            .performScrollToNode(hasText(PROVIDER_APPLY_HINT_STOPPED))
+        compose.onNodeWithText(PROVIDER_APPLY_HINT_STOPPED).assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
             .performScrollToNode(hasText(UiStrings.PROVIDER_START_ENGINE))
         compose.onNodeWithText(UiStrings.PROVIDER_START_ENGINE).performClick()
@@ -227,14 +278,27 @@ class ModelProviderSettingsPageTest {
     }
 
     @Test
+    fun `empty page footer is neutral and does not claim a save already happened`() {
+        val state = ModelProviderScreenState.from(
+            ModelProviderFacts(profiles = emptyList(), engineStarted = FactState.NO),
+        )
+        assertEquals(PROVIDER_APPLY_HINT_STOPPED, state.restartHint)
+        assertFalse(state.restartHint.contains("已保存"))
+        assertFalse(state.restartHint.contains("环境"))
+        show(ModelProviderFacts(profiles = emptyList(), engineStarted = FactState.NO))
+        compose.onNodeWithText(PROVIDER_APPLY_HINT_STOPPED).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_SECTION_APPLY).assertDoesNotExist()
+    }
+
+    @Test
     fun `a running engine swaps the hint and hides the start action`() {
         val state = ModelProviderScreenState.from(
             ModelProviderFacts(profiles = listOf(deepSeek), engineStarted = FactState.YES),
         )
-        assertEquals(UiStrings.PROVIDER_RESTART_HINT_RUNNING, state.restartHint)
+        assertEquals(PROVIDER_APPLY_HINT_RUNNING, state.restartHint)
         assertFalse(state.canStartEngine)
         assertEquals(
-            UiStrings.PROVIDER_RESTART_HINT_IDLE,
+            PROVIDER_APPLY_HINT_STOPPED,
             ModelProviderScreenState(phase = SettingsDataPhase.READY).restartHint,
         )
         show(ModelProviderFacts(profiles = listOf(deepSeek), engineStarted = FactState.YES))
@@ -301,27 +365,148 @@ class ModelProviderSettingsPageTest {
     // ------------------------------------------------------------------ editor
 
     @Test
-    fun `添加模型服务 opens the editor with the contract's model rows`() {
+    fun `next launch selection does not claim to be the active provider`() {
+        val active = deepSeek.copy(selected = false, active = true)
+        val next = ProviderProfile(
+            id = "next",
+            name = "Next service",
+            model = "next-model",
+            endpoint = "https://next.example.test/v1",
+            key = ProviderKeyFact(ProviderKeyStatus.NOT_CONFIGURED),
+            selected = true,
+            active = false,
+        )
+        val facts = ModelProviderFacts(profiles = listOf(active, next), engineStarted = FactState.YES)
+        val state = ModelProviderScreenState.from(facts)
+        assertTrue(state.rows.first { it.id == "deepseek" }.active == true)
+        assertFalse(state.rows.first { it.id == "deepseek" }.selected)
+        assertTrue(state.rows.first { it.id == "next" }.selected)
+        assertFalse(state.rows.first { it.id == "next" }.active == true)
+        assertTrue(state.restartHint.contains("重新打开 App"))
+
+        show(facts)
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ROW_PREFIX + "next"))
+        compose.onNodeWithText("下次默认").assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_DEFAULT).assertDoesNotExist()
+    }
+
+    @Test
+    fun `添加模型服务 keeps connection fields on editor and pushes advanced settings`() {
         show(ModelProviderFacts(profiles = emptyList()))
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
             .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
         compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
-        // The editor replaces the list: the sheet is a full-surface panel here.
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertDoesNotExist()
-        // The editor's toolbar: 测试 / 取消 / 保存, the contract's three actions.
-        compose.onNodeWithText(UiStrings.PROVIDER_TEST).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.CANCEL).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.SAVE).performScrollTo().assertIsDisplayed()
+        assertInlineTitle(UiStrings.PROVIDER_ADD_SERVICE)
+        compose.onNodeWithText(UiStrings.PROVIDER_SECTION_CONNECTION).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_FIELD_NAME).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_API_URL).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_IMPORT_CLIPBOARD).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.MODEL_LABEL).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_FETCH).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_DEFAULT_MODEL).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_MODEL_ID).assertDoesNotExist()
+
+        compose.onNodeWithTag("pdsh.provider.advanced").performScrollTo().performClick()
+        assertInlineTitle(UiStrings.PROVIDER_ADVANCED)
+        compose.onNodeWithText(UiStrings.PROVIDER_ADVANCED_SECTION).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_REASONING_EFFORT).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PROVIDER_MODEL_CATALOG).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_MODEL_ID).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_TEXT_INPUT).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_IMAGE_INPUT).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_DELETE_MODEL).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(UiStrings.PROVIDER_ADD_MODEL).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PROVIDER_KEY_SECTION).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PROVIDER_IMPORT_CLIPBOARD).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_SECTION_KEY_CONNECTION).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_TEST_CONNECTION).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.provider.field.${UiStrings.PROVIDER_FIELD_NAME}").assertDoesNotExist()
+        compose.onNodeWithText(UiStrings.SAVE).assertDoesNotExist()
+        compose.onNodeWithText(UiStrings.CANCEL).assertDoesNotExist()
+    }
+
+    @Test
+    fun `advanced editor pushes a real back bar from an embedded settings tab`() {
+        compose.setContent {
+            PdshTheme {
+                ModelProviderSettingsPage(
+                    state = ModelProviderScreenState.from(ModelProviderFacts(profiles = emptyList())),
+                    onAdd = {},
+                    onEdit = {},
+                    onToggleSection = {},
+                    onBack = {},
+                    embedded = true,
+                )
+            }
+        }
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
+        compose.onNodeWithTag("pdsh.provider.advanced").performScrollTo().performClick()
+        compose.onNodeWithText(UiStrings.PROVIDER_ADVANCED).assertIsDisplayed()
+        compose.onNodeWithContentDescription(UiStrings.BACK).assertIsDisplayed()
+    }
+
+    @Test
+    fun `system back consumes advanced then editor before the route`() {
+        var routeBackCount = 0
+        val backLevel = PdshBackLevel()
+        compose.setContent {
+            PdshTheme {
+                ModelProviderSettingsPage(
+                    state = ModelProviderScreenState.from(ModelProviderFacts(profiles = emptyList())),
+                    onAdd = {},
+                    onEdit = {},
+                    onToggleSection = {},
+                    onBack = { routeBackCount++ },
+                    backLevel = backLevel,
+                )
+            }
+        }
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ADD))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
+        compose.waitForIdle()
+        assertTrue(backLevel.available)
+
+        compose.onNodeWithTag("pdsh.provider.advanced").performScrollTo().performClick()
+        compose.onNodeWithText(UiStrings.PROVIDER_ADVANCED).assertIsDisplayed()
+        compose.runOnIdle { assertTrue(backLevel.consume()) }
+        compose.onNodeWithText(UiStrings.PROVIDER_ADD_SERVICE).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_SECTION_CONNECTION).assertIsDisplayed()
+
+        compose.runOnIdle { assertTrue(backLevel.consume()) }
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertIsDisplayed()
+        compose.runOnIdle { assertFalse(backLevel.available) }
+        assertEquals(0, routeBackCount)
+    }
+
+    @Test
+    fun `the API key field is a password field and never the generic text field`() {
+        show(ModelProviderFacts(profiles = listOf(deepSeek)))
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ROW_PREFIX + "deepseek"))
+        compose.onNodeWithText(UiStrings.PROVIDER_EDIT).performClick()
+        val keyField = compose.onNodeWithTag("pdsh.provider.field.${UiStrings.PROVIDER_KEY_FIELD_REPLACE}")
+        keyField.performScrollTo().assertIsDisplayed()
+        keyField.assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
+    }
+
+    @Test
+    fun `tapping a service selects it while the edit action opens the editor`() {
+        var selected: String? = null
+        var edited: String? = null
+        show(
+            ModelProviderFacts(profiles = listOf(deepSeek)),
+            onSelect = { selected = it },
+            onEdit = { edited = it },
+        )
+        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PROVIDER_ROW_PREFIX + "deepseek"))
+        compose.onNodeWithText("DeepSeek").performClick()
+        assertEquals("deepseek", selected)
+        assertNull(edited)
+        compose.onNodeWithText(UiStrings.PROVIDER_EDIT).performClick()
+        assertEquals("deepseek", edited)
     }
 
     @Test
@@ -332,7 +517,7 @@ class ModelProviderSettingsPageTest {
         compose.onNodeWithTag(UiPageTags.PROVIDER_ADD).performClick()
         compose.onNodeWithText(UiStrings.CANCEL).performClick()
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PROVIDER_FIELD_NAME).assertDoesNotExist()
+        compose.onNodeWithTag("pdsh.provider.field.${UiStrings.PROVIDER_FIELD_NAME}").assertDoesNotExist()
     }
 
     @Test
@@ -388,7 +573,7 @@ class ModelProviderSettingsPageTest {
         }
         compose.onNodeWithTag("pdsh.provider.save-result").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("本机存储不可写，本次未保存").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.CANCEL).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.CANCEL).assertIsDisplayed()
         nameField.performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("用户服务").assertIsDisplayed()
     }
@@ -408,7 +593,7 @@ class ModelProviderSettingsPageTest {
                         facts.value = facts.value.copy(
                             providerSave = ProviderSaveFact(
                                 requestId = requestId,
-                                profileId = draft.id,
+                                profileId = if (draft.isNew) "generated-profile" else draft.id,
                                 isNew = draft.isNew,
                                 isSaving = false,
                                 succeeded = true,
@@ -427,7 +612,7 @@ class ModelProviderSettingsPageTest {
         compose.onNodeWithText(UiStrings.SAVE).performClick()
         compose.waitForIdle()
         compose.onNodeWithTag(UiPageTags.PROVIDER_LIST).assertIsDisplayed()
-        compose.onNodeWithText(UiStrings.PROVIDER_FIELD_NAME).assertDoesNotExist()
+        compose.onNodeWithTag("pdsh.provider.field.${UiStrings.PROVIDER_FIELD_NAME}").assertDoesNotExist()
     }
 
     // ----------------------------------------------------------------- delete
@@ -609,9 +794,7 @@ class ModelProviderSettingsPageTest {
         compose.onNodeWithText("DeepSeek").assertIsDisplayed()
         compose.onNodeWithTag(UiPageTags.PROVIDER_SERVICES_SECTION).performClick()
         compose.onNodeWithText("DeepSeek").assertIsDisplayed()
-        compose.onNodeWithTag(UiPageTags.PROVIDER_LIST)
-            .performScrollToNode(hasText(UiStrings.PROVIDER_SECTION_APPLY))
-        compose.onNodeWithText(UiStrings.PROVIDER_SECTION_APPLY).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.PROVIDER_SECTION_APPLY).assertDoesNotExist()
     }
 
     private fun decoy(): ProviderProfile = ProviderProfile(

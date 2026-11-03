@@ -721,6 +721,7 @@ public object UiPageTags {
     public const val PLUGIN_INVENTORY_EMPTY: String = "pdsh.plugin.inventory.empty"
     public const val PLUGIN_INVENTORY_UNREAD: String = "pdsh.plugin.inventory.unread"
     public const val PLUGIN_INVENTORY_FAILURE: String = "pdsh.plugin.inventory.failure"
+    public const val PLUGIN_INVENTORY_RETRY: String = "pdsh.plugin.inventory.retry"
     public const val PLUGIN_INVENTORY_NOTICE: String = "pdsh.plugin.inventory.notice"
     public const val PLUGIN_INVENTORY_ROW_PREFIX: String = "pdsh.plugin.inventory.row."
     public const val PLUGIN_INVENTORY_ROW_HEADER: String = "pdsh.plugin.inventory.header."

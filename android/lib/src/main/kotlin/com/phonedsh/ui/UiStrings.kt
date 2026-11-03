@@ -778,7 +778,7 @@ public object UiStrings {
     // `NativeConfigurationPage.swift:28` `.navigationTitle("插件")`; the iOS
     // page never titles itself 本会话设置 (that is only a menu item wording,
     // `ChatPage.swift:274`).
-    public const val CONFIGURATION_TITLE: String = "插件"
+    public const val CONFIGURATION_TITLE: String = "插件与工具"
     public const val CONFIGURATION_DONE: String = "完成"
     public const val CONFIGURATION_REFRESH: String = "刷新"
     public const val CONFIGURATION_INTRO: String = "安装、启用和配置插件"

@@ -102,6 +102,9 @@ import com.phonedsh.ui.page.ShellSnapshot
 import com.phonedsh.ui.nav.PdshNavFacts
 import com.phonedsh.ui.page.BusyEnterMode
 import com.phonedsh.ui.page.ChatSubagentEntry
+import com.phonedsh.ui.page.ConfigurationFacts
+import com.phonedsh.ui.page.ConfigurationFieldKind
+import com.phonedsh.ui.page.ConfigurationWriteReceipt
 import com.phonedsh.ui.page.FactState
 import java.io.File
 import java.net.HttpURLConnection
@@ -127,6 +130,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.util.UUID
 
@@ -649,6 +654,11 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     private val mutablePermissionDefaults = MutableStateFlow(PermissionDefaultsHostState())
     internal val permissionDefaults: StateFlow<PermissionDefaultsHostState> = mutablePermissionDefaults.asStateFlow()
 
+    /** The live settings/plugin/model/permission read behind 本会话设置. */
+    private val mutableConfiguration = MutableStateFlow(ConfigurationFacts())
+    internal val configuration: StateFlow<ConfigurationFacts> = mutableConfiguration.asStateFlow()
+    private val configurationRefreshMutex = Mutex()
+
     private val host: DefaultPhoneDshHost = DefaultPhoneDshHost(
         engine = engine,
         controller = controller,
@@ -891,6 +901,175 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 failure = message,
             )
             message
+        }
+    }
+
+    /**
+     * Reads the four DSH configuration sources and publishes them. Each source
+     * keeps its own failure; a failed source clears only its section.
+     *
+     * @return the first partial failure, or `null` when all four reads succeeded.
+     */
+    internal suspend fun refreshConfiguration(): String? = withContext(Dispatchers.IO) {
+        configurationRefreshMutex.withLock {
+            mutableConfiguration.update { it.copy(loading = true) }
+            try {
+                val facts = readConfigurationFacts(DshTurnClient(host.channel, ::logTurn))
+                mutableConfiguration.value = facts.copy(loading = false)
+                val snapshot = facts.snapshot ?: return@withLock "本会话设置读取失败"
+                listOfNotNull(
+                    snapshot.settingsFailure,
+                    snapshot.inventoryFailure,
+                    snapshot.permissionFailure,
+                    snapshot.modelCatalogFailure,
+                ).firstOrNull()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                mutableConfiguration.update {
+                    it.copy(
+                        loading = false,
+                        failure = failure.message?.substringBefore('\n')?.take(180)
+                            ?: "本会话设置读取失败",
+                    )
+                }
+                failure.message?.substringBefore('\n')?.take(180) ?: "本会话设置读取失败"
+            } finally {
+                mutableConfiguration.update { if (it.loading) it.copy(loading = false) else it }
+            }
+        }
+    }
+
+    /** Legacy host-action adapter; the settings page uses the request receipt below. */
+    internal suspend fun saveConfigurationGroup(namespace: String, patch: Map<String, String>): String? {
+        val revision = mutableConfiguration.value.snapshot?.groups
+            ?.firstOrNull { it.namespace == namespace }?.revision
+            ?: return "配置分组版本未知，请刷新后重试。"
+        val receipt = saveConfigurationGroupConfirmed(
+            namespace, patch, revision, java.util.UUID.randomUUID().toString(),
+        )
+        return if (receipt.success) null else receipt.message
+    }
+
+    internal suspend fun saveConfigurationGroupConfirmed(
+        namespace: String,
+        patch: Map<String, String>,
+        expectedRevision: Int,
+        requestId: String,
+    ): ConfigurationWriteReceipt = withContext(Dispatchers.IO) {
+        fun failed(message: String) = ConfigurationWriteReceipt(requestId, false, message)
+        val snapshot = mutableConfiguration.value.snapshot ?: return@withContext failed("本会话设置尚未读取")
+        if (mutableConfiguration.value.loading) return@withContext failed("设置仍在读取，请稍后重试。")
+        val group = snapshot.groups?.firstOrNull { it.namespace == namespace }
+            ?: return@withContext failed("配置分组不存在")
+        if (group.writable != FactState.YES) return@withContext failed("DSH 当前不允许修改这个设置分组。")
+        val fields = group.fields ?: return@withContext failed("设置字段尚未读取")
+        if (patch.isEmpty() || patch.keys.any { key -> fields.none { it.id == key } }) {
+            return@withContext failed("配置草稿为空或包含不支持的字段。")
+        }
+        val kinds = fields.associate { it.id to it.kind }
+        if (patch.any { (key, raw) -> configurationPatchValue(kinds[key] ?: return@any true, raw) == null }) {
+            return@withContext failed("配置值格式不正确，草稿仍保留。")
+        }
+        patch["allowedModels"]?.let { raw ->
+            val requested = configurationPatchModelIds(raw)
+                ?: return@withContext failed("子 Agent 模型选择格式不正确。")
+            val offered = snapshot.modelRoutes?.map { it.id }?.toSet()
+                ?: return@withContext failed("模型列表未知，请刷新后重试。")
+            if (!offered.containsAll(requested)) return@withContext failed("模型目录已变化，请刷新后重试。")
+        }
+        if (group.revision != expectedRevision) return@withContext failed("设置已被其他更改推进到新版本；草稿保留，请先撤销再编辑。")
+        val client = DshTurnClient(host.channel, ::logTurn)
+        val error = com.phonedsh.probe.saveConfigurationGroup(client, namespace, patch, expectedRevision, kinds)
+        if (error != null) return@withContext failed(error)
+
+        refreshConfiguration()
+        val readback = mutableConfiguration.value.snapshot
+        val readbackGroup = readback?.groups?.firstOrNull { it.namespace == namespace }
+        if (readback?.settingsFailure != null ||
+            !configurationPatchMatches(readbackGroup, patch, kinds)
+        ) {
+            failed("设置写入后没有在 DSH 读回中确认，草稿仍保留。")
+        } else {
+            ConfigurationWriteReceipt(requestId, true)
+        }
+    }
+
+    /** Resets one overridden field through settings/mutate with the read revision. */
+    internal suspend fun resetConfigurationField(namespace: String, field: String): String? {
+        val revision = mutableConfiguration.value.snapshot?.groups
+            ?.firstOrNull { it.namespace == namespace }?.revision
+            ?: return "配置分组版本未知，请刷新后重试。"
+        val receipt = resetConfigurationFieldConfirmed(
+            namespace, field, revision, java.util.UUID.randomUUID().toString(),
+        )
+        return if (receipt.success) null else receipt.message
+    }
+
+    internal suspend fun resetConfigurationFieldConfirmed(
+        namespace: String,
+        field: String,
+        expectedRevision: Int,
+        requestId: String,
+    ): ConfigurationWriteReceipt = withContext(Dispatchers.IO) {
+        fun failed(message: String) = ConfigurationWriteReceipt(requestId, false, message)
+        val snapshot = mutableConfiguration.value.snapshot ?: return@withContext failed("本会话设置尚未读取")
+        if (mutableConfiguration.value.loading) return@withContext failed("设置仍在读取，请稍后重试。")
+        val group = snapshot.groups?.firstOrNull { it.namespace == namespace }
+            ?: return@withContext failed("配置分组不存在")
+        if (group.writable != FactState.YES) return@withContext failed("DSH 当前不允许修改这个设置分组。")
+        val target = group.fields?.firstOrNull { it.id == field }
+            ?: return@withContext failed("设置字段不存在")
+        if (!target.overridden || target.kind == ConfigurationFieldKind.MODEL_SELECTION) {
+            return@withContext failed("此字段没有可恢复的覆盖值。")
+        }
+        if (group.revision != expectedRevision) return@withContext failed("设置已被其他更改推进到新版本；请刷新后重试。")
+        val error = resetConfigurationField(
+            DshTurnClient(host.channel, ::logTurn), namespace, field, expectedRevision,
+        )
+        if (error != null) return@withContext failed(error)
+        refreshConfiguration()
+        val readbackField = mutableConfiguration.value.snapshot?.groups
+            ?.firstOrNull { it.namespace == namespace }?.fields?.firstOrNull { it.id == field }
+        if (mutableConfiguration.value.snapshot?.settingsFailure != null || readbackField == null || readbackField.overridden) {
+            failed("默认值恢复后没有在 DSH 读回中确认，页面仍保留草稿。")
+        } else {
+            ConfigurationWriteReceipt(requestId, true)
+        }
+    }
+
+    /** Saves the new-session permission preset through the permission namespace CAS. */
+    internal suspend fun saveDefaultPermission(modeId: String): String? {
+        val revision = mutableConfiguration.value.snapshot?.permissionRevision
+            ?: return "权限预设版本未知，请刷新后重试。"
+        val receipt = saveDefaultPermissionConfirmed(modeId, revision, java.util.UUID.randomUUID().toString())
+        return if (receipt.success) null else receipt.message
+    }
+
+    internal suspend fun saveDefaultPermissionConfirmed(
+        modeId: String,
+        expectedRevision: Int,
+        requestId: String,
+    ): ConfigurationWriteReceipt = withContext(Dispatchers.IO) {
+        fun failed(message: String) = ConfigurationWriteReceipt(requestId, false, message)
+        val snapshot = mutableConfiguration.value.snapshot ?: return@withContext failed("本会话设置尚未读取")
+        if (mutableConfiguration.value.loading) return@withContext failed("设置仍在读取，请稍后重试。")
+        if (snapshot.permissionModes?.any { it.id == modeId } != true) {
+            return@withContext failed("这个权限预设不在当前 DSH 目录中。")
+        }
+        if (snapshot.permissionRevision != expectedRevision) {
+            return@withContext failed("新会话默认权限已被其他更改推进到新版本；草稿保留，请刷新后重试。")
+        }
+        val error = com.phonedsh.probe.saveDefaultPermissionMode(
+            DshTurnClient(host.channel, ::logTurn), modeId, expectedRevision,
+        )
+        if (error != null) return@withContext failed(error)
+        refreshConfiguration()
+        val readback = mutableConfiguration.value.snapshot
+        if (readback?.permissionFailure != null || readback?.defaultPermissionModeId != modeId) {
+            failed("新会话默认权限写入后没有在 DSH 读回中确认，草稿仍保留。")
+        } else {
+            ConfigurationWriteReceipt(requestId, true)
         }
     }
 

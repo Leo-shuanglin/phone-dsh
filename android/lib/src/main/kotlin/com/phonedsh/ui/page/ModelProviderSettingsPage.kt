@@ -58,6 +58,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -78,19 +79,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.password
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import com.phonedsh.ui.UiStrings
-import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
+import com.phonedsh.ui.surface.BACK_GLYPH
+import com.phonedsh.ui.nav.PdshBackLevel
+import com.phonedsh.ui.nav.RouteBackLevel
 import com.phonedsh.ui.surface.SettingsHairline
 import com.phonedsh.ui.surface.SettingsSectionLabel
 import com.phonedsh.ui.surface.SettingsSubPageFrame
+import com.phonedsh.ui.surface.SettingsNavAction
 import com.phonedsh.ui.surface.settingsFootnoteStyle
 import com.phonedsh.ui.surface.settingsLabelStyle
 import com.phonedsh.ui.surface.settingsValueStyle
@@ -240,7 +249,8 @@ public data class ProviderKeyFact(
  * @param endpoint a host name, or a URL the host happens to have. Only the host
  *   part is rendered ([redactEndpointHost]); a complete URL is never printed.
  * @param key the stored-key fact.
- * @param selected whether this is the service the engine will use.
+ * @param selected whether this is the stored default for the next process launch.
+ * @param active whether this profile is the service captured by the current process.
  */
 @Immutable
 public data class ProviderProfile(
@@ -250,6 +260,10 @@ public data class ProviderProfile(
     public val endpoint: String? = null,
     public val key: ProviderKeyFact = ProviderKeyFact(),
     public val selected: Boolean = false,
+    public val reasoningEffort: String? = null,
+    public val models: List<ProviderModelDraft> = emptyList(),
+    public val credentialRef: String? = null,
+    public val active: Boolean? = null,
 )
 
 /** Why the page could not read or use the configuration; wording is page-owned. */
@@ -292,6 +306,19 @@ public data class ModelProviderFacts(
     /** Last test for the currently edited profile; contains no endpoint or key. */
     public val connectionTest: ProviderConnectionTestFact? = null,
     public val providerSave: ProviderSaveFact? = null,
+    /** Request-bound model catalog result; contains model ids only. */
+    public val catalog: ProviderCatalogFact? = null,
+)
+
+/** A real /models read, correlated to the editor request and profile that started it. */
+@Immutable
+public data class ProviderCatalogFact(
+    public val requestId: String,
+    public val profileId: String?,
+    public val isNew: Boolean,
+    public val isLoading: Boolean,
+    public val models: List<String>? = null,
+    public val message: String? = null,
 )
 
 /** A connection-test lifecycle/result, correlated by non-secret profile identity. */
@@ -393,6 +420,10 @@ public data class ProviderRowView(
     public val keySuffixLabel: String?,
     public val modelLabel: String?,
     public val endpointLabel: String?,
+    public val reasoningEffort: String? = null,
+    public val models: List<ProviderModelDraft> = emptyList(),
+    public val credentialRef: String? = null,
+    public val active: Boolean? = null,
 )
 
 /**
@@ -416,9 +447,10 @@ public data class ModelProviderScreenState(
     public val servicesExpanded: Boolean = true,
     public val canWrite: Boolean = true,
     public val engineStarted: FactState = FactState.UNKNOWN,
-    public val restartHint: String = UiStrings.PROVIDER_RESTART_HINT_IDLE,
+    public val restartHint: String = PROVIDER_APPLY_HINT_STOPPED,
     public val connectionTest: ProviderConnectionTestFact? = null,
     public val providerSave: ProviderSaveFact? = null,
+    public val catalog: ProviderCatalogFact? = null,
 ) {
     /** The empty state: the host read the page and there is nothing in it. */
     public val isEmpty: Boolean get() = phase == SettingsDataPhase.READY && rows.isEmpty()
@@ -462,12 +494,13 @@ public data class ModelProviderScreenState(
                 canWrite = facts.writable != FactState.NO,
                 engineStarted = facts.engineStarted,
                 restartHint = if (facts.engineStarted == FactState.YES) {
-                    UiStrings.PROVIDER_RESTART_HINT_RUNNING
+                    PROVIDER_APPLY_HINT_RUNNING
                 } else {
-                    UiStrings.PROVIDER_RESTART_HINT_IDLE
+                    PROVIDER_APPLY_HINT_STOPPED
                 },
                 connectionTest = facts.connectionTest,
                 providerSave = facts.providerSave,
+                catalog = facts.catalog,
             )
         }
 
@@ -501,6 +534,10 @@ public data class ModelProviderScreenState(
                     ?.let { UiStrings.PROVIDER_MODEL.format(it) },
                 endpointLabel = redactEndpointHost(profile.endpoint)
                     ?.let { UiStrings.PROVIDER_ENDPOINT.format(it) },
+                reasoningEffort = profile.reasoningEffort,
+                models = profile.models,
+                credentialRef = profile.credentialRef,
+                active = profile.active,
             )
         }
 
@@ -541,8 +578,12 @@ public data class ModelProviderScreenState(
 @Immutable
 public data class ProviderModelDraft(
     public val id: String = "",
+    public val name: String? = null,
+    public val contextWindow: Int? = null,
+    public val maxTokens: Int? = null,
     public val textInput: Boolean = true,
     public val imageInput: Boolean = false,
+    public val reasoningEffort: String? = null,
 )
 
 /** A picker row keeps the wire value separate from its localized title. */
@@ -582,6 +623,9 @@ public data class ProviderDraft(
             if (ids.any(String::isEmpty)) return "模型 ID 不能为空。"
             if (ids.distinct().size != ids.size) return "模型 ID 不能重复。"
             if (models.any { !it.textInput && !it.imageInput }) return "每个模型至少保留文本或图片一种输入类型。"
+            if (models.any { (it.contextWindow != null && it.contextWindow <= 0) || (it.maxTokens != null && it.maxTokens <= 0) }) {
+                return "上下文窗口和最大输出必须是正整数。"
+            }
             return null
         }
 
@@ -611,7 +655,8 @@ public data class ProviderDraft(
             id = row.id,
             name = if (row.nameIsFallback) "" else row.name,
             model = row.model.orEmpty(),
-            models = listOf(ProviderModelDraft(id = row.model.orEmpty())),
+            reasoningEffort = row.reasoningEffort,
+            models = row.models.ifEmpty { listOf(ProviderModelDraft(id = row.model.orEmpty())) },
             isNew = false,
         )
 
@@ -670,20 +715,66 @@ public fun ModelProviderSettingsPage(
     modifier: Modifier = Modifier,
     onRetry: (() -> Unit)? = null,
     embedded: Boolean = false,
+    onSelect: (String) -> Unit = {},
     onStartEngine: () -> Unit = {},
     onSave: (ProviderDraft, String) -> Unit = { _, _ -> },
     onTest: (ProviderDraft) -> Unit = {},
     onDelete: (String) -> Unit = {},
+    onGetModels: (ProviderDraft, String) -> Unit = { _, _ -> },
+    /** Existing route back chain; editor and advanced pages consume one inner level each. */
+    backLevel: PdshBackLevel? = null,
 ) {
     var draft by remember { mutableStateOf<ProviderDraft?>(null) }
     var pendingDelete by remember { mutableStateOf<ProviderRowView?>(null) }
     var saveRequestId by remember { mutableStateOf<String?>(null) }
+    var catalogRequestId by remember { mutableStateOf<String?>(null) }
+    var advanced by remember { mutableStateOf(false) }
+    var appliedCatalogRequestId by remember { mutableStateOf<String?>(null) }
     val editing = draft
-    val saveFact = editing?.let { current ->
-        state.providerSave?.takeIf {
-            it.requestId == saveRequestId && it.profileId == current.id && it.isNew == current.isNew
+    val editingCatalog = editing?.let { current ->
+        state.catalog?.takeIf {
+            it.requestId == catalogRequestId &&
+                it.profileId == current.id.takeIf(String::isNotBlank) &&
+                it.isNew == current.isNew
         }
     }
+    LaunchedEffect(editingCatalog?.requestId, editingCatalog?.isLoading, editingCatalog?.models) {
+        val current = editing ?: return@LaunchedEffect
+        val fact = editingCatalog ?: return@LaunchedEffect
+        val ids = fact.models ?: return@LaunchedEffect
+        if (fact.isLoading || fact.requestId == appliedCatalogRequestId) return@LaunchedEffect
+        appliedCatalogRequestId = fact.requestId
+        val merged = ids.map { id ->
+            current.models.firstOrNull { it.id == id } ?: ProviderModelDraft(id = id)
+        }
+        val selected = current.model.takeIf { it in ids } ?: ids.firstOrNull().orEmpty()
+        draft = current.copy(models = merged, model = selected)
+    }
+    val saveFact = editing?.let { current ->
+        state.providerSave?.takeIf {
+            it.requestId == saveRequestId && it.isNew == current.isNew &&
+                (current.isNew || it.profileId == current.id)
+        }
+    }
+    val cancelEditor: () -> Unit = {
+        draft = null
+        saveRequestId = null
+        catalogRequestId = null
+        advanced = false
+    }
+    val leaveEditorLevel: () -> Unit = {
+        if (advanced) advanced = false else cancelEditor()
+    }
+    val submitEditor: () -> Unit = {
+        editing?.let { current ->
+            val requestId = java.util.UUID.randomUUID().toString()
+            saveRequestId = requestId
+            onSave(current, requestId)
+        }
+    }
+    val editorMain = editing != null && !advanced
+    val editorBusy = saveFact?.isSaving == true
+    RouteBackLevel(backLevel, enabled = editing != null) { leaveEditorLevel() }
     LaunchedEffect(editing?.id, editing?.isNew, saveFact?.requestId, saveFact?.isSaving, saveFact?.succeeded) {
         if (saveFact?.succeeded == true && !saveFact.isSaving) {
             draft = null
@@ -692,14 +783,32 @@ public fun ModelProviderSettingsPage(
     }
 
     SettingsSubPageFrame(
-        backGlyph = SETTINGS_CLOSE_GLYPH,
-        embedded = embedded,
-        largeTitle = when {
-            editing == null -> UiStrings.MODEL_PROVIDER_TITLE
-            editing.isNew -> UiStrings.PROVIDER_ADD_SERVICE
-            else -> UiStrings.PROVIDER_EDITOR_EDIT_TITLE
+        // The source page, editor and advanced page all use inline navigation
+        // titles; no 34pt large-title scaffold belongs to this NavigationStack.
+        title = when {
+            editing != null && advanced -> UiStrings.PROVIDER_ADVANCED
+            editing != null && editing.isNew -> UiStrings.PROVIDER_ADD_SERVICE
+            editing != null -> UiStrings.PROVIDER_EDITOR_EDIT_TITLE
+            embedded -> null
+            else -> UiStrings.MODEL_PROVIDER_TITLE
         },
-        onBack = onBack,
+        largeTitle = null,
+        backGlyph = if (editorMain) UiStrings.CANCEL else BACK_GLYPH,
+        embedded = embedded && editing == null,
+        onBack = when {
+            editorMain -> cancelEditor
+            editing != null -> leaveEditorLevel
+            else -> onBack
+        },
+        trailing = if (editorMain) {
+            {
+                SettingsNavAction(
+                    text = UiStrings.SAVE,
+                    onClick = submitEditor,
+                    enabled = editing?.canSave == true && !editorBusy,
+                )
+            }
+        } else null,
         rootTag = UiPageTags.PROVIDER_ROOT,
         modifier = modifier,
     ) {
@@ -714,23 +823,35 @@ public fun ModelProviderSettingsPage(
                     onRetry = onRetry,
                 )
             }
-            if (editing != null) {
+            if (editing != null && advanced) {
+                ProviderAdvancedEditor(
+                    draft = editing,
+                    keyStatus = state.rows.firstOrNull { it.id == editing.id }?.keyStatus
+                        ?: ProviderKeyStatus.NOT_CONFIGURED,
+                    connectionTest = state.connectionTest?.takeIf {
+                        it.isNew == editing.isNew && (editing.isNew || it.profileId == editing.id)
+                    },
+                    onDraftChange = { draft = it },
+                    onTest = { onTest(editing) },
+                )
+            } else if (editing != null) {
                 ProviderEditor(
                     draft = editing,
                     keyStatus = state.rows.firstOrNull { it.id == editing.id }?.keyStatus
                         ?: ProviderKeyStatus.NOT_CONFIGURED,
                     connectionTest = state.connectionTest?.takeIf {
-                        it.profileId == editing.id && it.isNew == editing.isNew
+                        it.isNew == editing.isNew && (editing.isNew || it.profileId == editing.id)
                     },
+                    catalog = editingCatalog,
                     saveFact = saveFact,
                     onDraftChange = { draft = it },
-                    onTest = { onTest(editing) },
-                    onCancel = { draft = null; saveRequestId = null },
-                    onSave = {
+                    onGetModels = {
                         val requestId = java.util.UUID.randomUUID().toString()
-                        saveRequestId = requestId
-                        onSave(editing, requestId)
+                        catalogRequestId = requestId
+                        appliedCatalogRequestId = null
+                        onGetModels(editing, requestId)
                     },
+                    onOpenAdvanced = { advanced = true },
                 )
             } else if (state.isUnknown) {
                 EmptyHint(
@@ -750,12 +871,19 @@ public fun ModelProviderSettingsPage(
                         onStartEngine = onStartEngine,
                         onOpenNew = {
                             draft = ProviderDraft.new()
+                            advanced = false
+                            catalogRequestId = null
+                            appliedCatalogRequestId = null
                             onAdd()
                         },
                         onOpen = { row ->
                             draft = ProviderDraft.from(row)
+                            advanced = false
+                            catalogRequestId = null
+                            appliedCatalogRequestId = null
                             onEdit(row.id)
                         },
+                        onSelect = onSelect,
                         onDeleteRequest = { pendingDelete = it },
                     )
                 }
@@ -798,6 +926,7 @@ private fun LazyListScope.serviceGroup(
     onStartEngine: () -> Unit,
     onOpenNew: () -> Unit,
     onOpen: (ProviderRowView) -> Unit,
+    onSelect: (String) -> Unit,
     onDeleteRequest: (ProviderRowView) -> Unit,
 ) {
     item(key = "header.services") {
@@ -826,6 +955,7 @@ private fun LazyListScope.serviceGroup(
                 row = row,
                 canWrite = state.canWrite,
                 onOpen = { onOpen(row) },
+                onSelect = { onSelect(row.id) },
                 onDelete = { onDeleteRequest(row) },
             )
         }
@@ -850,9 +980,6 @@ private fun LazyListScope.serviceGroup(
             )
         }
     }
-    item(key = "header.apply") {
-        SettingsSectionLabel(UiStrings.PROVIDER_SECTION_APPLY)
-    }
     item(key = "apply.hint") {
         ProviderFooterLine(text = state.restartHint)
     }
@@ -873,6 +1000,7 @@ private fun ProviderServiceRow(
     row: ProviderRowView,
     canWrite: Boolean,
     onOpen: () -> Unit,
+    onSelect: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
@@ -880,6 +1008,7 @@ private fun ProviderServiceRow(
         modifier = Modifier
             .fillMaxWidth()
             .testTag(UiPageTags.PROVIDER_ROW_PREFIX + row.id)
+            .clickable(enabled = canWrite, role = Role.Button, onClick = onSelect)
             .padding(
                 horizontal = tokens.geometry.pageOuterMarginH,
                 vertical = tokens.spacing.iconText,
@@ -890,7 +1019,6 @@ private fun ProviderServiceRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(enabled = canWrite, role = Role.Button, onClick = onOpen)
                 .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
@@ -902,18 +1030,18 @@ private fun ProviderServiceRow(
                 BasicText(
                     text = UiStrings.MODEL_PROVIDER_TITLE,
                     style = settingsLabelStyle().copy(color = tokens.colors.primary),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).clickable(role = Role.Button, onClick = onSelect),
                 )
             } else {
                 BasicText(
                     text = row.name,
                     style = settingsLabelStyle().copy(color = tokens.colors.primary),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).clickable(role = Role.Button, onClick = onSelect),
                 )
             }
             if (row.selected) {
                 BasicText(
-                    text = UiStrings.PROVIDER_DEFAULT,
+                    text = if (row.active == true) UiStrings.PROVIDER_DEFAULT else PROVIDER_NEXT_LAUNCH_DEFAULT,
                     style = settingsFootnoteStyle().copy(color = tokens.colors.accent),
                 )
             }
@@ -925,11 +1053,14 @@ private fun ProviderServiceRow(
             // tinted with the accent (`ModelProviderSettingsPage.swift:129-132`) —
             // a filled circle with a check in it, not a word. It is drawn rather
             // than typed so the mark cannot contribute a font line box to the row.
-            if (row.selected) {
+            if (row.active == true) {
                 SelectedServiceMark()
             }
         }
-        row.modelLabel?.let { label -> ProviderFooterLine(text = label) }
+        row.modelLabel?.let { label ->
+            val effort = row.reasoningEffort?.let(::providerEffortLabel)
+            ProviderFooterLine(text = if (effort != null) "$label · $effort" else label)
+        }
         row.endpointLabel?.let { label -> ProviderFooterLine(text = label) }
         row.keySuffixLabel?.let { label -> ProviderFooterLine(text = label) }
         ProviderFooterLine(text = row.keyHint)
@@ -947,7 +1078,9 @@ private fun ProviderServiceRow(
                 label = UiStrings.PROVIDER_DELETE,
                 onClick = onDelete,
                 tone = SessionActionTone.DANGER,
-                enabled = canWrite,
+                // iOS omits delete when the key cannot be read, so a destructive
+                // action can never erase a credential it could not inspect.
+                enabled = canWrite && row.keyStatus != ProviderKeyStatus.UNKNOWN,
             )
         }
     }
@@ -1085,15 +1218,16 @@ private fun ProviderEditor(
     draft: ProviderDraft,
     keyStatus: ProviderKeyStatus,
     connectionTest: ProviderConnectionTestFact?,
+    catalog: ProviderCatalogFact?,
+    onOpenAdvanced: () -> Unit,
     saveFact: ProviderSaveFact?,
     onDraftChange: (ProviderDraft) -> Unit,
-    onTest: () -> Unit,
-    onCancel: () -> Unit,
-    onSave: () -> Unit,
+    onGetModels: () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
     val clipboard = LocalClipboardManager.current
     val saveInProgress = saveFact?.isSaving == true
+    val fetching = catalog?.isLoading == true
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1104,130 +1238,15 @@ private fun ProviderEditor(
             .imePadding()
             .verticalScroll(rememberScrollState()),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = tokens.geometry.pageOuterMarginH),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (saveInProgress) {
-                Row(
-                    modifier = Modifier.defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-                        .padding(horizontal = tokens.spacing.iconText)
-                        .semantics { contentDescription = UiStrings.PROVIDER_SAVING },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(tokens.geometry.statusDotDiameter),
-                        color = tokens.colors.accent,
-                        strokeWidth = tokens.stroke.hairline,
-                    )
-                    BasicText(UiStrings.PROVIDER_SAVING, style = settingsLabelStyle().copy(color = tokens.colors.accent))
-                }
-            } else if (connectionTest?.isTesting == true) {
-                Row(
-                    modifier = Modifier.defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
-                        .padding(horizontal = tokens.spacing.iconText)
-                        .semantics { contentDescription = "${UiStrings.PROVIDER_TEST}中" },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(tokens.geometry.statusDotDiameter),
-                        color = tokens.colors.accent,
-                        strokeWidth = tokens.stroke.hairline,
-                    )
-                    BasicText("${UiStrings.PROVIDER_TEST}中…", style = settingsLabelStyle().copy(color = tokens.colors.accent))
-                }
-            } else {
-                SessionTextAction(
-                    label = UiStrings.PROVIDER_TEST,
-                    onClick = onTest,
-                    tone = SessionActionTone.ACCENT,
-                    enabled = draft.canSave,
-                    modifier = Modifier.testTag(PROVIDER_TEST_TAG),
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            SessionTextAction(
-                label = UiStrings.CANCEL,
-                onClick = onCancel,
-                tone = SessionActionTone.SECONDARY,
-            )
-            SessionTextAction(
-                label = UiStrings.SAVE,
-                onClick = onSave,
-                tone = SessionActionTone.ACCENT,
-                enabled = draft.canSave && !saveInProgress,
-            )
-        }
+        if (saveInProgress) ProviderProgressLine(UiStrings.PROVIDER_SAVING)
         SettingsHairline()
+        SettingsSectionLabel(UiStrings.PROVIDER_SECTION_CONNECTION)
         ProviderField(
             label = UiStrings.PROVIDER_FIELD_NAME,
             value = draft.name,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
             onValueChange = { onDraftChange(draft.copy(name = it)) },
         )
-        ProviderField(
-            label = if (draft.isNew) UiStrings.PROVIDER_FIELD_ID_NEW else UiStrings.PROVIDER_FIELD_ID,
-            value = draft.id,
-            enabled = draft.isNew,
-            onValueChange = { onDraftChange(draft.copy(id = it)) },
-        )
-        ProviderField(
-            label = UiStrings.PROVIDER_FIELD_URL,
-            value = draft.endpoint,
-            onValueChange = { onDraftChange(draft.copy(endpoint = it)) },
-        )
-        ProviderPickerRow(
-            label = UiStrings.PROVIDER_DEFAULT_MODEL,
-            value = draft.model,
-            options = draft.models.map { it.id }.filter { it.isNotBlank() }
-                .map { ProviderPickerOption(it, it) },
-            onSelect = { onDraftChange(draft.copy(model = it)) },
-        )
-        ProviderPickerRow(
-            label = UiStrings.PROVIDER_REASONING_EFFORT,
-            value = draft.reasoningEffort?.let(::providerEffortLabel) ?: UiStrings.PROVIDER_DEFAULT,
-            options = listOf(
-                ProviderPickerOption("off", UiStrings.PROVIDER_EFFORT_OFF),
-                ProviderPickerOption("low", UiStrings.PROVIDER_EFFORT_LOW),
-                ProviderPickerOption("high", UiStrings.PROVIDER_EFFORT_HIGH),
-                ProviderPickerOption("max", UiStrings.PROVIDER_EFFORT_MAX),
-            ),
-            onSelect = { onDraftChange(draft.copy(reasoningEffort = it)) },
-        )
-        draft.modelValidationError?.let { error ->
-            ProviderFooterLine(text = error)
-        }
-        ProviderFooterLine(text = draft.protocolHint)
-        SettingsSectionLabel(UiStrings.PROVIDER_MODEL_CATALOG)
-        draft.models.forEachIndexed { index, model ->
-            ProviderModelCard(
-                model = model,
-                onModelChange = { changed ->
-                    onDraftChange(
-                        draft.copy(
-                            models = draft.models.toMutableList().also { it[index] = changed },
-                        ),
-                    )
-                },
-                onDelete = {
-                    onDraftChange(
-                        draft.copy(
-                            models = draft.models.filterIndexed { at, _ -> at != index },
-                            model = if (draft.model == model.id) "" else draft.model,
-                        ),
-                    )
-                },
-            )
-        }
-        ProviderRowAction(
-            label = UiStrings.PROVIDER_ADD_MODEL,
-            onClick = { onDraftChange(draft.copy(models = draft.models + ProviderModelDraft())) },
-        )
-        SettingsSectionLabel(UiStrings.PROVIDER_KEY_SECTION)
-        ProviderFooterLine(text = keyStatus.keyStatusText())
         ProviderField(
             label = if (keyStatus == ProviderKeyStatus.CONFIGURED) {
                 UiStrings.PROVIDER_KEY_FIELD_REPLACE
@@ -1235,7 +1254,18 @@ private fun ProviderEditor(
                 UiStrings.PROVIDER_KEY_FIELD
             },
             value = draft.apiKey,
+            secure = true,
             onValueChange = { onDraftChange(draft.copy(apiKey = it, removeStoredKey = false)) },
+        )
+        ProviderField(
+            label = UiStrings.PROVIDER_API_URL,
+            value = draft.endpoint,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Uri,
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+            ),
+            onValueChange = { onDraftChange(draft.copy(endpoint = it)) },
         )
         SessionTextAction(
             label = UiStrings.PROVIDER_IMPORT_CLIPBOARD,
@@ -1247,14 +1277,34 @@ private fun ProviderEditor(
             tone = SessionActionTone.ACCENT,
             modifier = Modifier.padding(horizontal = tokens.geometry.pageOuterMarginH),
         )
-        if (keyStatus == ProviderKeyStatus.CONFIGURED) {
-            ProviderToggleRow(
-                label = UiStrings.PROVIDER_DELETE_SAVED_KEY,
-                checked = draft.removeStoredKey,
-                onCheckedChange = { onDraftChange(draft.copy(removeStoredKey = it, apiKey = "")) },
-            )
-        }
-        ProviderFooterLine(text = UiStrings.PROVIDER_KEY_STORE_HINT)
+        ProviderFooterLine(text = UiStrings.PROVIDER_CONNECTION_FOOTER)
+
+        SettingsSectionLabel(UiStrings.MODEL_LABEL)
+        SessionTextAction(
+            label = if (fetching) UiStrings.PROVIDER_FETCHING else UiStrings.PROVIDER_FETCH,
+            onClick = onGetModels,
+            tone = SessionActionTone.ACCENT,
+            enabled = draft.endpoint.isNotBlank() && !fetching && !saveInProgress,
+            modifier = Modifier
+                .padding(horizontal = tokens.geometry.pageOuterMarginH)
+                .testTag(PROVIDER_FETCH_TAG),
+        )
+        ProviderPickerRow(
+            label = UiStrings.PROVIDER_DEFAULT_MODEL,
+            value = draft.model,
+            options = draft.models.map { it.id }.filter { it.isNotBlank() }
+                .map { ProviderPickerOption(it, it) },
+            onSelect = { onDraftChange(draft.copy(model = it)) },
+        )
+        catalog?.message?.let { message -> ProviderFooterLine(text = message) }
+        ProviderFooterLine(text = UiStrings.PROVIDER_MODEL_FOOTER)
+
+        ProviderRowAction(
+            label = UiStrings.PROVIDER_ADVANCED,
+            onClick = onOpenAdvanced,
+            modifier = Modifier.testTag(PROVIDER_ADVANCED_TAG),
+        )
+        ProviderFooterLine(text = UiStrings.PROVIDER_ADVANCED_FOOTER)
         connectionTest?.message?.let { message ->
             BasicText(
                 text = message,
@@ -1282,6 +1332,114 @@ private fun ProviderEditor(
     }
 }
 
+/** The advanced editor is a pushed settings page, matching the iOS NavigationLink. */
+@Composable
+private fun ProviderAdvancedEditor(
+    draft: ProviderDraft,
+    keyStatus: ProviderKeyStatus,
+    connectionTest: ProviderConnectionTestFact?,
+    onDraftChange: (ProviderDraft) -> Unit,
+    onTest: () -> Unit,
+) {
+    val tokens = LocalUiTokens.current
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+    ) {
+        SettingsSectionLabel(UiStrings.PROVIDER_ADVANCED_SECTION)
+        ProviderField(
+            label = if (draft.isNew) UiStrings.PROVIDER_FIELD_ID_NEW else UiStrings.PROVIDER_FIELD_ID,
+            value = draft.id,
+            enabled = draft.isNew,
+            onValueChange = { onDraftChange(draft.copy(id = it)) },
+        )
+        ProviderPickerRow(
+            label = UiStrings.PROVIDER_REASONING_EFFORT,
+            value = draft.reasoningEffort?.let(::providerEffortLabel) ?: UiStrings.PROVIDER_DEFAULT,
+            options = listOf(
+                ProviderPickerOption("", UiStrings.PROVIDER_DEFAULT),
+                ProviderPickerOption("off", UiStrings.PROVIDER_EFFORT_OFF),
+                ProviderPickerOption("low", UiStrings.PROVIDER_EFFORT_LOW),
+                ProviderPickerOption("high", UiStrings.PROVIDER_EFFORT_HIGH),
+                ProviderPickerOption("max", UiStrings.PROVIDER_EFFORT_MAX),
+            ),
+            onSelect = { onDraftChange(draft.copy(reasoningEffort = it.ifEmpty { null })) },
+        )
+        draft.modelValidationError?.let { ProviderFooterLine(text = it) }
+        ProviderFooterLine(text = draft.protocolHint)
+        draft.models.forEachIndexed { index, model ->
+            ProviderModelCard(
+                model = model,
+                onModelChange = { changed ->
+                    onDraftChange(draft.copy(models = draft.models.toMutableList().also { it[index] = changed }))
+                },
+                onDelete = {
+                    onDraftChange(
+                        draft.copy(
+                            models = draft.models.filterIndexed { at, _ -> at != index },
+                            model = if (draft.model == model.id) "" else draft.model,
+                        ),
+                    )
+                },
+            )
+        }
+        ProviderRowAction(
+            label = UiStrings.PROVIDER_ADD_MODEL,
+            onClick = { onDraftChange(draft.copy(models = draft.models + ProviderModelDraft())) },
+        )
+        SettingsSectionLabel(UiStrings.PROVIDER_SECTION_KEY_CONNECTION)
+        ProviderFooterLine(text = keyStatus.keyStatusText())
+        if (keyStatus == ProviderKeyStatus.CONFIGURED) {
+            ProviderToggleRow(
+                label = UiStrings.PROVIDER_DELETE_SAVED_KEY,
+                checked = draft.removeStoredKey,
+                onCheckedChange = { onDraftChange(draft.copy(removeStoredKey = it, apiKey = "")) },
+            )
+        }
+        ProviderFooterLine(text = UiStrings.PROVIDER_KEY_STORE_HINT)
+        SessionTextAction(
+            label = if (connectionTest?.isTesting == true) UiStrings.PROVIDER_TESTING
+                else UiStrings.PROVIDER_TEST_CONNECTION,
+            onClick = onTest,
+            tone = SessionActionTone.ACCENT,
+            enabled = draft.canSave && connectionTest?.isTesting != true,
+            modifier = Modifier
+                .padding(horizontal = tokens.geometry.pageOuterMarginH)
+                .testTag(PROVIDER_TEST_TAG),
+        )
+        connectionTest?.message?.let { message ->
+            BasicText(
+                text = message,
+                style = settingsFootnoteStyle().copy(
+                    color = if (connectionTest.succeeded == true) tokens.colors.secondary else tokens.colors.danger,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(PROVIDER_TEST_RESULT_TAG)
+                    .padding(horizontal = tokens.geometry.pageOuterMarginH, vertical = tokens.spacing.badgeInsetV),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProviderProgressLine(label: String) {
+    val tokens = LocalUiTokens.current
+    Row(
+        modifier = Modifier.defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+            .padding(horizontal = tokens.spacing.iconText)
+            .semantics { contentDescription = label },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(tokens.geometry.statusDotDiameter),
+            color = tokens.colors.accent,
+            strokeWidth = tokens.stroke.hairline,
+        )
+        BasicText(label, style = settingsLabelStyle().copy(color = tokens.colors.accent))
+    }
+}
+
 /** One text field of the editor: a fixed label above the field. */
 @Composable
 private fun ProviderField(
@@ -1290,6 +1448,9 @@ private fun ProviderField(
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    secure: Boolean = false,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    tag: String? = null,
 ) {
     val tokens = LocalUiTokens.current
     Column(
@@ -1310,6 +1471,20 @@ private fun ProviderField(
             onValueChange = onValueChange,
             enabled = enabled,
             singleLine = true,
+            keyboardOptions = if (secure) {
+                KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                )
+            } else {
+                keyboardOptions
+            },
+            visualTransformation = if (secure) {
+                PasswordVisualTransformation()
+            } else {
+                VisualTransformation.None
+            },
             textStyle = settingsValueStyle().copy(
                 color = if (enabled) tokens.colors.primary else tokens.colors.tertiary,
             ),
@@ -1317,7 +1492,8 @@ private fun ProviderField(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = tokens.geometry.pageRowMinHeight)
-                .testTag(PROVIDER_FIELD_TAG_PREFIX + label),
+                .then(if (secure) Modifier.semantics { password() } else Modifier)
+                .testTag(tag ?: (PROVIDER_FIELD_TAG_PREFIX + label)),
         )
     }
 }
@@ -1395,7 +1571,38 @@ private fun ProviderModelCard(
         ProviderField(
             label = UiStrings.PROVIDER_MODEL_ID,
             value = model.id,
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+            ),
             onValueChange = { onModelChange(model.copy(id = it)) },
+        )
+        ProviderField(
+            label = UiStrings.PROVIDER_FIELD_NAME,
+            value = model.name.orEmpty(),
+            onValueChange = { onModelChange(model.copy(name = it.takeIf(String::isNotBlank))) },
+            tag = "pdsh.provider.model.name",
+        )
+        ProviderField(
+            label = UiStrings.PROVIDER_TOKENS,
+            value = model.contextWindow?.toString().orEmpty(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            onValueChange = { onModelChange(model.copy(contextWindow = it.filter(Char::isDigit).toIntOrNull())) },
+        )
+        ProviderField(
+            label = UiStrings.PROVIDER_MAX_OUTPUT,
+            value = model.maxTokens?.toString().orEmpty(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            onValueChange = { onModelChange(model.copy(maxTokens = it.filter(Char::isDigit).toIntOrNull())) },
+        )
+        ProviderField(
+            label = UiStrings.PROVIDER_EFFORT_FIELD,
+            value = model.reasoningEffort.orEmpty(),
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+            ),
+            onValueChange = { onModelChange(model.copy(reasoningEffort = it.takeIf(String::isNotBlank))) },
         )
         ProviderToggleRow(
             label = UiStrings.PROVIDER_TEXT_INPUT,
@@ -1426,6 +1633,10 @@ private fun ProviderKeyStatus.keyStatusText(): String = when (this) {
 }
 
 /** Four is the only suffix the page ever shows. */
+internal const val PROVIDER_APPLY_HINT_STOPPED: String = "保存后的配置将在下次启动 App 时生效。"
+internal const val PROVIDER_APPLY_HINT_RUNNING: String =
+    "保存后的配置将在完全退出并重新打开 App 后生效；当前会话继续使用启动时配置。"
+
 private const val KEY_SUFFIX_LENGTH: Int = 4
 
 /** Below this length, "the last four" would be the whole value. */
@@ -1437,6 +1648,9 @@ private val HOST_PATTERN: Regex = Regex("""^[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z
 /** The retry affordance the failure line draws (a glyph, not a contract label). */
 private const val RETRY_GLYPH: String = "↻"
 private const val PROVIDER_TEST_TAG: String = "pdsh.provider.test"
+private const val PROVIDER_FETCH_TAG: String = "pdsh.provider.fetch"
+private const val PROVIDER_ADVANCED_TAG: String = "pdsh.provider.advanced"
+private const val PROVIDER_NEXT_LAUNCH_DEFAULT: String = "下次默认"
 private const val PROVIDER_TEST_RESULT_TAG: String = "pdsh.provider.test-result"
 private const val PROVIDER_SAVE_RESULT_TAG: String = "pdsh.provider.save-result"
 private const val PROVIDER_FIELD_TAG_PREFIX: String = "pdsh.provider.field."

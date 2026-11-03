@@ -836,6 +836,8 @@ class PageExtractor:
             self._link_presentations()
             if self.depth == 0:
                 self._inline_presented_actions()
+                if self.name == "ChatPage":
+                    self._inline_verified_chat_helpers()
         return {
             "schema": SCHEMA,
             "page": self.name,
@@ -1841,6 +1843,148 @@ class PageExtractor:
                 inlined = dict(action)
                 inlined["presentedBy"] = presentation["id"]
                 self._add_action(inlined)
+
+    def _inline_verified_chat_helpers(self) -> None:
+        """Inline only the four external helper views mounted by ChatPage.
+
+        Chat's permission, question takeover, plan-review and todo-dock controls
+        live in separate SwiftUI files. This is deliberately not a general helper
+        string collector: each source control is included only when ChatPage has
+        the production callsite and forwards the callback that makes that control
+        functional. The helper's own literal (or verified static literal) remains
+        the provenance anchor.
+        """
+        if not self.has_body:
+            return
+
+        call = self.source.masked[self.body_start:self.body_end]
+
+        def mounted(call_name: str, required: tuple[str, ...], guard: str | None = None) -> bool:
+            for match in re.finditer(rf"\b{re.escape(call_name)}\s*\(", call):
+                pos = self.body_start + match.start()
+                if not self._live(pos):
+                    continue
+                if guard is not None and innermost_condition(self.if_scopes, pos) != guard:
+                    continue
+                opening = self.source.masked.find("(", pos)
+                closing = match_delim(self.source.masked, opening, "(", ")")
+                if closing < 0:
+                    continue
+                args = self.source.masked[opening + 1:closing]
+                if all(re.search(pattern, args, re.S) for pattern in required):
+                    return True
+            return False
+
+        def helper(name: str) -> Source | None:
+            path = self.source.path.parent / name
+            return Source(path, self.source.path.parents[3]) if path.is_file() else None
+
+        def static_label(source: Source, declaration: str, property_name: str) -> tuple[str, int] | None:
+            match = re.search(rf"\bstatic\s+let\s+{re.escape(property_name)}\s*=",
+                              source.masked)
+            if not match:
+                return None
+            owner = re.search(rf"\b(?:struct|class|enum)\s+{re.escape(declaration)}\b[^{{]*\{{",
+                              source.masked)
+            if not owner:
+                return None
+            owner_open = source.masked.find("{", owner.start(), owner.end())
+            owner_close = match_delim(source.masked, owner_open, "{", "}")
+            if not owner_open < match.start() < owner_close:
+                return None
+            value_start = match.end()
+            line_end = source.masked.find("\n", value_start)
+            end = len(source.text) if line_end < 0 else line_end
+            literals = source.literals(value_start, end)
+            if len(literals) != 1:
+                return None
+            return unescape(literals[0][0]), literals[0][1]
+
+        def add(source: Source, label: str, pos: int, *, writes_value: bool,
+                semantic: str, condition: str) -> None:
+            self._add_action(action_of(source, pos, label, pos, "button", "tap",
+                                       writes=writes_value, semantic=semantic,
+                                       condition=condition, extraction="manual"))
+
+        # ChatPage.permissionCard -> PermissionCardView with both decisions
+        # wired to ChatPage.respond. Only include controls that still call those
+        # exact named closures in the helper source.
+        if mounted("PermissionCardView", (r"onAllow\s*:\s*\{\s*respond\(\.allowOnce\)\s*\}",
+                                           r"onDeny\s*:\s*\{\s*respond\(\.deny\)\s*\}")):
+            source = self.source
+            helper_start = None
+            for st in view_structs(source):
+                if st["name"] == "PermissionCardView":
+                    helper_start = st["body_start"]
+                    helper_end = st["body_end"]
+                    break
+            if helper_start is not None:
+                body = source.masked[helper_start:helper_end]
+                for label, handler in (("允许一次", "onAllow"), ("拒绝", "onDeny")):
+                    button = re.search(rf"Button\s*\{{\s*{handler}\(\)\s*\}}\s*label\s*:\s*\{{", body)
+                    if not button:
+                        continue
+                    label_open = helper_start + button.end() - 1
+                    label_close = match_delim(source.masked, label_open, "{", "}")
+                    text = next(((value, pos) for value, pos in source.literals(label_open, label_close)
+                                 if unescape(value) == label), None)
+                    if text:
+                        pos = text[1]
+                        add(source, label, pos, writes_value=True,
+                            semantic=f"{handler} forwards to ChatPage.respond",
+                            condition="pending permission card")
+
+        # A pending plan-review question mounts NativePlanReviewCard with both
+        # mutation callbacks; its optional full-plan action is intentionally
+        # excluded because ChatPage does not supply onOpenPlan.
+        plan_call = mounted("NativePlanReviewCard", (r"onApprove\s*:\s*\{\s*submitPlanApproval\(item\)\s*\}",
+                                                     r"onRequestChanges\s*:\s*\{\s*model\.dismissQuestion\(\)\s*\}"))
+        if plan_call:
+            source = helper("NativePlanReviewCard.swift")
+            if source:
+                masked = source.masked
+                for prop, expected, handler in (("requestChangesText", "要求修改", "onRequestChanges"),
+                                                ("approveText", "同意执行", "onApprove")):
+                    found = static_label(source, "NativePlanReviewCard", prop)
+                    control = re.search(rf"Button\s*\(\s*action:\s*{handler}\s*\)\s*\{{", masked)
+                    control_end = (match_delim(masked, control.end() - 1, "{", "}")
+                                   if control else -1)
+                    if (found and found[0] == expected and control and control_end > control.end()
+                            and re.search(rf"Text\(Self\.{prop}\)", masked[control.end():control_end])):
+                        add(source, expected, found[1], writes_value=True,
+                            semantic=f"{handler} is forwarded by ChatPage.questionTakeover",
+                            condition="plan-review question")
+
+        # Non-plan questions mount NativeQuestionComposer and provide onDiscard;
+        # its source skip button mutates the current answer and submits/advances.
+        if mounted("NativeQuestionComposer", (r"onDiscard\s*:\s*\{\s*model\.dismissQuestion\(\)\s*\}",
+                                                r"onSubmit\s*:\s*\{\s*submitQuestion\(\$0\)\s*\}")):
+            source = helper("NativeQuestionComposer.swift")
+            if source:
+                found = static_label(source, "NativeQuestionCopy", "skip")
+                control = re.search(
+                    r"NativeQuestionActionButton\(title:\s*NativeQuestionCopy\.skip,"
+                    r"\s*enabled:\s*!isSubmitting\)\s*\{\s*skipCurrent\(\)\s*\}",
+                    source.masked, re.S)
+                implementation = re.search(r"private\s+func\s+skipCurrent\s*\(\)\s*\{", source.masked)
+                if found and found[0] == "跳过" and control and implementation:
+                    add(source, found[0], found[1], writes_value=True,
+                        semantic="skipCurrent marks this question skipped and advances/submits",
+                        condition="non-plan question composer")
+
+        # The todo dock is mounted only for a non-empty model.todoDockItems list;
+        # its collapsed header is a real button whose handler toggles visibility.
+        if mounted("NativeTodoDock", (r"todos:\s*model\.todoDockItems",),
+                   guard="!model.todoDockItems.isEmpty"):
+            source = helper("NativeTodoDock.swift")
+            if source:
+                found = static_label(source, "NativeTodoDock", "title")
+                control = re.search(
+                    r"private\s+var\s+header:\s*some\s+View\s*\{\s*Button\s*\{\s*collapsed\.toggle\(\)\s*\}\s*label:\s*\{.*?Text\(Self\.title\)",
+                    source.masked, re.S)
+                if found and found[0] == "任务" and control:
+                    add(source, found[0], found[1], writes_value=False,
+                        semantic="collapsed.toggle()", condition="todo list is non-empty")
 
     # -- non-Section groups -------------------------------------------------
 

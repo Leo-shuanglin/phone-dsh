@@ -22,18 +22,6 @@
   {
    "page": "workspace-folders",
    "kind": "action",
-   "label": "切换",
-   "reason": {
-    "baselineLacks": "the baseline makes the current folder implicit: creating a session inside a folder is the only switch",
-    "androidNeeds": "README §1 makes switching this page's duty, and Android's session creation lives on another page, so the switch has to be explicit here",
-    "withoutIt": "switching folders requires detouring through the sessions page and creating a throwaway session"
-   },
-   "owner": "android-ui",
-   "reviewBy": "2027-01-31"
-  },
-  {
-   "page": "workspace-folders",
-   "kind": "action",
    "label": "删除",
    "reason": {
     "baselineLacks": "the baseline deletes a workspace from the drawer's `⋯` menu (SessionsPage.swift:447), not from this page",

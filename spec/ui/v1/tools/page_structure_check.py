@@ -171,6 +171,16 @@ KINDS = (
     "conditional-action",
     "conditional-section",
 )
+# Cross-file actions that ChatPage explicitly mounts and whose callbacks the
+# extractor verifies at that callsite. No other helper provenance is accepted.
+CHAT_HELPER_ACTION_SOURCES = {
+    "允许一次": "ChatPage.swift",
+    "拒绝": "ChatPage.swift",
+    "要求修改": "NativePlanReviewCard.swift",
+    "同意执行": "NativePlanReviewCard.swift",
+    "跳过": "NativeQuestionComposer.swift",
+    "任务": "NativeTodoDock.swift",
+}
 TITLE_KINDS = ("title-mismatch", "missing-title", "unresolved-title")
 #: The re-baseline is owned by a lane: C chat, D composer, E drawer/sessions,
 #: F settings/provider, G secondary files/device/workbench, H integration. A
@@ -541,10 +551,10 @@ def resolve_kotlin_expr(expr: str, strings: dict, consts: dict | None = None) ->
 def kotlin_label_variants(expr: str, strings: dict, consts: dict) -> list[str]:
     """Resolve the literal alternatives of a small Compose label expression.
 
-    Supports only a `when` whose every branch returns one static label, plus an
-    availability ternary whose unavailable branch explicitly says `不可用`. Other
-    expressions remain unresolved; this keeps state-derived wording out of the
-    static action inventory.
+    Supports a `when` whose every branch returns one static label, an availability
+    ternary whose unavailable branch explicitly says `不可用`, and the verified
+    automation saving label ternary. Other expressions remain unresolved so
+    state-derived wording does not become a static action inventory.
     """
     value = strip_kotlin_comments(collapse(expr))
     when = re.fullmatch(r"when\s*\([^{}]*\)\s*\{(.*)\}", value, re.S)
@@ -572,6 +582,20 @@ def kotlin_label_variants(expr: str, strings: dict, consts: dict) -> list[str]:
             # the label of the action the user can perform.
             available = [label for label, _ in branches if "不可用" not in label]
             return available or [label for label, _ in branches]
+    # A saving-state toolbar action keeps its ordinary action identity while its
+    # label briefly changes to a progress word. Count the steady action only when
+    # both branches resolve to the exact verified static labels and the guard is
+    # the editor's saving flag.
+    saving_action = re.fullmatch(
+        r"if\s*\(editor\.saving\)\s*([A-Z][A-Z0-9_]*|UiStrings\.[A-Z][A-Z0-9_]*)"
+        r"\s*else\s*(UiStrings\.[A-Z][A-Z0-9_]*)",
+        value)
+    if saving_action:
+        saving_label, saving_dynamic = resolve_kotlin_expr(saving_action.group(1), strings, consts)
+        action_label, action_dynamic = resolve_kotlin_expr(saving_action.group(2), strings, consts)
+        if (not saving_dynamic and saving_label == "保存中…" and
+                not action_dynamic and action_label == "保存"):
+            return [action_label]
     return []
 
 
@@ -869,18 +893,29 @@ def check_provenance(root: Path, contract: dict, stale: list) -> None:
         m = PROVENANCE_RE.match(prov)
         if not m:
             raise CheckError(f"{contract['pageId']}: {kind} {item.get('id')!r} has no `File.swift:line` provenance")
-        if m.group(1) != source["file"]:
+        helper_file = None
+        if contract["pageId"] == "chat" and kind == "action":
+            helper_file = CHAT_HELPER_ACTION_SOURCES.get(item.get("label"))
+        if helper_file is None and m.group(1) != source["file"]:
             raise CheckError(f"{contract['pageId']}: {kind} {item.get('id')!r} points at {m.group(1)}, "
                              f"not {source['file']}")
+        expected_file = helper_file or source["file"]
+        if m.group(1) != expected_file:
+            raise CheckError(f"{contract['pageId']}: action {item.get('id')!r} points at {m.group(1)}, "
+                             f"not its verified helper {expected_file}")
         line_no = int(m.group(2))
-        if not (1 <= line_no <= len(lines)):
+        item_source = swift.parent / helper_file if helper_file else swift
+        if not item_source.is_file():
+            raise CheckError(f"{contract['pageId']}: Swift source {item_source} is missing")
+        item_lines = read_text(item_source).splitlines()
+        if not (1 <= line_no <= len(item_lines)):
             raise CheckError(f"{contract['pageId']}: {kind} {item.get('id')!r} line {line_no} is out of range")
         anchor = (item.get("anchor") or "").strip()
         if not anchor:
             raise CheckError(f"{contract['pageId']}: {kind} {item.get('id')!r} has no anchor")
-        if anchor not in lines[line_no - 1]:
+        if anchor not in item_lines[line_no - 1]:
             stale.append(f"{contract['pageId']}/{kind}:{item.get('id')} {prov} no longer carries "
-                         f"{anchor!r} (got {lines[line_no - 1].strip()!r})")
+                         f"{anchor!r} (got {item_lines[line_no - 1].strip()!r})")
 
 
 # ---------------------------------------------------------------------------
@@ -1694,7 +1729,29 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
             continue
         value, dynamic = resolve_kotlin_expr(text[span[0]:span[1]], strings, consts)
         if dynamic:
-            unresolved.append(strip_kotlin_comments(collapse(text[span[0]:span[1]]))[:DYN_EXPR_MAX])
+            raw_label = strip_kotlin_comments(collapse(text[span[0]:span[1]]))
+            saving_expr = re.fullmatch(
+                r"if\s*\(editor\.saving\)\s*AUTOMATION_EDITOR_SAVING_LABEL"
+                r"\s*else\s*UiStrings\.AUTOMATION_EDITOR_SAVE",
+                raw_label)
+            variants = kotlin_label_variants(raw_label, strings, consts) if saving_expr else []
+            if saving_expr:
+                click_span = named.get("onClick")
+                enabled_span = named.get("enabled")
+                click = collapse(text[click_span[0]:click_span[1]]) if click_span else ""
+                enabled = collapse(text[enabled_span[0]:enabled_span[1]]) if enabled_span else ""
+                callback_verified = bool(re.search(
+                    r"onSubmit\s*\(\s*draft\s*,\s*UUID\.randomUUID\(\)\.toString\(\)\s*\)", click))
+                if not callback_verified or enabled != "editor.canSubmit":
+                    variants = []
+            if variants:
+                for variant in variants:
+                    labels.append(variant)
+                    found.append((variant, m.start()))
+                    if positions is not None:
+                        positions.append((variant, m.start()))
+            else:
+                unresolved.append(strip_kotlin_comments(collapse(text[span[0]:span[1]]))[:DYN_EXPR_MAX])
         elif value and value.strip():
             labels.append(value)
             found.append((value, m.start()))

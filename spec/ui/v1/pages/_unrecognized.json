@@ -43,14 +43,6 @@
    "reviewBy": "2027-06-30"
   },
   {
-   "page": "native-configuration",
-   "kind": "unresolved-section",
-   "name": "section.title",
-   "reason": "Android composes this section's header from host state (`section.title`), so the static comparator sees an expression; the contract's literal is the iOS half of the platform-forced 手机 Worker 限制 / iPhone Worker 限制 noun difference.",
-   "owner": "android-parity",
-   "reviewBy": "2027-06-30"
-  },
-  {
    "page": "runtime-details",
    "kind": "unresolved-section",
    "name": "section.title",
