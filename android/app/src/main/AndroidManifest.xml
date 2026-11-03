@@ -118,6 +118,19 @@
             android:name="com.phonedsh.app.SIGNING_NOTICE"
             android:value="${pdshSigningNotice}" />
 
+        <!-- 导出对话记录 writes a long Markdown document under cacheDir and hands
+             it to the share sheet through this provider. Scope is exactly that
+             one cache directory; the preview's provider keeps the workspace. -->
+        <provider
+            android:name="com.phonedsh.probe.TranscriptFileProvider"
+            android:authorities="${applicationId}.pdsh.transcript"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/transcript_file_paths" />
+        </provider>
+
         <activity
             android:name="com.phonedsh.probe.MainActivity"
             android:exported="true">

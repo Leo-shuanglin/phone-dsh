@@ -1421,6 +1421,16 @@ public object UiStrings {
     public const val HEADER_RUN_STATUS: String = "运行状态"
     public const val HEADER_MORE: String = "更多"
     public const val HEADER_EXPORT: String = "导出对话记录"
+    public const val CHAT_EXPORT_CHOOSER: String = "分享对话记录"
+    public const val CHAT_EXPORT_FAILED: String = "没有可用的分享应用，对话记录未导出。"
+    public const val CHAT_EXPORT_TOO_LONG: String = "对话记录过长，且本机没有可用的文件分享通道，未导出。"
+    public const val CHAT_EXPORT_TITLE_YOU: String = "你"
+    public const val CHAT_EXPORT_TITLE_STEERING: String = "你（补充说明）"
+    public const val CHAT_EXPORT_TITLE_DSH: String = "DSH"
+    public const val CHAT_EXPORT_TITLE_TOOL_CALL: String = "工具调用"
+    public const val CHAT_EXPORT_TITLE_TOOL_RESULT: String = "工具结果"
+    public const val CHAT_EXPORT_TITLE_TOOL_ERROR: String = "工具错误"
+    public const val CHAT_EXPORT_TITLE_CONTEXT: String = "上下文注入"
     public const val HEADER_SESSION_SETTINGS: String = "插件与工具"
     public const val SESSION_TITLE_NEW: String = "新会话"
     public const val SESSION_TITLE_CURRENT: String = "当前会话"
@@ -1684,6 +1694,8 @@ public object UiStrings {
     public const val AGENT_PRESETS_CREATE: String = "让 Agent 创建预设"
     public const val AGENT_PRESETS_CREATE_NOTE: String =
         "进入创造模式但不自动发送任务，现有草稿会保留。"
+    public const val AGENT_PRESETS_CREATE_UNAVAILABLE: String =
+        "宿主没有可用的新建会话动作，无法进入创造模式。"
     public const val AGENT_PRESETS_LOADING: String = "正在读取预设…"
     public const val AGENT_PRESETS_UNREAD: String = "宿主还没有返回预设清单，暂不判断有没有预设。"
     public const val AGENT_PRESETS_DEFAULT: String = "默认"
@@ -1737,6 +1749,8 @@ public object UiStrings {
     public const val PHONE_PERMISSIONS_STATUS_LOCAL_NETWORK_UNVERIFIED: String = "未验证 · 点击测试"
     public const val PHONE_PERMISSIONS_STATUS_LOCAL_NETWORK_DENIED: String = "可能已拒绝"
     public const val PHONE_PERMISSIONS_STATUS_BIOMETRIC_CONFIRM: String = "已允许 · 写操作前确认"
+    public const val PHONE_PERMISSIONS_BIOMETRIC_UNAVAILABLE: String = "此宿主未提供面容确认，开关不可用"
+    public const val PHONE_PERMISSIONS_APP_SWITCH_UNAVAILABLE: String = "此宿主由系统授权决定，暂无应用内开关"
 
     // ---------------------------------------------------------------------
     // L13 lane: the three iOS pages Android did not carry

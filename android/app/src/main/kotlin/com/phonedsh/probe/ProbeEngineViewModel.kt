@@ -79,6 +79,7 @@ import com.phonedsh.log.VfsOp
 import com.phonedsh.log.WalPaths
 import com.phonedsh.log.WorkspaceLog
 import com.phonedsh.ui.projection.UiStateNode
+import com.phonedsh.ui.surface.preview.WorkspacePreviewSource
 import com.phonedsh.ui.nav.confirms
 import com.phonedsh.ui.state.ChatAttachment
 import com.phonedsh.ui.state.ChatScreenState
@@ -1717,8 +1718,46 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     private val chatIo = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
+    /**
+     * The `@` menu's candidates, read on the IO lane.
+     *
+     * The files are the same materialized workspace the files page and the preview
+     * read; the titles come from the durable session store and exclude the
+     * conversation already on screen. The composition root calls this from a
+     * `LaunchedEffect`, never from `chatSurfaceState()` itself, so a frame never
+     * walks the workspace.
+     */
+    internal suspend fun chatMentionFacts(
+        currentChatId: String = mutableChat.value.chatId,
+    ): ChatMentionFacts = withContext(Dispatchers.IO) {
+        val files = try {
+            WorkspacePreviewSource(walPaths.materializedWorkspace).files()
+                .orEmpty()
+                .map { it.relativePath }
+                .take(CHAT_MENTION_FILE_LIMIT)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val records = try {
+            chatStore.loadAll()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyList()
+        }
+        ChatMentionFacts(
+            files = files,
+            sessionTitles = chatMentionSessionTitles(records, currentChatId),
+        )
+    }
+
     /** The page's state, assembled from the host's own readings. */
-    internal fun chatSurfaceState(): ChatScreenState = chatScreenState(
+    internal fun chatSurfaceState(
+        files: List<String> = emptyList(),
+        sessionTitles: List<String> = emptyList(),
+    ): ChatScreenState = chatScreenState(
         ui = mutableChat.value,
         engineStarted = state.value is EngineHostState.Running && host.state.value != com.phonedsh.controller.HostState.FAILED,
         providerNeedsKey = modelRoute.route == ModelRoute.NONE,
@@ -1730,6 +1769,8 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         },
         lifecycle = nativeEngineLifecycle(),
         performanceUsage = preferenceStore.snapshot().performanceUsage,
+        files = files,
+        sessionTitles = sessionTitles,
     )
 
     /** What the person typed. Local state; the page never stores it. */
