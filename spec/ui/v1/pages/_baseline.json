@@ -528,12 +528,6 @@
     {
       "page": "native-workbench",
       "kind": "extra-action",
-      "name": "文件",
-      "reason": "known divergence on native-workbench (extra-action); shrink only"
-    },
-    {
-      "page": "native-workbench",
-      "kind": "extra-action",
       "name": "重试",
       "reason": "known divergence on native-workbench (extra-action); shrink only"
     },

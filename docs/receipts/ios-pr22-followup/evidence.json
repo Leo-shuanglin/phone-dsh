@@ -1,0 +1,74 @@
+{
+  "base": "2695fd21d2d32369c5b3c8b8ae4cc736819b7d74",
+  "rawPR22": "edd687463cd24b9c969914a13fa1da268df016fe",
+  "providerSourceBeforeSha256": "5fbf6dc527f06a04bf66cd4ba1c9fb0832a5a92682c3416c325c4a50fad8382c",
+  "providerSourceAfterSha256": "3a5250f1507e49750ab7f7ecea09cae87e133e2c6cf487a791ecc46483e91426",
+  "simulator": "iPhone14ProMax/iOS26.5",
+  "realProviderRequests": "NOT_RUN",
+  "credentialsEnteredOrSaved": false,
+  "nativeUITests": {
+    "tests": 3,
+    "failures": 0,
+    "skipped": 0
+  },
+  "pythonUnitTests": {
+    "tests": 89,
+    "failures": 0
+  },
+  "pageRatchet": {
+    "known": 173,
+    "new": 0,
+    "stale": 0,
+    "whitelisted": 1
+  },
+  "captures": [
+    {
+      "file": "provider-add-before.png",
+      "state": "raw PR22 production home -> provider list -> Add; Edit title and empty-id key error",
+      "pixels": [
+        1290,
+        2796
+      ],
+      "points": [
+        430,
+        932
+      ],
+      "sha256": "5319d547a6833bca460cf09a3701d353d2ac5f7eb1517a1d5802ac8d302f3887"
+    },
+    {
+      "file": "provider-add-after.png",
+      "state": "fixed provider-list preview entry -> real Add sheet; Add title and no key-read error",
+      "pixels": [
+        1290,
+        2796
+      ],
+      "points": [
+        430,
+        932
+      ],
+      "sha256": "f09574c240f7cfd959e5ed3522243040ac13b356bb5b2aa765767ed280acf4f7"
+    }
+  ],
+  "queueFollowup": {
+    "sourceBeforeSha256": "b3a6ab4ccccc57be22b9fc1b7e9feb5f5c1036de89cb300229bf38309e011807",
+    "sourceAfterSha256": "ab66020e977bfa85e7aea7dd31035a0a13eade0e02f047324f46f443b59dc3f3",
+    "scope": "Disable delete and steer for local queue rows without a durable item id; existing guards and durable actions retained",
+    "simulatorBuild": "PASS",
+    "pythonTests": {
+      "tests": 89,
+      "failures": 0
+    },
+    "queueInteractionUITests": "NOT_RUN",
+    "strictAndroidParity": {
+      "result": "FAIL",
+      "existingDifferences": 173
+    },
+    "baselineCheck": {
+      "known": 173,
+      "new": 0,
+      "stale": 0,
+      "whitelisted": 1
+    },
+    "providerUITestSourceCommit": "df20c5bd411034655a44f14cdb91cd308edd9a9c"
+  }
+}

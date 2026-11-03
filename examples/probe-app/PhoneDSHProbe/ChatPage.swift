@@ -472,10 +472,6 @@ struct ChatPage: View {
                     onOpenSession: { entry in
                         showSubagentCatalog = false
                         Task { await model.selectSession(entry.id) }
-                    },
-                    onOpenAside: { entry in
-                        showSubagentCatalog = false
-                        Task { await model.selectSession(entry.id) }
                     })
                     .padding(.horizontal, HomeSpec.chromeInset)
                     .padding(.top, 20)
@@ -1719,12 +1715,14 @@ struct ChatPage: View {
                     queueEditText = item.text
                     queueEditItem = item
                 }
-                queueRowAction(symbol: "trash", label: "删除排队消息", reason: nil) {
+                queueRowAction(symbol: "trash", label: "删除排队消息",
+                               reason: row.item == nil ? "这条排队消息还没有落盘，暂时不能删除" : nil) {
                     guard let item = row.item else { return }
                     Task { await updateQueueItem(item, action: "remove") }
                 }
                 queueRowAction(symbol: "paperplane", label: "插话发送",
-                               reason: model.turnRunning ? nil : "仅运行中可插话发送") {
+                               reason: row.item == nil ? "这条排队消息还没有落盘，暂时不能插话发送"
+                                   : (model.turnRunning ? nil : "仅运行中可插话发送")) {
                     guard let item = row.item, model.turnRunning else { return }
                     Task { await updateQueueItem(item, action: "steer") }
                 }

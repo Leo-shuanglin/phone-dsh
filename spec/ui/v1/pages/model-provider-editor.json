@@ -7,14 +7,14 @@
   "sectionNote": null,
   "title": {
     "text": "添加模型服务",
-    "provenance": "ModelProviderSettingsPage.swift:421",
+    "provenance": "ModelProviderSettingsPage.swift:447",
     "anchor": ".navigationTitle(isNew ? NativeText(\"添加模型服务\", \"Add Model Provider\") : NativeText"
   },
   "source": {
     "file": "ModelProviderSettingsPage.swift",
     "path": "examples/probe-app/PhoneDSHProbe/ModelProviderSettingsPage.swift",
-    "lines": 834,
-    "structLine": 279,
+    "lines": 860,
+    "structLine": 305,
     "renderedFrom": [
       "body",
       "advancedSettings"
@@ -48,7 +48,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:343",
+          "provenance": "ModelProviderSettingsPage.swift:369",
           "anchor": "HomeFieldRow(title: NativeText(\"名称\", \"Name\")) {",
           "extraction": "syntax",
           "template": "HomeFieldRow"
@@ -64,7 +64,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:348",
+          "provenance": "ModelProviderSettingsPage.swift:374",
           "anchor": "HomeFieldRow(title: NativeText(\"密钥\", \"API key\")) {",
           "extraction": "syntax",
           "template": "HomeFieldRow"
@@ -80,13 +80,13 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:355",
+          "provenance": "ModelProviderSettingsPage.swift:381",
           "anchor": "HomeFieldRow(title: NativeText(\"API 地址\", \"API URL\")) {",
           "extraction": "syntax",
           "template": "HomeFieldRow"
         },
         {
-          "id": "action-363",
+          "id": "action-389",
           "label": null,
           "labelExpr": null,
           "kind": "action",
@@ -96,19 +96,19 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:363",
+          "provenance": "ModelProviderSettingsPage.swift:389",
           "anchor": "Button {",
           "extraction": "manual"
         }
       ],
-      "provenance": "ModelProviderSettingsPage.swift:371",
+      "provenance": "ModelProviderSettingsPage.swift:397",
       "anchor": "Text(NativeText(\"连接信息\", \"Connection\"))",
       "extraction": "syntax",
       "hasHeader": true,
       "footer": {
         "text": "填写这三项，然后获取模型。密钥仅保存在这台手机的钥匙串中。",
         "labelExpr": null,
-        "provenance": "ModelProviderSettingsPage.swift:373",
+        "provenance": "ModelProviderSettingsPage.swift:399",
         "anchor": "Text(NativeText(\"填写这三项，然后获取模型。密钥仅保存在这台手机的钥匙串中。\", \"Enter these three fields, then"
       }
     },
@@ -123,7 +123,7 @@
       "collection": null,
       "rows": [
         {
-          "id": "action-380",
+          "id": "action-406",
           "label": null,
           "labelExpr": null,
           "kind": "action",
@@ -133,7 +133,7 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:380",
+          "provenance": "ModelProviderSettingsPage.swift:406",
           "anchor": "Button {",
           "extraction": "manual"
         },
@@ -148,24 +148,24 @@
           "destination": null,
           "writes": true,
           "condition": "!modelDrafts.isEmpty",
-          "provenance": "ModelProviderSettingsPage.swift:391",
+          "provenance": "ModelProviderSettingsPage.swift:417",
           "anchor": "Picker(NativeText(\"默认模型\", \"Default model\"), selection: $draft.model) {",
           "extraction": "syntax"
         }
       ],
-      "provenance": "ModelProviderSettingsPage.swift:398",
+      "provenance": "ModelProviderSettingsPage.swift:424",
       "anchor": "Text(NativeText(\"选择模型\", \"Model\"))",
       "extraction": "syntax",
       "hasHeader": true,
       "footer": {
         "text": null,
         "labelExpr": "catalogStatus",
-        "provenance": "ModelProviderSettingsPage.swift:400",
+        "provenance": "ModelProviderSettingsPage.swift:426",
         "anchor": "if let catalogStatus { Text(catalogStatus) }"
       }
     },
     {
-      "id": "section-404",
+      "id": "section-430",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
@@ -175,7 +175,7 @@
       "collection": null,
       "rows": [
         {
-          "id": "navigation-405",
+          "id": "navigation-431",
           "label": null,
           "labelExpr": null,
           "kind": "navigation",
@@ -185,27 +185,27 @@
           "destination": "advancedSettings",
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:405",
+          "provenance": "ModelProviderSettingsPage.swift:431",
           "anchor": "NavigationLink { advancedSettings } label: {",
           "extraction": "manual"
         }
       ],
-      "provenance": "ModelProviderSettingsPage.swift:404",
+      "provenance": "ModelProviderSettingsPage.swift:430",
       "anchor": "Section {",
       "extraction": "syntax",
       "criterion": {
         "kind": "empty",
-        "provenance": "ModelProviderSettingsPage.swift:404"
+        "provenance": "ModelProviderSettingsPage.swift:430"
       },
       "footer": {
         "text": "推理强度、上下文和输出长度沿用默认值。",
         "labelExpr": null,
-        "provenance": "ModelProviderSettingsPage.swift:409",
+        "provenance": "ModelProviderSettingsPage.swift:435",
         "anchor": "Text(\"推理强度、上下文和输出长度沿用默认值。\")"
       }
     },
     {
-      "id": "section-413",
+      "id": "section-439",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
@@ -215,7 +215,7 @@
       "collection": null,
       "rows": [
         {
-          "id": "text-414",
+          "id": "text-440",
           "label": null,
           "labelExpr": "errorText",
           "kind": "text",
@@ -225,18 +225,18 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:414",
+          "provenance": "ModelProviderSettingsPage.swift:440",
           "anchor": "Label(errorText, systemImage: \"exclamationmark.triangle\")",
           "extraction": "manual"
         }
       ],
-      "provenance": "ModelProviderSettingsPage.swift:413",
+      "provenance": "ModelProviderSettingsPage.swift:439",
       "anchor": "Section {",
       "extraction": "syntax",
       "criterion": {
         "kind": "first-row-expression",
         "labelExpr": "errorText",
-        "provenance": "ModelProviderSettingsPage.swift:414"
+        "provenance": "ModelProviderSettingsPage.swift:440"
       }
     },
     {
@@ -260,7 +260,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:448",
+          "provenance": "ModelProviderSettingsPage.swift:474",
           "anchor": "HomeFieldRow(title: NativeText(\"标识\", \"Identifier\")) {",
           "extraction": "syntax",
           "template": "HomeFieldRow"
@@ -276,17 +276,17 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:456",
+          "provenance": "ModelProviderSettingsPage.swift:482",
           "anchor": "Picker(NativeText(\"推理强度\", \"Reasoning effort\"), selection: Binding(",
           "extraction": "syntax"
         }
       ],
-      "provenance": "ModelProviderSettingsPage.swift:447",
+      "provenance": "ModelProviderSettingsPage.swift:473",
       "anchor": "Section(\"服务选项\") {",
       "extraction": "syntax"
     },
     {
-      "id": "section-467",
+      "id": "section-493",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
@@ -306,7 +306,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:468",
+          "provenance": "ModelProviderSettingsPage.swift:494",
           "anchor": "HomeFieldRow(title: NativeText(\"模型 ID\", \"Model ID\")) {",
           "extraction": "syntax",
           "template": "HomeFieldRow"
@@ -322,7 +322,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:473",
+          "provenance": "ModelProviderSettingsPage.swift:499",
           "anchor": "HomeFieldRow(title: NativeText(\"显示名称\", \"Name\")) {",
           "extraction": "syntax",
           "template": "HomeFieldRow"
@@ -338,7 +338,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:476",
+          "provenance": "ModelProviderSettingsPage.swift:502",
           "anchor": "HomeFieldRow(title: NativeText(\"上下文\", \"Context\")) {",
           "extraction": "syntax",
           "template": "HomeFieldRow"
@@ -354,7 +354,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:480",
+          "provenance": "ModelProviderSettingsPage.swift:506",
           "anchor": "HomeFieldRow(title: NativeText(\"最大输出\", \"Max output\")) {",
           "extraction": "syntax",
           "template": "HomeFieldRow"
@@ -370,7 +370,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:484",
+          "provenance": "ModelProviderSettingsPage.swift:510",
           "anchor": "HomeFieldRow(title: NativeText(\"推理档位\", \"Effort\")) {",
           "extraction": "syntax",
           "template": "HomeFieldRow"
@@ -386,7 +386,7 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:488",
+          "provenance": "ModelProviderSettingsPage.swift:514",
           "anchor": "Toggle(NativeText(\"文本输入\", \"Text input\"), isOn: $modelDrafts[index].textInput)",
           "extraction": "syntax"
         },
@@ -401,7 +401,7 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:489",
+          "provenance": "ModelProviderSettingsPage.swift:515",
           "anchor": "Toggle(NativeText(\"图片输入\", \"Image input\"), isOn: $modelDrafts[index].imageInput)",
           "extraction": "syntax"
         },
@@ -416,22 +416,22 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:490",
+          "provenance": "ModelProviderSettingsPage.swift:516",
           "anchor": "Button(NativeText(\"删除这个模型\", \"Delete This Model\"), role: .destructive) {",
           "extraction": "syntax"
         }
       ],
-      "provenance": "ModelProviderSettingsPage.swift:467",
+      "provenance": "ModelProviderSettingsPage.swift:493",
       "anchor": "Section {",
       "extraction": "syntax",
       "criterion": {
         "kind": "first-clickable-row",
         "label": "文本输入",
-        "provenance": "ModelProviderSettingsPage.swift:488"
+        "provenance": "ModelProviderSettingsPage.swift:514"
       }
     },
     {
-      "id": "section-495",
+      "id": "section-521",
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
@@ -441,7 +441,7 @@
       "collection": null,
       "rows": [
         {
-          "id": "action-496",
+          "id": "action-522",
           "label": null,
           "labelExpr": null,
           "kind": "action",
@@ -451,17 +451,17 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:496",
+          "provenance": "ModelProviderSettingsPage.swift:522",
           "anchor": "Button {",
           "extraction": "manual"
         }
       ],
-      "provenance": "ModelProviderSettingsPage.swift:495",
+      "provenance": "ModelProviderSettingsPage.swift:521",
       "anchor": "Section {",
       "extraction": "syntax",
       "criterion": {
         "kind": "empty",
-        "provenance": "ModelProviderSettingsPage.swift:495"
+        "provenance": "ModelProviderSettingsPage.swift:521"
       }
     },
     {
@@ -475,7 +475,7 @@
       "collection": null,
       "rows": [
         {
-          "id": "text-504",
+          "id": "text-530",
           "label": null,
           "labelExpr": "keyStatusText",
           "kind": "text",
@@ -485,7 +485,7 @@
           "destination": null,
           "writes": false,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:504",
+          "provenance": "ModelProviderSettingsPage.swift:530",
           "anchor": "Label(keyStatusText, systemImage: keyStatusSymbol)",
           "extraction": "manual"
         },
@@ -500,12 +500,12 @@
           "destination": null,
           "writes": true,
           "condition": "hasStoredKey",
-          "provenance": "ModelProviderSettingsPage.swift:507",
+          "provenance": "ModelProviderSettingsPage.swift:533",
           "anchor": "Toggle(\"删除已保存的密钥\", isOn: $removeStoredKey)",
           "extraction": "syntax"
         },
         {
-          "id": "action-510",
+          "id": "action-536",
           "label": null,
           "labelExpr": null,
           "kind": "action",
@@ -515,26 +515,26 @@
           "destination": null,
           "writes": true,
           "condition": null,
-          "provenance": "ModelProviderSettingsPage.swift:510",
+          "provenance": "ModelProviderSettingsPage.swift:536",
           "anchor": "Button {",
           "extraction": "manual"
         }
       ],
-      "provenance": "ModelProviderSettingsPage.swift:520",
+      "provenance": "ModelProviderSettingsPage.swift:546",
       "anchor": "Text(\"密钥与连接\")",
       "extraction": "syntax",
       "hasHeader": true,
       "footer": {
         "text": null,
         "labelExpr": "testResult",
-        "provenance": "ModelProviderSettingsPage.swift:523",
+        "provenance": "ModelProviderSettingsPage.swift:549",
         "anchor": "Text(testResult)"
       }
     }
   ],
   "actions": [
     {
-      "id": "button-363",
+      "id": "button-389",
       "label": null,
       "labelExpr": null,
       "kind": "button",
@@ -543,13 +543,13 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:363",
+      "provenance": "ModelProviderSettingsPage.swift:389",
       "anchor": "Button {",
       "extraction": "manual",
       "labelAlternatives": []
     },
     {
-      "id": "button-380",
+      "id": "button-406",
       "label": null,
       "labelExpr": null,
       "kind": "button",
@@ -558,7 +558,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:380",
+      "provenance": "ModelProviderSettingsPage.swift:406",
       "anchor": "Button {",
       "extraction": "manual",
       "labelAlternatives": []
@@ -573,7 +573,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:391",
+      "provenance": "ModelProviderSettingsPage.swift:417",
       "anchor": "Picker(NativeText(\"默认模型\", \"Default model\"), selection: $draft.model) {",
       "extraction": "syntax",
       "items": [
@@ -583,7 +583,7 @@
       "style": "default"
     },
     {
-      "id": "navigation-405",
+      "id": "navigation-431",
       "label": null,
       "labelExpr": null,
       "kind": "navigation",
@@ -592,7 +592,7 @@
       "writes": false,
       "destination": "advancedSettings",
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:405",
+      "provenance": "ModelProviderSettingsPage.swift:431",
       "anchor": "NavigationLink { advancedSettings } label: {",
       "extraction": "manual"
     },
@@ -606,7 +606,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:456",
+      "provenance": "ModelProviderSettingsPage.swift:482",
       "anchor": "Picker(NativeText(\"推理强度\", \"Reasoning effort\"), selection: Binding(",
       "extraction": "syntax",
       "items": [
@@ -627,7 +627,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:488",
+      "provenance": "ModelProviderSettingsPage.swift:514",
       "anchor": "Toggle(NativeText(\"文本输入\", \"Text input\"), isOn: $modelDrafts[index].textInput)",
       "extraction": "syntax"
     },
@@ -641,7 +641,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:489",
+      "provenance": "ModelProviderSettingsPage.swift:515",
       "anchor": "Toggle(NativeText(\"图片输入\", \"Image input\"), isOn: $modelDrafts[index].imageInput)",
       "extraction": "syntax"
     },
@@ -655,13 +655,13 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:490",
+      "provenance": "ModelProviderSettingsPage.swift:516",
       "anchor": "Button(NativeText(\"删除这个模型\", \"Delete This Model\"), role: .destructive) {",
       "extraction": "syntax",
       "labelAlternatives": []
     },
     {
-      "id": "button-496",
+      "id": "button-522",
       "label": null,
       "labelExpr": null,
       "kind": "button",
@@ -670,7 +670,7 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:496",
+      "provenance": "ModelProviderSettingsPage.swift:522",
       "anchor": "Button {",
       "extraction": "manual",
       "labelAlternatives": []
@@ -685,12 +685,12 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:507",
+      "provenance": "ModelProviderSettingsPage.swift:533",
       "anchor": "Toggle(\"删除已保存的密钥\", isOn: $removeStoredKey)",
       "extraction": "syntax"
     },
     {
-      "id": "button-510",
+      "id": "button-536",
       "label": null,
       "labelExpr": null,
       "kind": "button",
@@ -699,7 +699,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:510",
+      "provenance": "ModelProviderSettingsPage.swift:536",
       "anchor": "Button {",
       "extraction": "manual",
       "labelAlternatives": []
@@ -714,7 +714,7 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:425",
+      "provenance": "ModelProviderSettingsPage.swift:451",
       "anchor": "Button(NativeText(\"取消\", \"Cancel\")) { dismiss() }.leadingBarText()",
       "extraction": "syntax"
     },
@@ -728,7 +728,7 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "ModelProviderSettingsPage.swift:428",
+      "provenance": "ModelProviderSettingsPage.swift:454",
       "anchor": "Button(NativeText(\"保存\", \"Save\")) { save() }",
       "extraction": "syntax"
     }
@@ -742,21 +742,21 @@
         {
           "renders": "还没有保存密钥。",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:656",
+          "provenance": "ModelProviderSettingsPage.swift:682",
           "anchor": "testResult = NativeText(\"还没有保存密钥。\", \"No API key has been saved.\")"
         },
         {
           "renders": "没有可用协议",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:697",
+          "provenance": "ModelProviderSettingsPage.swift:723",
           "anchor": "testResult = String(format: NativeText(\"测试失败：%@。检查接口地址与模型名“%@”。\", \"Test failed: "
         }
       ],
       "data": [
         {
-          "renders": "连接信息 | 选择模型 | untitled section at 404 | untitled section at 413 | 服务选项 | untitled section at 467 | untitled section at 495 | 密钥与连接",
+          "renders": "连接信息 | 选择模型 | untitled section at 430 | untitled section at 439 | 服务选项 | untitled section at 493 | untitled section at 521 | 密钥与连接",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:279",
+          "provenance": "ModelProviderSettingsPage.swift:305",
           "anchor": "struct ModelProviderEditorPage: View {",
           "note": "structural default: the sections above, when no condition overrides them"
         }
@@ -765,43 +765,43 @@
         {
           "renders": "无法读取此设备的密钥",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:314",
+          "provenance": "ModelProviderSettingsPage.swift:340",
           "anchor": "case .unreadable: return NativeText(\"无法读取此设备的密钥\", \"The key on this device could "
         },
         {
           "renders": "无法读取此设备的密钥：%@",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:440",
+          "provenance": "ModelProviderSettingsPage.swift:466",
           "anchor": "errorText = String(format: NativeText(\"无法读取此设备的密钥：%@\", \"Could not read the key o"
         },
         {
           "renders": "无法读取已保存的密钥，请解锁手机后重试。",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:549",
+          "provenance": "ModelProviderSettingsPage.swift:575",
           "anchor": "} catch { catalogStatus = \"无法读取已保存的密钥，请解锁手机后重试。\"; return }"
         },
         {
           "renders": "获取模型失败（HTTP \\(http.statusCode)），请稍后重试。",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:577",
+          "provenance": "ModelProviderSettingsPage.swift:603",
           "anchor": "default: catalogStatus = \"获取模型失败（HTTP \\(http.statusCode)），请稍后重试。\""
         },
         {
           "renders": "暂时无法获取模型，请检查网络与 API 地址，或在高级设置中手动添加。",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:592",
+          "provenance": "ModelProviderSettingsPage.swift:618",
           "anchor": "catalogStatus = \"暂时无法获取模型，请检查网络与 API 地址，或在高级设置中手动添加。\""
         },
         {
           "renders": "读不到已保存的密钥：%@",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:660",
+          "provenance": "ModelProviderSettingsPage.swift:686",
           "anchor": "testResult = String(format: NativeText(\"读不到已保存的密钥：%@\", \"Could not read the saved"
         },
         {
           "renders": "测试失败：%@。检查接口地址与模型名“%@”。",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:697",
+          "provenance": "ModelProviderSettingsPage.swift:723",
           "anchor": "testResult = String(format: NativeText(\"测试失败：%@。检查接口地址与模型名“%@”。\", \"Test failed: "
         }
       ],
@@ -810,25 +810,25 @@
         {
           "renders": "正在获取模型…",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:384",
+          "provenance": "ModelProviderSettingsPage.swift:410",
           "anchor": "SettingsRowLabel(title: fetchingModels ? \"正在获取模型…\" : \"获取模型\", icon: \"arrow.down.c"
         },
         {
           "renders": "正在测试…",
           "when": null,
-          "provenance": "ModelProviderSettingsPage.swift:514",
+          "provenance": "ModelProviderSettingsPage.swift:540",
           "anchor": "SettingsRowLabel(title: testing ? \"正在测试…\" : \"测试连接\", icon: \"bolt.horizontal\")"
         },
         {
           "renders": "ProgressView",
           "when": "fetchingModels",
-          "provenance": "ModelProviderSettingsPage.swift:385",
+          "provenance": "ModelProviderSettingsPage.swift:411",
           "anchor": "if fetchingModels { ProgressView().controlSize(.small) }"
         },
         {
           "renders": "ProgressView",
           "when": "testing",
-          "provenance": "ModelProviderSettingsPage.swift:515",
+          "provenance": "ModelProviderSettingsPage.swift:541",
           "anchor": "if testing { ProgressView().controlSize(.small) }"
         }
       ]
@@ -852,7 +852,7 @@
       "sections": [
         {
           "title": "服务",
-          "provenance": "ModelProviderSettingsPage.swift:74"
+          "provenance": "ModelProviderSettingsPage.swift:100"
         }
       ],
       "provenance": "ModelProviderSettingsPage.swift:28"

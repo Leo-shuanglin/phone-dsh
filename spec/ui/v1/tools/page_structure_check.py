@@ -1589,7 +1589,18 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
                    "the baseline groups this page without Section/PageSection/GroupBox/header Text; "
                    "a human must name the group before the sections can be compared")
 
-    expected_labels = {normalize(a["label"]): a["label"] for a in labelled}
+    expected_labels = {}
+    for action in labelled:
+        if action.get("kind") == "picker" and action.get("style") == "segmented":
+            items = action.get("items", [])
+            # Extraction includes the Picker title first. Remove that occurrence
+            # only: a real segment may legitimately have the same visible title.
+            if items and normalize(items[0]) == normalize(action["label"]):
+                items = items[1:]
+            for item in items:
+                expected_labels.setdefault(normalize(item), item)
+        else:
+            expected_labels.setdefault(normalize(action["label"]), action["label"])
     actual_labels = {normalize(l): l for l in android_labels}
     for action in android_only_actions:
         if normalize(action["label"]) in actual_labels:

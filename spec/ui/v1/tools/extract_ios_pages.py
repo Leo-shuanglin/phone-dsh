@@ -1445,6 +1445,46 @@ class PageExtractor:
                     label_pos = pos + acc.start(1)
             self._add_action(action_of(source, pos, label, label_pos, "menu", "tap", writes=False,
                                        extraction="syntax" if label else "manual"))
+        # A toolbar Picker is page chrome rather than a child reached while walking
+        # the body rows. Limit this pass to ToolbarItem content so ordinary body
+        # Pickers remain the responsibility of the existing row traversal.
+        toolbar_contents = []
+        for m in re.finditer(r"\bToolbarItem(?:Group)?[ \t]*\(", masked[start:end]):
+            pos = start + m.start()
+            if not self._live(pos):
+                continue
+            toolbar_item = call_parts(source, pos, end)
+            if not toolbar_item:
+                continue
+            content = toolbar_item.get("trailing") or toolbar_item.get("named", {}).get("content")
+            if content:
+                toolbar_contents.append((content[0] + 1, content[1]))
+        for content_start, content_end in toolbar_contents:
+            for m in re.finditer(r"\bPicker[ \t]*[({]", masked[content_start:content_end]):
+                pos = content_start + m.start()
+                if not self._live(pos):
+                    continue
+                stmt_end = self._statement_end(pos, content_end)
+                call = call_parts(source, pos, stmt_end)
+                if not call:
+                    continue
+                label, label_pos = (first_label(source, *call["positional"][0])
+                                    if call["positional"] else (None, None))
+                option_spans = [(call["args_start"], call["args_end"])]
+                if call["trailing"]:
+                    option_spans.append((call["trailing"][0] + 1, call["trailing"][1]))
+                options = [unescape(value) for a, b in option_spans
+                           for value, _ in source.literals(a, b)
+                           if unescape(value).strip() and not SYMBOL_LITERAL_RE.match(unescape(value))]
+                binding = source.statement_lines(*call["named"]["selection"]) \
+                    if "selection" in call["named"] else None
+                tail_start = call["trailing"][1] if call["trailing"] else call["end"]
+                tail = source.text[tail_start: tail_start + 120]
+                style = "segmented" if ".segmented" in tail else ("menu" if ".menu" in tail else "default")
+                self._add_action(action_of(source, label_pos if label_pos is not None else pos, label,
+                                           label_pos, "picker", "tap", writes=True, items=options,
+                                           style=style, semantic=f"binding:{binding}" if binding else None,
+                                           extraction="syntax" if label else "manual"))
         seen_presentations = set()
         for m in re.finditer(r"\.(alert|confirmationDialog|sheet|navigationDestination)[ \t]*\(", masked[start:end]):
             pos = start + m.start()
