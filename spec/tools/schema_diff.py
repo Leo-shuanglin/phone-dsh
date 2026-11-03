@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Conservative schema compatibility check against a git base (baseline section 5.1).
+"""Conservative schema compatibility check against a git merge-base (baseline section 5.1).
 
 Examines spec/**/schema/*.json, including removals. Existing validation-domain
 changes in either direction are breaking. Optional property additions and
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts/ci'))
-from protocol_impact import (SpecError, base_commit, changed_paths, git, load_contracts,
+from protocol_impact import (SpecError, comparison_base, changed_paths, git, load_contracts,
                              load_json, path_matches)
 
 SCHEMA_PATH = re.compile(r'^spec/(?:.*/)?schema/[^/]+\.json$')
@@ -98,8 +98,8 @@ def authorized_contracts(root, base, changed):
                 continue
             if fields.get('status') not in {'frozen', 'implemented', 'verified'}:
                 raise SpecError('breaking record must be frozen or later')
-            if base_commit(root, fields.get('base', '')) != base:
-                raise SpecError('breaking record base does not match comparison base')
+            if comparison_base(root, fields.get('base', '')) != base:
+                raise SpecError('breaking record merge-base does not match comparison merge-base')
             decision = fields.get('version_decision', '')
             if not any(c.isalnum() for c in decision) or '<' in decision:
                 raise SpecError('breaking record requires a concrete version_decision')
@@ -115,7 +115,7 @@ def authorized_contracts(root, base, changed):
 
 def check(root, ref):
     root = Path(root).resolve()
-    base = base_commit(root, ref)
+    base = comparison_base(root, ref)
     contracts = load_contracts(root)
     # A removed/renamed schema can belong to a previous registry revision.
     previous = git(root, 'show', base + ':spec/registry.json', allow_missing=True)

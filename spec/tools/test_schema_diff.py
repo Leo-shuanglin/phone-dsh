@@ -42,8 +42,8 @@ class SchemaDiffTests(unittest.TestCase):
     def write_schema(self, value):
         self.write(self.path, json.dumps(value))
 
-    def run_check(self):
-        return subprocess.run([sys.executable, str(SCRIPT), '--root', str(self.root), '--base', self.base],
+    def run_check(self, base=None):
+        return subprocess.run([sys.executable, str(SCRIPT), '--root', str(self.root), '--base', base or self.base],
                               capture_output=True, text=True)
 
     def assert_breaks(self, value, needle):
@@ -132,6 +132,27 @@ class SchemaDiffTests(unittest.TestCase):
         for fields in [{'contracts': '[P02]'}, {'breaking': 'false'}, {'status': 'draft'}, {'version_decision': ''}]:
             self.record(**fields)
             self.assertEqual(self.run_check().returncode, 1)
+
+    def test_change_record_base_is_also_resolved_to_merge_base(self):
+        self.git('checkout', '-qb', 'advanced-base')
+        upstream = copy.deepcopy(self.original)
+        upstream['properties']['mode']['enum'] = ['a']
+        self.write_schema(upstream)
+        self.git('add', '.')
+        self.git('-c', 'user.name=Schema Test', '-c', 'user.email=test@example.invalid',
+                 'commit', '-qm', 'base advances schema alone')
+        self.git('checkout', '-qb', 'feature', self.base)
+        changed = copy.deepcopy(self.original)
+        changed['required'].append('mode')
+        self.write_schema(changed)
+        self.git('add', '.')
+        self.git('-c', 'user.name=Schema Test', '-c', 'user.email=test@example.invalid',
+                 'commit', '-qm', 'feature changes only required')
+        self.record(base='advanced-base')
+        result = self.run_check('advanced-base')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('required members', result.stdout)
+        self.assertNotIn('enum values', result.stdout)
 
     def test_stale_base_record_does_not_waive(self):
         self.record(base='0000000000000000000000000000000000000000')

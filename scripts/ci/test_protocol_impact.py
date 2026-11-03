@@ -35,11 +35,11 @@ class ImpactTests(unittest.TestCase):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text)
 
-    def run_check(self, body):
+    def run_check(self, body, base='HEAD'):
         body_file = self.root / '.git/body.txt'
         body_file.write_text(body)
         return subprocess.run([sys.executable, str(SCRIPT), '--root', str(self.root),
-                               '--base', 'HEAD', '--body-file', str(body_file)], capture_output=True, text=True)
+                               '--base', base, '--body-file', str(body_file)], capture_output=True, text=True)
 
     def test_missing_id_fails_and_correct_id_passes(self):
         self.write('Sources/PhoneDSHWire/Frame.swift', '// changed\n')
@@ -74,6 +74,36 @@ class ImpactTests(unittest.TestCase):
                       'P01, P09: none — shared reason', 'P09: none — comments;']:
             with self.subTest(value=value):
                 self.assertEqual(self.run_check('Protocol impact: ' + value).returncode, 1)
+
+    def test_advanced_base_only_paths_do_not_trigger_either_tool(self):
+        schema_path = 'spec/v1/schema/hello.schema.json'
+        self.write(schema_path, '{"type":"object"}')
+        self.git('add', '.')
+        self.git('-c', 'user.name=Protocol Test', '-c', 'user.email=test@example.invalid',
+                 'commit', '-qm', 'shared schema')
+        shared = self.git('rev-parse', 'HEAD').stdout.decode().strip()
+        self.git('checkout', '-qb', 'advanced-base')
+        self.write('Sources/PhoneDSHWire/Frame.swift', '// upstream-only change\n')
+        self.write(schema_path, '{"type":"string"}')
+        self.git('add', '.')
+        self.git('-c', 'user.name=Protocol Test', '-c', 'user.email=test@example.invalid',
+                 'commit', '-qm', 'base advances trigger and schema')
+        self.git('checkout', '-qb', 'feature', shared)
+        self.write('notes.md', 'feature-only documentation\n')
+        self.git('add', '.')
+        self.git('-c', 'user.name=Protocol Test', '-c', 'user.email=test@example.invalid',
+                 'commit', '-qm', 'feature diverges without touching either path')
+        result = self.run_check('Protocol impact: none — local notes only', 'advanced-base')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('0 triggered ID(s)', result.stdout)
+        schema = subprocess.run([sys.executable, str(ROOT / 'spec/tools/schema_diff.py'),
+                                 '--root', str(self.root), '--base', 'advanced-base'],
+                                capture_output=True, text=True)
+        self.assertEqual(schema.returncode, 0, schema.stdout + schema.stderr)
+        self.assertIn('0 breaking finding(s)', schema.stdout)
+        for output in (result.stdout, schema.stdout):
+            self.assertNotIn('Sources/PhoneDSHWire/Frame.swift', output)
+            self.assertNotIn(schema_path, output)
 
     def test_missing_line_fails(self):
         self.assertEqual(self.run_check('Only a description').returncode, 1)

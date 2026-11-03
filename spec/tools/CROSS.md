@@ -94,7 +94,9 @@ of a linked implementation. No runtime message/schema/golden is changed.
 python3 scripts/ci/protocol_impact.py --base origin/main --body-file pr-body.md
 ```
 
-The base-to-worktree diff includes staged/unstaged/untracked files and both paths
+Both diff tools first resolve `git merge-base <base> HEAD`, matching the left
+endpoint of a three-dot PR diff. The merge-base-to-worktree diff includes
+staged/unstaged/untracked files and both paths
 of renames. Conditional bridge triggers inspect both old and new content, so
 removing a call is still covered. A single `Protocol impact: P01, P02` line must
 cover all triggered IDs. `Protocol impact: P01; P09: none — UI comments only`
@@ -111,7 +113,8 @@ is added.
 `phone-cross-tree` runs `schema_diff.py --base origin/main`; set `CI_PROTOCOL_BASE`
 to another locally available base ref when appropriate. Missing/invalid bases fail.
 Direct use: `python3 spec/tools/schema_diff.py --base <ref> --root .`. It compares
-all files under `spec/**/schema/*.json` with the base, including deleted paths.
+all files under `spec/**/schema/*.json` with that merge-base, including deleted
+paths. Changes only on an advanced base branch are not part of the current delta.
 Required/type/enum/domain changes in either direction, removed properties, changed
 unknown-member policy and other changed validation/default/reference keywords are
 conservatively breaking. Optional property additions and annotation-only edits are
@@ -120,6 +123,6 @@ policy. This is structural evidence, not a complete JSON Schema theorem prover.
 
 A breaking change needs a new/modified `docs/protocol-changes/*.md` using the
 change template's YAML summary: `breaking: true`, covered `contracts`, a matching
-comparison `base`, frozen-or-later `status`, and concrete `version_decision`. An
+comparison merge-base (`base` is resolved with the same rule), frozen-or-later `status`, and concrete `version_decision`. An
 unchanged historical record cannot authorize a new delta. Unknown ownership fails.
 No protocol schema or GAP is changed by this enforcement work.

@@ -90,7 +90,8 @@ diff 觸及下列任一路徑，就必須逐 ID 聲明 `Protocol impact`：例�
 `Protocol impact: P01; P09: none — 僅改 UI 註解`。裸 ID 表示有影響；每個 `ID: none — 理由`
 只解釋該 ID 無行為影響，不能代替其他 ID。所有觸發 ID 都必須出現；理由中提到的 ID 不算聲明。
 只有完全沒有觸發時，才接受整體 `Protocol impact: none — 理由`。
-一個檔案可同時屬於多個 ID。glob 以倉庫根為起點。
+比較起點為 `git merge-base <base> HEAD`，再對工作區計算 diff（與三點比較的左端一致）；
+base 分支單邊前進不算本分支改動。一個檔案可同時屬於多個 ID。glob 以倉庫根為起點。
 
 | ID | 觸發路徑 |
 | --- | --- |
@@ -207,7 +208,7 @@ diff 觸及下列任一路徑，就必須逐 ID 聲明 `Protocol impact`：例�
 1. **已完成：機器可讀登記表**。`registry.json` 逐條保留 §3／§4 的來源與結構化投影；`registry_check.py` 校驗 schema、ID、來源、觸發條件及路徑，在 `phone-cross-tree` 執行。
 2. **已完成本地工具：觸發檢查**。`protocol_impact.py --base <ref> --body-file <path>` 校驗 §4 的所有觸發 ID；支援 `P01; P09: none — 理由` 逐項聲明，只有零觸發才接受整體 `none`。尚未接入 hosted workflow；理由真實性仍由審查者判斷。
 3. **partial：兩端讀同一批 golden**。已接 `phone-rust-tests` 跑 pdsh-wire／pdsh-wal；Swift 讀 gateway／host golden 與正反例命名仍未實作。GAP-08 不因 Rust gate 通過而關閉。
-4. **已完成：schema breaking diff**。`schema_diff.py --base <ref>` 對 schema 做保守結構比較，在 `phone-cross-tree` 執行；breaking 需本次變更單的 `breaking: true`、contracts、匹配 base、frozen 狀態及版本決定。
+4. **已完成：schema breaking diff**。`schema_diff.py --base <ref>` 對 schema 做保守結構比較，在 `phone-cross-tree` 執行；breaking 需本次變更單的 `breaking: true`、contracts、匹配 merge-base（變更單 base 也用同一規則解析）、frozen 狀態及版本決定。
 5. **未做：CODEOWNERS** 與 code owner review；本輪明確不新增，也不調整 GitHub 設定。
 6. **已完成：CLAUDE.md 改為 `@AGENTS.md` import**。普通檔首行為 `@AGENTS.md`，不另寫規則；`cross_check.py` 拒絕 symlink、缺失檔與錯誤 import。Windows／Claude 實際載入尚未驗證。
 

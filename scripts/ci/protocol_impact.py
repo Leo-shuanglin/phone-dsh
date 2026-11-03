@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Check a PR Protocol impact declaration against base-to-worktree changes.
+"""Check a PR Protocol impact declaration against merge-base-to-worktree changes.
 
 Includes staged, unstaged, untracked, deleted and both sides of renamed paths.
 Content predicates examine old AND new file contents so deleting a bridge call
@@ -28,6 +28,12 @@ def base_commit(root, ref):
     if ref.startswith('-') or '\n' in ref:
         raise SpecError('invalid base ref')
     return git(root, 'rev-parse', '--verify', ref + '^{commit}').decode().strip()
+
+
+def comparison_base(root, ref):
+    """Use the common ancestor, matching a three-dot PR diff's left endpoint."""
+    resolved = base_commit(root, ref)
+    return git(root, 'merge-base', resolved, 'HEAD').decode().strip()
 
 
 def load_contracts(root):
@@ -125,12 +131,12 @@ def check_declaration(body, triggered, known):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', default='.', help='repository root')
-    parser.add_argument('--base', required=True, help='commit/ref compared with the current working tree')
+    parser.add_argument('--base', required=True, help='ref whose merge-base with HEAD is compared with the working tree')
     parser.add_argument('--body-file', type=Path, required=True, help='UTF-8 PR/task body')
     args = parser.parse_args(argv)
     try:
         root = Path(args.root).resolve()
-        base = base_commit(root, args.base)
+        base = comparison_base(root, args.base)
         contracts = load_contracts(root)
         paths = changed_paths(root, base)
         hits = triggered_contracts(root, base, contracts, paths)
