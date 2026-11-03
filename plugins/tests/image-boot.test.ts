@@ -54,6 +54,8 @@ interface WorkspaceProbe {
   importedWorkspacePath?: string
   importedAbsolutePath?: string
   readText?: string
+  settingsLocks?: Record<string, {code: string; message: string}>
+  presetDocument?: string
   presets?: { id: string; isDefault: boolean; broken?: string }[]
   presetSessions?: Record<string, string>
   presetErrors?: Record<string, string>
@@ -268,6 +270,12 @@ test('the packed phone image boots DSH 0.2.1 with every roster row live or docum
     `imported file must be inside the same session workspace: ${probe.importedAbsolutePath ?? ''}`,
   )
   assert.equal(probe.readText, 'hello workspace')
+
+  for (const ns of ['permission', 'agent-preset-registry']) {
+    assert.equal(probe.settingsLocks?.[ns]?.code, 'settings/rejected')
+    assert.match(probe.settingsLocks?.[ns]?.message ?? '', /overridden by a home patch or command-line overlay/)
+  }
+  assert.match(probe.presetDocument ?? '', /name:/, 'the official read endpoint must return real YAML at content')
 
   // The official roster, through the real agent-preset Remote.
   const presets = new Map((probe.presets ?? []).map(row => [row.id, row]))

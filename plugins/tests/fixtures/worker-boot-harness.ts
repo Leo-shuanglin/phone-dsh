@@ -49,6 +49,8 @@ interface WorkspaceProbe {
   importedWorkspacePath?: string
   importedAbsolutePath?: string
   readText?: string
+  settingsLocks?: Record<string, {code: string; message: string}>
+  presetDocument?: string
   presets?: { id: string; isDefault: boolean; broken?: string }[]
   presetSessions?: Record<string, string>
   presetErrors?: Record<string, string>
@@ -448,6 +450,19 @@ try {
     return envelope.value
   }
   const tryCall = callEnvelope
+  // The native phone settings must respect the real startup overlay. A
+  // globally writable settings provider does not make these fields writable.
+  const settings = await call('settings/describe', {})
+  probe.settingsLocks = {}
+  for (const [ns, patch] of [
+    ['permission', {defaultPreset: 'read-only'}],
+    ['agent-preset-registry', {selectedDefault: 'ptc'}],
+  ] as const) {
+    const descriptor = (settings.namespaces as Record<string, unknown>[]).find(row => row.ns === ns)
+    const result = await tryCall('settings/update', {ns, patch, expectedRevision: descriptor?.revision})
+    if (result.ok) throw new Error(`startup-owned ${ns} unexpectedly accepted a profile write`)
+    probe.settingsLocks[ns] = result.error as {code: string; message: string}
+  }
 
   const initialized = await call('workspace/initializeDefault', {})
   const workspace = initialized.workspace as Record<string, unknown> | undefined
@@ -508,6 +523,8 @@ try {
   // default must be standard; unsupported presets stay listed with their own
   // real diagnostics instead of being hidden.
   const listed = await call('agentPresets/list', {})
+  const document = await call('agentPresets/read', {agentPreset: 'standard'})
+  probe.presetDocument = typeof document.content === 'string' ? document.content : undefined
   const presetRows = Array.isArray(listed.presets) ? listed.presets as Record<string, unknown>[] : []
   probe.presets = presetRows.map(row => ({
     id: String(row.id),
