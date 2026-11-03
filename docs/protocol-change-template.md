@@ -10,10 +10,14 @@ contract freeze。放進任務或 PR 正文即可；跨多個 PR 的變更另存
 change: PC-YYYYMMDD-<slug>      # 唯一，不重用
 contracts: [P01]                # 依 spec/README.md §3
 status: draft                   # draft → frozen → implemented → verified；或 rejected
-breaking: false                 # 依 spec/README.md §5；true 時必須填 §3 的版本決定
+breaking: false                 # 依 spec/README.md §5；true 時必須填版本決定
+version_decision: <具體版本／adapter 決定> # breaking 時必填；也在 §3 說明遷移
 base: <commit sha>
 contract_revision: <commit sha 或 file@sha>   # frozen 之後才填
 ```
+
+schema diff 的 breaking 豁免只接受本次 diff 新增或修改的變更單，`base` 必須解析到比較 base，
+`status` 為 frozen／implemented／verified，且 `contracts` 涵蓋受影響 ID；舊單不會永久豁免未來變更。
 
 `frozen` 之後，契約只能由 contract owner 透過新 revision 修改，並在本單的「修訂紀錄」寫明。
 

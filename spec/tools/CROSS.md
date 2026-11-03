@@ -103,3 +103,21 @@ judge whether that reason is truthful. Missing lines/IDs, unknown IDs, bare none
 and contradictory declarations fail. Tests run in `phone-gate-contracts`; this
 checker is local-only until a caller supplies a real PR body. No hosted workflow
 is added.
+
+## Structural schema compatibility
+
+`phone-cross-tree` runs `schema_diff.py --base origin/main`; set `CI_PROTOCOL_BASE`
+to another locally available base ref when appropriate. Missing/invalid bases fail.
+Direct use: `python3 spec/tools/schema_diff.py --base <ref> --root .`. It compares
+all files under `spec/**/schema/*.json` with the base, including deleted paths.
+Required/type/enum/domain changes in either direction, removed properties, changed
+unknown-member policy and other changed validation/default/reference keywords are
+conservatively breaking. Optional property additions and annotation-only edits are
+not automatically breaking; the owner still checks documented defaults and peer
+policy. This is structural evidence, not a complete JSON Schema theorem prover.
+
+A breaking change needs a new/modified `docs/protocol-changes/*.md` using the
+change template's YAML summary: `breaking: true`, covered `contracts`, a matching
+comparison `base`, frozen-or-later `status`, and concrete `version_decision`. An
+unchanged historical record cannot authorize a new delta. Unknown ownership fails.
+No protocol schema or GAP is changed by this enforcement work.
