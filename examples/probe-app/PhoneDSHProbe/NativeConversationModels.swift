@@ -18,6 +18,10 @@ struct ChatItem: Identifiable, Equatable {
     var streaming = false
     var timestamp: Date?
     var messageID: String?
+    /// DSH `source.rpcId` of a human prompt or steering submission.
+    var promptRequestID: String?
+    /// Set only once that input appears in a durable `user/message` record.
+    var promptJournalSeq: Int?
     var turn: Int?
     var step: Int?
     var callID: String?

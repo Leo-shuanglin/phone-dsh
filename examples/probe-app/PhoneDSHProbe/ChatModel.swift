@@ -363,6 +363,7 @@ final class ChatModel {
     private(set) var goal: HarnessGoal?
     private(set) var busy = false
     private(set) var turnRunning = false
+    private(set) var eventStreamRecovering = false
     private(set) var userFacingError: String?
     /// Non-secret, user-facing explanation of the last search launch decision.
     /// A normal first launch without a model service leaves this nil.
@@ -536,7 +537,7 @@ final class ChatModel {
     private var autoRecoveryAttempted = false
     private var foregroundResumeRequested = false
     private var backgroundParkRequested = false
-    var canSend: Bool { harness != nil && sessionID != nil && transcriptReady && !busy && !parked && !hostLifecycleTransition }
+    var canSend: Bool { harness != nil && sessionID != nil && transcriptReady && !eventStreamRecovering && !busy && !parked && !hostLifecycleTransition }
     var canStartBySending: Bool {
         ChatEngineLifecycle.canStartBySending(hostIsStopped: host == nil,
                                               busy: busy,
@@ -563,16 +564,17 @@ final class ChatModel {
     }
 
     var displayStatus: String {
+        if eventStreamRecovering { return "重新同步中" }
         if parked { return "已暂停" }
         if host == nil { return "已停止" }
         if userFacingError != nil || hostState.lowercased().contains("fail") { return "失败" }
         if busy || hostLifecycleTransition { return "处理中" }
         if pendingQuestion != nil || pendingPermission != nil { return "等待回复" }
         if turnRunning { return "运行中" }
-        if transcriptReady { return "运行中" }
+        if transcriptReady { return "就绪" }
         return "未连接"
     }
-    var canSteer: Bool { harness != nil && sessionID != nil && transcriptReady && turnRunning && !busy && !parked && !hostLifecycleTransition }
+    var canSteer: Bool { harness != nil && sessionID != nil && transcriptReady && !eventStreamRecovering && turnRunning && !busy && !parked && !hostLifecycleTransition }
     private var pumpTask: Task<Void, Never>?
     private var hostEventTask: Task<Void, Never>?
     private var lastSeq: UInt64?
@@ -1374,6 +1376,8 @@ final class ChatModel {
     /// 归档的正好是当前打开的那个会话:把它从页面上摘掉,回到空屏,
     /// 不让用户停在一个已经不在列表里的对话上。不关宿主、不动别的会话。
     func detachArchivedSession() async {
+        pumpTask?.cancel(); pumpTask = nil
+        eventStreamRecovering = false
         if let harness, let sessionID { await harness.closeSession(sessionID) }
         harness = nil
         sessionID = nil
@@ -1394,6 +1398,7 @@ final class ChatModel {
         busy = true
         defer { busy = false }
         pumpTask?.cancel(); pumpTask = nil
+        eventStreamRecovering = false
         if let harness, let sessionID { await harness.closeSession(sessionID) }
         harness = nil; sessionID = nil
         transcriptReady = false
@@ -1423,6 +1428,7 @@ final class ChatModel {
         contextPressure = nil
         contextBreakdown = nil
         projectionValues = nil
+        eventStreamRecovering = false
         activeTurn = nil
         activeStep = nil
         activeTurnStartedAt = nil
@@ -1703,6 +1709,7 @@ final class ChatModel {
     private func hostDidFail(_ failed: PhoneDSHHost) {
         guard host === failed else { return }
         pumpTask?.cancel(); pumpTask = nil
+        eventStreamRecovering = false
         hostEventTask?.cancel(); hostEventTask = nil
         host = nil
         failedHost = failed
@@ -1815,14 +1822,10 @@ final class ChatModel {
             SessionTitleHints.remember(prompt, for: sessionID)
             let attachmentLabel = attachments.map { "[\($0.name)]" }.joined(separator: " ")
             let visiblePrompt = [prompt, attachmentLabel].filter { !$0.isEmpty }.joined(separator: "\n")
-            if itemID == nil {
-                let newID = "\(sessionID):prompt:\(requestID)"
-                // 同一个 requestID 是同一句话(重发时逐字相同),那一条已经在列表里了。
-                // 再追加一条同 id 的行,界面会把两条挤进同一块,新字就像拼进了旧气泡。
-                if !items.contains(where: { $0.id == newID }) {
-                    items.append(ChatItem(id: newID, kind: .user, title: "You", text: visiblePrompt))
-                }
-            }
+            var input = ChatItem(id: itemID ?? "\(sessionID):prompt:\(requestID)",
+                                 kind: .user, title: "You", text: visiblePrompt)
+            input.promptRequestID = requestID
+            NativeTranscriptProjector.acceptInput(input, in: &items)
             turnRunning = true
             syncIdleTimer()
             clearError()
@@ -1846,7 +1849,10 @@ final class ChatModel {
         do {
             try await harness.send(.steer(text: guidance, requestID: requestID), to: sessionID)
             Self.completeRetryableRequest(fingerprint: fingerprint, requestID: requestID)
-            items.append(ChatItem(id: "\(sessionID):steer:\(requestID)", kind: .user, title: "You (steering)", text: guidance))
+            var input = ChatItem(id: "\(sessionID):steer:\(requestID)", kind: .user,
+                                 title: "You (steering)", text: guidance)
+            input.promptRequestID = requestID
+            NativeTranscriptProjector.acceptInput(input, in: &items)
             clearError()
             return true
         } catch {
@@ -1948,6 +1954,7 @@ final class ChatModel {
         var beforeSeq: Int?
         var throughSeq: Int?
         var turnFacts: TurnFacts
+        var inputReceipts: [String: Int]
     }
 
     /// Durable turn/start + turn/end facts, kept beside (not inside) ChatItem so
@@ -1961,10 +1968,13 @@ final class ChatModel {
     /// Reads DSH's durable event log directly so user prompts, which are not
     /// projected by AgentHarness.events, appear in their original position.
     private func loadSessionHistory(sessionID: String,
-                                   transport: any DSHRemoteTransport) async throws -> SessionHistory {
+                                   transport: any DSHRemoteTransport,
+                                   requireRunningState: Bool = false,
+                                   pendingInputs: [ChatItem] = []) async throws -> SessionHistory {
         let mux = try await transport.openMux()
         let streamID = "phone-chat-history-\(UUID().uuidString)"
         let cursor: Int
+        let snapshot: JSONValue
         do {
             try await mux.send(.object([
                 "type": .string("open"),
@@ -1976,7 +1986,11 @@ final class ChatModel {
                     "assistantStream": .bool(false),
                 ])])]),
             ]))
-            cursor = try await receiveHistoryCursor(from: mux, streamID: streamID)
+            snapshot = try await receiveHistorySnapshot(from: mux, streamID: streamID)
+            guard let snapshotCursor = snapshot["cursor"]?.intValue else {
+                throw ProviderError.invalidResponse("session/follow snapshot has no cursor")
+            }
+            cursor = snapshotCursor
             await mux.close()
         } catch {
             await mux.close()
@@ -1986,6 +2000,7 @@ final class ChatModel {
         var records: [JSONValue] = []
         var hasMore = false
         var beforeSeq: Int?
+        var historyPage: JSONValue = .object([:])
         if cursor >= 0 {
             let page = try await transport.call("session/page", args: .object(["request": .object([
                 "address": .object(["kind": .string("session"), "sessionId": .string(sessionID)]),
@@ -1995,20 +2010,38 @@ final class ChatModel {
             records = (page["records"]?.arrayValue ?? []).compactMap { $0["event"] }
             hasMore = page["hasMore"]?.boolValue ?? false
             beforeSeq = records.compactMap { $0["seq"]?.intValue }.min()
+            historyPage = page
+        }
+        let inputReceipts = try await NativeTranscriptProjector.inputReceipts(
+            for: pendingInputs, historyPage: historyPage, inbox: snapshot["projections"]?["values"]?["inbox"]
+        ) { before in
+            try await transport.call("session/page", args: .object(["request": .object([
+                "address": .object(["kind": .string("session"), "sessionId": .string(sessionID)]),
+                "throughSeq": .number(Double(cursor)), "beforeSeq": .number(Double(before)),
+                "maxMessages": .number(60),
+            ])]))
         }
         let after = cursor >= 0
             ? UInt64(cursor + 1) * DSHEventMapper.partsPerEvent - 1
             : nil
         let running: Bool?
-        if let sessions = try? await transport.call("session/list", args: .object([:])),
-           let row = sessions["items"]?.arrayValue?.first(where: { $0["sessionId"]?.stringValue == sessionID }) {
+        if requireRunningState {
+            let sessions = try await transport.call("session/list", args: .object([:]))
+            guard let confirmed = sessions["items"]?.arrayValue?.first(where: {
+                $0["sessionId"]?.stringValue == sessionID
+            })?["running"]?.boolValue else {
+                throw PhoneDSHError.invalidResponse("session running state is unavailable")
+            }
+            running = confirmed
+        } else if let sessions = try? await transport.call("session/list", args: .object([:])),
+                  let row = sessions["items"]?.arrayValue?.first(where: { $0["sessionId"]?.stringValue == sessionID }) {
             running = row["running"]?.boolValue
         } else { running = nil }
         return SessionHistory(items: Self.transcriptItems(from: records, sessionID: sessionID), after: after,
                               turnRunning: running ?? Self.isTurnRunning(in: records),
                               hasMore: hasMore, beforeSeq: beforeSeq,
                               throughSeq: cursor >= 0 ? cursor : nil,
-                              turnFacts: Self.turnFacts(in: records))
+                              turnFacts: Self.turnFacts(in: records), inputReceipts: inputReceipts)
     }
 
     /// Loads one older message-aligned page and prepends unseen durable events.
@@ -2050,7 +2083,15 @@ final class ChatModel {
     }
 
     private func receiveHistoryCursor(from mux: any DSHMuxConnection, streamID: String) async throws -> Int {
-        try await withThrowingTaskGroup(of: Int.self) { group in
+        let snapshot = try await receiveHistorySnapshot(from: mux, streamID: streamID)
+        guard let cursor = snapshot["cursor"]?.intValue else {
+            throw ProviderError.invalidResponse("session/follow snapshot has no cursor")
+        }
+        return cursor
+    }
+
+    private func receiveHistorySnapshot(from mux: any DSHMuxConnection, streamID: String) async throws -> JSONValue {
+        try await withThrowingTaskGroup(of: JSONValue.self) { group in
             group.addTask {
                 while !Task.isCancelled {
                     guard let frame = try await mux.receive() else {
@@ -2065,10 +2106,10 @@ final class ChatModel {
                     case "item":
                         let value = frame["value"] ?? .null
                         if value["type"]?.stringValue == "snapshot" {
-                            guard let cursor = value["cursor"]?.intValue else {
+                            guard value["cursor"]?.intValue != nil else {
                                 throw ProviderError.invalidResponse("session/follow snapshot has no cursor")
                             }
-                            return cursor
+                            return value
                         }
                     default:
                         continue
@@ -2333,25 +2374,69 @@ final class ChatModel {
 
     private func startPump(harness: any AgentHarness, sessionID: String, after initialSeq: UInt64? = nil) {
         pumpTask?.cancel()
+        eventStreamRecovering = false
         pumpTask = Task { [weak self] in
-            var after = initialSeq
-            while !Task.isCancelled {
-                do {
-                    for try await event in harness.events(sessionID: sessionID, after: after) {
-                        guard !Task.isCancelled, let self, self.sessionID == sessionID else { break }
-                        if let seq = event.seq, let current = after, seq <= current { continue }
-                        if let seq = event.seq { after = seq }
-                        self.handle(event)
-                        if event.seq != nil { self.scheduleTrajectoryRefresh(sessionID: sessionID) }
-                    }
-                } catch {
-                    guard !Task.isCancelled, let self, self.sessionID == sessionID else { break }
-                    self.reportError("Event stream interrupted: \(error)")
-                }
-                if Task.isCancelled { break }
-                try? await Task.sleep(for: .milliseconds(300))
+            await ChatEventPump.run(
+                after: initialSeq,
+                isCurrent: { self?.sessionID == sessionID },
+                events: { harness.events(sessionID: sessionID, after: $0) },
+                synchronize: { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    return try await self.synchronizeInterruptedSession(sessionID: sessionID)
+                },
+                handle: { [weak self] event in
+                    self?.handle(event)
+                    if event.seq != nil { self?.scheduleTrajectoryRefresh(sessionID: sessionID) }
+                },
+                interrupted: { [weak self] error in
+                    guard let self else { return }
+                    self.eventStreamRecovering = true
+                    self.statusLine = "事件流中断，正在重新同步会话"
+                    self.appendStatus("Event stream interrupted: \(error)")
+                },
+                recovered: { [weak self] in
+                    guard let self else { return }
+                    self.eventStreamRecovering = false
+                    self.statusLine = self.turnRunning ? "会话已同步，任务仍在运行" : "会话已同步，任务已结束"
+                })
+        }
+    }
+
+    private func synchronizeInterruptedSession(sessionID: String) async throws -> UInt64? {
+        let transport = try await transportForManagement()
+        let history = try await loadSessionHistory(sessionID: sessionID, transport: transport,
+                                                   requireRunningState: true, pendingInputs: items)
+        try Task.checkCancellation()
+        guard self.sessionID == sessionID else { throw CancellationError() }
+        items = NativeTranscriptProjector.restoring(history.items, preservingInputsFrom: items,
+                                                    inputReceipts: history.inputReceipts)
+        turnStartTimes = history.turnFacts.starts
+        turnEndReasons = history.turnFacts.endReasons
+        turnEndTimes = history.turnFacts.ends
+        transcriptHasMore = history.hasMore
+        transcriptBeforeSeq = history.beforeSeq
+        transcriptThroughSeq = history.throughSeq
+        isShowingCachedTranscript = false
+        lastSeq = history.after
+        turnRunning = history.turnRunning
+        activeTurn = history.turnRunning ? history.turnFacts.starts.keys.max() : nil
+        activeStep = nil
+        activeTurnStartedAt = activeTurn.flatMap { history.turnFacts.starts[$0] }
+        if !history.turnRunning {
+            finishStreamingAssistant()
+            finishStreamingReasoning()
+            clearQueueLines()
+            pendingQuestion = nil
+            pendingPermission = nil
+            for index in items.indices where items[index].toolState == .running {
+                items[index].toolState = .stopped
             }
         }
+        syncIdleTimer()
+        persistTranscriptSnapshot()
+        scheduleNativeMetricsRefresh()
+        if !turnRunning, keepingAlive { Task { await self.finishBackgroundKeepAlive() } }
+        return history.after
     }
 
     private func handle(_ event: HarnessEvent) {
@@ -2407,6 +2492,9 @@ final class ChatModel {
             }
             scheduleNativeMetricsRefresh()
         case .userMessage(let text, let source):
+            if let sessionID {
+                NativeTranscriptProjector.acknowledgeInput(event, sessionID: sessionID, in: &items)
+            }
             // Human prompts are already appended optimistically by the
             // composer. Every non-human producer (subagent-settled, goal,
             // schedule, tool-jobs, webhook, plugin) must still surface; it is

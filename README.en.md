@@ -4,7 +4,7 @@
 
 Run DeepSeek Harness, unmodified, on your phone.
 
-[简体中文](README.md) · [Android](#android-version) · [Architecture](docs/architecture.md) · [Protocol spec](spec/v1/README.md)
+[简体中文](README.md) · [Android](#android-version) · [Architecture](docs/architecture.md) · [Protocol baseline & collaboration](spec/README.md) · [Protocol spec](spec/v1/README.md)
 
 <p align="center"><img src="docs/assets/screenshot-chat.jpg" width="300" alt="Phone DSH generating a PDF and reporting progress in the native chat"></p>
 

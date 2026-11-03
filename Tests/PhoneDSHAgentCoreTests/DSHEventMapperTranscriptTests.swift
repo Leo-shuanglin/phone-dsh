@@ -25,6 +25,22 @@ final class DSHEventMapperTranscriptTests: XCTestCase {
 
     // MARK: - G2-FIX-79: user-visible input
 
+    func testAttachmentOnlyPromptCarriesDurableIdentityThroughCoding() throws {
+        let data: JSONValue = .object([
+            "source": .object(["kind": .string("user"), "rpcId": .string("image-request")]),
+            "content": .array([.object(["type": .string("image"), "path": .string("/images/photo.png")])]),
+        ])
+        let mapped = DSHEventMapper.map(makeEvent("user/message", seq: 7, time: 7_000, data: data))
+        XCTAssertEqual(mapped.count, 1)
+        XCTAssertEqual(mapped.first?.kind, .userMessage(text: "", source: "user"))
+        XCTAssertEqual(mapped.first?.userMessageData, data)
+        XCTAssertEqual(try roundTrip(mapped), mapped)
+
+        let old = HarnessEvent(seq: 1, time: Date(), kind: .userMessage(text: "legacy", source: "user"))
+        let decoded = try roundTrip([old])
+        XCTAssertNil(decoded.first?.userMessageData, "older event producers remain compatible")
+    }
+
     func testUserMessageAndInboxSpliceMapNonEmptyInputWithOrderedSeqAndTime() throws {
         let user = DSHEventMapper.map(makeEvent(
             "user/message", seq: 3, time: 3_000,

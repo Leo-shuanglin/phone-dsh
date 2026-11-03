@@ -4,7 +4,7 @@
 
 把 DeepSeek Harness 变成手机的一等运行时。
 
-[English](README.en.md) · [Android 版本](#android-版本) · [架构说明](docs/architecture.md) · [协议规范](spec/v1/README.md)
+[English](README.en.md) · [Android 版本](#android-版本) · [架构说明](docs/architecture.md) · [协议基线与协作](spec/README.md) · [协议规范](spec/v1/README.md)
 
 <p align="center"><img src="docs/assets/screenshot-chat.jpg" width="300" alt="原生对话：模型生成 PDF 后汇报结果"></p>
 

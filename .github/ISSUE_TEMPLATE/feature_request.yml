@@ -1,0 +1,58 @@
+name: Feature request / 功能建议
+description: 建议 Phone DSH 的新能力，或改进现有使用体验。
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        可以用中文或 English 填写。提交前搜索已有 Issue，已有需求可以补充使用场景。
+
+        Phone DSH 是非官方 DeepSeek Harness 手机宿主，重点是手机本地运行、办公工具，以及 BLE / 局域网外设连接。实现建议可选，无需熟悉代码。
+
+        设计约定见 [CONTRIBUTING.md](https://github.com/launsion-boop/phone-dsh/blob/main/CONTRIBUTING.md)：保持 DSH 源码不被修改，凭据、持久化和生命周期由原生宿主管理。需要修改上游的能力可以提出上游建议。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 使用场景与问题 / Use case and problem
+      description: 谁在什么场景下，需要完成什么任务？现有流程有什么困难？
+      placeholder: 例如，切回 App 后需要确认后台任务是否完成，目前必须逐个打开会话检查。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望的行为 / Proposed behavior
+      description: 描述用户如何使用这项能力，以及最终能得到什么结果。
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 适用平台 / Platforms
+      multiple: true
+      options:
+        - iOS
+        - Android
+        - macOS / Swift SDK
+        - 共享 Worker / 插件 / xz-shell
+        - 跨平台 / 无法确定
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收示例 / Acceptance criteria
+      description: 给出一两个具体例子，说明做到什么程度就能解决你的问题；无需编写测试代码。
+      placeholder: |
+        - 当……时，我可以……，并看到……
+        - 如果权限未授予、网络中断或外设离线，界面会……
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 现有替代方案 / Alternatives
+      description: 目前如何绕过这个问题？考虑过哪些其他方案？
+  - type: textarea
+    id: context
+    attributes:
+      label: 补充信息 / Additional context
+      description: 可附草图、参考链接、相关 Issue 或实现建议。涉及模型、MCP 或外设时，说明对应协议或型号；涉及手机数据时，说明所需权限。截图和示例需脱敏。

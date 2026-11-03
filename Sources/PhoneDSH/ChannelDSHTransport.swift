@@ -15,9 +15,9 @@
 //   x-pdsh-mux-id: <32 lowercase hex>
 //   x-pdsh-mux-op: send | receive | close
 //
-// `send` carries one canonical JSON mux frame as the request body; the Worker
+// `send` carries one application JSON mux frame as the request body; the Worker
 // bridge answers 2xx. `receive` is a long-lived request whose body chunks are
-// newline-delimited canonical JSON mux frames; it ends when the mux closes or
+// newline-delimited application JSON mux frames; it ends when the mux closes or
 // the channel connection dies. The Worker entry bridges these three operations
 // to its in-process `/api/remote.mux` server (D23); the header/path contract
 // above is the whole interface between the two sides.
@@ -47,17 +47,17 @@ public enum PhoneDSHMuxProtocol {
     public static let muxIDHeader = "x-pdsh-mux-id"
     /// `send`, `receive` or `close`.
     public static let operationHeader = "x-pdsh-mux-op"
-    /// Operation value: the body is one canonical JSON mux frame to deliver
+    /// Operation value: the body is one application JSON mux frame to deliver
     /// to the Worker's `/api/remote.mux` server.
     public static let sendOperation = "send"
     /// Operation value: a long-lived request whose body chunks are
-    /// newline-delimited canonical JSON mux frames.
+    /// newline-delimited application JSON mux frames.
     public static let receiveOperation = "receive"
     /// Operation value: closes the logical mux session.
     public static let closeOperation = "close"
     /// `Content-Type` header name used by the mux requests.
     public static let contentTypeHeader = "content-type"
-    /// `Content-Type` of one canonical JSON mux frame (`send`/`close`).
+    /// `Content-Type` of one application JSON mux frame (`send`/`close`).
     public static let jsonContentType = "application/json"
     /// `Content-Type` of the newline-delimited mux stream (`receive`).
     public static let ndjsonContentType = "application/x-ndjson"

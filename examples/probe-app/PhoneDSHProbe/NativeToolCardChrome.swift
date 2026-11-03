@@ -462,12 +462,13 @@ struct NativeToolCardHairline: View {
 #if DEBUG
 private struct NativeToolCardChromePreview: View {
     private var diffLines: [NativeToolCardLine] {
-        [NativeToolCardLine(number: 1, "@@ Sources/App.swift → Sources/App.swift", kind: .path)]
-            + (1...12).map { index in
-                NativeToolCardLine(number: index,
-                                   index == 3 ? "let chrome = NativeToolCardChrome()" : "print(\(index))",
-                                   kind: index == 3 ? .added : (index == 4 ? .removed : .context))
-            }
+        let header = NativeToolCardLine(number: 1, "@@ Sources/App.swift → Sources/App.swift", kind: .path)
+        let lines: [NativeToolCardLine] = (1...12).map { index in
+            let text = index == 3 ? "let chrome = NativeToolCardChrome()" : "print(\(index))"
+            let kind: NativeToolCardLine.Kind = index == 3 ? .added : (index == 4 ? .removed : .context)
+            return NativeToolCardLine(number: index, text, kind: kind)
+        }
+        return [header] + lines
     }
 
     var body: some View {
