@@ -1087,6 +1087,8 @@ public fun SettingsPage(
     onSelectDefaultPermission: ((PermissionTier) -> Unit)? = null,
     licenseEntries: List<AndroidLicenseNotice>? = null,
     backLevel: com.phonedsh.ui.nav.PdshBackLevel? = null,
+    /** Retained by the settings host while an external settings child is open. */
+    indexListState: androidx.compose.foundation.lazy.LazyListState = androidx.compose.foundation.lazy.rememberLazyListState(),
 ) {
     // The old tab enum is retained as the deep-link vocabulary used by the host.
     // A non-General incoming tab is still rendered as the requested pushed page.
@@ -1160,6 +1162,7 @@ public fun SettingsPage(
         when (page) {
             SettingsIndexPage.ROOT -> SettingsIndexList(
                 state = state,
+                listState = indexListState,
                 language = language,
                 appearance = appearance,
                 fontSize = fontSize,
@@ -1231,6 +1234,7 @@ private enum class SettingsIndexPage(val titleZh: String, val titleEn: String) {
 @Composable
 private fun SettingsIndexList(
     state: SettingsScreenState,
+    listState: androidx.compose.foundation.lazy.LazyListState,
     language: String,
     appearance: String,
     fontSize: String,
@@ -1314,6 +1318,7 @@ private fun SettingsIndexList(
         ),
     )
     androidx.compose.foundation.lazy.LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize().navigationBarsPadding().testTag(SETTINGS_INDEX_LIST_TAG),
         contentPadding = PaddingValues(top = com.phonedsh.ui.surface.SettingsSubPageGroupedTopInset),
         verticalArrangement = Arrangement.spacedBy(SettingsCardGap),

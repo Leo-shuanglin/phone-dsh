@@ -10,8 +10,11 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -110,6 +113,31 @@ closeBoundsPx=$closeBounds
         compose.onNodeWithTag("pdsh.settings.permission-defaults").assertIsDisplayed()
         consumeToSettingsIndex(backLevel)
         assertTrue("local child back should not pop the settings route", outerBacks.isEmpty())
+    }
+
+    @Test
+    fun aboutBackRetainsTheSettingsIndexScrollPosition() {
+        compose.setContent {
+            PdshTheme {
+                PdshNavHost(
+                    nav = PdshNavState(listOf(PdshRoute.Home, PdshRoute.Settings)),
+                    facts = PdshNavFacts(settings = SettingsFacts()),
+                    onNavigate = {}, onBack = {}, onHome = {}, onHostAction = {},
+                    home = { BasicText("home") }, webSurface = {},
+                )
+            }
+        }
+        val aboutTag = UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "about"
+        compose.onNodeWithTag(UiTags.SETTINGS_LIST).performScrollToNode(hasTestTag(aboutTag))
+        val row = compose.onNodeWithTag(aboutTag)
+        row.performScrollTo().assertIsDisplayed()
+        val before = row.fetchSemanticsNode().boundsInRoot
+        row.performTouchInput { click(center) }
+        compose.onNodeWithTag(UiTags.ABOUT_LIST).assertIsDisplayed()
+        compose.onNodeWithContentDescription("返回").performTouchInput { click(center) }
+        row.assertIsDisplayed()
+        val after = row.fetchSemanticsNode().boundsInRoot
+        assertEquals("returning from About keeps the visible index row", before.top, after.top, 1f)
     }
 
     @Test

@@ -1359,6 +1359,7 @@ private fun SettingsRoute(
     // the settings sheet, and neither is a route. Each surface registers its own back
     // level (see `SettingsSurfaces.kt`), so this frame only decides what the body is.
     var surface by remember { mutableStateOf(SettingsSurface.NONE) }
+    val settingsIndexListState = androidx.compose.foundation.lazy.rememberLazyListState()
     // The sheet's five tabs are host state (§1: 通用 / 模型 / 插件 / 手机权限 / 预设).
     // Before this lane the tab was never set and the picker's callback was empty, so
     // the four non-通用 bodies were unreachable even though each page already ships
@@ -1452,6 +1453,7 @@ private fun SettingsRoute(
             onToggleDeveloperTools = onToggleDeveloperTools,
             onBack = onBack,
             tab = tab,
+            indexListState = settingsIndexListState,
             onSelectTab = { selected -> tab = selected },
             tabContent = { selected ->
                 when (selected) {
