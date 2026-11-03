@@ -276,6 +276,53 @@ abstract class PackagePdshJni @Inject constructor(
     }
 }
 
+/**
+ * Copies the generated Termux proot jniLibs into the variant.
+ *
+ * The binaries are third-party build inputs, not repository content:
+ * `android/tools/fetch-termux-proot.sh` downloads the pinned `.deb` files,
+ * verifies their SHA-256, applies the in-place `DT_NEEDED` rename and writes
+ * `android/app/build/generated/termux-proot/jniLibs`. A build without that
+ * output fails here with the exact command, like `PackagePdshJni` does for the
+ * Rust library — a JVM test never runs this task.
+ */
+abstract class PackageProotAssets : DefaultTask() {
+    @get:InputFiles
+    @get:Optional
+    abstract val source: ConfigurableFileCollection
+
+    @get:OutputDirectory
+    abstract val destination: DirectoryProperty
+
+    @TaskAction
+    fun copyAssets() {
+        val root = source.files.singleOrNull()
+            ?: error(
+                "the Termux proot jniLibs are missing; run:\n" +
+                    "  bash android/tools/fetch-termux-proot.sh\n" +
+                    "The binaries are pinned third-party assets and are not committed.",
+            )
+        val names = listOf("libproot.so", "libproot_loader.so", "libtalloc.so", "libandroid-shmem.so")
+        val target = destination.get().asFile.resolve("arm64-v8a")
+        target.mkdirs()
+        for (name in names) {
+            val input = root.resolve("arm64-v8a").resolve(name)
+            check(input.isFile && input.length() > 0L) {
+                "missing or empty proot asset ${input.path}; run " +
+                    "bash android/tools/fetch-termux-proot.sh"
+            }
+            val magic = ByteArray(4)
+            val read = input.inputStream().use { it.read(magic) }
+            check(read == 4 && magic[0] == 0x7f.toByte() && magic[1] == 'E'.code.toByte() &&
+                magic[2] == 'L'.code.toByte() && magic[3] == 'F'.code.toByte()) {
+                "not an ELF shared object: ${input.path}"
+            }
+            input.copyTo(target.resolve(name), overwrite = true)
+        }
+        logger.lifecycle("[proot] packaged 4 pinned Termux binaries from ${root.path}")
+    }
+}
+
 // ---- identity ------------------------------------------------------------
 //
 // `applicationId` is the product identity; `namespace` above it stays
@@ -390,6 +437,15 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // The demo target is arm64-v8a: the Rust JNI library, the Termux proot
+        // stack and every 16 KB claim in this repository are arm64. Without this
+        // filter a transitive AAR's armeabi/x86 libraries land in the APK and
+        // the packaged-alignment gate correctly rejects them; they are not
+        // loadable on this product's device class and were never part of the
+        // shipped surface.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     signingConfigs {
@@ -478,6 +534,26 @@ android {
     androidResources {
         // The worker bundle is already a zip; the demo never deflates it twice.
         noCompress += "zip"
+        // proot and its libraries are executed from nativeLibraryDir, so the
+        // APK keeps them STORED. `extractNativeLibs=true` in the manifest is
+        // what makes PackageManager materialize them there; compressed entries
+        // would be extracted anyway, but STORED keeps the zip and the disk copy
+        // the same bytes, which the 16 KB gate and the asset SHAs read.
+        noCompress += "so"
+    }
+
+    packaging {
+        jniLibs {
+            // Never let AGP strip the Termux binaries: their build-id/DWARF is
+            // not needed at runtime, but a strip rewrites program headers that
+            // the pinned SHA and the 16 KB PT_LOAD proof were taken over.
+            keepDebugSymbols += listOf(
+                "**/libproot.so",
+                "**/libproot_loader.so",
+                "**/libtalloc.so",
+                "**/libandroid-shmem.so",
+            )
+        }
     }
 
     // No loose worker assets here: :engine already packs the same bundle into a
@@ -518,6 +594,21 @@ androidComponents {
         variant.sources.jniLibs?.addGeneratedSourceDirectory(
             packageTask,
             PackagePdshJni::destination,
+        )
+
+        // The proot stack is independent of the Rust JNI library and produced
+        // by a network script, not cargo. It gets its own generated source
+        // directory so a missing download fails only the APK/connected build,
+        // never `testDebugUnitTest`.
+        val prootInput = layout.buildDirectory.dir("generated/termux-proot/jniLibs").get().asFile
+        val packageProot = tasks.register<PackageProotAssets>("package${suffix}ProotAssets") {
+            group = "build"
+            description = "Copies the pinned Termux proot binaries into the ${variant.name} APK"
+            source.from(prootInput)
+        }
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(
+            packageProot,
+            PackageProotAssets::destination,
         )
     }
 }

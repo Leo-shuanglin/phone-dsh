@@ -61,7 +61,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   tool only reaches this request with a session it read out of band from the
  *   Worker, so a `null` here means "a path the host does not let a model take".
  * @param env the environment id the job would run in (`ubuntu-24.04`, …).
- * @param backend the adapter's backend name; `mock` in this build.
+ * @param backend the session's backend name (`mock` or `proot`); read from the
+ *   session, never from a constant, so a real environment cannot show as a mock.
  * @param label the caller's short audit label, if any.
  * @param argvDigest the job's `argv` digest, never the argv.
  * @param argvLength how many arguments the command has.

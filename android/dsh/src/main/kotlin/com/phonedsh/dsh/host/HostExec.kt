@@ -50,9 +50,11 @@ import com.phonedsh.dsh.exec.AdmissionGate
 import com.phonedsh.dsh.exec.ExecBridge
 import com.phonedsh.dsh.exec.ExecCapability
 import com.phonedsh.dsh.exec.ExecWorkspace
+import com.phonedsh.dsh.localexec.MockUbuntuSession
 import com.phonedsh.dsh.localexec.UbuntuHostTool
 import com.phonedsh.dsh.localexec.UbuntuPhoneCatalog
 import com.phonedsh.dsh.localexec.UbuntuSeal
+import com.phonedsh.dsh.localexec.UbuntuSessionFactory
 import com.phonedsh.dsh.tools.InMemoryRequestLedger
 import com.phonedsh.dsh.tools.RegisteredTool
 import com.phonedsh.dsh.tools.RequestLedger
@@ -98,6 +100,10 @@ object HostExec {
      *   existed. That default is the audit's fix: the previous wiring answered
      *   `sealed` from a seam that opened nothing, on the production path, for
      *   every job.
+     * @param ubuntuSessionFactory the environment behind the `ubuntu` tool. The
+     *   default is the mock session, built over the injected seal; `:app` passes
+     *   a factory over `ProotUbuntuSession`, which is the only place the real
+     *   adapter is selected. `:dsh` never names the real backend.
      *
      * Historical note: this function was named `phoneOnly` while `phone info`
      * was the only registered accelerator. The old name is kept here so code
@@ -111,6 +117,16 @@ object HostExec {
         ledger: RequestLedger = InMemoryRequestLedger(),
         shellMounts: List<AcceleratorMount> = emptyList(),
         seal: UbuntuSeal = UbuntuSeal.unwired,
+        ubuntuSessionFactory: UbuntuSessionFactory = UbuntuSessionFactory(
+            backend = MockUbuntuSession.BACKEND,
+        ) {
+            MockUbuntuSession(
+                clock = clock,
+                logger = logger,
+                seal = seal,
+                admissionOpen = { controller.admission == Admission.OPEN },
+            )
+        },
     ): ExecBridge {
         val tools = ArrayList<RegisteredTool>(1 + shellMounts.size)
         // `phone` is one tool with a small catalog: `info` (the device facts,
@@ -130,6 +146,7 @@ object HostExec {
                         logger = logger,
                         admissionOpen = { controller.admission == Admission.OPEN },
                         seal = seal,
+                        sessionFactory = ubuntuSessionFactory,
                     ),
                 ),
             ),

@@ -416,6 +416,7 @@ export {
   UBUNTU_DEFAULT_ENV,
   UBUNTU_DESCRIPTION,
   UBUNTU_USAGE,
+  ubuntuDescription,
   createUbuntuCommand,
   exitOfReply,
   getUbuntuCapability,

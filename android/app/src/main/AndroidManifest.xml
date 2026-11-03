@@ -78,6 +78,15 @@
       points at the same layers so a round-masked launcher gets the same mark
       from its own mask instead of a scaled bitmap.
 
+      extractNativeLibs: `true`, because the Termux proot binaries and the Rust
+      JNI library are executed from `applicationInfo.nativeLibraryDir`; Android
+      10+ refuses `execve` on app-home files. The cost is that every packaged
+      `.so` is materialized in app data (the 32 MB JNI library included), and
+      the 16 KB gate runs in its extracted mode: ELF PT_LOAD alignment is still
+      checked, while zip compression/offset no longer describe the executed
+      file. `noCompress += "so"` and `keepDebugSymbols` in `:app` keep the
+      packaged bytes equal to the pinned asset SHAs.
+
       allowBackup: already `false`, and it stays `false`. This app owns an API
       key's encrypted record under `noBackupFilesDir` plus the WAL workspace; a
       backup that carried either off the device would be a leak. The two rule
@@ -85,6 +94,7 @@
     -->
     <application
         android:allowBackup="false"
+        android:extractNativeLibs="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:enableOnBackInvokedCallback="true"
         android:fullBackupContent="@xml/backup_rules"

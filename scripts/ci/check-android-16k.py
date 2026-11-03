@@ -26,22 +26,34 @@ owns it, so the two gates cannot drift into disagreeing about what "aligned"
 means.
 
 Exit codes, deliberately distinct:
-  0  PASS -- every inspected `.so` is STORED, 16 KB aligned in the zip, and has
-             every PT_LOAD `p_align >= 16384`.
+  0  PASS -- every inspected `.so` has every PT_LOAD `p_align >= 16384`, and in
+             the non-extracted mode it is also STORED and 16 KB aligned in the
+             zip.
   1  FAIL -- one of those properties is wrong, or the target is malformed.
   2  SKIP -- no APK (and no `--so`) was found. Printed as SKIP with the build
              command; a missing build product is never a pass.
+
+Extracted mode: `:app` declares `android:extractNativeLibs="true"` because the
+Termux proot binaries and the Rust JNI library are executed from
+`nativeLibraryDir`. PackageManager then extracts every `lib/**` member to app
+data, so the zip entry's compression and data offset no longer describe the
+file the loader maps; the ELF's own PT_LOAD alignment is the property that
+matters. The gate auto-detects that declaration from the source manifest (or
+`--extracted` forces it) and still checks every ELF, the required member, and
+the malformed-archive paths. It never skips the ELF proof.
 
 Usage:
     python3 scripts/ci/check-android-16k.py
     python3 scripts/ci/check-android-16k.py --apk android/app/build/outputs/apk/release/app-release-unsigned.apk
     python3 scripts/ci/check-android-16k.py --so android/app/build/generated/jniLibs/packageDebugPdshJni/arm64-v8a/libpdsh_jni.so
+    python3 scripts/ci/check-android-16k.py --extracted --apk <apk>
 """
 
 from __future__ import annotations
 
 import argparse
 import importlib.util
+import re
 import struct
 import sys
 import zipfile
@@ -63,6 +75,8 @@ APK_GLOBS = (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ELF_PARSER = REPO_ROOT / "android/tools/check-native-alignment.py"
+SOURCE_MANIFEST = Path("android/app/src/main/AndroidManifest.xml")
+EXTRACT_NATIVE_RE = re.compile(r'android:extractNativeLibs\s*=\s*["\']true["\']')
 
 
 class GateError(Exception):
@@ -137,7 +151,7 @@ def check_so(path, parser):
     return check_elf_bytes(parser, data, str(path))
 
 
-def check_apk(path, parser, required):
+def check_apk(path, parser, required, extracted=False):
     """Check every `lib/**/*.so` of an APK; return (problems, alignments)."""
     if not path.is_file():
         return ["{}: target does not exist".format(path)], []
@@ -155,25 +169,26 @@ def check_apk(path, parser, required):
             for info in members:
                 seen.add(info.filename)
                 label = "{}!{}".format(path, info.filename)
-                if info.compress_type != zipfile.ZIP_STORED:
-                    problems.append(
-                        "{}: zip entry is compressed (method {}); an uncompressed "
-                        "entry is required so the loader maps the ELF instead of "
-                        "extracting it".format(label, info.compress_type)
-                    )
-                try:
-                    offset = local_data_offset(raw, info)
-                except GateError as exc:
-                    problems.append(str(exc))
-                    continue
-                if offset % PAGE_16K:
-                    problems.append(
-                        "{}: zip data offset {:#x} is not 16 KB aligned "
-                        "({} bytes past the previous 16 KB boundary); run "
-                        "`zipalign -P 16` or stop compressing the member".format(
-                            label, offset, offset % PAGE_16K
+                if not extracted:
+                    if info.compress_type != zipfile.ZIP_STORED:
+                        problems.append(
+                            "{}: zip entry is compressed (method {}); an uncompressed "
+                            "entry is required so the loader maps the ELF instead of "
+                            "extracting it".format(label, info.compress_type)
                         )
-                    )
+                    try:
+                        offset = local_data_offset(raw, info)
+                    except GateError as exc:
+                        problems.append(str(exc))
+                        continue
+                    if offset % PAGE_16K:
+                        problems.append(
+                            "{}: zip data offset {:#x} is not 16 KB aligned "
+                            "({} bytes past the previous 16 KB boundary); run "
+                            "`zipalign -P 16` or stop compressing the member".format(
+                                label, offset, offset % PAGE_16K
+                            )
+                        )
                 sub_problems, sub_aligns = check_elf_bytes(parser, archive.read(info), label)
                 problems.extend(sub_problems)
                 aligns.extend(sub_aligns)
@@ -183,6 +198,16 @@ def check_apk(path, parser, required):
         if member not in seen:
             problems.append("{}: required member {} is missing".format(path, member))
     return problems, aligns
+
+
+def detect_extracted(root):
+    """Read the app's extractNativeLibs declaration from its source manifest."""
+    manifest = Path(root) / SOURCE_MANIFEST
+    try:
+        text = manifest.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return bool(EXTRACT_NATIVE_RE.search(text))
 
 
 def discover_apks(root):
@@ -211,6 +236,19 @@ def main(argv=None):
     parser.add_argument("--root", default=None, help="repository root (default: this checkout)")
     parser.add_argument("--apk", action="append", default=None, help="APK to inspect (repeatable)")
     parser.add_argument("--so", action="append", default=None, help="bare .so to inspect (repeatable)")
+    parser.add_argument(
+        "--extracted",
+        action="store_true",
+        default=None,
+        help="force extracted mode: skip zip compression/offset checks, keep the ELF checks",
+    )
+    parser.add_argument(
+        "--no-extracted",
+        action="store_false",
+        dest="extracted",
+        default=None,
+        help="force packaged mode even if the manifest declares extractNativeLibs=true",
+    )
     parser.add_argument(
         "--require",
         action="append",
@@ -246,12 +284,19 @@ def main(argv=None):
         print("[FAIL] check-android-16k: {}".format(exc))
         return 1
 
+    extracted = args.extracted if args.extracted is not None else detect_extracted(root)
+    if extracted:
+        print(
+            "[i] check-android-16k: extracted mode (extractNativeLibs=true); "
+            "zip compression/offset are not execution properties, ELF PT_LOAD "
+            "alignment is still checked"
+        )
     targets = [("apk", path) for path in apks] + [("so", path) for path in sos]
     failed = 0
     alignments = []
     for kind, path in targets:
         if kind == "apk":
-            problems, aligns = check_apk(path, elf_parser, required)
+            problems, aligns = check_apk(path, elf_parser, required, extracted=extracted)
         else:
             problems, aligns = check_so(path, elf_parser)
         alignments.extend(aligns)
@@ -278,8 +323,13 @@ def main(argv=None):
     smallest = min(alignments) if alignments else 0
     print(
         "[PASS] check-android-16k: {} target(s), {} PT_LOAD segment(s), "
-        "min p_align=0x{:x}; every packaged .so is STORED, 16 KB aligned in the "
-        "zip and 16 KB aligned in the ELF".format(len(targets), len(alignments), smallest)
+        "min p_align=0x{:x}; every inspected .so is 16 KB aligned in the ELF{}".format(
+            len(targets),
+            len(alignments),
+            smallest,
+            " (extracted mode: zip compression/offset not asserted)" if extracted else
+            " and STORED/16 KB aligned in the zip",
+        )
     )
     return 0
 

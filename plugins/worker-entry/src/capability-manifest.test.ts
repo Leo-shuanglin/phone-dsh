@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 import { getCommandNames } from 'just-bash/browser'
 import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import { createMemoryChannelPair } from '../../channel/src/index.ts'
-import { UBUNTU_DESCRIPTION, createWorkerCommands } from '../../shell-ext/src/index.ts'
+import { UBUNTU_DESCRIPTION, createWorkerCommands, ubuntuDescription } from '../../shell-ext/src/index.ts'
 import { SHELL_MANIFEST_PATH } from '../../shell-ext/src/contract.ts'
 import type { WorkerToolbox } from '../../wasi-toolbox/src/index.ts'
 import {
@@ -688,6 +688,21 @@ test('boot publishes both files before ready and a second boot emits no VFS_MUT'
     await second.stop()
   }
   assert.equal(SHELL_MANIFEST_PATH, CAPABILITIES_JSON_PATH, 'the 127 trailer points at the published file')
+})
+
+test('a proot ubuntu section describes the real environment, not the mock', () => {
+  const withUbuntu = buildCapabilityManifest(manifestInput({
+    commands: ['bash', 'phone', 'ubuntu'],
+    accelerators: ['phone'],
+    ubuntu: { env: 'ubuntu-24.04', backend: 'proot', commands: ['run', 'status', 'close', 'fetch'] },
+  }))
+  assert.equal(withUbuntu.json.ubuntu?.backend, 'proot')
+  assert.equal(withUbuntu.json.ubuntu?.description, ubuntuDescription('proot'))
+  const text = withUbuntu.markdown.replace(/\s+/gu, ' ')
+  assert.match(text, /real local Ubuntu environment/u)
+  assert.match(text, /backend=proot/u)
+  assert.doesNotMatch(text, /MOCK adapter/u)
+  assert.doesNotMatch(text, /exit code is synthetic/u)
 })
 
 test('the ubuntu section exists only when the host answered the probe', () => {

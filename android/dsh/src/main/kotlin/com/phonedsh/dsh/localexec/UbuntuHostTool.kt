@@ -44,11 +44,13 @@
 // host never grows a second wording for the same facts.
 //
 // ---- what this does NOT do ----
-// It does not snapshot, fork a process or read a workspace byte. It runs the
-// mock adapter, so every job is `backend = mock`; the answer says so. The seal
-// is not this file's either: it is injected (see the `seal` constructor
-// parameter), the production composition root passes the real one, and every
-// answer renders `sealMock` from that implementation instead of writing a
+// It does not snapshot, fork a process or read a workspace byte. The session it
+// asks is injected: the default is the mock, and the composition root passes a
+// factory over the proot adapter. Every answer's `backend` is read from that
+// session, so `backend=mock` and `backend=proot` describe which one actually
+// answered; this file never writes either as a literal. The seal is not this
+// file's either: it is injected (see the `seal` constructor parameter), and
+// every answer renders `sealMock` from that implementation instead of writing a
 // literal. A real environment replaces the session, not this dispatch surface.
 
 package com.phonedsh.dsh.localexec
@@ -62,6 +64,7 @@ import com.phonedsh.dsh.tools.ToolInvocation
 import com.phonedsh.dsh.tools.ToolOutcome
 import com.phonedsh.platform.Clock
 import java.util.Base64
+import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -82,6 +85,12 @@ import org.json.JSONObject
  *   `BuildSealUbuntu` through `HostExec.defaultTools`, whose own default is the
  *   fail-closed `UbuntuSeal.unwired` rather than this one. Every answer renders
  *   `sealMock` from it, so a real chmod window can never be reported as a mock.
+ * @param sessionFactory the environment seam. The default is the mock session
+ *   this class shipped with, built from the same clock/logger/seal as before;
+ *   the composition root injects a factory over `ProotUbuntuAdapter`. Every
+ *   answer's `backend` is read from the session this factory returns, never
+ *   from a constant, so `backend=proot` cannot appear beside mock behaviour or
+ *   the reverse.
  */
 class UbuntuHostTool(
     private val clock: Clock,
@@ -90,21 +99,33 @@ class UbuntuHostTool(
     private val admissionOpen: () -> Boolean = { true },
     private val approval: UbuntuApprovalGate = UbuntuApproval.gate,
     private val seal: UbuntuSeal = MockUbuntuSeal(),
-) : PhoneTool {
-
-    private val lock = Any()
-
-    private var created: MockUbuntuSession? = null
-
-    /** The lazily created session; construction is cheap and probe touches it. */
-    private fun session(): MockUbuntuSession = synchronized(lock) {
-        created ?: MockUbuntuSession(
+    private val sessionFactory: UbuntuSessionFactory = UbuntuSessionFactory(
+        backend = MockUbuntuSession.BACKEND,
+    ) {
+        MockUbuntuSession(
             clock = clock,
             budgets = budgets,
             logger = logger,
             seal = seal,
             admissionOpen = admissionOpen,
-        ).also { created = it }
+        )
+    },
+) : PhoneTool {
+
+    private val lock = Any()
+
+    private var created: UbuntuSession? = null
+
+    /** The lazily created session; construction is cheap and probe touches it. */
+    private fun session(): UbuntuSession = synchronized(lock) {
+        created ?: sessionFactory.create().also { created = it }
+    }
+
+    /** Drop the closed session so the next op opens a fresh one over the store. */
+    private fun forget(session: UbuntuSession) {
+        synchronized(lock) {
+            if (created === session) created = null
+        }
     }
 
     /**
@@ -164,7 +185,7 @@ class UbuntuHostTool(
     private fun trustedSession(request: ExecRequest): String? =
         request.env[SESSION_ENV]?.takeIf { UbuntuApprovalGate.SESSION_ID.matches(it) }
 
-    /** The boot probe: available only when the session really opened. */
+    /** The boot probe: available only when the session's environment really opened. */
     private suspend fun probe(): ToolOutcome {
         val session = try {
             session().also { it.lane() }
@@ -174,8 +195,19 @@ class UbuntuHostTool(
                 resultJson(
                     JSONObject()
                         .put("available", false)
-                        .put("backend", MockUbuntuSession.BACKEND)
-                        .put("reason", "the mock session could not be created"),
+                        .put("backend", sessionFactory.backend)
+                        .put("reason", "the environment session could not be created"),
+                ),
+            )
+        }
+        if (!session.available) {
+            return ToolOutcome.Success(
+                resultJson(
+                    JSONObject()
+                        .put("available", false)
+                        .put("backend", session.backend)
+                        .put("env", session.env)
+                        .put("reason", session.unavailableReason ?: "the environment is unavailable"),
                 ),
             )
         }
@@ -204,11 +236,21 @@ class UbuntuHostTool(
     private suspend fun run(request: ExecRequest, args: List<String>, session: String): ToolOutcome {
         val parsed = parseRun(args)
             ?: return ToolOutcome.Failure(CODE_UNSUPPORTED, RUN_USAGE)
+        val hostSession = session()
+        val cwd = parsed.cwd ?: DEFAULT_GUEST_ROOT
+        // The real guest receives the host workspace as a bind mount at
+        // /dsh/workspace; a cwd outside it would either escape the one subtree
+        // the job is allowed to read or fail opaquely inside proot. The adapter
+        // checks again (it is the enforcement point); this refusal keeps an
+        // impossible request from opening an approval dialog.
+        if (hostSession.backend != MockUbuntuSession.BACKEND && !isGuestWorkspace(cwd)) {
+            return ToolOutcome.Failure(CODE_UNSUPPORTED, CWD_USAGE)
+        }
         val job = try {
             UbuntuExecRequest(
-                env = parsed.env ?: session().env,
+                env = parsed.env ?: hostSession.env,
                 argv = parsed.command,
-                cwd = parsed.cwd ?: DEFAULT_GUEST_ROOT,
+                cwd = cwd,
                 workspace = DEFAULT_GUEST_ROOT,
                 label = parsed.label,
                 jobTimeoutMs = parsed.jobTimeoutMs,
@@ -223,7 +265,7 @@ class UbuntuHostTool(
             UbuntuApprovalRequest(
                 sessionId = session,
                 env = job.env,
-                backend = MockUbuntuSession.BACKEND,
+                backend = hostSession.backend,
                 label = job.label,
                 argvDigest = UbuntuJobLane.digest(job.argv),
                 argvLength = job.argv.size,
@@ -260,7 +302,16 @@ class UbuntuHostTool(
             is UbuntuSubmit.Accepted -> {
                 val jobId = submitted.job.jobId
                 val waitMs = waitBudgetMs(request, job.jobTimeoutMs)
-                val record = session().awaitTerminal(jobId, waitMs) ?: submitted.job
+                val record = try {
+                    session().awaitTerminal(jobId, waitMs) ?: submitted.job
+                } catch (cancelled: CancellationException) {
+                    // The dispatch coroutine is gone, but the job is not: without
+                    // this the proot process would keep running after the turn
+                    // that asked for it was cancelled. The lane records the
+                    // cancellation; the adapter stops the process group.
+                    session().lane().cancel(jobId)
+                    throw cancelled
+                }
                 ToolOutcome.Success(resultJson(jobPayload(record)))
             }
         }
@@ -293,7 +344,7 @@ class UbuntuHostTool(
             ?: return ToolOutcome.Success(
                 resultJson(
                     JSONObject()
-                        .put("backend", MockUbuntuSession.BACKEND)
+                        .put("backend", session().backend)
                         .put("jobId", jobId)
                         .put("state", "unknown")
                         .put("exitCode", JSONObject.NULL)
@@ -314,17 +365,21 @@ class UbuntuHostTool(
     /** `ubuntu close`: stop every non-terminal job, then report the ids. */
     private suspend fun close(args: List<String>): ToolOutcome {
         if (args.isNotEmpty()) return ToolOutcome.Failure(CODE_UNSUPPORTED, "close takes no arguments")
+        val active = session()
         val cancelled = try {
-            session().close()
+            active.close()
         } catch (failure: Exception) {
             logger.warn("ubuntu close failed (${failure.javaClass.simpleName})")
             return ToolOutcome.Failure(CODE_TOOL_FAILED, "the environment could not be closed")
         }
+        // The next op opens a fresh session over the same durable store; the
+        // adapter handles of the closed one are already released.
+        forget(active)
         return ToolOutcome.Success(
             resultJson(
                 JSONObject()
                     .put("closed", true)
-                    .put("backend", MockUbuntuSession.BACKEND)
+                    .put("backend", active.backend)
                     .put("cancelled", JSONArray(cancelled)),
             ),
         )
@@ -367,7 +422,7 @@ class UbuntuHostTool(
                 .put("foregroundRequired", failure.foregroundRequired)
         }
         return JSONObject()
-            .put("backend", MockUbuntuSession.BACKEND)
+            .put("backend", session().backend)
             .put("env", record.env)
             .put("jobId", record.jobId)
             .put("state", record.state.wire)
@@ -413,7 +468,7 @@ class UbuntuHostTool(
 
     /** A refusal that created no record, in the status shape the renderer reads. */
     private fun failurePayload(code: String, message: String): JSONObject = JSONObject()
-        .put("backend", MockUbuntuSession.BACKEND)
+        .put("backend", session().backend)
         .put("state", "failed")
         .put("exitCode", JSONObject.NULL)
         .put("logTail", "")
@@ -432,7 +487,7 @@ class UbuntuHostTool(
      * Worker's renderer reads it and the caller may show it.
      */
     private fun refusalPayload(failure: UbuntuJobFailure, approval: UbuntuJobApproval): JSONObject = JSONObject()
-        .put("backend", MockUbuntuSession.BACKEND)
+        .put("backend", session().backend)
         .put("state", UbuntuJobState.FAILED.wire)
         .put("exitCode", JSONObject.NULL)
         .put("logTail", "")
@@ -453,7 +508,7 @@ class UbuntuHostTool(
     /** One `ubuntu.fetch` answer (bridge.md §12.8): chunk, refusal or error. */
     private fun fetchPayload(answer: UbuntuFetch): JSONObject = when (answer) {
         is UbuntuFetch.Chunk -> JSONObject()
-            .put("backend", MockUbuntuSession.BACKEND)
+            .put("backend", session().backend)
             .put("jobId", answer.jobId)
             .put("name", answer.name)
             .put("offset", answer.offset)
@@ -465,7 +520,7 @@ class UbuntuHostTool(
             .put("limits", limitsObject(answer.limits))
 
         is UbuntuFetch.Refused -> JSONObject()
-            .put("backend", MockUbuntuSession.BACKEND)
+            .put("backend", session().backend)
             .put("jobId", answer.jobId)
             .put("name", answer.name)
             .put("offset", 0L)
@@ -484,7 +539,7 @@ class UbuntuHostTool(
             .put("limits", limitsObject(answer.limits))
 
         is UbuntuFetch.Unavailable -> JSONObject()
-            .put("backend", MockUbuntuSession.BACKEND)
+            .put("backend", session().backend)
             .put("jobId", answer.jobId)
             .put("name", answer.name)
             .put("offset", 0L)
@@ -518,6 +573,21 @@ class UbuntuHostTool(
         val remaining = request.deadline?.let { (it - clock.nowMillis()).coerceAtLeast(1L) }
             ?: DEFAULT_WAIT_MS
         return remaining.coerceAtMost(jobTimeoutMs + WAIT_MARGIN_MS).coerceAtLeast(1L)
+    }
+
+    /**
+     * Whether [cwd] is the guest workspace or a directory inside it.
+     *
+     * One canonical spelling: `/dsh/workspace` itself or `/dsh/workspace/...`,
+     * with no empty, `.` or `..` path segment. Checked only for a non-mock
+     * backend so the mock's historical acceptance is unchanged; the real
+     * adapter repeats the check because it is the enforcement point.
+     */
+    internal fun isGuestWorkspace(cwd: String): Boolean {
+        if (!cwd.startsWith(DEFAULT_GUEST_ROOT)) return false
+        if (cwd == DEFAULT_GUEST_ROOT) return true
+        if (!cwd.startsWith("$DEFAULT_GUEST_ROOT/")) return false
+        return cwd.removePrefix("$DEFAULT_GUEST_ROOT/").split('/').all { it.isNotEmpty() && it != "." && it != ".." }
     }
 
     /** One parsed `run`. */
@@ -656,6 +726,9 @@ class UbuntuHostTool(
         /** The `run` and `fetch` shapes, for a malformed dispatch. */
         const val RUN_USAGE: String = "run takes [--env V] [--cwd P] [--label L] [--timeout-ms N] -- <command…>"
         const val FETCH_USAGE: String = "fetch takes <jobId> <name> [--offset N] [--path P]"
+
+        /** The refusal for a real-backend cwd outside the one bound subtree. */
+        const val CWD_USAGE: String = "run --cwd must be /dsh/workspace or a directory inside it for the real backend"
 
         /** The one guest root the mock advertises (bridge.md §12.2's default). */
         const val DEFAULT_GUEST_ROOT: String = "/dsh/workspace"

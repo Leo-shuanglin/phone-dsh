@@ -39,7 +39,38 @@ class UbuntuHostToolTest {
     private fun tool(
         gate: UbuntuApprovalGate = approvingGate(clock),
         budgets: ControllerBudgets = ControllerBudgets.forTier(ControllerBudgets.DEFAULT_TIER),
-    ): UbuntuHostTool = UbuntuHostTool(clock = clock, budgets = budgets, approval = gate)
+        sessionFactory: UbuntuSessionFactory? = null,
+    ): UbuntuHostTool = if (sessionFactory == null) {
+        UbuntuHostTool(clock = clock, budgets = budgets, approval = gate)
+    } else {
+        UbuntuHostTool(
+            clock = clock,
+            budgets = budgets,
+            approval = gate,
+            sessionFactory = sessionFactory,
+        )
+    }
+
+    /**
+     * A real-backend factory over the mock adapter.
+     *
+     * The adapter is a stand-in (no proot in a host JVM test); what this pins is
+     * that the session's backend reaches the probe, the approval request and
+     * every payload, and that a real backend validates `cwd` before the gate.
+     */
+    private fun prootFactory(): UbuntuSessionFactory {
+        val store = java.nio.file.Files.createTempDirectory("pdsh-ubuntu-proot-session")
+        return UbuntuSessionFactory(backend = "proot") {
+            HostUbuntuSession(
+                clock = clock,
+                adapter = MockUbuntuAdapter(clock = clock, fileLimitBytes = MockUbuntuAdapter.HUGE_BYTES),
+                seal = MockUbuntuSeal(),
+                backend = "proot",
+                storeRoot = store,
+                durability = TestDurability,
+            )
+        }
+    }
 
     /**
      * One dispatch.
@@ -414,4 +445,41 @@ class UbuntuHostToolTest {
         assertTrue(outcome is ToolOutcome.Failure)
         assertEquals("unsupported", (outcome as ToolOutcome.Failure).code)
     }
+
+    @Test
+    fun probe_reports_the_injected_backend_without_lying_about_the_mock() {
+        val reply = payload(invoke(tool(sessionFactory = prootFactory()), listOf("phone", "ubuntu", "probe")))
+        assertTrue(reply.getBoolean("available"))
+        assertEquals("proot", reply.getString("backend"))
+        assertEquals(MockUbuntuAdapter.DEFAULT_ENV, reply.getString("env"))
+    }
+
+    @Test
+    fun a_real_backend_reaches_the_approval_dialog_and_the_job_payload() {
+        val (gate, prompt) = approvalGate(clock = clock)
+        val reply = payload(
+            invoke(
+                tool(gate = gate, sessionFactory = prootFactory()),
+                listOf("phone", "ubuntu", "run", "--label", "uname", "--", "uname", "-a"),
+            ),
+        )
+        assertEquals("proot", prompt.requests.single().backend)
+        assertEquals("proot", reply.getString("backend"))
+        assertEquals("succeeded", reply.getString("state"))
+        assertEquals(0, reply.getInt("exitCode"))
+        assertTrue(reply.getBoolean("sealMock"))
+    }
+
+    @Test
+    fun a_real_backend_refuses_a_cwd_outside_the_workspace_before_the_gate() {
+        val (gate, prompt) = approvalGate(clock = clock)
+        val outcome = invoke(
+            tool(gate = gate, sessionFactory = prootFactory()),
+            listOf("phone", "ubuntu", "run", "--cwd", "/etc", "--", "uname", "-a"),
+        )
+        assertTrue("expected a refusal, was $outcome", outcome is ToolOutcome.Failure)
+        assertTrue((outcome as ToolOutcome.Failure).message.contains("/dsh/workspace"))
+        assertTrue(prompt.requests.isEmpty())
+    }
+
 }
