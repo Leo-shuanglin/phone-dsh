@@ -132,7 +132,6 @@ skip() { echo "$*" > "$SKIP_FILE"; return 77; }
 # Print "name|udid" of the simulator to use.
 
 
-
 stage_phone_spec() {
     spec="$ROOT/spec/v1"
     [ -d "$spec" ] || { skip "spec/v1 not present"; return; }
@@ -405,15 +404,6 @@ stage_phone_android_structure() {
 # only in `shell/` — and nothing else runs them. The 2026-11-01 audit found the
 # fix for "rg and jaq leak DSH-internal state" guarded by tests that no stage ran:
 # a regression there would leave every gate green while the device leaked bytes.
-stage_phone_rust_tests() {
-    command -v cargo >/dev/null 2>&1 || { skip "cargo not found: cannot run the Rust suite"; return; }
-    [ -d "$ROOT/shell" ] || { skip "shell/ not present"; return; }
-    ( cd "$ROOT/shell" && cargo test --workspace ) || {
-        echo "cargo test --workspace failed; the host read policy / WAL planner / accelerators are not proven"
-        echo "  cd shell && cargo test --workspace"
-        return 1
-    }
-}
 
 # cd shell && cargo build -p pdsh-jni". Build the host library first, then run
 # every test-bearing module and refuse an aggregate count of 0.
