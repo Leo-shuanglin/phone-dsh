@@ -239,6 +239,10 @@ private fun subagentHistoryUserNode(
  *   than 引擎还没启动.
  * @param providerNeedsKey no usable model service is configured.
  * @param canSend the host can accept a message right now.
+ * @param files the workspace-relative paths the `@` menu offers; the host reads
+ *   them off the same materialized tree as the files page, on its IO lane.
+ * @param sessionTitles the unarchived session titles the `@` menu offers, with
+ *   the current conversation already excluded by the host.
  */
 internal fun chatScreenState(
     ui: ChatUiState,
@@ -249,6 +253,8 @@ internal fun chatScreenState(
     enterMode: com.phonedsh.ui.state.EnterMode = com.phonedsh.ui.state.EnterMode.QUEUE,
     lifecycle: com.phonedsh.ui.state.EngineLifecycleFacts? = null,
     performanceUsage: PerformanceUsage = PerformanceUsage.DETAILED,
+    files: List<String> = emptyList(),
+    sessionTitles: List<String> = emptyList(),
 ): ChatScreenState {
     val chatId = ui.chatId.ifEmpty { PENDING_CHAT_ID }
     val nodes = ArrayList<UiStateNode>(ui.nodes.size + 2)
@@ -314,6 +320,8 @@ internal fun chatScreenState(
         workerSessionID = ui.workerSessionId,
         accessModeError = ui.sessionSnapshot.accessError,
         commandsError = ui.sessionSnapshot.commandsError,
+        files = files.take(CHAT_MENTION_FILE_LIMIT),
+        sessionTitles = sessionTitles.take(CHAT_MENTION_SESSION_LIMIT),
         models = ui.sessionSnapshot.modelRoutes.map { it.model }.distinct(),
         currentModel = ui.sessionSnapshot.currentModel,
         currentEffort = ui.sessionSnapshot.currentEffort,
@@ -675,6 +683,37 @@ private const val FALLBACK_TURN_ID: String = "turn-0000"
 
 /** The conversation id a never-started chat renders under. */
 internal const val PENDING_CHAT_ID: String = "pending"
+
+/** The host-read candidates behind the `@` menu, loaded once off the UI thread. */
+internal data class ChatMentionFacts(
+    val files: List<String> = emptyList(),
+    val sessionTitles: List<String> = emptyList(),
+)
+
+/** How many workspace paths the `@` menu is allowed to carry into one screen state. */
+internal const val CHAT_MENTION_FILE_LIMIT: Int = 200
+
+/** How many session titles the `@` menu is allowed to carry into one screen state. */
+internal const val CHAT_MENTION_SESSION_LIMIT: Int = 100
+
+/**
+ * The `@` menu's session candidates: the active conversation titles, in store
+ * order, excluding the conversation that is already on screen.
+ *
+ * Pure so the host's IO read can be tested without a device: the caller supplies
+ * the store rows and the current conversation id.
+ */
+internal fun chatMentionSessionTitles(
+    records: List<ChatRecord>,
+    currentChatId: String,
+    limit: Int = CHAT_MENTION_SESSION_LIMIT,
+): List<String> = records.asSequence()
+    .filter { !it.archived && it.id != currentChatId }
+    .map { it.title.trim() }
+    .filter { it.isNotEmpty() }
+    .distinct()
+    .take(limit)
+    .toList()
 
 /** The one turn-end reason that closes a turn without a visible row. */
 private const val COMPLETED: String = "completed"

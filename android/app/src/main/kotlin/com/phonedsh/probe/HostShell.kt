@@ -220,7 +220,21 @@ internal fun HostShell(
     // page on the next frame; the view model is its only writer.
     val chatUi by engine.chat.collectAsState()
     val sessionSnapshot by engine.sessions.collectAsState()
-    val chatScreenState = engine.chatSurfaceState()
+    // The `@` menu's candidates are a host read, not a projection: the workspace
+    // walk and the session-store read happen here, on the IO lane, and the page
+    // only ever receives the bounded result. A frame never touches the disk.
+    var chatMention by remember { mutableStateOf(ChatMentionFacts()) }
+    LaunchedEffect(
+        chatUi.chatId,
+        chatUi.attachments,
+        chatUi.notice,
+        sessionSnapshot.sessions,
+        sessionSnapshot.archivedSessions,
+        settingsRevision,
+    ) {
+        chatMention = engine.chatMentionFacts(chatUi.chatId)
+    }
+    val chatScreenState = engine.chatSurfaceState(chatMention.files, chatMention.sessionTitles)
     LaunchedEffect(Unit) { engine.startNativeSurface() }
     LaunchedEffect(state is EngineHostState.Running, chatUi.chatId) {
         if (state is EngineHostState.Running) engine.prepareChatSession()
@@ -294,6 +308,8 @@ internal fun HostShell(
         settingsRevision,
         preferences,
         automationFacts,
+        chatUi.chatId,
+        chatUi.title,
         chatUi.workerSessionId,
         chatUi.error,
         chatUi.lastSubmission,
@@ -511,6 +527,14 @@ internal fun HostShell(
                 }
             }
         }
+        available(com.phonedsh.ui.nav.PdshActionKey.EXPORT_TRANSCRIPT) { request ->
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.ExportTranscript &&
+                request.sessionId == chatScreenState.sessionID
+            ) {
+                val markdown = chatTranscriptMarkdown(chatUi.title, chatScreenState.rows)
+                shareChatTranscript(context, chatUi.title, markdown)?.let { notice = it }
+            }
+        }
         available(com.phonedsh.ui.nav.PdshActionKey.SESSION_RENAME) { request ->
             if (request is com.phonedsh.ui.nav.PdshUiHostCommand.SessionRename) providerProbeScope.launch {
                 val receipt = withContext(Dispatchers.IO) { applyHostSessionCommand(engine.chatStore, request) }
@@ -658,10 +682,17 @@ internal fun HostShell(
             }
         }
         available(com.phonedsh.ui.nav.PdshActionKey.NEW_SESSION) { request ->
-            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.NewSession) providerProbeScope.launch {
-                val receipt = engine.newChatSessionConfirmed(request.requestId)
-                if (receipt.confirms(request.requestId, receipt.sessionId, null)) {
-                    nav = PdshNavState(listOf(PdshRoute.Chat))
+            if (request is com.phonedsh.ui.nav.PdshUiHostCommand.NewSession) {
+                // iOS `newSession(preset:)` opens a new chat and sends nothing; the
+                // composer copy stays with the person. Read the draft at the click,
+                // not from a remembered frame, so the newest typing survives.
+                val draft = engine.chat.value.draft
+                providerProbeScope.launch {
+                    val receipt = engine.newChatSessionConfirmed(request.requestId)
+                    if (receipt.confirms(request.requestId, receipt.sessionId, null)) {
+                        if (draft.isNotEmpty()) engine.chatDraftChanged(draft)
+                        nav = PdshNavState(listOf(PdshRoute.Chat))
+                    }
                 }
             }
         }

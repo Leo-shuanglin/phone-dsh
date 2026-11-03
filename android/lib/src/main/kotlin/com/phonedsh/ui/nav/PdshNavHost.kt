@@ -512,7 +512,7 @@ public fun PdshNavHost(
             )
             is PdshRoute.SessionArtifacts ->
                 SessionArtifactsRoute(route.sessionId, artifacts, workspaceRoot, onBack, backLevel)
-            PdshRoute.AgentPresets -> AgentPresetsRoute(onBack)
+            PdshRoute.AgentPresets -> AgentPresetsRoute(onBack, facts.actionAvailability)
             PdshRoute.PluginInventory -> PluginInventoryRoute(
                 facts = facts,
                 onBack = onBack,
@@ -686,6 +686,22 @@ private fun ChatRoute(
             }
         }
     }
+    val exportTranscript: (() -> Unit)? =
+        when (val export = actionAvailability.forAction(PdshActionKey.EXPORT_TRANSCRIPT)) {
+            is PdshActionAvailability.Unavailable -> null
+            is PdshActionAvailability.Available -> if (sessionId == null) {
+                null
+            } else {
+                {
+                    export.callback(
+                        PdshUiHostCommand.ExportTranscript(
+                            sessionId,
+                            StateRequestId(UUID.randomUUID().toString()),
+                        ),
+                    )
+                }
+            }
+        }
     val retryFromTable: PdshActionAvailability<() -> Unit> = when (val retry = actionAvailability.forAction(PdshActionKey.RETRY)) {
         is PdshActionAvailability.Unavailable -> retry
         is PdshActionAvailability.Available -> if (sessionId == null) {
@@ -852,6 +868,7 @@ private fun ChatRoute(
         // owns it), and the preview of a row's file is a route push.
         onAddFiles = onAddFiles,
         onAddImages = onAddImages,
+        onExportTranscript = exportTranscript ?: {},
         onRemoveAttachment = onRemoveAttachment,
         onDismissComposerNotice = onDismissNotice,
         onOpenFile = { path -> onNavigate(PdshRoute.Preview(path)) },
@@ -1511,7 +1528,11 @@ private fun SettingsRoute(
                             onRequestPermission = onPhonePermissionRequest,
                             onOpenPermissionSettings = onPhonePermissionSettings,
                         )
-                    SettingsTab.PRESETS -> AgentPresetsRoute(onBack = onBack, embedded = true)
+                    SettingsTab.PRESETS -> AgentPresetsRoute(
+                        onBack = onBack,
+                        actionAvailability = facts.actionAvailability,
+                        embedded = true,
+                    )
                 }
             },
         )
@@ -2061,21 +2082,38 @@ private fun SessionsRoute(facts: PdshNavFacts, onBack: () -> Unit) {
 @Composable
 private fun AgentPresetsRoute(
     onBack: () -> Unit,
+    actionAvailability: PdshActionAvailabilities = PdshActionAvailabilities(),
     embedded: Boolean = false,
 ) {
     var local by remember { mutableStateOf(NativeAgentPresetsLocalState()) }
     // The baseline keeps one `error` for both the roster read and a row verb
     // (`NativeAgentPresetsPage.swift:20`), so one local override is enough.
     var error by remember { mutableStateOf<String?>(null) }
+    val createAvailability = actionAvailability.forAction(PdshActionKey.NEW_SESSION)
     NativeAgentPresetsPage(
         state = NativeAgentPresetsScreenState.from(
             facts = NativeAgentPresetsFacts(error = error),
             local = local,
         ),
         onBack = onBack,
-        // 让 Agent 创建预设 opens creator mode on the engine; this host owns no
-        // session command through the router, so the gesture changes nothing.
-        onCreate = {},
+        // iOS `startCreator` opens a new chat and sends nothing. This route owns
+        // no session store, so it dispatches the same typed NEW_SESSION action the
+        // drawer uses; the host creates the conversation and lands on the chat
+        // page with the existing draft untouched.
+        onCreate = {
+            when (createAvailability) {
+                is PdshActionAvailability.Unavailable ->
+                    error = UiStrings.AGENT_PRESETS_CREATE_UNAVAILABLE
+                is PdshActionAvailability.Available -> {
+                    error = null
+                    val dispatched = actionAvailability.dispatch(
+                        PdshActionKey.NEW_SESSION,
+                        PdshUiHostCommand.NewSession(StateRequestId("ui.presets.create.${UUID.randomUUID()}")),
+                    )
+                    if (!dispatched) error = UiStrings.AGENT_PRESETS_CREATE_UNAVAILABLE
+                }
+            }
+        },
         onViewConfiguration = { error = NativeAgentPresetsScreenState.NO_DOCUMENT_FAILURE },
         onMakeDefault = { error = NativeAgentPresetsScreenState.NO_WRITABLE_DEFAULT_FAILURE },
         onCloseDocument = { local = local.apply(NativeAgentPresetsUiEvent.CloseDocument) },
@@ -2158,25 +2196,27 @@ private fun PhonePermissionsRoute(
     // honest face of an unread permission. The one thing this route must never do is
     // fill that gap with 已允许.
     val state = PhonePermissionsScreenState.from(facts.phonePermissions, local)
+    // One activation path for the row tap and the switch's on position. 请求
+    // confirms the purpose first, and a row whose only repair is the settings page
+    // opens it (the baseline's `activate()` does the same for `.denied`).
+    // BLOCKED / ALWAYS_ON rows are neither tappable nor switchable.
+    fun activate(capability: PhoneCapability) {
+        val row = state.groups.asSequence().flatMap { it.rows }
+            .firstOrNull { it.capability == capability }
+        when (row?.action) {
+            PhoneCapabilityAction.REQUEST ->
+                local = local.apply(PhonePermissionsUiEvent.Confirm(capability))
+            PhoneCapabilityAction.OPEN_SETTINGS -> onOpenPermissionSettings(capability)
+            else -> Unit
+        }
+    }
     PhonePermissionsPage(
         state = state,
         onDone = onBack,
-        onTapCapability = { capability ->
-            // The tap performs the row's own action, so no clickable row is inert:
-            // 请求 confirms the purpose first, and a row whose only repair is the
-            // settings page opens it (the baseline's `activate()` does the same for
-            // `.denied`). BLOCKED / ALWAYS_ON rows are not clickable at all.
-            val row = state.groups.asSequence().flatMap { it.rows }
-                .firstOrNull { it.capability == capability }
-            when (row?.action) {
-                PhoneCapabilityAction.REQUEST ->
-                    local = local.apply(PhonePermissionsUiEvent.Confirm(capability))
-                PhoneCapabilityAction.OPEN_SETTINGS -> onOpenPermissionSettings(capability)
-                else -> Unit
-            }
-        },
+        onTapCapability = ::activate,
         onToggleCapability = { capability, value ->
-            if (!value) local = local.apply(PhonePermissionsUiEvent.NotifyDisabled(capability))
+            if (value) activate(capability)
+            else local = local.apply(PhonePermissionsUiEvent.NotifyDisabled(capability))
         },
         // 去系统设置 opens the page that holds this capability's grant: the same host
         // gesture as a 继续 on a row that has no prompt to raise.
