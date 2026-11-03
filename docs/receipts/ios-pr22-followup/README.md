@@ -51,3 +51,16 @@ are unchanged.
 
 The two generated ChatPage/runtime contract files and the manual Submit Answers
 source anchor were refreshed for the two-line source shift.
+
+
+## 2026-11-03 — subagent aside availability
+
+Source checkpoint: `a28d4e3f9ac98e24f078b3a328829b75a6bb7c88`. The product catalog previously passed the same active-chat selection callback for both primary open and “在侧边栏打开”; the component's default aside callback could also do nothing. The aside callback is now optional. The chevron and context action render only with a distinct supplied destination; normal session open is preserved. No side-pane architecture was added.
+
+- **PASS:** iOS Simulator Debug build using the existing pack-image-generated Worker input from the same source lineage. Root independently checked both `PhoneDSHProbe` and `PhoneDSHProbe.debug.dylib` with `lipo -archs`: `x86_64 arm64`.
+- **PASS:** full UI Python suite, 89 tests, after correcting the shifted manual `提交回答` source anchor.
+- **PASS:** extraction check, 33 current contracts; token/source check (the same six AA pairs remain deferred); baseline ratchet 173 known, 0 new, 0 stale, one existing platform whitelist. This is the Android snapshot in this iOS follow-up branch, not PR14's later integration tree.
+- **PASS:** final diff whitespace check. Regenerated `chat.json` and `runtime-details.json` only change source line/provenance/id/span metadata. No baseline or waiver entries were added.
+- **NOT_RUN:** aside interaction/SwiftUI view tests and physical-device checks. The existing simulator test target does not import this view; no replacement test architecture was added. Prior provider UI checks and queue-source results above retain their original source bindings.
+
+The latest metadata/receipt commit leaves the product Swift source byte-identical to the checkpoint above.
