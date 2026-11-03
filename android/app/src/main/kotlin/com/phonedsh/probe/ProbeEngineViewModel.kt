@@ -1458,6 +1458,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             BusyEnterMode.STEER -> com.phonedsh.ui.state.EnterMode.STEER
         },
         lifecycle = nativeEngineLifecycle(),
+        performanceUsage = preferenceStore.snapshot().performanceUsage,
     )
 
     /** What the person typed. Local state; the page never stores it. */

@@ -30,6 +30,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
+import com.phonedsh.ui.state.ComposerStatsMode
+import com.phonedsh.ui.state.SessionStats
+import com.phonedsh.ui.state.SessionTokenUsage
+import com.phonedsh.ui.state.ContextPressure
+import com.phonedsh.ui.state.ContextBreakdown
 import com.phonedsh.ui.theme.PdshTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -114,6 +119,64 @@ class ComposerSurfaceTest {
     }
 
     @Test
+    fun `compact mode uses only available speed and cache hit`() {
+        show(
+            text = "", canSubmit = false,
+            sessionStats = SessionStats(1, 2, 0.0, 0.0, 0.0, 0, 1000.0, 25),
+            tokenUsage = SessionTokenUsage(100, 20, 80, 0),
+            contextPressure = ContextPressure(500, 700, 1000),
+            statsMode = ComposerStatsMode.COMPACT,
+        )
+        compose.onNodeWithTag("pdsh.composer.metrics.compact").assertIsDisplayed()
+        compose.onNodeWithText("25 tok/s", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("缓存命中 44%", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.composer.metrics.activity").assertDoesNotExist()
+        compose.onNodeWithTag("pdsh.composer.metrics.context").assertDoesNotExist()
+    }
+
+    @Test
+    fun `detailed mode chips open source-data detail sheets`() {
+        show(
+            text = "", canSubmit = false,
+            sessionStats = SessionStats(2, 4, 1200.0, 0.0, 600.0, 2, 2000.0, 50),
+            tokenUsage = SessionTokenUsage(100, 20, 80, 10),
+            contextPressure = ContextPressure(800, 900, 1000),
+            contextBreakdown = ContextBreakdown(30, 40, 800),
+        )
+        compose.onNodeWithText("210 tok", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.composer.metrics.usage").performClick()
+        compose.onNodeWithText("Token 用量").assertIsDisplayed()
+        compose.onNodeWithText("缓存读取").assertIsDisplayed()
+        compose.onNodeWithText("80 tok").assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.composer.metrics.done").assertIsDisplayed()
+    }
+
+    @Test
+    fun `activity chip opens its session detail`() {
+        show(
+            text = "", canSubmit = false,
+            sessionStats = SessionStats(2, 4, 1200.0, 300.0, 600.0, 2, 2000.0, 50),
+        )
+        compose.onNodeWithTag("pdsh.composer.metrics.activity").performClick()
+        compose.onNodeWithText("会话统计").assertIsDisplayed()
+        compose.onNodeWithText("轮 / 步").assertIsDisplayed()
+        compose.onNodeWithText("模型用时").assertIsDisplayed()
+    }
+
+    @Test
+    fun `context chip opens the supplied context breakdown`() {
+        show(
+            text = "", canSubmit = false,
+            contextPressure = ContextPressure(800, 900, 1000),
+            contextBreakdown = ContextBreakdown(30, 40, 800),
+        )
+        compose.onNodeWithTag("pdsh.composer.metrics.context").performClick()
+        compose.onNodeWithText("上下文").assertIsDisplayed()
+        compose.onNodeWithText("系统提示").assertIsDisplayed()
+        compose.onNodeWithText("~30").assertIsDisplayed()
+    }
+
+    @Test
     fun `the controls slot is docked inside the card`() {
         // ChatPage.swift `composerControls`: the tool row lives inside the card.
         show(
@@ -181,6 +244,11 @@ class ComposerSurfaceTest {
         mode: ComposerMode = ComposerMode.SEND,
         stat: String? = null,
         contextPercent: Int? = null,
+        sessionStats: SessionStats? = null,
+        tokenUsage: SessionTokenUsage? = null,
+        contextPressure: ContextPressure? = null,
+        contextBreakdown: ContextBreakdown? = null,
+        statsMode: ComposerStatsMode = ComposerStatsMode.DETAILED,
         onSend: () -> Unit = {},
         onStop: () -> Unit = {},
         controls: (@androidx.compose.runtime.Composable () -> Unit)? = null,
@@ -199,6 +267,11 @@ class ComposerSurfaceTest {
                     onStop = onStop,
                     stat = stat,
                     contextPercent = contextPercent,
+                    sessionStats = sessionStats,
+                    tokenUsage = tokenUsage,
+                    contextPressure = contextPressure,
+                    contextBreakdown = contextBreakdown,
+                    statsMode = statsMode,
                     controls = controls,
                 )
             }

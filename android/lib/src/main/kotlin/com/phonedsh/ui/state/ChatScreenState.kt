@@ -36,6 +36,71 @@ import com.phonedsh.ui.surface.ComposerMode
 import com.phonedsh.ui.surface.ToolRowState
 import com.phonedsh.ui.surface.lineDelta
 import androidx.compose.runtime.Immutable
+import kotlin.math.roundToInt
+
+/** Compact or detailed presentation for the native composer metrics row. */
+public enum class ComposerStatsMode { COMPACT, DETAILED }
+
+/** Session-level activity metrics, present only when the host projection reports them. */
+@Immutable
+public data class SessionStats(
+    public val turns: Long,
+    public val steps: Long,
+    public val llmMs: Double,
+    public val toolMs: Double,
+    public val ttftMs: Double,
+    public val ttftSteps: Long,
+    public val decodeMs: Double,
+    public val decodeTokens: Long,
+) {
+    public val tokensPerSecond: Double? get() = if (decodeMs > 0) decodeTokens / (decodeMs / 1_000.0) else null
+}
+
+/** Session-level token counters. A missing object stays unavailable. */
+@Immutable
+public data class SessionTokenUsage(
+    public val uncachedInputTokens: Long,
+    public val outputTokens: Long,
+    public val cacheReadTokens: Long,
+    public val cacheWriteTokens: Long,
+) {
+    init {
+        require(safeTokenSum(uncachedInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens) != null) {
+            "session token totals exceed the supported integer range"
+        }
+    }
+    public val billedInputTokens: Long get() = safeTokenSum(uncachedInputTokens, cacheReadTokens, cacheWriteTokens)!!
+    public val totalTokens: Long get() = safeTokenSum(uncachedInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens)!!
+    public val cacheHitPercent: Double? get() = if (billedInputTokens > 0) cacheReadTokens * 100.0 / billedInputTokens else null
+}
+
+private fun safeTokenSum(vararg values: Long): Long? {
+    var sum = 0L
+    for (value in values) {
+        if (value < 0 || Long.MAX_VALUE - sum < value) return null
+        sum += value
+    }
+    return sum
+}
+
+@Immutable
+public data class ContextPressure(
+    public val pressureTokens: Long?,
+    public val projectedTokens: Long?,
+    public val contextWindow: Long,
+) {
+    public val usedTokens: Long? get() = projectedTokens ?: pressureTokens
+    public val percent: Int? get() = usedTokens?.let {
+        (it * 100.0 / contextWindow).roundToInt().coerceIn(0, 100)
+    }
+}
+
+@Immutable
+public data class ContextBreakdown(
+    public val systemTokens: Long,
+    public val toolsTokens: Long,
+    public val messageTokens: Long,
+)
 
 /** What the page shows around the list. */
 public enum class ChatPhase {
@@ -717,6 +782,11 @@ public data class ChatHostFacts(
     public val artifacts: List<ArtifactReference>? = null,
     public val contextLost: ContextLostReceipt? = null,
     public val snapshotRevision: StateRevision? = null,
+    public val sessionStats: SessionStats? = null,
+    public val tokenUsage: SessionTokenUsage? = null,
+    public val contextPressure: ContextPressure? = null,
+    public val contextBreakdown: ContextBreakdown? = null,
+    public val composerStatsMode: ComposerStatsMode = ComposerStatsMode.DETAILED,
 )
 
 /** One todo row from `session/projections.values.todos`; status remains a wire fact. */
@@ -1037,6 +1107,11 @@ public data class ChatScreenState(
     public val artifacts: List<ArtifactReference>? = null,
     public val contextLost: ContextLostReceipt? = null,
     public val snapshotRevision: StateRevision? = null,
+    public val sessionStats: SessionStats? = null,
+    public val tokenUsage: SessionTokenUsage? = null,
+    public val contextPressure: ContextPressure? = null,
+    public val contextBreakdown: ContextBreakdown? = null,
+    public val composerStatsMode: ComposerStatsMode = ComposerStatsMode.DETAILED,
 ) {
     /** True when the list has nothing to show yet. */
     public val isEmpty: Boolean get() = rows.isEmpty()
@@ -1481,6 +1556,11 @@ public data class ChatScreenState(
                     catalogLoaded = host.modelsLoaded,
                 ),
                 contextPercent = host.contextPercent,
+                sessionStats = host.sessionStats,
+                tokenUsage = host.tokenUsage,
+                contextPressure = host.contextPressure,
+                contextBreakdown = host.contextBreakdown,
+                composerStatsMode = host.composerStatsMode,
                 todoItems = host.todoItems,
                 hasOnlineDevices = host.hasOnlineDevices,
                 lifecycle = host.lifecycle,

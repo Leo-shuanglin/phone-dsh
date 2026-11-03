@@ -362,6 +362,59 @@ class ChatSessionSnapshotTest {
         assertNull(snapshot.accessError)
     }
 
+    @Test fun `session metrics project only complete valid host facts`() {
+        val snapshot = sessionSnapshotOf(json("""{"values":{
+          "sessionStats":{"turns":4,"steps":9,"llmMs":1200.5,"toolMs":300,
+            "ttftMs":800,"ttftSteps":4,"decodeMs":2000,"decodeTokens":50},
+          "tokenUsage":{"uncachedInputTokens":100,"outputTokens":20,"cacheReadTokens":80,"cacheWriteTokens":10},
+          "contextPressure":{"pressureTokens":800,"projectedTokens":900,"contextWindow":1000},
+          "contextBreakdown":{"systemTokens":30,"toolsTokens":40,"messageTokens":800}
+        }}"""), null, null)
+        assertEquals(SessionStats(4, 9, 1200.5, 300.0, 800.0, 4, 2000.0, 50), snapshot.sessionStats)
+        assertEquals(SessionTokenUsage(100, 20, 80, 10), snapshot.tokenUsage)
+        assertEquals(ContextPressure(800, 900, 1000), snapshot.contextPressure)
+        assertEquals(ContextBreakdown(30, 40, 800), snapshot.contextBreakdown)
+        assertEquals(25.0, snapshot.sessionStats?.tokensPerSecond)
+        assertEquals(90, snapshot.contextPressure?.percent)
+        assertEquals(210L, snapshot.tokenUsage?.totalTokens)
+        assertEquals(80.0 / 190.0 * 100.0, snapshot.tokenUsage?.cacheHitPercent!!, 1e-9)
+    }
+
+    @Test fun `missing partial and invalid metrics remain unavailable`() {
+        val absent = sessionSnapshotOf(json("""{"values":{}}"""), null, null)
+        assertNull(absent.sessionStats)
+        assertNull(absent.tokenUsage)
+        assertNull(absent.contextPressure)
+        assertNull(absent.contextBreakdown)
+
+        val partial = sessionSnapshotOf(json("""{"values":{
+          "sessionStats":{"turns":1,"steps":2},
+          "tokenUsage":{"uncachedInputTokens":1,"outputTokens":2},
+          "contextPressure":{"pressureTokens":4},
+          "contextBreakdown":{"systemTokens":1,"toolsTokens":2}
+        }}"""), null, null)
+        assertNull(partial.sessionStats)
+        assertNull(partial.tokenUsage)
+        assertNull(partial.contextPressure)
+        assertNull(partial.contextBreakdown)
+
+        val invalid = sessionSnapshotOf(json("""{"values":{
+          "sessionStats":{"turns":-1,"steps":2,"llmMs":1,"toolMs":1,"ttftMs":1,"ttftSteps":1,"decodeMs":1,"decodeTokens":2},
+          "tokenUsage":{"uncachedInputTokens":1,"outputTokens":2,"cacheReadTokens":-1,"cacheWriteTokens":0},
+          "contextPressure":{"pressureTokens":1,"projectedTokens":2,"contextWindow":0},
+          "contextBreakdown":{"systemTokens":1,"toolsTokens":2,"messageTokens":-3}
+        }}"""), null, null)
+        assertNull(invalid.sessionStats)
+        assertNull(invalid.tokenUsage)
+        assertNull(invalid.contextPressure)
+        assertNull(invalid.contextBreakdown)
+
+        val aggregateOverflow = sessionSnapshotOf(json("""{"values":{
+          "tokenUsage":{"uncachedInputTokens":9223372036854775807,"outputTokens":1,"cacheReadTokens":0,"cacheWriteTokens":0}
+        }}"""), null, null)
+        assertNull(aggregateOverflow.tokenUsage)
+    }
+
     @Test fun `rich live question reaches plan review carrier without losing metadata`() {
         val request = PendingRemoteRequest("ask-1", "client-1", json("""{
           "questions":[{"id":"plan","header":"Review","question":"Proceed?",

@@ -20,6 +20,12 @@ import com.phonedsh.hostevents.HostEventProjection
 import com.phonedsh.ui.state.ChatAttachment
 import com.phonedsh.ui.state.ChatPhase
 import com.phonedsh.ui.state.ChatRow
+import com.phonedsh.ui.state.SessionStats
+import com.phonedsh.ui.state.SessionTokenUsage
+import com.phonedsh.ui.state.ContextPressure
+import com.phonedsh.ui.state.ContextBreakdown
+import com.phonedsh.ui.state.ComposerStatsMode
+import com.phonedsh.ui.page.PerformanceUsage
 import com.phonedsh.ui.surface.ComposerMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,6 +35,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatSurfaceTest {
+    @Test
+    fun `session metrics and stored compact choice reach the page state`() {
+        val snapshot = ChatSessionSnapshot(
+            sessionStats = SessionStats(2, 3, 1.0, 2.0, 3.0, 1, 1000.0, 25),
+            tokenUsage = SessionTokenUsage(10, 4, 5, 1),
+            contextPressure = ContextPressure(40, 50, 100),
+            contextBreakdown = ContextBreakdown(5, 10, 35),
+        )
+        val state = chatScreenState(
+            ui = ChatUiState(chatId = "chat", sessionSnapshot = snapshot),
+            engineStarted = true,
+            providerNeedsKey = false,
+            canSend = true,
+            performanceUsage = PerformanceUsage.COMPACT,
+        )
+        assertEquals(snapshot.sessionStats, state.sessionStats)
+        assertEquals(snapshot.tokenUsage, state.tokenUsage)
+        assertEquals(snapshot.contextPressure?.percent, state.contextPercent)
+        assertEquals(snapshot.contextBreakdown, state.contextBreakdown)
+        assertEquals(ComposerStatsMode.COMPACT, state.composerStatsMode)
+    }
+
     @Test
     fun `a settled assistant message becomes an assistant row`() {
         val event = project(

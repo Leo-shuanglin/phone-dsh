@@ -23,12 +23,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -41,6 +42,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import com.phonedsh.ui.state.ComposerStatsMode
+import com.phonedsh.ui.state.SessionStats
+import com.phonedsh.ui.state.SessionTokenUsage
+import com.phonedsh.ui.state.ContextPressure
+import com.phonedsh.ui.state.ContextBreakdown
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -58,9 +65,11 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -76,6 +85,8 @@ import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
 import java.util.Locale
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /** Which key the dock's trailing corner shows. */
 public enum class ComposerMode {
@@ -170,6 +181,11 @@ public fun Composer(
     onTruncated: () -> Unit = {},
     onMenuKey: (KeyEvent) -> Boolean = { false },
     onMenuSubmit: () -> Boolean = { false },
+    sessionStats: SessionStats? = null,
+    tokenUsage: SessionTokenUsage? = null,
+    contextPressure: ContextPressure? = null,
+    contextBreakdown: ContextBreakdown? = null,
+    statsMode: ComposerStatsMode = ComposerStatsMode.DETAILED,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -336,29 +352,177 @@ public fun Composer(
             modifier = Modifier.fillMaxWidth().padding(top = com.phonedsh.ui.ChatMetrics.COMPOSER_STATS_TOP_PT.dp),
             // ios-chat-official.png: the stats line sits under the card's leading
             // edge (x 29.3), not centred under it.
-            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText, Alignment.Start),
+            horizontalArrangement = Arrangement.spacedBy(if (statsMode == ComposerStatsMode.COMPACT) 8.dp else 4.dp, Alignment.Start),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (stat != null) {
-                StatPill(modifier = Modifier.testTag(UiTags.COMPOSER_STAT)) {
-                    BasicText(
-                        text = stat,
-                        style = type.secondary.copy(color = tokens.colors.tertiary),
-                        maxLines = 1,
-                    )
+            if (sessionStats != null || tokenUsage != null || contextPressure != null || contextBreakdown != null) {
+                ComposerMetrics(statsMode, sessionStats, tokenUsage, contextPressure, contextBreakdown)
+            } else {
+                if (stat != null) {
+                    StatPill(modifier = Modifier.testTag(UiTags.COMPOSER_STAT)) {
+                        BasicText(text = stat, style = type.secondary.copy(color = tokens.colors.tertiary), maxLines = 1)
+                    }
                 }
-            }
-            if (contextPercent != null) {
-                StatPill {
-                    ContextRing(percent = contextPercent)
-                    BasicText(
-                        text = "$contextPercent%",
-                        style = type.secondary.copy(color = tokens.colors.tertiary),
-                        maxLines = 1,
-                    )
+                if (contextPercent != null) {
+                    StatPill {
+                        ContextRing(percent = contextPercent)
+                        BasicText(text = "$contextPercent%", style = type.secondary.copy(color = tokens.colors.tertiary), maxLines = 1)
+                    }
                 }
             }
         }
+    }
+}
+
+private enum class ComposerMetricDetail { ACTIVITY, USAGE, CONTEXT }
+
+@Composable
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+private fun ComposerMetrics(
+    mode: ComposerStatsMode,
+    stats: SessionStats?,
+    usage: SessionTokenUsage?,
+    pressure: ContextPressure?,
+    breakdown: ContextBreakdown?,
+) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    val pillStyle = type.secondary.copy(
+        fontSize = 11.sp,
+        fontFeatureSettings = "tnum",
+        color = tokens.colors.tertiary,
+    )
+    var detail by remember { mutableStateOf<ComposerMetricDetail?>(null) }
+    val detailSheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    val closeDetail: () -> Unit = {
+        detail = null
+        scope.launch {
+            detailSheetState.hide()
+        }
+    }
+    val speed = stats?.tokensPerSecond?.takeIf(Double::isFinite)
+    val cacheHit = usage?.cacheHitPercent
+    if (mode == ComposerStatsMode.COMPACT) {
+        StatPill(modifier = Modifier.testTag("pdsh.composer.metrics.compact"), contentSpacing = 8.dp) {
+            if (speed != null) {
+                PdshIconView(PdshIcon.GAUGE, 14.dp, tokens.colors.tertiary, null)
+                BasicText("${speed.roundToInt()} tok/s", style = pillStyle, maxLines = 1)
+            }
+            if (cacheHit != null) {
+                PdshIconView(PdshIcon.DATABASE, 14.dp, tokens.colors.tertiary, null)
+                BasicText("缓存命中 ${formatMetricPercent(cacheHit)}%", style = pillStyle, maxLines = 1)
+            }
+        }
+    } else {
+        if (stats != null && (stats.steps > 0 || speed != null)) {
+            StatPill(Modifier.testTag("pdsh.composer.metrics.activity").clickable(role = Role.Button) { detail = ComposerMetricDetail.ACTIVITY }) {
+                PdshIconView(PdshIcon.GAUGE, 14.dp, tokens.colors.tertiary, null)
+                if (stats.steps > 0) BasicText("${stats.turns} 轮 ${stats.steps} 步", style = pillStyle, maxLines = 1)
+                if (speed != null) BasicText((if (stats.steps > 0) "· " else "") + "${speed.roundToInt()} tok/s", style = pillStyle, maxLines = 1)
+            }
+        }
+        if (usage != null && (usage.billedInputTokens > 0 || usage.outputTokens > 0)) {
+            StatPill(Modifier.testTag("pdsh.composer.metrics.usage").clickable(role = Role.Button) { detail = ComposerMetricDetail.USAGE }) {
+                PdshIconView(PdshIcon.DATABASE, 14.dp, tokens.colors.tertiary, null)
+                BasicText("${compactMetricTokens(usage.totalTokens)} tok", style = pillStyle, maxLines = 1)
+                if (cacheHit != null) BasicText("· 缓存命中 ${formatMetricPercent(cacheHit)}%", style = pillStyle, maxLines = 1)
+            }
+        }
+        val percent = pressure?.percent
+        if (percent != null) {
+            StatPill(Modifier.testTag("pdsh.composer.metrics.context").clickable(role = Role.Button) { detail = ComposerMetricDetail.CONTEXT }) {
+                ContextRing(percent)
+                BasicText("$percent%", style = pillStyle, maxLines = 1)
+            }
+        }
+    }
+    val selected = detail ?: return
+    val title = when (selected) {
+        ComposerMetricDetail.ACTIVITY -> "会话统计"
+        ComposerMetricDetail.USAGE -> "Token 用量"
+        ComposerMetricDetail.CONTEXT -> "上下文"
+    }
+    val detailRows = buildList {
+        when (selected) {
+            ComposerMetricDetail.ACTIVITY -> stats?.let {
+                add("轮 / 步" to "${it.turns} / ${it.steps}")
+                if (it.llmMs > 0) add("模型用时" to formatMetricDuration(it.llmMs))
+                if (it.toolMs > 0) add("工具调用用时" to formatMetricDuration(it.toolMs))
+                if (it.ttftSteps > 0) add("首 token 平均（TTFT）" to formatMetricDuration(it.ttftMs / it.ttftSteps))
+                speed?.let { rate -> add("输出速度（TPS）" to "${rate.roundToInt()} tok/s") }
+            }
+            ComposerMetricDetail.USAGE -> usage?.let {
+                cacheHit?.let { hit -> add("缓存命中" to "${formatMetricPercent(hit)}%") }
+                add("未缓存输入" to "${it.uncachedInputTokens} tok")
+                add("缓存读取" to "${it.cacheReadTokens} tok")
+                if (it.cacheWriteTokens > 0) add("缓存写入" to "${it.cacheWriteTokens} tok")
+                add("输出" to "${it.outputTokens} tok")
+                add("合计" to "${it.totalTokens} tok")
+            }
+            ComposerMetricDetail.CONTEXT -> {
+                if (pressure != null) {
+                    pressure.usedTokens?.let { used ->
+                        add("上下文已用" to "${pressure.percent ?: 0}%")
+                        add("估算用量 / 容量" to "~${compactMetricTokens(used)} / ${compactMetricTokens(pressure.contextWindow)}")
+                    }
+                }
+                breakdown?.let {
+                    add("系统提示" to "~${compactMetricTokens(it.systemTokens)}")
+                    add("工具" to "~${compactMetricTokens(it.toolsTokens)}")
+                    add("对话" to "~${compactMetricTokens(it.messageTokens)}")
+                }
+            }
+        }
+    }
+    androidx.compose.material3.ModalBottomSheet(
+        sheetState = detailSheetState,
+        onDismissRequest = { detail = null },
+    ) {
+        com.phonedsh.ui.surface.SettingsSubPageFrame(
+            modifier = Modifier.fillMaxWidth().height((LocalConfiguration.current.screenHeightDp * 0.5f).dp),
+            title = title,
+            grouped = true,
+            trailing = {
+                com.phonedsh.ui.surface.SettingsNavAction(
+                    text = "完成",
+                    onClick = closeDetail,
+                    tag = "pdsh.composer.metrics.done",
+                    description = "完成",
+                )
+            },
+        ) {
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier.fillMaxSize().verticalScroll(androidx.compose.foundation.rememberScrollState())
+                    .padding(top = 16.dp, bottom = 24.dp),
+            ) {
+                com.phonedsh.ui.surface.SettingsGroupCard {
+                    detailRows.forEachIndexed { index, row ->
+                        com.phonedsh.ui.surface.SettingsGroupedRow(
+                            title = row.first,
+                            value = row.second,
+                            dividerBelow = index != detailRows.lastIndex,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun compactMetricTokens(value: Long): String = when {
+    value < 1_000 -> value.toString()
+    value < 1_000_000 -> scaledMetric(value / 1_000.0) + "K"
+    else -> scaledMetric(value / 1_000_000.0) + "M"
+}
+
+private fun scaledMetric(value: Double): String = if (value >= 100) value.roundToInt().toString() else (value * 10).roundToInt().div(10.0).toString()
+private fun formatMetricPercent(value: Double): String = if (value >= 10) value.roundToInt().toString() else (value * 10).roundToInt().div(10.0).toString()
+private fun formatMetricDuration(milliseconds: Double): String {
+    val seconds = milliseconds / 1_000.0
+    return if (seconds < 60) "${(seconds * 10).roundToInt() / 10.0}秒" else {
+        val whole = seconds.roundToInt()
+        "${whole / 60}分${whole % 60}秒"
     }
 }
 
@@ -432,15 +596,16 @@ private fun StopKey(
 @Composable
 private fun StatPill(
     modifier: Modifier = Modifier,
+    contentSpacing: androidx.compose.ui.unit.Dp = 6.dp,
     content: @Composable () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
     Row(
         modifier = modifier
-            .defaultMinSize(minHeight = tokens.geometry.statPillMinHeight)
-            .padding(horizontal = tokens.spacing.iconText),
+            .heightIn(min = tokens.geometry.statPillMinHeight)
+            .padding(horizontal = 2.dp, vertical = 1.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
+        horizontalArrangement = Arrangement.spacedBy(contentSpacing),
     ) {
         content()
     }
@@ -450,7 +615,7 @@ private fun StatPill(
 @Composable
 private fun ContextRing(percent: Int) {
     val tokens = LocalUiTokens.current
-    val size = tokens.geometry.composerControlSize / 2
+    val size = 14.dp
     androidx.compose.foundation.Canvas(modifier = Modifier.size(size)) {
         val stroke = tokens.stroke.hairline.value * 2f
         val radius = (this.size.minDimension - stroke) / 2f

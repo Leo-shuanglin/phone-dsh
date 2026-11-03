@@ -19,6 +19,10 @@ internal data class ChatSessionSnapshot(
     val currentModel: String? = null,
     val currentProvider: String? = null,
     val currentEffort: String? = null,
+    val sessionStats: SessionStats? = null,
+    val tokenUsage: SessionTokenUsage? = null,
+    val contextPressure: ContextPressure? = null,
+    val contextBreakdown: ContextBreakdown? = null,
     /** Durable DSH inbox rows; null means the projection has not reported inbox. */
     val queueItems: List<ManagedQueueItemState>? = null,
 )
@@ -34,6 +38,10 @@ internal fun sessionSnapshotOf(
     sessionId: String? = null,
 ): ChatSessionSnapshot {
     val values = (projections as? JsonObject)?.get("values") as? JsonObject
+    val sessionStats = values?.get("sessionStats").asSessionStats()
+    val tokenUsage = values?.get("tokenUsage").asSessionTokenUsage()
+    val contextPressure = values?.get("contextPressure").asContextPressure()
+    val contextBreakdown = values?.get("contextBreakdown").asContextBreakdown()
     val goal = ((values?.get("goal") as? JsonObject)?.get("goal") as? JsonObject)
     val objective = goal?.string("objective")?.takeIf { it.isNotBlank() }
     val modes = ((catalog as? JsonObject)?.get("options") as? JsonArray)?.values.orEmpty()
@@ -117,8 +125,59 @@ internal fun sessionSnapshotOf(
         currentModel = selected?.string("model"),
         currentProvider = selected?.string("provider"),
         currentEffort = selected?.string("reasoningEffort"),
+        sessionStats = sessionStats,
+        tokenUsage = tokenUsage,
+        contextPressure = contextPressure,
+        contextBreakdown = contextBreakdown,
         queueItems = queueItems,
     )
+}
+
+private fun JsonValue?.objectValue(): JsonObject? = this as? JsonObject
+private fun JsonObject.long(key: String): Long? = (this[key] as? JsonNumber)?.asLongOrNull()
+private fun JsonObject.finiteDouble(key: String): Double? =
+    (this[key] as? JsonNumber)?.raw?.toDoubleOrNull()?.takeIf(Double::isFinite)
+
+private fun JsonValue?.asSessionStats(): SessionStats? {
+    val value = objectValue() ?: return null
+    val fields = listOf("turns", "steps", "ttftSteps", "decodeTokens").map { value.long(it) ?: return null }
+    val times = listOf("llmMs", "toolMs", "ttftMs", "decodeMs").map { value.finiteDouble(it) ?: return null }
+    if (fields.any { it < 0 } || times.any { it < 0 }) return null
+    return SessionStats(fields[0], fields[1], times[0], times[1], times[2], fields[2], times[3], fields[3])
+}
+
+private fun JsonValue?.asSessionTokenUsage(): SessionTokenUsage? {
+    val value = objectValue() ?: return null
+    val counts = listOf("uncachedInputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens")
+        .map { value.long(it) ?: return null }
+    if (counts.any { it < 0 }) return null
+    if (safeNonnegativeSum(counts[0], counts[2], counts[3], counts[1]) == null) return null
+    return SessionTokenUsage(counts[0], counts[1], counts[2], counts[3])
+}
+
+private fun safeNonnegativeSum(vararg values: Long): Long? {
+    var sum = 0L
+    for (value in values) {
+        if (value < 0 || Long.MAX_VALUE - sum < value) return null
+        sum += value
+    }
+    return sum
+}
+
+private fun JsonValue?.asContextPressure(): ContextPressure? {
+    val value = objectValue() ?: return null
+    val window = value.long("contextWindow")?.takeIf { it > 0 } ?: return null
+    val pressure = value.long("pressureTokens") ?: if (value["pressureTokens"] == null || value["pressureTokens"] == JsonNull) null else return null
+    val projected = value.long("projectedTokens") ?: if (value["projectedTokens"] == null || value["projectedTokens"] == JsonNull) null else return null
+    if ((pressure != null && pressure < 0) || (projected != null && projected < 0)) return null
+    return ContextPressure(pressure, projected, window)
+}
+
+private fun JsonValue?.asContextBreakdown(): ContextBreakdown? {
+    val value = objectValue() ?: return null
+    val counts = listOf("systemTokens", "toolsTokens", "messageTokens").map { value.long(it) ?: return null }
+    if (counts.any { it < 0 }) return null
+    return ContextBreakdown(counts[0], counts[1], counts[2])
 }
 
 /** A live waterfall request is transient; it must never be restored as actionable history. */

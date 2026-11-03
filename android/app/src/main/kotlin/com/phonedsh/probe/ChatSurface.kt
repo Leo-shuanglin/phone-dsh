@@ -43,7 +43,9 @@ import com.phonedsh.ui.state.ChatLocalState
 import com.phonedsh.ui.state.ChatPhase
 import com.phonedsh.ui.state.ChatRow
 import com.phonedsh.ui.state.ChatScreenState
+import com.phonedsh.ui.state.ComposerStatsMode
 import com.phonedsh.ui.state.RunStatus
+import com.phonedsh.ui.page.PerformanceUsage
 
 /**
  * The chat screen's host state.
@@ -136,6 +138,7 @@ internal fun chatScreenState(
     canSteer: Boolean = false,
     enterMode: com.phonedsh.ui.state.EnterMode = com.phonedsh.ui.state.EnterMode.QUEUE,
     lifecycle: com.phonedsh.ui.state.EngineLifecycleFacts? = null,
+    performanceUsage: PerformanceUsage = PerformanceUsage.DETAILED,
 ): ChatScreenState {
     val chatId = ui.chatId.ifEmpty { PENDING_CHAT_ID }
     val nodes = ArrayList<UiStateNode>(ui.nodes.size + 2)
@@ -187,6 +190,12 @@ internal fun chatScreenState(
         enterMode = enterMode,
         providerNeedsKey = providerNeedsKey,
         lifecycle = lifecycle,
+        sessionStats = ui.sessionSnapshot.sessionStats,
+        tokenUsage = ui.sessionSnapshot.tokenUsage,
+        contextPressure = ui.sessionSnapshot.contextPressure,
+        contextBreakdown = ui.sessionSnapshot.contextBreakdown,
+        contextPercent = ui.sessionSnapshot.contextPressure?.percent,
+        composerStatsMode = if (performanceUsage == PerformanceUsage.COMPACT) ComposerStatsMode.COMPACT else ComposerStatsMode.DETAILED,
         todoItems = ui.sessionSnapshot.todos,
         accessModes = ui.sessionSnapshot.accessModes,
         currentAccessMode = ui.sessionSnapshot.currentAccessMode,
