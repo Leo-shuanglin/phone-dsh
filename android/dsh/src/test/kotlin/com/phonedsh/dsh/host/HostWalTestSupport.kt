@@ -46,9 +46,15 @@ internal class FakeHostWal(
     private val appendFailure: Exception? = null,
     private val closeFailure: Exception? = null,
     private val closeGate: CompletableDeferred<Unit>? = null,
+    /** Returned by [pendingResync]; a test sets this to hold the periodic close. */
+    var pendingResyncValue: WalResync? = null,
 ) : HostWal {
     /** How many times the facade asked for recovery. */
     var recoverCalls: Int = 0
+        private set
+
+    /** How many times the facade asked for a real re-recovery. */
+    var resetCalls: Int = 0
         private set
 
     /** Whether an epoch close is inside the seam right now (drain tests). */
@@ -70,6 +76,12 @@ internal class FakeHostWal(
         failure?.let { throw it }
         return recovery
     }
+
+    override suspend fun resetForRecovery() {
+        resetCalls += 1
+    }
+
+    override fun pendingResync(): WalResync? = pendingResyncValue
 
     override fun durabilityClaim(): DurabilityLevel = level
 

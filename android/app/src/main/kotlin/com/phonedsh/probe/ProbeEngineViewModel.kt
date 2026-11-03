@@ -21,6 +21,7 @@ import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.agentcore.toJsonString
 import com.phonedsh.controller.Admission
 import com.phonedsh.controller.ControllerBudgets
+import com.phonedsh.controller.ControllerFailure
 import com.phonedsh.controller.ControllerStateMachine
 import com.phonedsh.dsh.exec.FileRequestLedger
 import com.phonedsh.dsh.exec.ExecEvent
@@ -1205,7 +1206,13 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     // `HandingOff` is `Failed`, and no record at all is the empty workspace.
     // `workspaceHasState` stays false: whether the WAL holds history is the
     // WAL's answer, not this file's.
-    private val controller = ControllerStateMachine.boot(persistedState = persistedHostState?.state)
+    private val controller = ControllerStateMachine.boot(
+        persistedState = persistedHostState?.state,
+        // `host-state.json` stores the closed-vocabulary code. Without it a
+        // cold boot rendered the real device failure as `UNRECORDED`
+        // (22:03:13.258 in the WAL evidence).
+        persistedFailure = ControllerFailure.fromCode(persistedHostState?.reason),
+    )
 
     // One path object for every consumer of the workspace layout: the WAL, the
     // journal and the exec accelerators' mounts all derive from it, so no store
@@ -1568,6 +1575,11 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         ).read(),
         permissionAsks = PhonePermissionAsks.asked(),
         permissionInFlight = PhonePermissionAsks.inFlight,
+        // The runtime page's 最近出錯 must read the host's own failure, not
+        // only the chat turn state (HostNavFacts.kt's runtimeLastError).
+        hostFailure = controller.lastFailure?.let { failure ->
+            HostFailureReading(code = failure.code, detail = controller.lastFailureDetail)
+        },
     )
 
     /** The facts every routed page reads, rebuilt from one host walk. */

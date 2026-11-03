@@ -115,6 +115,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -344,6 +346,12 @@ class DefaultPhoneDshHost(
      * drive [checkWindowHold] themselves.
      */
     private val windowWatchIntervalMillis: Long = WINDOW_WATCH_INTERVAL_MILLIS,
+    /**
+     * How often a `Running` host closes a WAL epoch (`wal.md` §5.2: every
+     * 30–60 s). It is a constructor parameter so the JVM test can prove the
+     * timer without waiting the product interval.
+     */
+    private val epochCloseIntervalMillis: Long = EPOCH_CLOSE_INTERVAL_MILLIS,
 ) : PhoneDshHost {
     override val boot: HostBoot = HostBoot.generate(clock, random)
 
@@ -599,6 +607,14 @@ class DefaultPhoneDshHost(
 
     /** Serialises `ControllerStateMachine.handle` (the machine is not thread-safe). */
     private val signalLock = Any()
+
+    /**
+     * Serialises every epoch close this facade issues: the periodic lane, the
+     * planned restart and the drain. A close is a D18 fsync/manifest sequence,
+     * so two of them must never interleave; the drain then waits for an
+     * in-flight periodic close instead of tearing the same epoch.
+     */
+    private val epochCloseGate = Mutex()
     private val jobsLock = Any()
     private val jobs = mutableListOf<Job>()
 
@@ -665,15 +681,18 @@ class DefaultPhoneDshHost(
             val hostLaneJob = launch {
                 wal?.hostLaneAppends?.collect { mseq -> onHostLaneAppend(mseq) }
             }
+            val epochCloseJob = scope.launch { periodicEpochClose(generation) }
             if (!current(generation)) {
                 engineJob.cancel()
                 signalsJob.cancel()
+                epochCloseJob.cancel()
                 return@launch
             }
             synchronized(jobsLock) {
                 jobs += engineJob
                 jobs += signalsJob
                 jobs += hostLaneJob
+                jobs += epochCloseJob
             }
             engine.start()
             if (!current(generation)) {
@@ -753,7 +772,10 @@ class DefaultPhoneDshHost(
     private fun current(generation: Long): Boolean =
         started.get() && bootGeneration.get() == generation
 
-    override suspend fun closeEpoch(): Long? = vfsSink?.closeEpoch()
+    override suspend fun closeEpoch(): Long? = epochCloseGate.withLock { closeEpochUnderGate() }
+
+    /** The gate-held close body, so the periodic lane does not re-lock. */
+    private suspend fun closeEpochUnderGate(): Long? = vfsSink?.closeEpoch()
 
     /**
      * Diagnostic: `true` while the drain of the current `Draining` entry is still
@@ -1333,13 +1355,33 @@ class DefaultPhoneDshHost(
                     }
                 }
                 if (!current(generation) || controller.state != HostState.RECOVERING) return@launch
-                closeEpochForRestart("user reset ($reason)")
-                if (!current(generation) || controller.state != HostState.RECOVERING) return@launch
+
+                // budgets.md §2's Failed -> Recovering action is "re-run
+                // recovery", not a planned restart: it does not close the
+                // epoch. A close here is what deadlocked the device, because
+                // the only party that could repair the held resync was the
+                // Worker this reset had just stopped. The log's cached outcome
+                // and sticky fatal are cleared so this pass is a real recovery
+                // (the first recover() of a process returns the boot outcome
+                // and closeEpoch() makes every later write throw).
+                val seam = wal
+                if (seam != null) {
+                    seam.resetForRecovery()
+                    if (!current(generation) || controller.state != HostState.RECOVERING) return@launch
+                }
 
                 // The controller effect is a real recovery pass, not only a
                 // state transition: reseed the VFS proof and HELLO before the
                 // replacement Worker starts.
-                helloState = helloState.copy(wal = recoverWal())
+                val uplink = recoverWal()
+                helloState = helloState.copy(wal = uplink)
+                if (seam != null && uplink !is WalUplink.Up) {
+                    logger.warn(
+                        "user reset ($reason): recovery did not reopen wal/1; " +
+                            "the replacement Worker is not started and the host stays Failed",
+                    )
+                    return@launch
+                }
                 openJournal()
                 if (!current(generation) || controller.state != HostState.RECOVERING) return@launch
                 startWorker("user reset ($reason)")
@@ -1363,9 +1405,9 @@ class DefaultPhoneDshHost(
 
     /** The row's `CLOSE_EPOCH`: reported, never fatal to the restart itself. */
     private suspend fun closeEpochForRestart(reason: String) {
-        val sink = vfsSink ?: return
+        if (vfsSink == null) return
         try {
-            sink.closeEpoch()
+            closeEpoch()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -1481,14 +1523,38 @@ class DefaultPhoneDshHost(
             throw cancelled
         } catch (failure: Exception) {
             val kind = failure.javaClass.simpleName
+            // A thrown recovery is a host defect under budgets.md §2 and must
+            // be recorded, not only logged: otherwise the next process boots
+            // the persisted Failed with no reason (`UNRECORDED`). The class
+            // name is the only safe detail here; an arbitrary exception message
+            // can carry an absolute path (HostWalWiringTest pins that rule).
             logger.warn("workspace log recovery threw $kind; wal/1 stays off")
+            handle(
+                ControllerSignal.FailureRaised(
+                    reason = ControllerFailure.HOST_DEFECT,
+                    detail = "workspace log recovery threw $kind",
+                ),
+            )
             return WalUplink.down("recovery threw $kind")
         }
         return when (recovered) {
             is WalRecovery.Recovered -> recoveredUplink(recovered)
 
             is WalRecovery.Failed -> {
-                logger.warn("workspace log recovery failed (${recovered.code}); wal/1 stays off")
+                logger.warn(
+                    "workspace log recovery failed (${recovered.code}): ${recovered.detail}; " +
+                        "wal/1 stays off",
+                )
+                // budgets.md §2: a WAL_CORRUPT/recovery refusal is an any-state
+                // Failed condition, and the reason must be recorded, not only
+                // logged. UNREPAIRED_BASE_MISMATCH is the closed-vocabulary name
+                // for the resync refusal; everything else is a host defect.
+                val reason = when (recovered.code) {
+                    "WAL_CORRUPT" -> ControllerFailure.WAL_CORRUPT
+                    "WAL_RESYNC_UNREPAIRED" -> ControllerFailure.UNREPAIRED_BASE_MISMATCH
+                    else -> ControllerFailure.HOST_DEFECT
+                }
+                handle(ControllerSignal.FailureRaised(reason = reason, detail = recovered.detail))
                 WalUplink.down("recovery failed (${recovered.code})")
             }
         }
@@ -1504,6 +1570,12 @@ class DefaultPhoneDshHost(
      * thrown out of the boot job.
      */
     private suspend fun recoveredUplink(recovered: WalRecovery.Recovered): WalUplink {
+        if (recovered.fullReconcile) {
+            logger.info(
+                "workspace log recovery rebuilt the materialized tree from the retained WAL " +
+                    "(wal.md §7.2); resync=${recovered.resync.size}",
+            )
+        }
         val next = recovered.nextMseq
         val acked = recovered.ackedMseq
         val durable = recovered.durableMseq
@@ -1517,6 +1589,13 @@ class DefaultPhoneDshHost(
                 "workspace log recovered a watermark outside channel.md §4.1 " +
                     "(next_mseq=$next, acked_mseq=$acked, durable_mseq=$durable); " +
                     "wal/1 stays off",
+            )
+            handle(
+                ControllerSignal.FailureRaised(
+                    reason = ControllerFailure.HOST_DEFECT,
+                    detail = "recovered watermark violates channel.md §4.1 " +
+                        "(next_mseq=$next, acked_mseq=$acked, durable_mseq=$durable)",
+                ),
             )
             return WalUplink.down("recovered watermark violates channel.md §4.1")
         }
@@ -1642,6 +1721,63 @@ class DefaultPhoneDshHost(
         is EngineHostState.Failed -> "Failed(${state.reason})"
     }
 
+    /**
+     * `wal.md` §5.2's periodic epoch close: every [epochCloseIntervalMillis]
+     * while `Running`, and never while the drain owns the close.
+     *
+     * An outstanding §5.1 resync defers the close instead of failing it. The
+     * closure would be fail-loud (`wal.md` §5.2), and the repair may still be
+     * in flight on a live Worker; the alternative, closing and entering
+     * `Failed`, leaves the user with an unrecoverable host. The reason and the
+     * held path/mseq are logged, so the deferral is observable rather than
+     * silent. A real failure of the close itself still reports through
+     * [VfsSink] and moves D14 to `Failed`.
+     */
+    private suspend fun periodicEpochClose(generation: Long) {
+        while (current(generation)) {
+            delay(epochCloseIntervalMillis)
+            if (!current(generation)) return
+            if (controller.state != HostState.RUNNING || drain.isDraining) continue
+            val pending = wal?.pendingResync()
+            if (pending != null) {
+                logger.warn(
+                    "periodic epoch close skipped: the base mismatch at ${pending.path} " +
+                        "(mseq ${pending.mseq}) is still unrepaired; a close now would " +
+                        "enter Failed (wal.md §5.2)",
+                )
+                continue
+            }
+            try {
+                val durable = epochCloseGate.withLock {
+                    // Re-check under the close gate: a drain or a new mismatch
+                    // may have arrived while this coroutine waited.
+                    if (controller.state != HostState.RUNNING || drain.isDraining) {
+                        null
+                    } else {
+                        wal?.pendingResync()?.let { held ->
+                            logger.warn(
+                                "periodic epoch close skipped: the base mismatch at ${held.path} " +
+                                    "(mseq ${held.mseq}) is still unrepaired; a close now would " +
+                                    "enter Failed (wal.md §5.2)",
+                            )
+                            null
+                        } ?: closeEpochUnderGate()
+                    }
+                }
+                if (durable != null) {
+                    logger.info("periodic epoch close: durable_upto=$durable (wal.md §5.2)")
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                logger.warn(
+                    "periodic epoch close failed (${failure.javaClass.simpleName}); " +
+                        "the VfsSink failure path owns the D14 transition",
+                )
+            }
+        }
+    }
+
     companion object {
         /**
          * The notification id the facade cancels on [stop]; mirrors
@@ -1692,5 +1828,14 @@ class DefaultPhoneDshHost(
          * edge polls at all.
          */
         const val WINDOW_WATCH_INTERVAL_MILLIS: Long = 250L
+
+        /**
+         * `wal.md` §5.2: an epoch closes every 30–60 s while the host runs.
+         *
+         * 45 s is the midpoint and matches the Swift reference's
+         * `defaultEpochIntervalSeconds` (45), which had no caller on either
+         * port before this lane.
+         */
+        const val EPOCH_CLOSE_INTERVAL_MILLIS: Long = 45_000L
     }
 }

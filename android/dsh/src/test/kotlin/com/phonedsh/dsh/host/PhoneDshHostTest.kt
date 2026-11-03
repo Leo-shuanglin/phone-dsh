@@ -26,7 +26,10 @@ import com.phonedsh.platform.testing.FakePlatform
 import com.phonedsh.wire.WireCodec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -313,12 +316,70 @@ class PhoneDshHostTest {
         host.stop()
     }
 
+    // ---- 4. wal.md §5.2: the running host closes an epoch every 30–60 s -----
+
+    @Test
+    fun periodicEpochCloseRunsWhileTheHostIsRunning() {
+        FakePlatform().use { platform ->
+            val wal = FakeHostWal(
+                recovery = WalRecovery.Recovered(nextMseq = 42, ackedMseq = 41, durableMseq = 40),
+            )
+            val host = newHost(platform, wal = wal, epochCloseIntervalMillis = 10L)
+            try {
+                host.start()
+                runBlocking { withTimeout(5_000) { host.ready.first { it } } }
+                platform.engine.setState(RUNNING)
+                runBlocking {
+                    withTimeout(5_000) {
+                        while (wal.closeCalls == 0) delay(5)
+                    }
+                }
+                assertTrue("the periodic lane closed at least one epoch", wal.closeCalls >= 1)
+                assertEquals("the close does not move D14 out of Running", HostState.RUNNING, host.state.value)
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    @Test
+    fun periodicEpochCloseIsSkippedAndLoggedWhileAResyncIsHeld() {
+        FakePlatform().use { platform ->
+            val wal = FakeHostWal(
+                recovery = WalRecovery.Recovered(nextMseq = 42, ackedMseq = 41, durableMseq = 40),
+            )
+            wal.pendingResyncValue = WalResync("/dsh/workspace/held.txt", 7L)
+            val log = RecordingHostLog()
+            val host = newHost(platform, wal = wal, log = log, epochCloseIntervalMillis = 10L)
+            try {
+                host.start()
+                runBlocking { withTimeout(5_000) { host.ready.first { it } } }
+                platform.engine.setState(RUNNING)
+                runBlocking { delay(100) }
+                assertEquals("a held resync must not become a Failed close", 0, wal.closeCalls)
+                assertEquals(HostState.RUNNING, host.state.value)
+                assertTrue(
+                    "the deferral names the path and mseq: ${log.messages}",
+                    log.messages.any {
+                        it.contains("periodic epoch close skipped") &&
+                            it.contains("/dsh/workspace/held.txt") &&
+                            it.contains("mseq 7")
+                    },
+                )
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private fun newHost(
         platform: FakePlatform,
         controller: ControllerStateMachine = ControllerStateMachine.boot(persistedState = null),
         wal: HostWal? = null,
+        log: HostLog = HostLog.None,
+        epochCloseIntervalMillis: Long = DefaultPhoneDshHost.EPOCH_CLOSE_INTERVAL_MILLIS,
     ): DefaultPhoneDshHost = DefaultPhoneDshHost(
         engine = platform.engine,
         controller = controller,
@@ -327,7 +388,8 @@ class PhoneDshHostTest {
         notifier = platform,
         wal = wal,
         scope = CoroutineScope(Dispatchers.Unconfined),
-        logger = HostLog.None,
+        logger = log,
+        epochCloseIntervalMillis = epochCloseIntervalMillis,
     )
 
     private fun capsOf(fields: JSONObject): List<String> {

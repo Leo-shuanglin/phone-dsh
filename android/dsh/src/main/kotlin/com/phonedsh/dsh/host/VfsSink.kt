@@ -179,6 +179,19 @@ class VfsSink(
     private var sender: VfsSender? = null
 
     /**
+     * Paths whose §5.1 repair is still outstanding, with the mseq that raised
+     * it. `wal.md` §5.1 allows at most one outstanding resync per path; this
+     * map is that "one", retained across a connection loss so a reconnect can
+     * re-request it (`channel.md` §9 item 6).
+     *
+     * Guarded by [senderLock] because [attach]/[detach] are not suspending.
+     */
+    private val outstandingResyncs = LinkedHashMap<String, Long>()
+
+    /** Outstanding paths already requested on the current connection. */
+    private val requestedResyncs = HashSet<String>()
+
+    /**
      * The highest mseq **this sink** appended for the Worker.
      *
      * It is the only counter the sink owns, and it is not the allocator: the
@@ -220,13 +233,25 @@ class VfsSink(
         // `open` only remembers what this sink has accepted so far.
         acceptedThrough = recovered.ackedMseq
         durableMseq = recovered.durableMseq
+        synchronized(senderLock) {
+            outstandingResyncs.clear()
+            for (request in recovered.resync) {
+                outstandingResyncs.putIfAbsent(request.path, request.mseq)
+            }
+            requestedResyncs.clear()
+        }
         opened = true
         Wired.issuedBySink()
     }
 
     /** Attaches the connection that receives ACKs/RESYNC/ERROR. */
     fun attach(sender: VfsSender) {
-        synchronized(senderLock) { this.sender = sender }
+        synchronized(senderLock) {
+            this.sender = sender
+            // A new connection has not received the outstanding requests yet;
+            // `onHelloAnswered` re-sends one per path after the host HELLO.
+            requestedResyncs.clear()
+        }
     }
 
     /**
@@ -238,6 +263,28 @@ class VfsSink(
     fun detach(sender: VfsSender?) {
         synchronized(senderLock) {
             if (sender == null || this.sender === sender) this.sender = null
+        }
+    }
+
+    /**
+     * Re-requests every outstanding repair once on this connection, after the
+     * host HELLO has opened its direction (`channel.md` §9 item 6,
+     * `wal.md` §10 step 4).
+     *
+     * The outstanding set survives [detach]; only [open] replaces it from a new
+     * recovery. A path already requested on this connection is skipped, which
+     * keeps the "at most one resync outstanding per path" rule across
+     * reconnects as well as live appends.
+     */
+    internal suspend fun onHelloAnswered() = mutex.withLock {
+        if (!opened) return@withLock
+        val toRequest = synchronized(senderLock) {
+            outstandingResyncs.keys.filter { it !in requestedResyncs }
+        }
+        for (path in toRequest) {
+            if (emit(VfsFrame.Resync(path))) {
+                synchronized(senderLock) { requestedResyncs.add(path) }
+            }
         }
     }
 
@@ -470,7 +517,12 @@ class VfsSink(
                 // The level-1 ACK is emitted only after the append returned: that
                 // is exactly the §3.2 "WAL write() returned" fact.
                 emit(VfsFrame.Ack(level = 1, uptoMseq = appended.mseq))
-                appended.resyncPath?.let { path -> emit(VfsFrame.Resync(path)) }
+                // wal.md §5.1: at most one resync outstanding per path. The
+                // append path reports the *current* held request on every
+                // mutation while the repair is pending; only the first one on
+                // this connection becomes a frame.
+                appended.resyncPath?.let { path -> requestResyncOnce(path, appended.mseq) }
+                clearSettledResyncs(appended.materializedUptoMseq)
                 satisfyLevel1Barriers()
             }
 
@@ -523,6 +575,40 @@ class VfsSink(
                 closeConnection = true,
             ),
         )
+    }
+
+    /**
+     * Records one outstanding path and sends `VFS_RESYNC` at most once on the
+     * current connection.
+     *
+     * The watermark is a strictly contiguous mseq, so a path whose held mseq
+     * is at or below the watermark has been settled; [clearSettledResyncs]
+     * drops it and allows a genuinely new mismatch on the same path to be
+     * requested again.
+     */
+    private suspend fun requestResyncOnce(path: String, mseq: Long) {
+        val shouldSend = synchronized(senderLock) {
+            outstandingResyncs.putIfAbsent(path, mseq)
+            path !in requestedResyncs
+        }
+        if (!shouldSend) return
+        if (emit(VfsFrame.Resync(path))) {
+            synchronized(senderLock) { requestedResyncs.add(path) }
+        }
+    }
+
+    /** Drops paths whose held mseq the contiguous materialized watermark passed. */
+    private fun clearSettledResyncs(materializedUptoMseq: Long) {
+        synchronized(senderLock) {
+            val iterator = outstandingResyncs.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (entry.value <= materializedUptoMseq) {
+                    iterator.remove()
+                    requestedResyncs.remove(entry.key)
+                }
+            }
+        }
     }
 
     private suspend fun satisfyLevel1Barriers() {
@@ -607,25 +693,25 @@ class VfsSink(
      */
     private fun reportFailure(operation: String, failure: Exception) {
         val reported = HostFailureRules.wal(failure)
+        // The store's own message is workspace-relative for every attributable
+        // code (LogException/WalException); it is what carries the held path and
+        // mseq from `WorkspaceLog.closeEpoch` into logcat and the D14 reason
+        // (budgets.md §1/§2 "record the condition").
+        val detail = "$operation failed (${reported?.code ?: failure.javaClass.simpleName}): " +
+            (failure.message ?: failure.javaClass.simpleName)
         if (reported != null) {
-            failures.reportQuietly(
-                reported.reason,
-                "$operation failed (${reported.code})",
-                logger,
-            )
+            failures.reportQuietly(reported.reason, detail, logger)
         }
-        logger.error(
-            "$operation failed (${reported?.code ?: failure.javaClass.simpleName}); " +
-                "closing the transport without a protocol ERROR",
-        )
+        logger.error("$detail; closing the transport without a protocol ERROR")
     }
 
-    private suspend fun emit(frame: VfsFrame) {
+    private suspend fun emit(frame: VfsFrame): Boolean {
         val target = synchronized(senderLock) { sender }
         if (target == null) {
             logger.warn("no VFS connection attached; dropping ${frame.javaClass.simpleName}")
-            return
+            return false
         }
         target.send(frame)
+        return true
     }
 }

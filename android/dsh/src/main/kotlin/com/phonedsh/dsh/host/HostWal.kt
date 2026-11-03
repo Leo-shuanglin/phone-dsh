@@ -53,6 +53,26 @@ interface HostWal {
     suspend fun recover(): WalRecovery
 
     /**
+     * Discards the cached recovery result and a sticky host failure so a later
+     * [recover] really re-runs (`budgets.md` §2 `Failed -> Recovering`).
+     *
+     * Only the explicit user reset calls this. A test double that never caches
+     * recovery may leave it empty; production's adapter forwards to
+     * `WorkspaceLog.resetForRecovery()`.
+     */
+    suspend fun resetForRecovery() = Unit
+
+    /**
+     * The outstanding §5.1 repair request, or `null`.
+     *
+     * The facade's periodic epoch-close guard reads this before closing:
+     * `wal.md` §5.2 makes an unrepaired mismatch at a close a `Failed`
+     * condition, so the periodic lane defers the close and records the path
+     * and mseq while a repair is still outstanding.
+     */
+    fun pendingResync(): WalResync? = null
+
+    /**
      * The durability this WAL can actually honour.
      *
      * A passthrough of the platform SPI: never promoted here. On the
@@ -161,6 +181,18 @@ sealed interface WalWorkerAppend {
 data class WalClose(val durableUpto: Long)
 
 /**
+ * One outstanding §5.1 repair: the path and the mseq whose base did not match.
+ *
+ * This is a seam-local value, not a wire field: `VFS_RESYNC` carries only the
+ * path (`channel.md` §3.4). The mseq is what the host uses for its diagnostics
+ * and for deciding when the path's repair has advanced the watermark.
+ */
+data class WalResync(
+    val path: String,
+    val mseq: Long,
+)
+
+/**
  * The numbers recovery left in force, or the reason it did not.
  *
  * This is a snapshot, not a live view: the facade builds the HELLO once from it
@@ -181,6 +213,15 @@ sealed interface WalRecovery {
         val nextMseq: Long,
         val ackedMseq: Long,
         val durableMseq: Long,
+        /**
+         * Paths whose startup replay left a base mismatch. The sink re-sends
+         * one `VFS_RESYNC` per path after the host HELLO (`wal.md` §10 step 4,
+         * `channel.md` §9 item 6); duplicates are limited to one per connection
+         * by [VfsSink].
+         */
+        val resync: List<WalResync> = emptyList(),
+        /** Whether recovery ran the full-tree `wal.md` §7.2 rebuild. */
+        val fullReconcile: Boolean = false,
     ) : WalRecovery
 
     /**
@@ -220,10 +261,22 @@ private class WorkspaceLogHostWal(
                 nextMseq = outcome.nextMseq,
                 ackedMseq = outcome.effectiveTail,
                 durableMseq = lastDurableUpto(outcome),
+                resync = if (outcome.resyncRequests.isNotEmpty()) {
+                    outcome.resyncRequests.map { WalResync(it.path, it.mseq) }
+                } else {
+                    outcome.resyncRequired.map { WalResync(it, outcome.materializedUptoMseq + 1) }
+                },
+                fullReconcile = outcome.fullReconcile,
             )
 
             is RecoveryOutcome.Failed -> WalRecovery.Failed(outcome.code, outcome.detail)
         }
+
+    override suspend fun resetForRecovery() = log.resetForRecovery()
+
+    override fun pendingResync(): WalResync? = log.outstandingResync()?.let { request ->
+        WalResync(request.path, request.mseq)
+    }
 
     override fun durabilityClaim(): DurabilityLevel = log.durabilityClaim()
 
