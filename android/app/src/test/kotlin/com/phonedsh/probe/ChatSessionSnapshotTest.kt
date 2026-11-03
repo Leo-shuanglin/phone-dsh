@@ -95,6 +95,23 @@ class ChatSessionSnapshotTest {
         assertEquals(before.revision + 1, persisted.revision)
     }
 
+    @Test fun `missing chat record refusal reaches the chat banner`() {
+        val current = ChatUiState(chatId = "chat-a", bannerDismissed = true)
+        val missing = chatWriteFailureState(current, "chat-a", existing = null, outcome = null)
+        assertEquals("聊天记录不存在，本次内容没有保存。", missing.error)
+        assertFalse(missing.bannerDismissed)
+
+        val row = ChatRecord("chat-a", "title", 20, emptyList(), emptyList())
+        val stale = chatWriteFailureState(current, "chat-a", row, ChatWriteOutcome.Stale)
+        assertEquals("聊天记录已在别处更新，本次内容没有保存；请重试。", stale.error)
+        assertFalse(stale.bannerDismissed)
+
+        // A late write for a conversation that is no longer on screen must not
+        // overwrite the current chat's state.
+        val other = ChatUiState(chatId = "chat-b")
+        assertSame(other, chatWriteFailureState(other, "chat-a", existing = null, outcome = null))
+    }
+
     @Test fun `workspace group rename and delete preserve assigned conversation`() {
         val store = chatStore()
         store.save(ChatRecord("chat-a", "A", 10, emptyList(), emptyList(), workspaceGroupId = "daily"))
