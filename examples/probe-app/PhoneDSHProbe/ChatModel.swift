@@ -1279,11 +1279,9 @@ final class ChatModel {
         await openManagedSession(id: nil)
     }
 
-    func newSession(preset: String) async {
-        // The authenticated host selects the preset from its own catalog; the
-        // phone only needs to open a fresh session for the creator flow.
-        _ = preset
-        await openManagedSession(id: nil)
+    @discardableResult
+    func newSession(preset: String) async -> Bool {
+        await openManagedSession(id: nil, preset: preset)
     }
 
     /// Resumes an existing DSH session by its server-issued identifier.
@@ -1293,20 +1291,21 @@ final class ChatModel {
         await openManagedSession(id: requested)
     }
 
-    private func openManagedSession(id: String?) async {
+    @discardableResult
+    private func openManagedSession(id: String?, preset: String? = nil) async -> Bool {
         if let id, DeviceSessionCoordinator.shared.isDeviceSession(id) {
             reportError("设备会话只能以只读监视方式打开")
-            return
+            return false
         }
-        guard let host else { reportError("Start the host before opening a session"); return }
-        guard !busy else { return }
+        guard let host else { reportError("Start the host before opening a session"); return false }
+        guard !busy else { return false }
         guard !hostLifecycleTransition else {
             reportError("Wait for the host to finish pausing or resuming before switching sessions")
-            return
+            return false
         }
         guard !turnRunning && !keepingAlive && pendingQuestion == nil && pendingPermission == nil else {
             reportError("Finish the current turn and answer pending requests before switching sessions")
-            return
+            return false
         }
         busy = true
         defer { busy = false }
@@ -1319,7 +1318,7 @@ final class ChatModel {
                 self.harness = harness
             }
             let session = try await harness.openSession(HarnessSessionRequest(
-                sessionID: id, workspace: "/dsh/workspace"))
+                sessionID: id, preset: preset, workspace: "/dsh/workspace"))
             let transport = try await transportForManagement()
             if let profile = try? PhoneModelProviderSettings.shared.load().selected {
                 try? await selectProviderModel(profile, sessionID: session.id, transport: transport)
@@ -1351,8 +1350,10 @@ final class ChatModel {
             statusLine = "Session \(session.id.prefix(8)) open — type a task"
             clearError()
             appendStatus("Session \(id == nil ? "created" : "resumed"): \(session.id)")
+            return true
         } catch {
             reportError("Could not \(id == nil ? "create" : "resume") session: \(error)")
+            return false
         }
     }
 
@@ -1821,8 +1822,11 @@ final class ChatModel {
         defer { busy = false }
         let (fingerprint, requestID) = Self.retryableRequest(operation: "prompt", text: prompt,
                                                             attachments: attachments)
+        let dispatchStart = ProcessInfo.processInfo.systemUptime
+        Self.persistStatus("latency client-observed phase=prompt-rpc-start request=\(requestID)")
         do {
             try await harness.send(.prompt(text: prompt, attachments: attachments, requestID: requestID), to: sessionID)
+            Self.persistStatus("latency client-observed phase=prompt-rpc-accepted request=\(requestID) elapsed_ms=\(Int((ProcessInfo.processInfo.systemUptime - dispatchStart) * 1000))")
             Self.completeRetryableRequest(fingerprint: fingerprint, requestID: requestID)
             // The drawer needs a readable row before DSH publishes its own
             // title projection.
@@ -1840,6 +1844,7 @@ final class ChatModel {
             lastPromptRequestID = requestID
             return true
         } catch {
+            Self.persistStatus("latency client-observed phase=prompt-rpc-failed request=\(requestID) elapsed_ms=\(Int((ProcessInfo.processInfo.systemUptime - dispatchStart) * 1000))")
             syncIdleTimer()
             reportError("Prompt failed: \(error)")
             return false
@@ -2389,6 +2394,7 @@ final class ChatModel {
                 events: { harness.events(sessionID: sessionID, after: $0) },
                 synchronize: { [weak self] in
                     guard let self else { throw CancellationError() }
+                    Self.persistStatus("latency client-observed phase=stream-resync-start")
                     return try await self.synchronizeInterruptedSession(sessionID: sessionID)
                 },
                 handle: { [weak self] event in
@@ -2404,6 +2410,7 @@ final class ChatModel {
                 recovered: { [weak self] in
                     guard let self else { return }
                     self.eventStreamRecovering = false
+                    Self.persistStatus("latency client-observed phase=stream-resync-completed")
                     self.statusLine = self.turnRunning ? "会话已同步，任务仍在运行" : "会话已同步，任务已结束"
                 })
         }
@@ -2446,6 +2453,15 @@ final class ChatModel {
         return history.after
     }
 
+    private var latencyFirstEvents = Set<String>()
+
+    /// Receipt times at the native client, not upstream model timings. Source
+    /// event time and sequence let a diagnostic distinguish replay from delay.
+    private func recordLatency(_ phase: String, event: HarnessEvent, once: Bool = false) {
+        if once && !latencyFirstEvents.insert(phase).inserted { return }
+        Self.persistStatus("latency client-observed phase=\(phase) turn=\(activeTurn.map(String.init) ?? "none") seq=\(event.seq.map(String.init) ?? "none") source_time=\(ISO8601DateFormatter().string(from: event.time)) uptime_ms=\(Int(ProcessInfo.processInfo.systemUptime * 1000))")
+    }
+
     private func handle(_ event: HarnessEvent) {
         eventsHandled += 1
         // A queued message only needs its dispatch label until the turn shows
@@ -2458,6 +2474,7 @@ final class ChatModel {
         }
         switch event.kind {
         case .reasoningDelta(let text):
+            recordLatency("first-reasoning", event: event, once: true)
             clearSendingLabels()
             if let index = items.indices.last, items[index].kind == .reasoning,
                items[index].streaming {
@@ -2472,6 +2489,7 @@ final class ChatModel {
                 items.append(item)
             }
         case .assistantDelta(let text):
+            recordLatency("first-assistant", event: event, once: true)
             clearSendingLabels()
             finishStreamingReasoning()
             if let index = items.indices.last, items[index].kind == .assistant, items[index].streaming {
@@ -2485,6 +2503,7 @@ final class ChatModel {
                 items.append(item)
             }
         case .assistantMessage(let text):
+            recordLatency("assistant-message", event: event)
             clearSendingLabels()
             finishStreamingReasoning()
             if let index = items.indices.last, items[index].kind == .assistant, items[index].streaming {
@@ -2523,6 +2542,7 @@ final class ChatModel {
                                event: event, idSuffix: "inbox-\(index)")
             }
         case .toolCall(let callID, let name, let arguments):
+            recordLatency("tool-start:\(callID)", event: event)
             finishStreamingAssistant()
             finishStreamingReasoning()
             recentToolArguments[name] = Self.flattenedArguments(arguments)
@@ -2538,6 +2558,7 @@ final class ChatModel {
             item.toolState = .running
             items.append(item)
         case .toolResult(let callID, let isError, let summary):
+            recordLatency("tool-result:\(callID)", event: event)
             let detail = event.toolResultDetail?.text ?? summary
             let state: NativeToolState = isError
                 ? (event.toolResultErrorCode == "interrupted" ? .stopped : .error)
@@ -2572,6 +2593,8 @@ final class ChatModel {
         case .turnStarted(let turnID):
             let turnNumber = Int(turnID) ?? activeTurn ?? 0
             activeTurn = turnNumber
+            latencyFirstEvents.removeAll()
+            recordLatency("turn-start", event: event)
             activeStep = nil
             activeTurnStartedAt = event.time
             turnStartTimes[turnNumber] = event.time
@@ -2581,6 +2604,7 @@ final class ChatModel {
             syncIdleTimer()
             statusLine = "Turn running…"
         case .turnEnded(let turnID, let reason):
+            recordLatency("turn-end", event: event)
             finishStreamingAssistant()
             finishStreamingReasoning()
             clearSendingLabels()
