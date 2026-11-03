@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -416,14 +417,20 @@ private fun ComposerMetrics(
         }
     } else {
         if (stats != null && (stats.steps > 0 || speed != null)) {
-            StatPill(Modifier.testTag("pdsh.composer.metrics.activity").clickable(role = Role.Button) { detail = ComposerMetricDetail.ACTIVITY }) {
+            StatPill(
+                modifier = Modifier.testTag("pdsh.composer.metrics.activity"),
+                onClick = { detail = ComposerMetricDetail.ACTIVITY },
+            ) {
                 PdshIconView(PdshIcon.GAUGE, 14.dp, tokens.colors.tertiary, null)
                 if (stats.steps > 0) BasicText("${stats.turns} 轮 ${stats.steps} 步", style = pillStyle, maxLines = 1)
                 if (speed != null) BasicText((if (stats.steps > 0) "· " else "") + "${speed.roundToInt()} tok/s", style = pillStyle, maxLines = 1)
             }
         }
         if (usage != null && (usage.billedInputTokens > 0 || usage.outputTokens > 0)) {
-            StatPill(Modifier.testTag("pdsh.composer.metrics.usage").clickable(role = Role.Button) { detail = ComposerMetricDetail.USAGE }) {
+            StatPill(
+                modifier = Modifier.testTag("pdsh.composer.metrics.usage"),
+                onClick = { detail = ComposerMetricDetail.USAGE },
+            ) {
                 PdshIconView(PdshIcon.DATABASE, 14.dp, tokens.colors.tertiary, null)
                 BasicText("${compactMetricTokens(usage.totalTokens)} tok", style = pillStyle, maxLines = 1)
                 if (cacheHit != null) BasicText("· 缓存命中 ${formatMetricPercent(cacheHit)}%", style = pillStyle, maxLines = 1)
@@ -431,7 +438,10 @@ private fun ComposerMetrics(
         }
         val percent = pressure?.percent
         if (percent != null) {
-            StatPill(Modifier.testTag("pdsh.composer.metrics.context").clickable(role = Role.Button) { detail = ComposerMetricDetail.CONTEXT }) {
+            StatPill(
+                modifier = Modifier.testTag("pdsh.composer.metrics.context"),
+                onClick = { detail = ComposerMetricDetail.CONTEXT },
+            ) {
                 ContextRing(percent)
                 BasicText("$percent%", style = pillStyle, maxLines = 1)
             }
@@ -592,16 +602,41 @@ private fun StopKey(
     }
 }
 
-/** One stat pill: a 20 pt-tall, tertiary-ink line with a 2 pt horizontal pad. */
+/**
+ * One stat pill: a 20 pt-tall, tertiary-ink line with a 2 pt horizontal pad.
+ *
+ * A detail-bearing pill owns its click target here, outside the caller's
+ * semantics and before the token-driven text box, with the platform's 48 dp
+ * minimum: the hit node then wraps the drawn label instead of being reported
+ * above it, and the text stays centred inside it. Pills without a destination
+ * keep the 20 pt line so the stats row's compact form is unchanged.
+ */
 @Composable
 private fun StatPill(
     modifier: Modifier = Modifier,
     contentSpacing: androidx.compose.ui.unit.Dp = 6.dp,
+    onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
+    val touchTarget = if (onClick != null) {
+        // The platform's 48 dp minimum, owned by the outermost node so the
+        // bounds reported to accessibility include the padding and the drawn
+        // label. `sizeIn` keeps the pill's token-driven type and colours intact.
+        Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+    } else {
+        Modifier
+    }
     Row(
-        modifier = modifier
+        modifier = touchTarget
+            .then(modifier)
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(role = Role.Button, onClick = onClick)
+                } else {
+                    Modifier
+                },
+            )
             .heightIn(min = tokens.geometry.statPillMinHeight)
             .padding(horizontal = 2.dp, vertical = 1.dp),
         verticalAlignment = Alignment.CenterVertically,
