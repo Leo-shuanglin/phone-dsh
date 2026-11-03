@@ -17,6 +17,14 @@
 //                          that tap 跑一轮 at launch ask for this)
 //   pdsh.boot.overlay      hand the recovered workspace to the Worker (default true)
 //
+// **Only a debuggable install reads these extras.** The launcher activity is
+// exported (it must be, to appear in the launcher), so any app or `adb`
+// invocation can deliver them. `MainActivity` passes the install's
+// `FLAG_DEBUGGABLE` fact into [ProbeLaunchConfig.install], and a release install
+// ignores every override above: it uses the defaults plus the user's saved
+// provider record. The device scripts keep the diagnostic behaviour because
+// they run a debuggable build.
+//
 // ---- the base URL is the Messages base, not the origin ---------------------
 // The launch value is forwarded verbatim to the provider endpoint the host edge
 // addresses; this host never appends or guesses a path prefix. That spelling is
@@ -83,6 +91,25 @@ import com.phonedsh.ui.page.ProviderKeyFact
 import java.net.URI
 import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
+
+/**
+ * The diagnostic values an Intent may carry.
+ *
+ * Kept separate from [Intent] so the release gate can be exercised by JVM tests
+ * without Android stubs. Every member keeps [ProbeLaunchConfig]'s default when
+ * the Intent did not name it.
+ */
+internal data class LaunchExtras(
+    val baseUrl: String? = null,
+    val egressOrigin: String? = null,
+    val prompt: String? = null,
+    val modelName: String? = null,
+    val egressProbe: Boolean = false,
+    val modelProxy: Boolean = true,
+    val webFace: Boolean = false,
+    val probeFace: Boolean = false,
+    val bootOverlay: Boolean = true,
+)
 
 /** The non-secret values a launch may supply. All are empty by default. */
 internal data class ProbeLaunchConfig(
@@ -327,28 +354,72 @@ internal data class ProbeLaunchConfig(
         private val current = AtomicReference(ProbeLaunchConfig())
 
         /** Installs the values of [intent] before the composition root is built. */
-        fun install(intent: Intent?) {
-            current.set(from(intent))
+        fun install(intent: Intent?, debuggable: Boolean = false) {
+            current.set(from(intent, debuggable))
         }
 
         /** The values installed for this process; safe to read repeatedly. */
         fun active(): ProbeLaunchConfig = current.get()
 
         /** Parses [intent] without trusting any value: a malformed one is ignored. */
-        fun from(intent: Intent?): ProbeLaunchConfig = from(intent, ProviderConfigStore.active()?.current())
+        fun from(intent: Intent?, debuggable: Boolean = false): ProbeLaunchConfig =
+            from(intent, ProviderConfigStore.active()?.current(), debuggable)
 
-        /** Pure launch resolver for tests; the selected profile and its key account are captured together. */
-        internal fun from(intent: Intent?, storedProfile: ProviderRecord?): ProbeLaunchConfig = fromValues(
-            extraBaseUrl = intent?.getStringExtra(EXTRA_BASE_URL),
-            extraEgressOrigin = intent?.getStringExtra(EXTRA_EGRESS_ORIGIN),
-            extraPrompt = intent?.getStringExtra(EXTRA_PROMPT),
-            extraModelName = intent?.getStringExtra(EXTRA_MODEL_NAME),
-            egressProbe = intent?.getBooleanExtra(EXTRA_EGRESS_PROBE, false) ?: false,
-            modelProxy = intent?.getBooleanExtra(EXTRA_MODEL_PROXY, true) ?: true,
-            webFace = intent?.getBooleanExtra(EXTRA_WEB_FACE, false) ?: false,
-            probeFace = intent?.getBooleanExtra(EXTRA_PROBE_FACE, false) ?: false,
-            bootOverlay = intent?.getBooleanExtra(EXTRA_BOOT_OVERLAY, true) ?: true,
+        /**
+         * Launch resolver; the selected profile and its key account are captured together.
+         *
+         * The launcher is exported, so a release install must not even read the
+         * diagnostic extras: with [debuggable] false this resolves exactly as if the
+         * Intent carried none. The stored profile is the user's saved configuration,
+         * not a launch override, so it is always honoured.
+         */
+        internal fun from(
+            intent: Intent?,
+            storedProfile: ProviderRecord?,
+            debuggable: Boolean = false,
+        ): ProbeLaunchConfig = fromExtras(
+            extras = if (debuggable) intent.readLaunchExtras() else null,
             storedProfile = storedProfile,
+            debuggable = debuggable,
+        )
+
+        /**
+         * The release gate shared with the JVM tests.
+         *
+         * Only a debuggable launch keeps [extras]; every other install resolves the
+         * no-extras shape and falls through to defaults plus the stored profile.
+         */
+        internal fun fromExtras(
+            extras: LaunchExtras?,
+            storedProfile: ProviderRecord?,
+            debuggable: Boolean,
+        ): ProbeLaunchConfig {
+            val allowed = extras?.takeIf { debuggable }
+            return fromValues(
+                extraBaseUrl = allowed?.baseUrl,
+                extraEgressOrigin = allowed?.egressOrigin,
+                extraPrompt = allowed?.prompt,
+                extraModelName = allowed?.modelName,
+                egressProbe = allowed?.egressProbe ?: false,
+                modelProxy = allowed?.modelProxy ?: true,
+                webFace = allowed?.webFace ?: false,
+                probeFace = allowed?.probeFace ?: false,
+                bootOverlay = allowed?.bootOverlay ?: true,
+                storedProfile = storedProfile,
+            )
+        }
+
+        /** Reads the diagnostic extras; only a debuggable launch calls this. */
+        private fun Intent?.readLaunchExtras(): LaunchExtras = LaunchExtras(
+            baseUrl = this?.getStringExtra(EXTRA_BASE_URL),
+            egressOrigin = this?.getStringExtra(EXTRA_EGRESS_ORIGIN),
+            prompt = this?.getStringExtra(EXTRA_PROMPT),
+            modelName = this?.getStringExtra(EXTRA_MODEL_NAME),
+            egressProbe = this?.getBooleanExtra(EXTRA_EGRESS_PROBE, false) ?: false,
+            modelProxy = this?.getBooleanExtra(EXTRA_MODEL_PROXY, true) ?: true,
+            webFace = this?.getBooleanExtra(EXTRA_WEB_FACE, false) ?: false,
+            probeFace = this?.getBooleanExtra(EXTRA_PROBE_FACE, false) ?: false,
+            bootOverlay = this?.getBooleanExtra(EXTRA_BOOT_OVERLAY, true) ?: true,
         )
 
         /** Pure value resolver shared by the Intent adapter and loopback regression tests. */

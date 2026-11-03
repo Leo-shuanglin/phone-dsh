@@ -224,8 +224,12 @@ class MainActivity : ComponentActivity() {
         ProbeRecovery.handleDiagnosticIntent(applicationContext, intent, debuggable)
         ProbeRecovery.auditAsync(applicationContext)
         // The launch values must be installed before the view model's first
-        // access constructs the engine and its `env` page parameter.
-        ProbeLaunchConfig.install(intent)
+        // access constructs the engine and its `env` page parameter. The
+        // launcher is exported, so the install's debuggable flag decides whether
+        // its extras are diagnostic overrides or untrusted input: a release
+        // install ignores every one of them and keeps defaults plus the saved
+        // provider record.
+        ProbeLaunchConfig.install(intent, debuggable)
         // The `ubuntu` approval gate's dialog. Installed before the engine can
         // start so the first `ubuntu run` already has a surface; the gate reads
         // the prompt at decision time, so order is not a correctness property —
