@@ -70,8 +70,11 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.VisualTransformation
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.surface.SecretVisualTransformation
 import com.phonedsh.ui.surface.SettingsSubPageFootnote
+import com.phonedsh.ui.surface.secretInputSemantics
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
@@ -1065,6 +1068,7 @@ private fun McpHeaderRow(
             tag = tagPrefix + UiPageTags.MCP_EDITOR_HEADER_VALUE_SUFFIX,
             errorTag = tagPrefix + UiPageTags.MCP_EDITOR_HEADER_VALUE_SUFFIX + ".error",
             keyboardType = KeyboardType.Password,
+            secure = true,
         )
     }
 }
@@ -1072,6 +1076,10 @@ private fun McpHeaderRow(
 /**
  * One labelled editor field: label, input, stored-value note, hint and the
  * in-place error.
+ *
+ * [secure] marks a value that must never be drawn or announced in plaintext: it
+ * applies the shared secret-input transformation and password semantics. Only
+ * the auth-header value uses it; every other field stays readable.
  *
  * The error is a sibling of the field, not a toast: the reason must stay on
  * screen while the user fixes the value.
@@ -1088,6 +1096,7 @@ private fun FieldBlock(
     error: String?,
     hint: String? = null,
     keyboardType: KeyboardType = KeyboardType.Text,
+    secure: Boolean = false,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -1111,11 +1120,17 @@ private fun FieldBlock(
             textStyle = type.body.copy(color = tokens.colors.primary),
             cursorBrush = SolidColor(tokens.colors.accent),
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = ImeAction.Done),
+            visualTransformation = if (secure) {
+                SecretVisualTransformation
+            } else {
+                VisualTransformation.None
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 // Page-level geometry: an editor field is a page row.
                 .heightIn(min = tokens.geometry.pageRowMinHeight)
                 .testTag(tag)
+                .then(if (secure) Modifier.secretInputSemantics() else Modifier)
                 .semantics { contentDescription = label },
             decorationBox = { inner ->
                 Box {
