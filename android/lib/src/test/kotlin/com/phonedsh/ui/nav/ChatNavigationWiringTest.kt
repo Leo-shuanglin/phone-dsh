@@ -9,6 +9,7 @@ package com.phonedsh.ui.nav
 
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -150,24 +151,61 @@ class ChatNavigationWiringTest {
     }
 
     @Test
-    fun `switching a capability off keeps the disable notice`() {
+    fun `an already permitted switch is disarmed with a visible reason`() {
         val requested = mutableListOf<PhoneCapability>()
+        val opened = mutableListOf<PhoneCapability>()
         val facts = PdshNavFacts(
             phonePermissions = PhonePermissionsFacts(
-                statuses = mapOf(PhoneCapability.NOTIFICATIONS to PhoneCapabilityStatus.Authorized),
+                statuses = mapOf(
+                    PhoneCapability.NOTIFICATIONS to PhoneCapabilityStatus.Authorized,
+                ),
                 enabled = setOf(PhoneCapability.NOTIFICATIONS),
                 grantRoutes = mapOf(PhoneCapability.NOTIFICATIONS to PhoneGrantRoute.REQUEST),
             ),
         )
-        mount(PdshRoute.PhonePermissions, facts, onPhonePermissionRequest = { requested += it })
+        mount(
+            PdshRoute.PhonePermissions,
+            facts,
+            onPhonePermissionRequest = { requested += it },
+            onPhonePermissionSettings = { opened += it },
+        )
 
         compose.onNodeWithTag(UiPageTags.PHONE_PERMISSIONS_LIST)
             .performScrollToNode(hasTestTag(UiPageTags.PHONE_PERMISSIONS_TOGGLE_PREFIX + PhoneCapability.NOTIFICATIONS.id))
+
+        // ENABLE used to fall through the shared activate() and do nothing. Android
+        // has no capability-enable store or tool gate, so this host states that the
+        // system grant is the whole decision and disables both controls.
+        compose.onNodeWithText(UiStrings.PHONE_PERMISSIONS_APP_SWITCH_UNAVAILABLE).assertIsDisplayed()
+        compose.onNodeWithText(PhoneCapability.NOTIFICATIONS.title).assertIsNotEnabled()
         compose.onNodeWithTag(UiPageTags.PHONE_PERMISSIONS_TOGGLE_PREFIX + PhoneCapability.NOTIFICATIONS.id)
+            .assertIsNotEnabled()
             .performSemanticsAction(SemanticsActions.OnClick)
 
-        compose.onNodeWithText(UiStrings.PHONE_PERMISSIONS_DISABLE_TITLE).assertIsDisplayed()
-        assertTrue("switching off must not request anything", requested.isEmpty())
+        assertTrue("a disarmed ENABLE row must not request a permission", requested.isEmpty())
+        assertTrue("a disarmed ENABLE row must not open settings", opened.isEmpty())
+    }
+
+    @Test
+    fun `a biometric switch is disarmed with a visible reason`() {
+        val facts = PdshNavFacts(
+            phonePermissions = PhonePermissionsFacts(
+                statuses = mapOf(
+                    PhoneCapability.BIOMETRICS to PhoneCapabilityStatus.NotDetermined,
+                ),
+            ),
+        )
+        mount(PdshRoute.PhonePermissions, facts)
+
+        compose.onNodeWithTag(UiPageTags.PHONE_PERMISSIONS_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.PHONE_PERMISSIONS_TOGGLE_PREFIX + PhoneCapability.BIOMETRICS.id))
+
+        // CONFIRM_BIOMETRIC used to fall through the shared activate() and do
+        // nothing. This host has no biometric prompt to run, so the honest control
+        // is a disabled switch with the reason in the row, not a dead tap.
+        compose.onNodeWithText(UiStrings.PHONE_PERMISSIONS_BIOMETRIC_UNAVAILABLE).assertIsDisplayed()
+        compose.onNodeWithTag(UiPageTags.PHONE_PERMISSIONS_TOGGLE_PREFIX + PhoneCapability.BIOMETRICS.id)
+            .assertIsNotEnabled()
     }
 
     @Test

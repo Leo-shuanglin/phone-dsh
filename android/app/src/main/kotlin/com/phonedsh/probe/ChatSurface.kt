@@ -34,6 +34,7 @@ import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.hostevents.HostEvent
 import com.phonedsh.hostevents.HostEventKind
 import com.phonedsh.hostevents.HostEventProjection
+import com.phonedsh.ui.page.FilesImportReceipt
 import com.phonedsh.ui.projection.UiStateKind
 import com.phonedsh.ui.projection.UiStateNode
 import com.phonedsh.ui.projection.UiStateSurface
@@ -714,6 +715,54 @@ internal fun chatMentionSessionTitles(
     .distinct()
     .take(limit)
     .toList()
+
+/**
+ * True while [draft] is the in-place `@` menu's trigger token.
+ *
+ * This is the same shape `ChatScreenState` projects (`@` then a token with no
+ * whitespace), kept on the host side so the candidates can be re-read exactly
+ * when the menu opens. It is one boolean, not the draft itself: typing inside
+ * the token must not re-walk the workspace on every character.
+ */
+internal fun isReferenceMenuOpen(draft: String): Boolean {
+    val trimmed = draft.trim()
+    if (!trimmed.startsWith("@")) return false
+    return trimmed.drop(1).none { it.isWhitespace() }
+}
+
+/**
+ * The state that must make the `@` menu re-read its candidates on the IO lane.
+ *
+ * The chat/session/settings keys alone leave the menu stale after a workspace
+ * change that produces none of them: a 文件 page import writes
+ * [FilesImportReceipt] on its own (it is not an attachment), an agent turn writes
+ * files that only [artifactWrites] reports, and a file can change while the menu
+ * is closed. `referenceMenuOpen` is the cheap catch-all: opening the trigger
+ * re-reads once, so a deleted or externally changed file cannot survive in the
+ * menu. The lists are compared structurally, so an unrelated recomposition does
+ * not repeat the walk.
+ */
+internal fun chatMentionRefreshKey(
+    chatId: String = "",
+    attachments: List<ChatAttachment> = emptyList(),
+    notice: String? = null,
+    sessions: List<HostSessionRecord> = emptyList(),
+    archivedSessions: List<HostSessionRecord> = emptyList(),
+    settingsRevision: Int = 0,
+    importReceipt: Pair<String, FilesImportReceipt>? = null,
+    artifactWrites: List<String> = emptyList(),
+    referenceMenuOpen: Boolean = false,
+): List<Any?> = listOf(
+    chatId,
+    attachments,
+    notice,
+    sessions,
+    archivedSessions,
+    settingsRevision,
+    importReceipt,
+    artifactWrites,
+    referenceMenuOpen,
+)
 
 /** The one turn-end reason that closes a turn without a visible row. */
 private const val COMPLETED: String = "completed"

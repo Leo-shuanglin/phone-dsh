@@ -1746,6 +1746,8 @@ public object UiStrings {
     public const val PHONE_PERMISSIONS_STATUS_LOCAL_NETWORK_UNVERIFIED: String = "未验证 · 点击测试"
     public const val PHONE_PERMISSIONS_STATUS_LOCAL_NETWORK_DENIED: String = "可能已拒绝"
     public const val PHONE_PERMISSIONS_STATUS_BIOMETRIC_CONFIRM: String = "已允许 · 写操作前确认"
+    public const val PHONE_PERMISSIONS_BIOMETRIC_UNAVAILABLE: String = "此宿主未提供面容确认，开关不可用"
+    public const val PHONE_PERMISSIONS_APP_SWITCH_UNAVAILABLE: String = "此宿主由系统授权决定，暂无应用内开关"
 
     // ---------------------------------------------------------------------
     // L13 lane: the three iOS pages Android did not carry

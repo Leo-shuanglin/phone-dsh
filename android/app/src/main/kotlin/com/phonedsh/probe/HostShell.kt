@@ -220,17 +220,35 @@ internal fun HostShell(
     // page on the next frame; the view model is its only writer.
     val chatUi by engine.chat.collectAsState()
     val sessionSnapshot by engine.sessions.collectAsState()
+    // L81: the 本 session 产物 attribution. Collected so a finished turn rebuilds the
+    // artifacts page with the paths it wrote; the diff itself runs on the turn's IO
+    // thread, never here. It is also an `@`-menu refresh key: a turn that wrote a
+    // workspace file changes no chat/session state, so the candidates would keep
+    // the pre-turn listing without it.
+    val artifactFacts by engine.artifactFacts.collectAsState()
     // The `@` menu's candidates are a host read, not a projection: the workspace
     // walk and the session-store read happen here, on the IO lane, and the page
     // only ever receives the bounded result. A frame never touches the disk.
+    //
+    // The refresh key carries every input that can change the workspace but not
+    // the transcript: a 文件 page import (`filesImportReceipt`, `attachToChat =
+    // false` makes no attachment), an agent turn's writes (`artifactFacts`), and
+    // the trigger itself (a file can be deleted or changed while the menu is
+    // closed). Re-reading on open is the bounded catch-all; typing inside the
+    // token is one boolean and does not repeat the walk.
     var chatMention by remember { mutableStateOf(ChatMentionFacts()) }
     LaunchedEffect(
-        chatUi.chatId,
-        chatUi.attachments,
-        chatUi.notice,
-        sessionSnapshot.sessions,
-        sessionSnapshot.archivedSessions,
-        settingsRevision,
+        chatMentionRefreshKey(
+            chatId = chatUi.chatId,
+            attachments = chatUi.attachments,
+            notice = chatUi.notice,
+            sessions = sessionSnapshot.sessions,
+            archivedSessions = sessionSnapshot.archivedSessions,
+            settingsRevision = settingsRevision,
+            importReceipt = filesImportReceipt,
+            artifactWrites = artifactFacts.writtenPaths.orEmpty(),
+            referenceMenuOpen = isReferenceMenuOpen(chatUi.draft),
+        ),
     ) {
         chatMention = engine.chatMentionFacts(chatUi.chatId)
     }
@@ -239,10 +257,6 @@ internal fun HostShell(
     LaunchedEffect(state is EngineHostState.Running, chatUi.chatId) {
         if (state is EngineHostState.Running) engine.prepareChatSession()
     }
-    // L81: the 本 session 产物 attribution. Collected so a finished turn rebuilds the
-    // artifacts page with the paths it wrote; the diff itself runs on the turn's IO
-    // thread, never here.
-    val artifactFacts by engine.artifactFacts.collectAsState()
     val automationFacts by engine.automation.collectAsState()
     var drawerRecords by remember { mutableStateOf<List<ChatRecord>?>(null) }
     var drawerFolders by remember { mutableStateOf<List<ChatWorkspaceGroup>?>(null) }
@@ -1088,7 +1102,10 @@ internal fun HostShell(
                         // The two hosted gestures of the phone-permissions page: a real
                         // system request, and the settings page that can change the
                         // grant. Both are the Activity's, because a permission prompt
-                        // is an Activity-scoped contract.
+                        // is an Activity-scoped contract. The page has no app-use
+                        // switch on this host: it is disarmed with a visible reason,
+                        // because there is no capability-enable store or gate behind
+                        // it (see `HostPhonePermissions.kt`).
                         onPhonePermissionRequest = onPhonePermissionRequest,
                         onPhonePermissionSettings = onPhonePermissionSettings,
                         onOpenDrawer = { drawerOpen = true },

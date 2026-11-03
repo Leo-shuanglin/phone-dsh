@@ -85,6 +85,29 @@ class ChatTranscriptExportTest {
     }
 
     @Test
+    fun `an interrupted tool call keeps the result heading`() {
+        val markdown = chatTranscriptMarkdown(
+            "中断",
+            listOf(
+                ChatRow.ToolRun(
+                    id = "run",
+                    entries = listOf(
+                        ToolEntry(
+                            id = "stopped",
+                            title = "bash",
+                            summary = "interrupted",
+                            state = ToolRowState.STOPPED,
+                            body = "已停止",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals("# 中断\n\n### 工具结果\n\n已停止", markdown)
+    }
+
+    @Test
     fun `a closed turn exports its process entries once`() {
         val markdown = chatTranscriptMarkdown(
             "继续",

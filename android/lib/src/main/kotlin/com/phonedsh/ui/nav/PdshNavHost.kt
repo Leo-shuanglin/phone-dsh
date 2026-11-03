@@ -84,6 +84,7 @@ import com.phonedsh.ui.page.NativeWorkbenchPage
 import com.phonedsh.ui.page.PDSHShellPage
 import com.phonedsh.ui.page.PhoneCapability
 import com.phonedsh.ui.page.PhoneCapabilityAction
+import com.phonedsh.ui.page.PhoneCapabilityRowState
 import com.phonedsh.ui.page.PhonePermissionsLocalState
 import com.phonedsh.ui.page.PhonePermissionsPage
 import com.phonedsh.ui.page.PhonePermissionsScreenState
@@ -2195,15 +2196,52 @@ private fun PhonePermissionsRoute(
     // (`statuses == null`): every row says 未知 and no control is armed, which is the
     // honest face of an unread permission. The one thing this route must never do is
     // fill that gap with 已允许.
-    val state = PhonePermissionsScreenState.from(facts.phonePermissions, local)
+    val projected = PhonePermissionsScreenState.from(facts.phonePermissions, local)
+    // Two actions are disarmed here with the reason visible in the row's status
+    // line, because this host cannot give them a real effect:
+    //
+    //  * CONFIRM_BIOMETRIC: the baseline gesture runs a system biometric prompt
+    //    (iOS `confirmBiometricWrite`); this AAR has no such prompt wired into the
+    //    route, and the row's switch would stay off even after an acknowledgement.
+    //  * ENABLE: iOS writes `PhonePermissionStore.isEnabled`, which
+    //    `PhoneCapabilityGate` checks before tool use. This host has no
+    //    capability-enable store and no gate (`HostPhonePermissions.kt`: "This host
+    //    has no capability-enable store"), so an armed switch would not change what
+    //    the Agent may do. The system grant is the whole decision here.
+    //
+    // The page already disables a BLOCKED row's tap and switch, so this is one
+    // projection, not a second control path.
+    val state = projected.copy(
+        groups = projected.groups.map { group ->
+            group.copy(
+                rows = group.rows.map { row ->
+                    when (row.action) {
+                        PhoneCapabilityAction.CONFIRM_BIOMETRIC -> row.copy(
+                            action = PhoneCapabilityAction.BLOCKED,
+                            statusLabel = UiStrings.PHONE_PERMISSIONS_BIOMETRIC_UNAVAILABLE,
+                            tone = com.phonedsh.ui.page.PhoneStatusTone.SECONDARY,
+                        )
+                        PhoneCapabilityAction.ENABLE -> row.copy(
+                            action = PhoneCapabilityAction.BLOCKED,
+                            statusLabel = UiStrings.PHONE_PERMISSIONS_APP_SWITCH_UNAVAILABLE,
+                            tone = com.phonedsh.ui.page.PhoneStatusTone.SECONDARY,
+                        )
+                        else -> row
+                    }
+                },
+            )
+        },
+    )
+    fun rowFor(capability: PhoneCapability): PhoneCapabilityRowState? =
+        state.groups.asSequence().flatMap { it.rows }.firstOrNull { it.capability == capability }
     // One activation path for the row tap and the switch's on position. 请求
     // confirms the purpose first, and a row whose only repair is the settings page
-    // opens it (the baseline's `activate()` does the same for `.denied`).
-    // BLOCKED / ALWAYS_ON rows are neither tappable nor switchable.
+    // opens it (the baseline's `activate()` does the same for `.denied`). ENABLE is
+    // not handled: nothing on this host toggles capability use, so the projection
+    // above has already disarmed it. BLOCKED / ALWAYS_ON rows are neither tappable
+    // nor switchable, and the page disables both controls for them.
     fun activate(capability: PhoneCapability) {
-        val row = state.groups.asSequence().flatMap { it.rows }
-            .firstOrNull { it.capability == capability }
-        when (row?.action) {
+        when (rowFor(capability)?.action) {
             PhoneCapabilityAction.REQUEST ->
                 local = local.apply(PhonePermissionsUiEvent.Confirm(capability))
             PhoneCapabilityAction.OPEN_SETTINGS -> onOpenPermissionSettings(capability)
@@ -2214,6 +2252,9 @@ private fun PhonePermissionsRoute(
         state = state,
         onDone = onBack,
         onTapCapability = ::activate,
+        // The projection above disarms every ENABLE row on this host, so a checked
+        // switch cannot currently reach the off branch. It stays because the page's
+        // toggle contract still defines the off position as its disable notice.
         onToggleCapability = { capability, value ->
             if (value) activate(capability)
             else local = local.apply(PhonePermissionsUiEvent.NotifyDisabled(capability))
@@ -2221,12 +2262,11 @@ private fun PhonePermissionsRoute(
         // 去系统设置 opens the page that holds this capability's grant: the same host
         // gesture as a 继续 on a row that has no prompt to raise.
         onOpenSettings = onOpenPermissionSettings,
-        // 继续 is a real request now, not a dismissal: the purpose has been shown, and
-        // the host performs the row's request — a system permission prompt, or the
-        // system page that holds the grant when there is no prompt to raise. The
-        // confirmation closes first so the platform's own dialog is the only thing on
-        // screen; the row's new state comes from the host's next read, never from
-        // this callback.
+        // 继续 is a real request, not a dismissal: the purpose has been shown, and
+        // the host raises the system prompt (or the settings page when no prompt
+        // exists). The confirmation closes first so the platform's own dialog is
+        // the only thing on screen; the row's new state comes from the host's next
+        // read, never from this callback.
         onConfirmRequest = {
             val capability = local.confirmation
             local = local.apply(PhonePermissionsUiEvent.CancelConfirmation)

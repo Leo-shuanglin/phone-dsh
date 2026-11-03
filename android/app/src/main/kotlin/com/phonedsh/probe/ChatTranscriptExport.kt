@@ -83,7 +83,11 @@ private fun ToolEntry.transcriptBlocks(): List<String> = buildList {
         add(block("${UiStrings.CHAT_EXPORT_TITLE_TOOL_CALL} · $name", callText))
     }
     if (state != ToolRowState.RUNNING) {
-        val heading = if (state == ToolRowState.ERROR || state == ToolRowState.STOPPED) {
+        // Only a real failure is 工具错误. STOPPED is a separately reported
+        // non-error state (the person interrupted the turn), and the iOS exporter
+        // maps only `isError` to its tool-error section; an interrupted call
+        // therefore keeps the result heading.
+        val heading = if (state == ToolRowState.ERROR) {
             UiStrings.CHAT_EXPORT_TITLE_TOOL_ERROR
         } else {
             UiStrings.CHAT_EXPORT_TITLE_TOOL_RESULT
