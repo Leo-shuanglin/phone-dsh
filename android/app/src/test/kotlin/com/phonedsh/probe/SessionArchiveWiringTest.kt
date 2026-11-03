@@ -89,6 +89,34 @@ class SessionArchiveWiringTest {
     }
 
     @Test
+    fun hostShellReloadsChatMetadataAfterEverySessionCommand() {
+        // The HostShell session commands write ChatSessionStore directly. Reading
+        // the compiled call sites proves every one of those paths asks the view
+        // model to re-read the store; removing one leaves the two device symptoms
+        // (stale archived count, renamed title overwritten by the next save).
+        val callers = classFamily("HostShell").filter { (name, bytes) ->
+            val input = DataInputStream(ByteArrayInputStream(bytes))
+            val refs = try {
+                readClass(input, name)
+            } finally {
+                input.close()
+            }
+            // Kotlin emits an internal method as `reloadChatMetadata$app_debug`,
+            // so the compiled name is a prefix match rather than the source name.
+            refs.methodRefs.any { (owner, method) ->
+                owner == SELF && method.startsWith("reloadChatMetadata")
+            }
+        }.map { it.first }
+
+        assertTrue(
+            "HostShell no longer calls ProbeEngineViewModel.reloadChatMetadata from all " +
+                "five session-command paths (rename/archive/restore actions, drawer rename, " +
+                "drawer archive); found ${callers.size} call site(s): $callers",
+            callers.size >= 5,
+        )
+    }
+
+    @Test
     fun appLinksDomainAndDshDoesNot() {
         val app = moduleBuildFile("app").readText()
         val dsh = moduleBuildFile("dsh").readText()
