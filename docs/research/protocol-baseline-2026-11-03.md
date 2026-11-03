@@ -38,3 +38,39 @@
 - LSP 3.17 與 MCP 2025-11-25 是明確標記的已發布樣本；未宣稱它們是目前最新 protocol revision。
 - GitHub connector 成功讀取 pinned 文件及 Git tree/blob。一次 `content/programming-guides/dos-donts.md` 定位 404，已從 tree 找到實際 `content/best-practices/dos-donts.md` 並完成閱讀。
 - 尚未對 phoneDSH 實作進行本子任務的本地驗收，也未運行任何測試。
+
+## 第二輪調研（2026-11-03，baseline revision 2）
+
+本輪由子 agent 查閱公開一手來源；下列結論已用於修訂 [協議基線](../../spec/README.md) 與
+[AGENTS.md](../../AGENTS.md)。引用的 commit 與 URL 由調研 agent 記錄，未逐條二次復核。
+
+### 協議治理
+
+| 來源 | 做法 | phoneDSH 採用 |
+| --- | --- | --- |
+| [Kubernetes API changes](https://github.com/kubernetes/community/blob/8ed8a77f/contributors/devel/sig-architecture/api_changes.md) | 新增欄位必須可選且有缺省；合法↔非法都不能翻轉；新增 enum 值不自動相容；同一特性不能同時用多個欄位表達 | 基線 §5.1 通用相容性規則 |
+| [MCP SEP 指南](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/3c4d91b7/docs/community/sep-guidelines.mdx) | draft → accepted → final；作者不能自行改狀態；final 需 schema、規範與 conformance 測試 | 變更單 `draft → frozen → implemented → verified`；只有 contract owner 改 frozen 契約 |
+| [MCP package.json](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/3c4d91b7/package.json) | 單一 schema.ts 生成 schema.json，CI 重新生成後逐字比對；examples 用 ajv 驗 schema | 基線 §9 路線圖：機器可讀登記表與生成／校驗 |
+| buf 官方文檔的 breaking rules 頁、[oasdiff](https://github.com/oasdiff/oasdiff/blob/2daca9b2/docs/BREAKING-CHANGES.md) | 破壞性變更由 CI 對 base 比較；不穩定（alpha／draft）條目豁免；豁免需顯式標記 | §9 schema breaking diff；`draft`／`target` 條目狀態 |
+| Kubernetes 倉庫 staging 下 api 模組的 testdata README（commit 915a1ba0）、[lsprotocol testdata](https://github.com/microsoft/lsprotocol/blob/24d45ab0/generator/plugins/testdata/testdata_generator.py) | 每版凍結 fixture，所有實作解同一批；正例必須成功、反例必須失敗 | §9 兩端讀同一批 golden，正反例命名 |
+| [MCP conformance](https://github.com/modelcontextprotocol/conformance/blob/c37eec88/SDK_INTEGRATION.md) | 各 SDK 維護已知失敗 baseline；新失敗報錯，已知失敗轉通過也報錯 | 基線 §7 GAP 表的關閉規則 |
+| [MCP CODEOWNERS](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/3c4d91b7/.github/CODEOWNERS)、[Envoy CODEOWNERS](https://github.com/envoyproxy/envoy/blob/4edefad7/CODEOWNERS) | `/schema/`、`/api/` 由固定 owner 群審 | §9 CODEOWNERS |
+
+不採用：Kubernetes PRR 問卷、Rust 10 天 FCP、獨立 conformance 倉庫、Pact broker、全量四語言型別生成器（先從常量表與 enum 開始）。
+
+### Agent 指令文件
+
+| 來源 | 做法 | phoneDSH 採用 |
+| --- | --- | --- |
+| [openai/agents.md](https://github.com/openai/agents.md) | 最近的 AGENTS.md 優先，用戶對話指令優先於檔案 | AGENTS.md 開頭寫明優先順序 |
+| Claude Code 官方文檔 memory 頁 | 建議 CLAUDE.md 用 `@AGENTS.md` import 再加 Claude 專屬內容；symlink 可用但在 Windows／未開 `core.symlinks` 時失效；單檔建議 200 行內 | 現維持 symlink（`cross_check.py` 強制），§9 第 6 項計劃改為 import |
+| openai/codex、Kubernetes、MCP 的 AGENTS.md | 觸發條件寫成「改了路徑 X → 必須做 Y」；具體 NEVER 規則；分層驗證命令 | AGENTS.md §1 觸發表、§2 規則、§5 驗證；基線 §4 完整 glob |
+| Claude Code 官方文檔 best practices 頁 | 每次都必須發生的事交給 hook／CI，指令檔只放指導 | 基線 §9：觸發檢查與 breaking diff 進 CI |
+| CircleCI 部落格〈parallel coding agents〉（2026-10-30）、Claude Code 官方文檔 agent teams 頁 | 先凍結契約再並行；每個 agent 獨占檔案範圍；agent 不自行改契約 | AGENTS.md §3 contract freeze、獨占路徑、CONTRACT CHANGE REQUEST |
+
+### 本地登記表核對
+
+對 HEAD `d07bc3e6` 的只讀審計發現：revision 1 的連結全部存在，但 P01／P02 漏登 Rust codec 與 Kotlin
+生產端，P03／P05 缺 Kotlin 端，P07／P09 沒有代碼路徑，P12 指錯權威（應為 `shell/include/xzshell.h`），
+且有約十個跨語言邊界未登記（現登記為 P14–P22）。另發現 Rust golden 測試不在任何 CI gate 中、
+`spec/exec-bridge-v1` 被引用但不存在。均已寫入基線 §3、§7。

@@ -4,16 +4,23 @@ Concrete trigger, previous behaviour, and the resulting behaviour.
 
 ## Protocol impact
 
-- Contract IDs / owning spec or code contract:
-- Delta, compatibility/version decision, affected producers and consumers:
-- Shared fixtures / runtime regression / remaining draft or legacy differences:
+<!-- Required. Match your diff against the path → contract table in spec/README.md §4. -->
 
-For no boundary behaviour change, write `none` with a reason. For a protocol
-change, complete the relevant fields of
-[the change record](https://github.com/launsion-boop/phone-dsh/blob/main/docs/protocol-change-template.md) here or link its
-persistent copy. Do not claim a reserved/target contract is implemented.
+`Protocol impact:` P0x, P0y | none — <one-line reason>
+
+If not `none`:
+
+- [ ] Change record (contract freeze) filled in here or linked:
+      [template](https://github.com/launsion-boop/phone-dsh/blob/main/docs/protocol-change-template.md)
+- [ ] Owning spec/schema/golden or code-contract file changed **first**, at contract revision: `<sha>`
+- [ ] Every producer and consumer listed in the registry is updated, or the record says why not
+- [ ] Shared valid **and** invalid fixtures run through each end's real decoder
+- [ ] Compatibility matrix (old→new, new→old, new→new, old data/rollback) answered
+- [ ] No second envelope, alias field, duplicate error code, loosened schema or skipped check
+- [ ] No `target` / `draft` / `[NEW]` clause claimed as implemented without runtime evidence
 
 ## Validation
 
 Exact commands and results; distinguish spec checks, runtime tests and device
-evidence. Preserve FAIL / SKIP / INCOMPLETE / NOT_RUN and remaining risks.
+evidence. Preserve PASS / FAIL / SKIP / INCOMPLETE / NOT_RUN and remaining risks.
+P01/P02 codec changes: include `cd shell && cargo test -p pdsh-wire -p pdsh-wal`.

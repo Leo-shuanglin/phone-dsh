@@ -1,48 +1,68 @@
 # 協議變更單
 
-把下列內容放進任務或 PR 即可；跨多個 PR 的變更才需要另存持久文件並互相連結。
-無邊界行為變更的重構填 `Protocol impact: none` 和理由，不必填空表。
+協調者在**任何依賴它的實作開始之前**填寫本單，它就是 [AGENTS.md](../AGENTS.md) §3.1 所說的
+contract freeze。放進任務或 PR 正文即可；跨多個 PR 的變更另存為 `docs/protocol-changes/<change-id>.md`
+並互相連結。無邊界行為變更的重構只寫 `Protocol impact: none — <理由>`，不填本單。
 
-## 變更識別
+## 0. 摘要（機器可讀，保持這個格式）
 
-- Change ID／contract IDs（P01…P13 或新增邊界）：
-- Base commit／contract revision／implementation head：
-- 協調者兼 contract owner／producer owner／consumer owner／integrator：
+```yaml
+change: PC-YYYYMMDD-<slug>      # 唯一，不重用
+contracts: [P01]                # 依 spec/README.md §3
+status: draft                   # draft → frozen → implemented → verified；或 rejected
+breaking: false                 # 依 spec/README.md §5；true 時必須填 §3 的版本決定
+base: <commit sha>
+contract_revision: <commit sha 或 file@sha>   # frozen 之後才填
+```
+
+`frozen` 之後，契約只能由 contract owner 透過新 revision 修改，並在本單的「修訂紀錄」寫明。
+
+## 1. 識別與角色
+
 - 具體 trigger → 現況 → 期望：
-- Owning spec/code、schema、shared fixture、所有受影響 caller/receiver：
-- 狀態：proposed／contract reviewed／implemented／verified（分端列出）：
+- 協調者兼 contract owner／各端 implementer／reviewer-integrator：
+- Owning spec 或 code contract、schema、shared fixtures：
+- 所有受影響的 producer／consumer（依登記表逐端列出，含 Rust 與 Kotlin）：
 
-## 契約 delta
+## 2. 契約 delta
 
 只列改動；未變語義引用 owning clause，不複製整份協議。
 
-| 項目 | Before → After／來源 |
+| 項目 | Before → After／依據條款 |
 | --- | --- |
 | fields／encoding／number domain／limits／default／null | |
-| capability／version／unknown field／unknown method | |
+| capability／version／unknown field／unknown method／unknown enum | |
 | correlation／sequence scope／ordering／terminal outcome | |
-| error／retryable conditions／deadline／cancel／late response | |
+| error code／retryable／deadline／cancel／late response | |
 | idempotency／side effect unknown／ACK／durability／recovery | |
 | origin／auth／scope／path／redaction／backpressure | |
+| 條款狀態變化（target → implemented 等） | |
 
-## 相容性與發佈
+自檢（對照 spec/README.md §5.1）：是否新增了第二種表達？新欄位是否可選且定義缺省？
+是否收緊或放寬了兩端都讀的訊息？新增 enum 是否有未知值規則？是否刪除或重用了任何名稱或編號？
 
-| Producer → Consumer | 支援／拒絕及理由；具體測試 |
+## 3. 相容性與發佈
+
+| Producer → Consumer | 支援／拒絕方式及理由；對應測試 |
 | --- | --- |
 | old → new | |
 | new → old | |
 | new → new | |
 | persisted old data → new／rollback | 不適用需註明原因 |
 
-- 是否 breaking、根據哪個 owning version rule；版本／adapter 決定：
-- bundle／image／native artifact 更新順序、rollback 限制與移除舊路徑條件：
-- draft／target 條款中，本次實際實作與仍保留的差異：
+- 版本／adapter 決定，依據哪條 owning version rule：
+- bundle／image／native artifact 更新順序、回滾限制、移除舊路徑的條件：
+- `target`／`draft` 條款中，本次實作與仍保留的差異：
 
-## 協作與證據
+## 4. 分工與證據
 
-- 共享 contract revision／fixture 交付位置；各 agent 獨占的檔案範圍：
-- 如需改共享契約，由協調者更新此單並通知受影響端；不可私下分叉。
-- 正常、無效輸入、未知值、數值邊界及本次涉及的取消／重連／恢復案例：
-- 真實 producer／consumer 測試（區分 schema checker、unit、integration、device）：
-- Exact commands → PASS／FAIL／SKIP／INCOMPLETE／NOT_RUN，環境及證據位置：
-- 剩餘風險、未支援平台、後續 owner／關閉條件：
+- 每個 implementer 的獨占路徑（不可重疊）及各自驗收命令：
+- 共享 fixtures 位置（正例、反例、數值邊界、未知值，以及本次涉及的取消／重連／恢復案例）：
+- 各端真實 producer／consumer 測試（區分 spec checker、unit、integration、device）：
+- Exact commands → `PASS／FAIL／SKIP／INCOMPLETE／NOT_RUN`，環境及證據位置：
+- 剩餘風險、未支援平台、新發現的 GAP 及其關閉條件：
+
+## 5. 修訂紀錄
+
+| revision | 由誰 | 原因（含收到的 CONTRACT CHANGE REQUEST） | 通知了哪些端 |
+| --- | --- | --- | --- |

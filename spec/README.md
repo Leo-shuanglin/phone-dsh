@@ -1,125 +1,211 @@
 # phoneDSH 協議基線與變更協作
 
-本頁是所有 coding agent 的協議入口。它登記權威來源、責任邊界和變更流程；各協議的
-欄位、位元組與狀態機仍由下表的 owning contract 定義。`AGENTS.md` 是協作指令唯一來源，
-`CLAUDE.md` 連到同一檔案。
+Status: normative index（索引本身是規範；各協議的欄位、位元組與狀態機仍由 owning contract 定義）
+Baseline revision: 2（2026-11-03）。初次盤點 public main `fe33f75f46e970c051668027d85e9748b8f591ce`；
+每次任務另記自己的 base/head，不要求停留在此 commit。
 
-初次盤點：2026-11-03，public main `fe33f75f46e970c051668027d85e9748b8f591ce`。
-這是可追溯的起點，並非要求後續工作永遠留在此 commit；每次任務另記 base/head。
+本頁回答四個問題：**哪些東西算協議**、**每個協議的唯一權威在哪**、**改了哪些路徑就碰到哪個協議**、
+**改協議時誰做什麼、交什麼證據**。協作規則的唯一來源是 [AGENTS.md](../AGENTS.md)；`CLAUDE.md`
+指向同一份。本頁不複製任何協議內容，只登記與連結。
 
-## 1. 權威與實作的關係
+## 1. 什麼算協議
 
-- **規範**：下表登記的 normative contract 決定語義，schema 決定形狀，golden 決定具體
-  編碼與邊界案例。三者衝突就是缺陷，需要同一變更修正並說明相容性，不能自行挑一份。
-- **實作**：Swift 是參考實作，Kotlin 和 TypeScript 實作同一邊界時共同遵守規範。
-  實作與規範不一致時登記差異，不能把一端現狀自動升格為跨端標準。
-- **尚無語言無關規範的內部邊界**：下表明列 owning code contract；先保留現有形狀，
-  變更時補足兩端與測試。只有出現獨立版本或多實作需求時才抽出 schema／生成器。
-- **提案與預留**：`docs/design`、`[NEW]`、reserved、draft 不代表已實作或可呼叫。
-  同一文檔中也要逐條讀狀態。測試的證據範圍不能大於它真正執行的範圍。
+只要另一個模組、另一種語言、另一個進程、另一個版本的自己，或磁碟上的舊資料會讀到它，就是協議：
 
-協議不限於網路封包。跨模組公開 API、Worker 訊息、持久化檔案、事件序列及副作用的
-重試／取消／恢復承諾都屬於契約。函式內部的無行為變動重構不需要另寫協議。
+- 跨進程／跨語言訊息：frame、HTTP 路由與 header、postMessage／WKScriptMessage、JNI／FFI、Remote API。
+- 持久化格式：WAL、manifest、journal、ledger、`/dsh/home/*.json`、UserDefaults 中的 JSON、image 產物。
+- 啟動與環境：URL 參數、`PDSH_*` 環境變數、注入的全域變數、init 幀。
+- 可觀察的狀態轉移與承諾：ACK 時機、重試、取消、恢復、idempotency、錯誤碼。
+- 跨模組公開 API（Swift `public`、Kotlin 跨 Gradle module、TS 跨 plugin export）。
 
-## 2. 協議登記表
+函式內部、單一模組私有、無任何可觀察行為差異的重構不是協議變更。
 
-ID 是 review 與任務交接的索引，**不是新增的 wire 欄位或能力名稱**。Owner 是任務角色，
-不是預設指定某位同事；協調者可兼任，實作 agent 不得單方面重定義共同邊界。
+## 2. 權威層級與狀態詞彙
 
-| ID／責任角色 | Owning contract | 生產端／消費端與既有證據 |
+- **規範**：登記的 normative 文件決定語義，JSON Schema 決定形狀，golden 決定具體編碼與邊界案例。
+  三者衝突就是缺陷，必須在同一變更中修正並說明相容性，不可自行挑一份當準。
+- **參考實作**：Swift 是第一個在真機上證明行為的地方，但**不是**定義。Kotlin／TS／Rust 與 Swift
+  不一致時，對照規範判斷誰錯；規範沒寫清楚就是規範缺陷，先補規範。
+- **code contract**：尚無語言無關規範的邊界，以登記表指定的**單一源檔**為權威；另一端必須跟隨它。
+  只有出現獨立版本需求或第三個實作時，才抽出 schema。
+- **權威缺失**：代碼引用了不存在的規範（見 GAP-06）。在補齊之前，該邊界任何語義變更都必須先寫
+  變更單並由協調者決定權威落在哪個檔案。
+
+條款狀態統一使用以下詞彙（既有標記的對應見右欄；舊文件不強制一次改完，但新寫條款只用左欄）：
+
+| 狀態 | 意義 | 既有標記 |
 | --- | --- | --- |
-| P01 channel／wire owner | [v1/channel.md](v1/channel.md)、[v1/schema](v1/schema)、[v1/golden/frames](v1/golden/frames) | [Swift wire](../Sources/PhoneDSHWire/) ↔ [TS channel](../plugins/channel/src/)；[Kotlin wire](../android/core/src/main/kotlin/com/phonedsh/wire/) + Rust `shell/`；[Swift goldens](../Tests/PhoneDSHWireTests/GoldenFrameTests.swift)、[TS goldens](../plugins/channel/src/golden-frames.test.ts)、[Kotlin goldens](../android/core/src/test/kotlin/com/phonedsh/wire/WireGoldenFramesTest.kt) 共用 frame goldens |
-| P02 VFS／WAL／log owner | [v1/wal.md](v1/wal.md)、[v1/golden/wal](v1/golden/wal) | `Sources/PhoneDSHLog/`、`Sources/PhoneDSHWire/WAL.swift` ↔ `plugins/channel/src/wal.ts`；Swift `WALTests`、`PhoneDSHLogTests`，Kotlin `NativeWalGoldenTest` |
-| P03 exec／journal／controller owner | [v1/exec.md](v1/exec.md)、[v1/handoff.md](v1/handoff.md)、[v1/budgets.md](v1/budgets.md) | `Sources/PhoneDSHController/`、`Sources/PhoneDSH/` ↔ `plugins/exec-bridge/`、`tool-journal/`、`lifecycle-gate/`；`StepMachineJournalContractTests`、`SideEffectLedgerTests`、`PhoneDSHDrainRecoveryContractTests`、`plugins/tests/journal-sync.test.ts` |
-| P04 page bridge／engine owner | [v1/bridge.md](v1/bridge.md)、[bridge schema](v1/schema/bridge-message.schema.json)、[goldens](v1/golden/bridge) | **規範含未實作目標**；Swift `WebEngineNativePreview.swift` ↔ `plugins/phone-native-preview/src/protocol.ts` 仍是 feature bridge；directory import／console 同樣需查實作，見 §5 |
-| P05 HTTP／MCP gateway／security owner | [v1/gateway-security.md](v1/gateway-security.md)、[v1/exec.md](v1/exec.md) | `Sources/PhoneDSHGateway/`、`Sources/PhoneDSHLoopback/` ↔ `plugins/llm-bridge/`、`phone-mcp/`；`Tests/PhoneDSHGatewayTests/`、`plugins/tests/phone-mcp.test.ts`；`phone-mcp/src/protocol.ts` 擁有本地設定與 Remote payload 型別，不代表完整外部 MCP 規範 |
-| P06 harness／host contract owner | [host/v1/README.md](host/v1/README.md)、[event crosswalk](host/v1/event-kinds.md)、[host goldens](host/v1/golden) | [AgentHarness](../Sources/PhoneDSHAgentCore/AgentHarness.swift)、[DSHRemoteHarness](../Sources/PhoneDSHAgentCore/DSH/DSHRemoteHarness.swift)、[DSHEventMapper](../Sources/PhoneDSHAgentCore/DSH/DSHEventMapper.swift) ↔ [Kotlin AgentHarness](../android/core/src/main/kotlin/com/phonedsh/agentcore/AgentHarness.kt)／UI 消費者；[AgentCore tests](../Tests/PhoneDSHAgentCoreTests/) |
-| P07 device／connector owner | [host/v1/README.md](host/v1/README.md) 的 envelope／caps／receipt schema；[adapter draft](../docs/design/device-adapter-contract-draft.md) | 固定的是 host 映射形狀；第三方設備傳輸協議及端到端執行證據不由 schema 自動保證。新增 adapter 需另列實際 sender／receiver／receipt 測試 |
-| P08 OS differences／platform owner | [platform/README.md](platform/README.md)、[whitelist](platform/whitelist.json) | Swift OS API ↔ Android `:platform`／`:engine`／`:net`；只登記有根據的機制差異與證據等級，不以 whitelist 代替 conformance |
-| P09 UI projection／UI owner | [ui/v1/README.md](ui/v1/README.md)、[tokens](ui/v1/tokens.json)、[pages](ui/v1/pages)、[v1/trajectory.md](v1/trajectory.md) | 原生／Web UI 的事件、狀態、互動與平台差異；`ui_check.py`、`page_structure_check.py`、`trajectory_norm.py` 和平台投影測試，不能用更改 tokens 掩蓋事件語義差異 |
-| P10 workflow isolate／Worker owner | **code contract** [protocol.ts](../plugins/workflow-worker/src/protocol.ts) | parent ↔ isolate 的 structured-clone 訊息；[workflow tests](../plugins/tests/workflow-worker.test.ts)。不傳 Agent、token、VFS handle 或 function；沒有獨立 wire version，不冒稱 proto 1 |
-| P11 WASI VFS proxy／toolbox owner | **code contract** [vfs-protocol.ts](../plugins/wasi-toolbox/src/vfs-protocol.ts)、[types.ts](../plugins/wasi-toolbox/src/types.ts) | async postMessage／SAB 共用 codec；u32 JSON 長度為 **little-endian**，與 P01 的 network byte order 不同；[proxy tests](../plugins/wasi-toolbox/src/vfs-proxy.test.ts)、[SAB tests](../plugins/wasi-toolbox/src/vfs-sab.test.ts)。不能套用 P01 frame header |
-| P12 Rust native bridge／shell owner | **code contract** [shell README](../shell/README.md)、[Swift FFI](../Sources/PhoneDSHShell/)、[Kotlin JNI](../android/shell/src/main/kotlin/com/phonedsh/shell/) | Swift／Kotlin ↔ Rust；實際 binary artifact、ABI、平台及錯誤路徑須一起核對。以 [Package.swift](../Package.swift)、Android build wiring 和相應 shell tests 判斷可用性，不能從 source 存在推斷已連結 |
-| P13 plugin Remote／plugin owner | **code contracts** [phone-shell](../plugins/phone-shell/src/contract.ts)、[feature-admin](../plugins/phone-feature-admin/src/contracts.ts)、[MCP](../plugins/phone-mcp/src/protocol.ts)、[directory import](../plugins/phone-directory-import/src/types.ts) | Worker host ↔ Web client／Remote caller；[shell tests](../plugins/tests/phone-shell.test.ts)、[admin tests](../plugins/tests/phone-feature-admin.test.ts)、[MCP tests](../plugins/tests/phone-mcp.test.ts)、[import tests](../plugins/tests/phone-directory-import.test.ts)。本地 config／Remote API 版本與外部 MCP、P01 channel 版本分開 |
+| `implemented` | 所有登記端都已實作，有 runtime 測試證據 | 無自動對應；`[existing]`／`Status: normative` 只作查證線索，仍需逐端 runtime 證據 |
+| `partial` | 部分端已實作；必須註明哪些端缺 | 無統一標記 |
+| `target` | 已審定的目標設計，尚無或僅部分實作；**不可呼叫** | `[NEW]` |
+| `draft` | 尚在討論，可以改；**不可依賴** | `draft`、`DRAFT`、`provisional: true` |
+| `legacy` | 仍在線上運作、等待遷移的舊形狀；不得擴充 | `[legacy]` |
+| `deprecated` | 有替代品，保留到登記的移除條件達成 | 無 |
 
-這是本輪已盤點的主要跨邊界索引，不宣稱涵蓋每個 plugin Remote endpoint。新增或發現
-尚未登記的公共邊界時，補上 contract、兩端、版本／錯誤／證據，再分派實作。
+規則：normative 條款不得依賴 `draft` 條款（現有違例見 GAP-09）；`target` 改為 `implemented`
+需要每一端的 runtime 證據，不是 spec checker 通過。
 
-## 3. 不同邊界的相容性
+## 3. 協議登記表
+
+ID 是 review 與交接的索引，**不是 wire 欄位或能力名稱**。「角色」是任務中的責任，不預設綁定某個人；
+協調者可兼任 contract owner，但實作者不得單方面重定義共同邊界。
+
+### 3.1 已規範化的邊界（有 spec／schema／golden）
+
+| ID／角色 | Owning contract | 實作端 | Runtime 證據（真正讀 golden 的測試） |
+| --- | --- | --- | --- |
+| P01 channel／wire owner | [v1/channel.md](v1/channel.md)、[v1/schema](v1/schema)、[golden/frames](v1/golden/frames) | Swift [PhoneDSHWire](../Sources/PhoneDSHWire/)、[ChannelServer](../Sources/PhoneDSHLoopback/ChannelServer.swift)、[PhoneDSHChannel](../Sources/PhoneDSH/PhoneDSHChannel.swift)；TS [channel](../plugins/channel/src/)；Rust [pdsh-wire](../shell/crates/pdsh-wire/) 經 [pdsh-jni](../shell/crates/pdsh-jni/) 供 Android；Kotlin [core/wire](../android/core/src/main/kotlin/com/phonedsh/wire/)（JNI 殼）、[dsh/host](../android/dsh/src/main/kotlin/com/phonedsh/dsh/host/) 的 HostHello／HostChannel／VfsFrames | [Swift](../Tests/PhoneDSHWireTests/GoldenFrameTests.swift)、[TS](../plugins/channel/src/golden-frames.test.ts)、[Kotlin](../android/core/src/test/kotlin/com/phonedsh/wire/WireGoldenFramesTest.kt)、[Rust](../shell/crates/pdsh-wire/tests/golden_frames.rs)（**CI 未跑**，見 GAP-08） |
+| P02 VFS／WAL owner | [v1/wal.md](v1/wal.md)、[manifest schema](v1/schema/manifest.schema.json)、[golden/wal](v1/golden/wal) | Swift [PhoneDSHLog](../Sources/PhoneDSHLog/)、[WAL.swift](../Sources/PhoneDSHWire/WAL.swift)；Rust [pdsh-wal](../shell/crates/pdsh-wal/)；Kotlin [core/log](../android/core/src/main/kotlin/com/phonedsh/log/)、`dsh/host/{HostWal,WalUplink}.kt`；TS `plugins/channel/src/wal.ts` 只是**對拍 codec**，無生產消費者 | Swift `WALTests`、`PhoneDSHLogTests`；Kotlin `NativeWalGoldenTest`；Rust [golden_wal.rs](../shell/crates/pdsh-wal/tests/golden_wal.rs)（CI 未跑） |
+| P03 exec／journal／handoff owner | [v1/exec.md](v1/exec.md)、[v1/handoff.md](v1/handoff.md)、[v1/budgets.md](v1/budgets.md)、[golden/perturbations](v1/golden/perturbations) | Swift [PhoneDSHController](../Sources/PhoneDSHController/)、[Handoff](../Sources/PhoneDSH/Handoff/)、[Background](../Sources/PhoneDSH/Background/)、`PhoneDSHLedger.swift`、`PhoneDSHHost.swift`；TS `plugins/{exec-bridge,tool-journal,lifecycle-gate,subprocess-xl}`；Kotlin [android/controller](../android/controller/src/main/)、`android/dsh/.../dsh/{exec,journal,background}` | `StepMachineJournalContractTests`、`SideEffectLedgerTests`、`PhoneDSHDrainRecoveryContractTests`、`plugins/tests/journal-sync.test.ts`、Kotlin `PerturbationFixtureTest` |
+| P04 page bridge owner | [v1/bridge.md](v1/bridge.md)、[bridge schema](v1/schema/bridge-message.schema.json)、[golden/bridge](v1/golden/bridge) | **規範大半是 `target`**。現行 handler：`pdshNativePreview`（Swift `Sources/PhoneDSHEngine/WebEngineNativePreview.swift` ↔ [protocol.ts](../plugins/phone-native-preview/src/protocol.ts)，`legacy` 形狀）、directory import、`xlEngine` console、`pdshMcpControl`（↔ `examples/probe-app/ProbeKit/MCPControlBridge.swift`）、`pdshOpenModelSettings`（**倉內無接收端**）；Kotlin `android/engine/.../{WebViewEngine,NavigationPolicy}.kt` | bridge goldens **沒有任何 runtime 消費者**，只有 `bridge_check.py` |
+| P05 HTTP／MCP gateway owner | [v1/gateway-security.md](v1/gateway-security.md)、[gateway schema](v1/schema/gateway-vector.schema.json)、[golden/gateway](v1/golden/gateway) | Swift [PhoneDSHGateway](../Sources/PhoneDSHGateway/)、Loopback 中的 HTTP 部分（`HTTPTransport`、`StreamingForward` 等；ChannelServer／WebSocket 屬 P01）；TS `plugins/llm-bridge`、`plugins/phone-mcp/src/{manager,schema}.ts`；Kotlin [android/net](../android/net/src/main/) | 只有 Kotlin `GatewayVectorConformanceTest` 讀 golden；Swift `Tests/PhoneDSHGatewayTests` 不讀 |
+| P06 harness／host owner | [host/v1/README.md](host/v1/README.md)、[event-kinds](host/v1/event-kinds.md)、[host goldens](host/v1/golden) | Swift [AgentHarness](../Sources/PhoneDSHAgentCore/AgentHarness.swift)、[DSH/](../Sources/PhoneDSHAgentCore/DSH/)、`PhoneDSHEvents.swift`；Kotlin `android/core/.../{agentcore,hostevents}`、`android/dsh/.../turn` | 只有 Kotlin `HarnessKindClosureTest`、`HostEventKindSchemaTest` 讀 golden；Swift AgentCore tests 不讀 |
+| P07 device／connector owner | host/v1 的 envelope／caps／receipt schema；[adapter draft](../docs/design/device-adapter-contract-draft.md)（`draft`） | Kotlin `android/domain/.../{device,connector}`；Swift `examples/probe-app/ProbeKit/Devices` | Kotlin `DeviceCapabilitiesSchemaTest`；第三方傳輸與端到端回執不由 schema 保證 |
+| P08 platform owner | [platform/README.md](platform/README.md)、[whitelist](platform/whitelist.json) | Swift OS API、`Sources/PhoneDSH/Background`；Android `:platform`／`:engine`／`:net` | `platform_check.py`；whitelist 不代替 conformance |
+| P09 UI projection owner | [ui/v1/README.md](ui/v1/README.md)、[tokens](ui/v1/tokens.json)、[pages](ui/v1/pages)、[v1/trajectory.md](v1/trajectory.md) | iOS `examples/probe-app/PhoneDSHProbe`；Android `android/lib` | Kotlin `UiStateProjectorGoldenTest`、`TrajectoryNormalizerTest`；`ui_check.py`、`page_structure_check.py` |
+
+### 3.2 只有 code contract 的邊界
+
+| ID／角色 | 權威源檔（另一端跟隨它） | 另一端 | 證據與注意 |
+| --- | --- | --- | --- |
+| P10 workflow isolate owner | [workflow-worker/src/protocol.ts](../plugins/workflow-worker/src/protocol.ts) | 同 plugin 的 isolate | [workflow tests](../plugins/tests/workflow-worker.test.ts)。structured-clone；不傳 Agent、token、VFS handle、function；無 wire version，不冒稱 proto 1；DSH pin 升級會牽動型別 |
+| P11 WASI VFS proxy owner | [vfs-protocol.ts](../plugins/wasi-toolbox/src/vfs-protocol.ts)、[types.ts](../plugins/wasi-toolbox/src/types.ts) | `vfs-server.ts`、`vfs-client.ts`、`sab-client-worker.ts`、`message-endpoint.ts` | [proxy](../plugins/wasi-toolbox/src/vfs-proxy.test.ts)、[SAB](../plugins/wasi-toolbox/src/vfs-sab.test.ts)。u32 長度是 **little-endian**，不可套用 P01 header |
+| P12 native ABI owner | [shell/include/xzshell.h](../shell/include/xzshell.h) | Rust [pdsh-ffi](../shell/crates/pdsh-ffi/)、[pdsh-jni](../shell/crates/pdsh-jni/)；Swift [PhoneDSHShell](../Sources/PhoneDSHShell/)（含必須與 header 同步的 `PDSHShellCSurface.swift` stub）；Kotlin [android/shell](../android/shell/src/main/kotlin/com/phonedsh/shell/)、`core/wire/Native*.kt` | 以 [Package.swift](../Package.swift)、Android build wiring、`android/tools/check-native-alignment.py` 判斷是否真的連結；source 存在不等於可用 |
+| P13 plugin Remote owner | [phone-shell](../plugins/phone-shell/src/contract.ts)、[feature-admin](../plugins/phone-feature-admin/src/contracts.ts)、[phone-mcp](../plugins/phone-mcp/src/protocol.ts)、[directory-import](../plugins/phone-directory-import/src/types.ts)、`phone-model-config/src/remote.ts`、`surface-phone/src/management-remote.ts` | Web client、Swift `PhoneDSHWorkspaceImportSink.swift` | [shell](../plugins/tests/phone-shell.test.ts)、[admin](../plugins/tests/phone-feature-admin.test.ts)、[mcp](../plugins/tests/phone-mcp.test.ts)、[import](../plugins/tests/phone-directory-import.test.ts)。至少 6 個 service 共用 `phone` namespace，**沒有方法名登記表**（GAP-10） |
+| P14 DSH Remote mux owner | [ChannelDSHTransport.swift](../Sources/PhoneDSH/ChannelDSHTransport.swift)（`PhoneDSHMuxProtocol`，D22／D23） | `plugins/worker-entry/src/mux-{bridge,tunnel,json}.ts`；Swift `DSHRemoteTransport.swift`；Kotlin `android/dsh/.../turn/DshTurnClient.kt` | `/api/remote.mux`：`x-pdsh-mux-id`、`x-pdsh-mux-op`、NDJSON、4 MiB 分塊。D21–D24 不在 v1 決策表（GAP-11） |
+| P15 host 控制端點 owner | Swift `Sources/PhoneDSH/{PhoneDSHWorkerCommand,PhoneDSHRecovery,PhoneDSHDescendantDrain}.swift` | `plugins/surface-phone/src/*-controller.js` | `/api/pdsh-worker-command/execute`（receipt `pdsh-worker-command/1`）、`/api/pdsh-recovery/*`、`/api/pdsh-descendant-drain`；`PhoneDSHWorkerCommandTests`、`plugins/tests/worker-command-controller.test.ts` |
+| P16 Worker 啟動契約 owner | Swift `PhoneDSHWorkerEnvironment`（[PhoneDSH.swift](../Sources/PhoneDSH/PhoneDSH.swift)）、`Sources/PhoneDSHEngine/WebEngineConfiguration.swift` | Kotlin `android/engine/.../WorkerEnvironment.kt`；Worker **兩份**解析器 `plugins/worker-entry/www/boot.js`、`src/web-boot.ts`，及 `src/entry.ts` | URL 參數、init 幀、`PDSH_*` 環境變數（D24）、`__PDSH_*` 全域變數。兩份解析器必須同改 |
+| P17 exec-bridge loopback owner | **權威缺失**：代碼引用的 `spec/exec-bridge-v1` 不在倉內（GAP-06）；現暫以 `plugins/exec-bridge/src/client.ts` 為準 | Swift `LoopbackServer.swift`、`ExecBridgeHosting.swift`、`PhoneDSHGateway/ModelGateway.swift` | `/v1/hello`、`/v1/exec*`、`/v1/fs*`、`/v1/lifecycle`，NDJSON |
+| P18 持久化設定 owner | `/dsh/home/capabilities.json`：`plugins/worker-entry/src/capabilities.ts`；`mcp.json`：`plugins/phone-mcp/src/schema.ts`（`MCP_CONFIG_VERSION`）；`PDSH_MODEL_PROVIDER_JSON`：`plugins/phone-model-config/src/model-config.ts` | Swift `MaterializedInvariant.swift`、`ScenarioBudgets.swift`、`Sources/PhoneDSH/Phone*Settings.swift`；未查得 Kotlin 讀寫這三種設定的對應端 | 讀寫兩端、舊資料、降級一起評估；UserDefaults key 名也是協議 |
+| P19 phone 工具 envelope owner | [PhoneToolEnvelope.swift](../examples/probe-app/ProbeKit/Capabilities/PhoneToolEnvelope.swift) 定義成功／失敗 envelope；Rust `shell/crates/pdsh-phone/src/lib.rs` 只定義 `phone.<tool>` 呼叫詞彙並原樣轉送結果 | Rust host bridge 消費結果；Kotlin `android/dsh/.../host/PhoneInfoTool.kt` 是獨立的 `phone info` exec 子集，回傳 exec outcome，不是同一 envelope 的實作 | Swift 成功回覆 `{ok,tool,egress,scope,data,nextCursor,truncated}`，上限 256 KiB；不據此宣稱 Kotlin envelope 對齊 |
+| P20 Worker image 產物 owner | `plugins/scripts/pack-image.mjs`、[dsh-pin.json](../plugins/dsh-pin.json) | Swift `LoopbackServer.swift`；Kotlin `android/engine/.../*WorkerAssetSource.kt` | `manifest.json`、`sizes.json`、`config/vfs-manifest.json`、lazy／overlay tar |
+| P21 render-media／office IR owner | [render-media-v1.md](v1/render-media-v1.md)（`draft`）、[office-ir-v1.json](v1/office-ir-v1.json) | Swift `PageSchemeHandler.swift`、`PageSurface.swift`、`ProbeKit/Office/OfficeIR.swift` | 無 gate 檢查；normative 文件已引用此 draft（GAP-09） |
+| P22 scenario／perturbation fixtures owner | `spec/v1/schema/{scenario-*,perturbation,upstream-script}.schema.json` | `Sources/PhoneDSH{Scenario,Harness}`、`android/testkit`、`scripts/ci/scenarios` | `golden/upstream` 無 runtime 消費者 |
+
+登記表不宣稱窮盡。新增或發現未登記的公共邊界時，**先補一行**（權威、兩端、證據），再分派實作。
+
+## 4. 路徑 → 契約觸發表
+
+diff 觸及下列任一路徑，就必須在任務／PR 中寫出對應 ID 的 `Protocol impact`（可為 `none` 並說明理由）。
+一個檔案可同時屬於多個 ID。glob 以倉庫根為起點。
+
+| ID | 觸發路徑 |
+| --- | --- |
+| P01 | `spec/v1/{channel.md,README.md}`、`spec/v1/schema/{hello,exec-req,exec-ctl,lifecycle,fence,error,console,api-*}.schema.json`、`spec/v1/golden/frames/**`、`Sources/PhoneDSHWire/**`（除 `WAL.swift`）、`Sources/PhoneDSHLoopback/{ChannelServer,DefaultChannelHandling,WebSocket,LoopbackServer}.swift`、`Sources/PhoneDSH/PhoneDSHChannel.swift`、`plugins/channel/src/**`（除 `wal*`）、`shell/crates/pdsh-wire/**`、`shell/crates/pdsh-jni/src/{lib,bridge}.rs`、`android/core/src/main/kotlin/com/phonedsh/wire/**`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostHello,HostChannel,VfsFrames,VfsSink,BootId}.kt`、`android/engine/src/main/kotlin/com/phonedsh/engine/{FrameType,HelloFields,ChannelReopenLane,ObservedChannelHandler}.kt` |
+| P02 | `spec/v1/wal.md`、`spec/v1/schema/manifest.schema.json`、`spec/v1/golden/wal/**`、`Sources/PhoneDSHWire/WAL.swift`、`Sources/PhoneDSHLog/**`、`plugins/channel/src/{wal,vfs-mutation}.ts`、`shell/crates/pdsh-wal/**`、`shell/crates/pdsh-jni/src/wal.rs`、`android/core/src/main/kotlin/com/phonedsh/log/**`、`android/core/src/main/kotlin/com/phonedsh/wire/{NativeWal,WalException}.kt`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostWal,WalUplink,HostLog}.kt`、`android/engine/src/main/kotlin/com/phonedsh/engine/BootOverlay*.kt` |
+| P03 | `spec/v1/{exec,handoff,budgets}.md`、`spec/v1/schema/{handoff-*,perturbation}.schema.json`、`spec/v1/golden/perturbations/**`、`Sources/PhoneDSHController/**`、`Sources/PhoneDSH/{Handoff,Background}/**`、`Sources/PhoneDSH/{PhoneDSHLedger,PhoneDSHHost,PhoneDSHLifecycle,PhoneDSHInactivity,HostFault}.swift`、`Sources/PhoneDSHAgentCore/{ExecBridgeHosting,Delegation}.swift`、`plugins/{exec-bridge,tool-journal,lifecycle-gate,subprocess-xl}/src/**`、`android/controller/src/main/**`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/{exec,journal,background}/**` |
+| P04 | `spec/v1/bridge.md`、`spec/v1/schema/bridge-message.schema.json`、`spec/v1/golden/bridge/**`、`Sources/PhoneDSHEngine/WebEngine*.swift`、`examples/probe-app/ProbeKit/MCPControlBridge.swift`、`plugins/phone-native-preview/src/**`、任何 `plugins/*/src/client/**` 中的 `postMessage`／`webkit.messageHandlers`、`android/engine/src/main/kotlin/com/phonedsh/engine/{WebViewEngine,WebViewKernel,NavigationPolicy,EngineCapabilities}.kt` |
+| P05 | `spec/v1/gateway-security.md`、`spec/v1/schema/gateway-vector.schema.json`、`spec/v1/golden/gateway/**`、`Sources/PhoneDSHGateway/**`、`Sources/PhoneDSHLoopback/{HTTPTransport,HTTPEgressFailure,StreamingForward,Loopback,Support}.swift`、`Sources/PhoneDSHAgentCore/{Credentials,HTTPSupport,ProviderError}.swift`、`plugins/llm-bridge/src/**`、`plugins/phone-mcp/src/{manager,schema,protocol}.ts`、`plugins/worker-entry/src/model-route.ts`、`android/net/src/main/**` |
+| P06 | `spec/host/v1/**`（除 `device-*`）、`Sources/PhoneDSHAgentCore/{AgentHarness.swift,DSH/**}`、`Sources/PhoneDSH/PhoneDSHEvents.swift`、`android/core/src/main/kotlin/com/phonedsh/{agentcore,hostevents}/**`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/turn/**` |
+| P07 | `spec/host/v1/schema/device-*`、`spec/host/v1/golden/device-*`、`docs/design/device-*.md`、`android/domain/src/main/kotlin/com/phonedsh/domain/{device,connector}/**`、`examples/probe-app/ProbeKit/Devices/**` |
+| P08 | `spec/platform/**`、`android/platform*/src/main/**`、`Sources/PhoneDSHController/Signals/**`、`Sources/PhoneDSH/Background/**` |
+| P09 | `spec/ui/v1/**`、`spec/v1/trajectory.md`、`spec/v1/schema/{trajectory,ui-state-sequence}.schema.json`、`spec/v1/golden/trajectory/**`、`examples/probe-app/PhoneDSHProbe/**`、`android/lib/src/main/**` |
+| P10 | `plugins/workflow-worker/src/**`、`plugins/types/dsh-workflow-*.d.ts` |
+| P11 | `plugins/wasi-toolbox/src/{vfs-*,sab-client-worker,message-endpoint,worker-scope,tool-worker-runtime,stdin-delivery,types}.ts` |
+| P12 | `shell/include/**`、`shell/crates/{pdsh-ffi,pdsh-jni,pdsh-core}/**`、`shell/build-apple.sh`、`Sources/PhoneDSHShell/**`、`Package.swift`、`android/shell/src/main/**`、`android/core/src/main/kotlin/com/phonedsh/wire/Native*.kt` |
+| P13 | `plugins/{phone-shell,phone-feature-admin,phone-mcp,phone-directory-import,phone-model-config}/src/{contract*,protocol,types,remote,service,index}.ts`、`plugins/surface-phone/src/management-remote.ts`、`Sources/PhoneDSH/PhoneDSHWorkspaceImportSink.swift` |
+| P14 | `Sources/PhoneDSH/ChannelDSHTransport.swift`、`Sources/PhoneDSHAgentCore/DSH/DSHRemoteTransport.swift`、`plugins/worker-entry/src/mux-*.ts`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/turn/DshTurnClient.kt` |
+| P15 | `Sources/PhoneDSH/{PhoneDSHWorkerCommand,PhoneDSHRecovery,PhoneDSHDescendantDrain}.swift`、`plugins/surface-phone/src/*-controller.js` |
+| P16 | `Sources/PhoneDSH/PhoneDSH.swift`、`Sources/PhoneDSHEngine/{WebEngineConfiguration,WebEngineScripts}.swift`、`android/engine/src/main/kotlin/com/phonedsh/engine/WorkerEnvironment.kt`、`plugins/worker-entry/{www/boot.js,src/web-boot.ts,src/entry.ts}` |
+| P17 | `plugins/exec-bridge/src/{client,transport}.ts`、`Sources/PhoneDSHLoopback/LoopbackServer.swift`、`Sources/PhoneDSHAgentCore/ExecBridgeHosting.swift`、`Sources/PhoneDSHGateway/ModelGateway.swift`、`Sources/PhoneDSHShell/PDSHShellTypes.swift` |
+| P18 | `plugins/worker-entry/src/capabilities.ts`、`plugins/shell-ext/src/contract.ts`、`plugins/phone-mcp/src/schema.ts`、`plugins/phone-model-config/src/model-config.ts`、`Sources/PhoneDSH/Phone*Settings.swift`、`Sources/PhoneDSHLog/MaterializedInvariant.swift`、`Sources/PhoneDSHScenario/ScenarioBudgets.swift` |
+| P19 | `shell/crates/pdsh-phone/**`、`examples/probe-app/ProbeKit/Capabilities/PhoneTool*.swift`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/PhoneInfoTool.kt` |
+| P20 | `plugins/scripts/pack-image.mjs`、`plugins/dsh-pin.json`、`plugins/bundle/**`、`Sources/PhoneDSHLoopback/LoopbackServer.swift`、`android/engine/src/main/kotlin/com/phonedsh/engine/{WorkerAssets,*WorkerAssetSource}.kt` |
+| P21 | `spec/v1/render-media-v1.md`、`spec/v1/office-ir-v1.json`、`Sources/PhoneDSHEngine/{PageSchemeHandler,PageSurface}.swift`、`examples/probe-app/ProbeKit/Office/**` |
+| P22 | `spec/v1/schema/{scenario-*,perturbation,upstream-script}.schema.json`、`spec/v1/golden/upstream/**`、`scripts/ci/scenarios/**`、`Sources/PhoneDSH{Scenario,Harness}/**`、`android/testkit/**` |
+
+此表目前由人和 agent 對照執行，尚無 CI 強制（見 §9）。路徑改名或新增實作檔時，同一變更更新此表。
+
+## 5. 相容性規則
+
+### 5.1 通用規則（所有邊界）
+
+以下規則借自 Kubernetes API conventions 與 Protobuf 實踐（來源見[研究紀錄](../docs/research/protocol-baseline-2026-11-03.md)），
+適用於每個邊界，除非該邊界的 owning contract 明文另訂：
+
+1. **同一語義只有一種表達。** 不得新增第二個欄位、第二種 envelope、第二個錯誤碼或別名來表達已存在的語義。
+   現有違例必須登記為 GAP，不得擴散。
+2. **新增欄位必須可選，且定義缺省時的行為。** 舊 producer 不會送它；舊 consumer 必須能忽略它（若該邊界
+   允許未知欄位）或在協商後才送（若不允許）。
+3. **兩端都讀的訊息不能收緊也不能放寬。** 讓原本合法的輸入變非法，或原本非法的輸入變合法，都是 breaking。
+4. **新增 enum／kind／錯誤碼不是自動相容。** 若 owning contract 沒寫明消費者遇到未知值的處理，就不能直接加值；
+   先補上未知值規則，或走新版本。
+5. **刪除與改名是 breaking。** 先標 `deprecated` 並登記移除條件；欄位編號、frame type、錯誤碼、方法名永不重用。
+6. **持久化資料永遠可讀。** 新代碼必須能讀登記的舊 golden／舊盤資料；降級／回滾路徑要說明。
+
+### 5.2 邊界專屬規則
 
 | 邊界 | 已有規則；變更時必須保持的差別 |
 | --- | --- |
-| P01 `proto: 1` | HELLO 協商版本與能力，缺少能力不可使用；不同 proto 拒絕。新增 frame type、flag、required member 或改既有語義需新 major，依 v1 README §2。合法 JSON 的 decoder 不可要求 canonical 排版；encoder 仍遵循 schema 與 canonical JSON |
-| P04 `bridge 1` target | schema 關閉未知欄位，`requestId`／method／terminal 規則由 bridge.md 定義。不得套用 P06 的忽略未知欄位策略；也不得把這個 target 的 `v:1` 當成現有 preview feature 的 `v:1`，兩者不是同一格式 |
-| P06／P07 host contract 1 | decoder 的未知 member／event／capability 處理依 host README §2；事件種類可加，但 required member、移除／改名／改語義及縮小有效範圍需 major。未知 durable event 仍消耗 cursor；best-effort 沒有 durable seq |
-| P02 persistent data | 版本、checksum、順序、原子提交與恢復規則依 wal.md。讀寫兩端、舊資料、降級／回滾路徑一起評估；不能只更新 Swift Codable 型別 |
-| P10／P11／P12 code contracts | 同次建置配對不代表可以讓舊 bundle 或 native artifact 消費新格式。若兩端不能原子更新，先設計版本辨識或 adapter；沒有現成 negotiation 就如實記錄，不偷偷新增自訂版本欄位 |
+| P01 `proto: 1` | HELLO 協商版本與能力，缺少能力不可使用；不同 proto 拒絕。新增 frame type、flag、required member 或改既有語義需新 major（v1 README §2）。decoder 不可要求 canonical 排版；encoder 仍遵循 schema 與 canonical JSON |
+| P04 `bridge 1` target | schema 關閉未知欄位，`requestId`／method／terminal 規則由 bridge.md 定義。不得套用 P06 的忽略未知欄位策略；target 的 `v:1` 與現行 preview 的 `v:1` 不是同一格式 |
+| P06／P07 host contract 1 | 未知 member／event／capability 依 host README §2；事件種類可加，但 required member、移除／改名／改語義需 major。未知 durable event 仍消耗 cursor；best-effort 沒有 durable seq |
+| P02、P18 持久化 | 版本、checksum、順序、原子提交與恢復依 wal.md；設定檔依其權威源檔的版本號。不能只更新 Swift Codable 型別 |
+| P10–P17、P19、P20 code contracts | 同次建置配對不代表舊 bundle／舊 native artifact 能消費新格式。兩端不能原子更新時，先設計版本辨識或 adapter；沒有現成 negotiation 就如實記錄，不偷偷加自訂版本欄位 |
 
-相容性至少檢查 old producer→new consumer、new producer→old consumer。只要有不合法的
-組合，就記錄拒絕方式、部署順序與回滾限制；不適用時說明理由。未知欄位／方法、缺省值、
-null、整數上限、浮點、字元編碼及 max payload 都是相容性的一部分。
+每次變更至少回答四格：old producer→new consumer、new producer→old consumer、new→new、
+舊持久化資料→新代碼／回滾。任何不支援的組合都要寫出拒絕方式、部署順序與回滾限制。
+未知欄位／方法、缺省值、null、整數上限、浮點、字元編碼、max payload 都屬於相容性。
 
-## 4. 必守語義
+## 6. 必守語義
 
-1. **序號有各自生命週期**：channel `seq` 每連線每方向；VFS `mseq` 持久；journal
-   `jseq` 每 session；harness durable event `seq` 是 cursor，容許 gap。不可互換或用差值猜遺失數。
-2. **確認要對應承諾**：WAL L1 承諾與 L2 epoch durability 分開；HTTP／bridge／MQTT 的
-   接受回覆不是外部動作已完成。設備執行需對應 command 的 applied／failed receipt。
-3. **取消與超時不證明副作用沒有發生**：保留同一操作的 idempotency／fence／結果查詢語義，
-   不能以新 ID 盲重送。現有 `SideEffectLedger` 是 exec／MCP replay 機制，不能推論成任意
-   遠端 API 的 exactly-once 或 generic unknown-result reconciliation。
-4. **恢復需重新確認權威**：HELLO、incarnation、fence generation、lease、WAL／journal
-   watermark 都有 owning rule。舊 Worker 的 ready／ACK 不可自動當成新 Worker 的授權。
-5. **有界與隔離**：保留 payload／buffer／queue／timeout／budget 上限與可觀察錯誤；token
-   留在 host 的既定 credential 機制；origin、main-frame、workspace path、capability 檢查
-   不得為方便測試而放寬。通知可以 best-effort，durable event 不得冒充通知丟棄。
-6. **數值不可默默失真**：binary u64、JSON number、Swift Int／Double、JS number／bigint
-   的有效域不同。使用 owning codec，保留合法浮點；不可經 `String`／`Int` 任意轉換。
-   全 u64 JSON 相容性仍有 §5 的缺口，不可聲稱已跨端解決。
+1. **序號有各自生命週期**：channel `seq` 每連線每方向；VFS `mseq` 持久；journal `jseq` 每 session；
+   harness durable event `seq` 是 cursor，容許 gap。不可互換或用差值推算遺失數。
+2. **確認要對應承諾**：WAL L1 承諾與 L2 epoch durability 分開；HTTP／bridge／MQTT 的接受回覆不是外部動作
+   已完成。設備執行要對應 command 的 applied／failed receipt。
+3. **取消與超時不證明副作用沒有發生**：保留同一操作的 idempotency／fence／結果查詢語義，不能用新 ID 盲重送。
+   `SideEffectLedger` 是 exec／MCP replay 機制，不能推論成任意遠端 API 的 exactly-once。
+4. **恢復要重新確認權威**：HELLO、incarnation、fence generation、lease、WAL／journal watermark 各有 owning rule。
+   舊 Worker 的 ready／ACK 不可當成新 Worker 的授權。
+5. **有界與隔離**：保留 payload／buffer／queue／timeout／budget 上限與可觀察錯誤；token 留在 host 的既定
+   credential 機制；origin、main-frame、workspace path、capability 檢查不得為了方便測試而放寬。
+6. **數值不可默默失真**：binary u64、JSON number、Swift Int／Double、JS number／bigint、Kotlin Long 的有效域不同。
+   使用 owning codec；不可經 `String`／`Int` 任意轉換（見 GAP-02）。
 
-## 5. 已知差異：維護債，不是實作許可
+## 7. 已知差異：維護債，不是實作許可
 
-以下是固定盤點 commit 的 source review。尚未以真機／完整 runtime 證明的部分維持未知；
-本輪標準化沒有改訊息格式或宣告它們已修復。後續修正要附對應 contract delta 與 regression。
+以下來自 source review，不是 runtime 實驗。本基線沒有修改任何訊息格式，也沒有宣稱它們已修好。
+修正時附 contract delta 與 regression；**不得為了消除差異把規範改成寬鬆的實作現狀**。
 
-| ID／責任 | 觀測 | 下一步與關閉條件 |
+| ID／邊界 | 觀測 | 關閉條件 |
 | --- | --- | --- |
-| GAP-01／P04 engine owner | bridge.md §11–12 已把 unified name／envelope 等標為 `[NEW]`；preview 的 TS `NativePreviewMessage` 與 Swift `WebEngineNativePreviewRequest.parse` 實際是 `{v,id,sessionId,path}`，回覆 `{id,ok,code,message}`，不是 `{v,kind,requestId,method,...}`。現有 feature tests 不等於 unified bridge goldens 的 runtime 測試 | 遷移需同時處理 caller、receiver、shim、錯誤／取消／timeout、平台 scope 與舊 bundle 策略；兩端 runtime conformance 通過才可把對應條款改為 implemented。現階段保持 legacy 形狀 |
-| GAP-02／P01 wire owner | [hello schema](v1/schema/hello.schema.json) 表達 u64 整數；[TS host-hello.ts](../plugins/channel/src/host-hello.ts) 的 `requireU64Integer` 要求 safe integer；[Kotlin HostHello](../android/dsh/src/main/kotlin/com/phonedsh/dsh/host/HostHello.kt) 水位以 signed Long 表示。schema 合法域不等於各語言 JSON 數值域 | 增加 2^53 附近及 u64 邊界的共同向量，選定相容編碼／有效域與版本方案，讓 Swift／TS／Kotlin 真正讀同一批資料。不得只把 JSON 改字串或把 schema 上限縮小 |
-| GAP-03／P01 wire owner | [Swift HelloPayload.validate](../Sources/PhoneDSHWire/JSONPayloads.swift) 要求 `next_mseq == acked_mseq + 1`；TS `parseHostHello` 及 Kotlin `MseqWatermark.satisfiesHelloRules` 只檢查 `next > acked` 等條件。channel.md §4.1 和 wal.md §7.2 的 effective tail 公式要求一起核對 | 用共同 negative HELLO 向量及 host watermark 建構測試驗證拒絕範圍，保留 D17 不重用 mseq，修復不一致。正常 golden 通過不能證明完整驗證域一致 |
-| GAP-04／P01 wire owner | Swift `HelloPayload.validate` 拒絕重複或不合法 capability；TS `parseHostHello` 僅確認 string array 和 required capabilities，與 schema 的 pattern／uniqueItems 範圍不一致 | 把重複／不合法 capability 加入共用 negative fixtures，核對每端實際 parser。保留缺少能力不可使用的規則，不用放寬 schema 消除差異 |
+| GAP-01／P04 | bridge.md §11–12 的 unified envelope 為 `target`；preview 實際為 `{v,id,sessionId,path}`／`{id,ok,code,message}` | caller、receiver、shim、錯誤／取消／timeout、舊 bundle 策略一起遷移，兩端 runtime conformance 通過後改為 `implemented` |
+| GAP-02／P01 | [hello schema](v1/schema/hello.schema.json) 允許完整 u64；TS `host-hello.ts` 要求 safe integer；Kotlin `HostHello.kt` 用 signed Long（Rust codec 支援完整 u64，截斷發生在 JNI→Kotlin） | 加 2^53 與 u64 邊界共同向量，選定有效域與版本方案，三端讀同一批資料 |
+| GAP-03／P01 | Swift `HelloPayload.validate` 與 Python oracle 要求 `next_mseq == acked_mseq + 1`；TS `parseHostHello` 只要求 `next > acked`；Kotlin 生產端自檢同樣寬鬆 | 共同 negative HELLO 向量；依 channel.md §4.1、wal.md §7.2 決定，修正寬鬆端 |
+| GAP-04／P01 | Swift 拒絕重複或不合法 capability、拒絕帶 `last_mseq` 的 host HELLO；TS 不檢查這兩項；Python oracle 比 schema pattern 更嚴 | 加入共用 negative fixtures，對齊 schema、oracle、三端 parser |
+| GAP-05／P04 | preview 超時：TS 頁面側錯誤碼 `native-preview-timeout`，Swift 為 `preview-timeout`——同一語義兩個碼 | 在 owning contract 選定一個碼，另一個標 `deprecated` |
+| GAP-06／P17 | `spec/exec-bridge-v1` 被 `ModelGateway.swift`、`PDSHShellTypes.swift` 等引用，倉內不存在 | 補齊規範或改引用到實際權威；補齊前該邊界只能做經變更單批准的修改 |
+| GAP-07／P04 | `pdshOpenModelSettings` 有兩個 TS 發送端，倉內無原生接收端 | 登記接收端所在位置，或標為 `legacy` 並移除 |
+| GAP-08／證據 | 沒有 gate 跑 Rust `cargo test`（pdsh-wire／pdsh-wal golden 測試從不在 CI 執行）；bridge golden 無 runtime 消費者；gateway 與 host golden 只有 Kotlin 消費，Swift 不讀 | 每個規範化邊界至少兩端真實 decoder 讀同一批 golden |
+| GAP-09／狀態 | 狀態標記各自為政（見 §2 對照表）；v1 README 把含 28 個 `[NEW]` 的 bridge.md 標為 landed；budgets.md 與 platform whitelist 引用 `draft` 的 render-media-v1.md | 狀態對齊 §2 詞彙；normative 不再依賴 draft |
+| GAP-10／P13 | 至少 6 個 Remote service 共用 `phone` namespace，沒有方法名登記 | 建立方法清單，新增方法前查重 |
+| GAP-11／P14、P16 | 代碼引用 D21–D24，v1 README 決策表只到 D20 | 補入決策表或移到對應 code contract 的註解中並在此登記 |
 
 只有修正來源、相關端測試及必要的 integration 證據齊備，才在此記錄關閉與修復 commit。
-不得為消除紅字把規範改成寬鬆的實作現狀。
 
-## 6. Agent 協作順序
-
-1. **定位**：協調者記 base/head、Pxx、具體 trigger→現況→期望，列出 owning source 與受影響端。
-2. **契約 delta**：使用 [變更單](../docs/protocol-change-template.md)，先定 fields／語義／
-   failure／compatibility；同步修訂 owning spec/schema/golden，code contract 則改其唯一來源。
-3. **固定協作版本**：協調者交付 contract revision、共享 fixture、檔案責任與命令。
-   producer／consumer 可並行實作；需要改契約時先回到同一變更單，不能各自補欄位。
-4. **驗證整合**：檢查兩端真實 encoder／decoder 或狀態機及受影響失敗路徑，再跑下表。
-   review 角色可由 agent 承擔；本流程不額外要求每個小改動都等待人工批准。
-5. **交付**：PR 使用 [模板](../.github/PULL_REQUEST_TEMPLATE.md) 記影響與證據；保留未跑項。
-   若沒有 protocol impact，記錄理由即可，不建立空白變更單。
-
-## 7. 驗證矩陣：沿用現有工具
+## 8. 驗證矩陣：沿用現有工具
 
 | 實際變動 | 命令與證據範圍 |
 | --- | --- |
-| spec／schema／golden／協議說明 | `bash scripts/ci/check.sh --only phone-spec,phone-p0-conformance,phone-cross-tree`：規範與 fixtures 一致；**不是 runtime conformance** |
-| P01／P02 Swift codec | `swift test --filter PhoneDSHWireTests`；依受影響持久化行為加 `PhoneDSHLogTests`。TS 的同一 goldens 測試及 Android/Rust 相應測試也須列在變更證據中 |
-| Worker／TS | `cd plugins && npm run typecheck && npm test`；`phone-compat` 確認既定 WebView 語法/API 基線。依賴未安裝不是通過；依既有 README 準備依賴 |
-| host／controller／gateway／harness runtime | 對應 Swift test target 與回歸；host path 按 CONTRIBUTING 跑 `bash scripts/ci/smoke.sh`。需要 Worker bundle／image 或模型的項目，分別記錄是否真的具備並執行 |
-| Android 實作／native ABI | `phone-android-structure`、`phone-android-tests`；影響產物時加 `phone-android-release`。建置／JVM 不等於 WebView／真機行為 |
-| 公倉交付 | CONTRIBUTING 的 hygiene／license／no-dsh-patch 與受影響 gates；完整清單以 `bash scripts/ci/check.sh --list` 為準 |
+| spec／schema／golden／本頁 | `bash scripts/ci/check.sh --only phone-spec,phone-p0-conformance,phone-cross-tree`：規範與 fixtures 一致，本頁與 AGENTS 的連結存在；**不是 runtime conformance** |
+| P01／P02 codec | `swift test --filter PhoneDSHWireTests`（持久化加 `PhoneDSHLogTests`）；TS 同一 golden 測試；`cd shell && cargo test -p pdsh-wire -p pdsh-wal`（**CI 未覆蓋，必須手動跑並記錄**）；Android `phone-android-tests` |
+| Worker／TS | `cd plugins && npm run typecheck && npm test`；`phone-compat`。依賴未安裝是 `NOT_RUN`，不是通過 |
+| host／controller／gateway／harness | 對應 Swift test target 與回歸；host path 跑 `bash scripts/ci/smoke.sh`。需要 Worker bundle／image／模型的項目分別記錄是否真的執行 |
+| Android／native ABI | `phone-android-structure`、`phone-android-tests`；影響產物時加 `phone-android-release`。JVM 測試不等於 WebView／真機 |
+| 公倉交付 | hygiene／license／no-dsh-patch 與受影響 gates；完整清單以 `bash scripts/ci/check.sh --list` 為準 |
 
-`phone-p0-conformance` 內含 UI page baseline ratchet，`phone-cross-tree` 有八項跨樹 invariant，
-其中 reference 檢查也驗證本頁與 AGENTS 的本地連結，以及 CLAUDE 指向同一份規則；
-兩者通過都不代表每個 runtime contract 或每個 UI 頁面已全面對齊。保留既有
-PASS／FAIL／SKIP／INCOMPLETE 口徑，未執行項目記 `NOT_RUN`，無測量證據記 `NOT_VERIFIED`。
+`phone-cross-tree` 只檢查本頁與 AGENTS 的 **Markdown 連結**；反引號中的路徑與 glob 不受檢查。
+結果用 `PASS／FAIL／SKIP／INCOMPLETE` 原樣記錄；沒跑記 `NOT_RUN`，沒有測量證據記 `NOT_VERIFIED`。
 
-既有 gate 已覆蓋 schema、golden、跨樹索引與 checker mutation，本輪不新增通用 hook 或
-平行的 protocol framework。[研究依據](../docs/research/protocol-baseline-2026-11-03.md) 解釋
-借鑑與不採用的做法；它是研究紀錄，不覆寫本頁登記的 owning contracts。
+## 9. 機器強制路線圖（planned，尚未實作）
+
+文件只能指引；能擋住「各改各的」的是 CI。下列項目按收益排序，實作前各自走變更流程：
+
+1. **機器可讀登記表**：把 §3／§4 抽成 `spec/` 下的 `registry.json`（ID、權威、兩端、觸發 glob、狀態），本頁由它生成或被它校驗。
+2. **觸發檢查**：PR 觸及 §4 路徑而描述中沒有對應 ID 的 `Protocol impact` 時失敗。
+3. **兩端讀同一批 golden**：補 Rust `cargo test` gate；Swift 讀 gateway／host golden；正反例向量命名 `<id>-valid|invalid`。
+4. **schema breaking diff**：對 `spec/**/schema/*.json` 與 base 比較，按 §5.1 判斷 breaking；豁免只能來自變更單中的 `breaking: true` 與版本決定。
+5. **CODEOWNERS** 保護 `spec/`、§3 的權威源檔，並啟用 code owner review。
+6. **CLAUDE.md 改為 `@AGENTS.md` import**（現為 symlink；Windows／未開 `core.symlinks` 的 checkout 會失效），同步更新 `cross_check.py` 的檢查。
+
+[研究依據](../docs/research/protocol-baseline-2026-11-03.md)說明借鑑來源與不採用的做法；它是研究紀錄，不覆寫本頁。
