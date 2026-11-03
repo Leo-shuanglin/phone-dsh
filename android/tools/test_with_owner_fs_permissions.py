@@ -81,7 +81,8 @@ class CapsetFallbackTest(unittest.TestCase):
 
     def test_capset_stub_receives_preserved_upper_bits_in_all_sets(self):
         # Capture the actual capset payload, not just the mask helper: upper
-        # word bits 1/2 are capabilities 33/34 and must survive in E/P/I.
+        # word bits 1/2 are capabilities 33/34 and must survive in E/P/I. Also
+        # require no_new_privs set+verified before capset and fail closed.
         captured = {}
 
         class FakeFunction:
@@ -95,24 +96,31 @@ class CapsetFallbackTest(unittest.TestCase):
                 return self.callback(*args)
 
         class FakeLibrary:
-            def __init__(self):
-                self.prctl = FakeFunction(
-                    lambda option, *_args: 0
-                    if option == self.owner_fs._PR_SET_NO_NEW_PRIVS
-                    else 1
-                )
+            def __init__(self, owner_fs, no_new_privs_observed=1):
+                self.owner_fs = owner_fs
+                self.no_new_privs_observed = no_new_privs_observed
+                self.calls = []
+                self.prctl = FakeFunction(self.handle_prctl)
                 self.capset = FakeFunction(self.capture)
 
+            def handle_prctl(self, option, *_arguments):
+                self.calls.append(("prctl", option))
+                if option == self.owner_fs._PR_SET_NO_NEW_PRIVS:
+                    return 0
+                if option == self.owner_fs._PR_GET_NO_NEW_PRIVS:
+                    return self.no_new_privs_observed
+                raise AssertionError(f"unexpected prctl option: {option}")
+
             def capture(self, _header, words):
+                self.calls.append(("capset",))
                 captured["words"] = [
                     (words[index].effective, words[index].permitted, words[index].inheritable)
                     for index in range(2)
                 ]
                 return 0
 
-        fake = FakeLibrary()
-        fake.owner_fs = self.owner_fs
         sample = DAC_BITS | (1 << 33) | (1 << 34) | (1 << 40)
+        fake = FakeLibrary(self.owner_fs)
         with (
             mock.patch.object(self.owner_fs, "_capabilities", return_value={
                 "CapEff": sample,
@@ -130,6 +138,39 @@ class CapsetFallbackTest(unittest.TestCase):
             ],
             captured["words"],
         )
+        self.assertEqual(
+            [
+                ("prctl", self.owner_fs._PR_SET_NO_NEW_PRIVS),
+                ("prctl", self.owner_fs._PR_GET_NO_NEW_PRIVS),
+                ("capset",),
+            ],
+            fake.calls,
+        )
+
+        # A fallback whose verified no_new_privs is absent or unreadable must
+        # fail closed without attempting capset at all.
+        for observed, expected_error in ((0, RuntimeError), (-1, OSError)):
+            with self.subTest(no_new_privs_observed=observed):
+                if observed < 0:
+                    ctypes.set_errno(errno.EPERM)
+                failing = FakeLibrary(self.owner_fs, no_new_privs_observed=observed)
+                with (
+                    mock.patch.object(self.owner_fs, "_capabilities", return_value={
+                        "CapEff": sample,
+                        "CapPrm": sample,
+                        "CapInh": sample,
+                    }),
+                    mock.patch.object(self.owner_fs.ctypes, "CDLL", return_value=failing),
+                ):
+                    with self.assertRaises(expected_error):
+                        self.owner_fs._drop_dac_with_capset()
+                self.assertEqual(
+                    [
+                        ("prctl", self.owner_fs._PR_SET_NO_NEW_PRIVS),
+                        ("prctl", self.owner_fs._PR_GET_NO_NEW_PRIVS),
+                    ],
+                    failing.calls,
+                )
 
     def test_no_new_privs_is_set_and_verified_before_fallback_exec(self):
         calls = []
