@@ -11,6 +11,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -225,7 +228,14 @@ class MCPEditorPageTest {
         // A fresh row has nothing stored: it must not claim "a value is kept".
         compose.onAllNodesWithText(UiStrings.MCP_FIELD_HEADER_VALUE_STORED).assertCountEquals(0)
         compose.onNodeWithTag(valueTag).performTextInput(secret)
-        compose.onNodeWithTag(valueTag).assertTextContains(secret)
+        // The old contract pinned the plaintext into the composed tree. A secret
+        // field must mask both the drawing and the semantics, so the plaintext
+        // is now a failure, not an expectation.
+        compose.onAllNodesWithText(secret, substring = true).assertCountEquals(0)
+        compose.onNodeWithTag(valueTag)
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
+        compose.onNodeWithTag(nameTag)
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Password))
         scrollTo(removeTag)
         compose.onNodeWithTag(removeTag).performClick()
         compose.onNodeWithTag(nameTag).assertDoesNotExist()

@@ -17,8 +17,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -28,6 +32,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.text.AnnotatedString
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.PdshTheme
@@ -87,6 +92,39 @@ class WebSearchSettingsPageTest {
                     onSelectBackend = {},
                     onToggleBackends = { local = local.apply(WebSearchUiEvent.ToggleBackends) },
                     onBack = {},
+                )
+            }
+        }
+    }
+
+    /**
+     * Compose with facts the host can answer: after 保存密钥, a confirming host
+     * flips [WebSearchFacts.hasCredential] to `YES`; with [confirmCredential]
+     * false it never answers, so the draft must stay in the field.
+     */
+    private fun showLiveCredential(
+        facts: WebSearchFacts,
+        confirmCredential: Boolean = true,
+        onCommitKey: (String) -> Unit = {},
+    ) {
+        compose.setContent {
+            var liveFacts by remember { mutableStateOf(facts) }
+            PdshTheme {
+                WebSearchSettingsPage(
+                    state = WebSearchScreenState.from(liveFacts),
+                    onToggle = {},
+                    onSelectBackend = {},
+                    onToggleBackends = {},
+                    onBack = {},
+                    onModeChange = {},
+                    onCommitKey = { key ->
+                        onCommitKey(key)
+                        if (confirmCredential) {
+                            liveFacts = liveFacts.copy(hasCredential = FactState.YES)
+                        }
+                    },
+                    onClearKey = {},
+                    onRemoveConfiguration = {},
                 )
             }
         }
@@ -189,6 +227,56 @@ class WebSearchSettingsPageTest {
         scrollTo(UiStrings.WEB_SEARCH_SAVE_KEY)
         compose.onNodeWithText(UiStrings.WEB_SEARCH_SAVE_KEY).performClick()
         assertEquals("sk-" + "pasted" + "-9f3a", committed)
+    }
+
+    @Test
+    fun `the key field masks its draft and declares password semantics`() {
+        val secret = "sk-" + "pasted" + "-9f3a"
+        showLiveCredential(
+            WebSearchFacts(mode = WebSearchMode.SEARCH_API, hasCredential = FactState.NO),
+            confirmCredential = false,
+        )
+        scrollToTag(UiPageTags.WEB_SEARCH_KEY_FIELD)
+        compose.onNodeWithTag(UiPageTags.WEB_SEARCH_KEY_FIELD).performTextInput(secret)
+        compose.onAllNodesWithText(secret, substring = true).assertCountEquals(0)
+        compose.onNodeWithTag(UiPageTags.WEB_SEARCH_KEY_FIELD)
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
+    }
+
+    @Test
+    fun `a host-confirmed save clears the key draft and offers 清除密钥`() {
+        val secret = "sk-" + "pasted" + "-9f3a"
+        showLiveCredential(
+            WebSearchFacts(mode = WebSearchMode.SEARCH_API, hasCredential = FactState.NO),
+        )
+        scrollToTag(UiPageTags.WEB_SEARCH_KEY_FIELD)
+        compose.onNodeWithTag(UiPageTags.WEB_SEARCH_KEY_FIELD).performTextInput(secret)
+        scrollTo(UiStrings.WEB_SEARCH_SAVE_KEY)
+        compose.onNodeWithText(UiStrings.WEB_SEARCH_SAVE_KEY).performClick()
+        // The host now reports the key as configured: the draft has done its job.
+        scrollToTag(UiPageTags.WEB_SEARCH_KEY_FIELD)
+        compose.onNodeWithTag(UiPageTags.WEB_SEARCH_KEY_FIELD).assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")),
+        )
+        scrollTo(UiStrings.WEB_SEARCH_CLEAR_KEY)
+        compose.onNodeWithText(UiStrings.WEB_SEARCH_CLEAR_KEY).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a save the host never confirms keeps the key draft`() {
+        val secret = "sk-" + "pasted" + "-9f3a"
+        showLiveCredential(
+            WebSearchFacts(mode = WebSearchMode.SEARCH_API, hasCredential = FactState.NO),
+            confirmCredential = false,
+        )
+        scrollToTag(UiPageTags.WEB_SEARCH_KEY_FIELD)
+        compose.onNodeWithTag(UiPageTags.WEB_SEARCH_KEY_FIELD).performTextInput(secret)
+        scrollTo(UiStrings.WEB_SEARCH_SAVE_KEY)
+        compose.onNodeWithText(UiStrings.WEB_SEARCH_SAVE_KEY).performClick()
+        // The draft is still non-empty, so 保存密钥 stays enabled; dropping a
+        // pasted credential the host never acknowledged would be worse.
+        compose.onNodeWithText(UiStrings.WEB_SEARCH_SAVE_KEY).assertIsEnabled()
+        compose.onAllNodesWithText(UiStrings.WEB_SEARCH_CLEAR_KEY).assertCountEquals(0)
     }
 
     @Test

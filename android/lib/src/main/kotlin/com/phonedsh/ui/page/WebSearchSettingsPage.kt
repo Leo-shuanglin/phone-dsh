@@ -49,6 +49,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,14 +60,18 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.VisualTransformation
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.surface.SETTINGS_CLOSE_GLYPH
+import com.phonedsh.ui.surface.SecretVisualTransformation
 import com.phonedsh.ui.surface.SettingsBodyRow
 import com.phonedsh.ui.surface.SettingsFootnoteRow
 import com.phonedsh.ui.surface.SettingsFormRow
 import com.phonedsh.ui.surface.SettingsSectionHeader
 import com.phonedsh.ui.surface.SettingsSectionLabel
 import com.phonedsh.ui.surface.SettingsSubPageFrame
+import com.phonedsh.ui.surface.secretInputSemantics
 import com.phonedsh.ui.surface.settingsFootnoteStyle
 import com.phonedsh.ui.surface.settingsLabelStyle
 import com.phonedsh.ui.surface.settingsValueStyle
@@ -330,8 +335,20 @@ public fun WebSearchSettingsPage(
     var address by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var feedback by remember { mutableStateOf<String?>(null) }
+    var keyCommitPending by remember { mutableStateOf(false) }
     var pendingClearKey by remember { mutableStateOf(false) }
     var pendingRemove by remember { mutableStateOf(false) }
+
+    // The key draft is dropped only after the host confirms it was stored. A
+    // pasted credential the host never acknowledged must stay on screen: losing
+    // it silently is worse than showing it. The address draft is not touched.
+    LaunchedEffect(keyCommitPending, state.hasCredential, keyWritable) {
+        if (keyCommitPending && keyWritable && state.hasCredential) {
+            apiKey = ""
+            keyCommitPending = false
+            feedback = null
+        }
+    }
 
     SettingsSubPageFrame(
         backGlyph = SETTINGS_CLOSE_GLYPH,
@@ -395,10 +412,12 @@ public fun WebSearchSettingsPage(
                             feedback = feedback,
                             onKeyChange = {
                                 apiKey = it
+                                keyCommitPending = false
                                 feedback = null
                             },
                             onCommit = {
                                 feedback = null
+                                keyCommitPending = true
                                 onCommitKey?.invoke(apiKey.trim())
                             },
                             onClear = { if (clearWritable) pendingClearKey = true },
@@ -581,6 +600,7 @@ private fun LazyListScope.keyGroup(
                 placeholder = UiStrings.WEB_SEARCH_KEY_PLACEHOLDER,
                 onValueChange = onKeyChange,
                 tag = UiPageTags.WEB_SEARCH_KEY_FIELD,
+                secure = true,
             )
             feedback?.let { line -> WebSearchFeedbackLine(text = line) }
         }
@@ -737,6 +757,10 @@ private fun KeyStateRow(state: WebSearchScreenState) {
 /**
  * One text field of the page: the placeholder is copy, the value is a draft.
  *
+ * [secure] marks a credential draft that must never be drawn or announced in
+ * plaintext; it applies the shared secret-input transformation and password
+ * semantics. The address field stays readable.
+ *
  * A `BasicTextField` is not one of the gate's action idioms unless it declares a
  * search IME action, which this field does not; the field is an input, not a
  * button.
@@ -749,6 +773,7 @@ private fun WebSearchTextField(
     onValueChange: (String) -> Unit,
     tag: String,
     onDone: (() -> Unit)? = null,
+    secure: Boolean = false,
 ) {
     val tokens = LocalUiTokens.current
     BasicTextField(
@@ -756,8 +781,16 @@ private fun WebSearchTextField(
         onValueChange = onValueChange,
         enabled = enabled,
         singleLine = true,
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = if (secure) KeyboardType.Password else KeyboardType.Text,
+            imeAction = ImeAction.Done,
+        ),
         keyboardActions = KeyboardActions(onDone = { onDone?.invoke() }),
+        visualTransformation = if (secure) {
+            SecretVisualTransformation
+        } else {
+            VisualTransformation.None
+        },
         textStyle = settingsValueStyle().copy(
             color = if (enabled) tokens.colors.primary else tokens.colors.tertiary,
         ),
@@ -765,6 +798,7 @@ private fun WebSearchTextField(
         modifier = Modifier
             .fillMaxWidth()
             .testTag(tag)
+            .then(if (secure) Modifier.secretInputSemantics() else Modifier)
             .heightIn(min = tokens.geometry.pageRowMinHeight),
         decorationBox = { inner ->
             if (value.isEmpty()) {
