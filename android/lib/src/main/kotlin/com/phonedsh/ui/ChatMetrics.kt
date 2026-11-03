@@ -292,13 +292,22 @@ public object ChatMetrics {
     /** Stop circle when it replaces the send control. Source: `HomeSpec.sendButton = 36`. Confidence: exact. */
     public const val STOP_DIAMETER_PT: Int = 36
 
-    /** "回到最新" pill horizontal padding. Source: `ChatPage.swift:1244`. Confidence: exact. */
+    /** "回到最新" pill horizontal padding. Source: `ChatPage.swift:1337`. Confidence: exact. */
     public const val BACK_TO_LATEST_PADDING_H_PT: Int = 12
 
-    /** "回到最新" pill vertical padding; with the 12 pt caption line this is the ~28-30 pt pill. Source: `ChatPage.swift:1245`. Confidence: exact. */
+    /** "回到最新" pill vertical padding. Source: `ChatPage.swift:1338`. Confidence: exact. */
     public const val BACK_TO_LATEST_PADDING_V_PT: Int = 8
 
-    /** "回到最新" pill corner radius. Source: `ChatPage.swift:1248`. Confidence: exact. */
+    /** "回到最新" pill bottom inset and separator stroke. Source: `ChatPage.swift:1343-1345`. Confidence: exact. */
+    public const val BACK_TO_LATEST_BOTTOM_PT: Int = 12
+    public const val BACK_TO_LATEST_BORDER_PT: Int = 1
+
+    /** Default Large Caption 1 label size. Source: Apple HIG Typography, “Text styles”; `ChatPage.swift:1335`. Confidence: exact. */
+    public const val BACK_TO_LATEST_LABEL_PT: Int = 12
+    /** Default Large Caption 1 line height. Source: Apple HIG Typography, “Text styles”. Confidence: exact. */
+    public const val BACK_TO_LATEST_LABEL_LINE_HEIGHT_PT: Int = 16
+
+    /** "回到最新" pill corner radius. Source: `ChatPage.swift:1341-1342`. Confidence: exact. */
     public const val BACK_TO_LATEST_RADIUS_PT: Int = 12
 
     // -------------------------------------------------------------------- queue

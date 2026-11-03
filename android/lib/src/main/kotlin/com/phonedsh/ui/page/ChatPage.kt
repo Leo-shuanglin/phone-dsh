@@ -121,6 +121,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -1897,23 +1898,26 @@ private fun ChatTranscript(
                 }
             }
             if (scrolledAway && !nearBottom) {
+                val latestShape = RoundedCornerShape(ChatMetrics.BACK_TO_LATEST_RADIUS_PT.dp)
+                val latestLabelStyle = LocalUiType.current.caption.copy(
+                    fontSize = ChatMetrics.BACK_TO_LATEST_LABEL_PT.sp,
+                    lineHeight = ChatMetrics.BACK_TO_LATEST_LABEL_LINE_HEIGHT_PT.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = tokens.colors.accent,
+                )
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = tokens.spacing.cardInset)
+                        .padding(bottom = ChatMetrics.BACK_TO_LATEST_BOTTOM_PT.dp)
                         .testTag(UiPageTags.CHAT_BACK_TO_LATEST)
-                        // iOS draws this pill as a capsule (94 x 30 pt, radius =
-                        // height / 2) with a **near-white glass fill** and a 0.5 pt
-                        // border (`VISUAL.md` back-to-latest row). Filling it with
-                        // `selector` — the page's own #F2F3F5 — made the capsule
-                        // disappear against the transcript and left the label
-                        // floating mid-air on a real device.
-                        .clip(CircleShape)
-                        .background(tokens.colors.input)
+                        // ChatPage.swift:1333-1345 uses an opaque surface rectangle;
+                        // this pill may cover transcript content while the reader is away.
+                        .clip(latestShape)
+                        .background(tokens.colors.surface, latestShape)
                         .border(
-                            width = tokens.stroke.hairline,
-                            color = tokens.colors.border,
-                            shape = CircleShape,
+                            width = ChatMetrics.BACK_TO_LATEST_BORDER_PT.dp,
+                            color = tokens.colors.separator,
+                            shape = latestShape,
                         )
                         .clickable(role = Role.Button) {
                             scrolledAway = false
@@ -1922,8 +1926,8 @@ private fun ChatTranscript(
                             }
                         }
                         .padding(
-                            horizontal = tokens.spacing.cardInset,
-                            vertical = tokens.spacing.codeToolbar,
+                            horizontal = ChatMetrics.BACK_TO_LATEST_PADDING_H_PT.dp,
+                            vertical = ChatMetrics.BACK_TO_LATEST_PADDING_V_PT.dp,
                         ),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
@@ -1933,13 +1937,11 @@ private fun ChatTranscript(
                     // stray link rather than a "jump to the tail" action.
                     BasicText(
                         text = BACK_TO_LATEST_GLYPH,
-                        style = LocalUiType.current.subheadline.copy(color = tokens.colors.accent),
+                        style = latestLabelStyle,
                     )
                     BasicText(
                         text = UiStrings.BACK_TO_LATEST,
-                        // iOS label is 17 pt in the accent; the nearest declared
-                        // regular role is `subheadline`.
-                        style = LocalUiType.current.subheadline.copy(color = tokens.colors.accent),
+                        style = latestLabelStyle,
                     )
                 }
             }

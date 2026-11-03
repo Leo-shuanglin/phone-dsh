@@ -223,7 +223,11 @@ public fun CodeBlock(
                         Modifier
                     },
                 )
-                .verticalScroll(verticalScroll)
+                // The transcript LazyColumn owns vertical movement for short and
+                // expanded blocks. A nested vertical scroller in an unbounded list
+                // item asks for infinite height and crashes during measure. Only the
+                // collapsed 300 pt preview needs its own vertical viewport.
+                .then(if (collapsible) Modifier.verticalScroll(verticalScroll) else Modifier)
                 .then(
                     if (!wrapped) Modifier.horizontalScroll(horizontalScroll) else Modifier,
                 ),
