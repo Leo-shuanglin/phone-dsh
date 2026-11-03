@@ -26,6 +26,7 @@ import android.view.View
 import android.widget.TextView
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.runtime.Composable
@@ -143,6 +144,10 @@ internal fun MarkdownMathTextView(
     val tokens = LocalUiTokens.current
     val uriHandler = LocalUriHandler.current
     val backend = LocalMarkdownMathSpanBackend.current
+    val linkFailure = remember(inlines) { mutableStateOf(false) }
+    val openExternal: (String) -> Unit = { value ->
+        openMarkdownExternalUri(uriHandler, value) { linkFailure.value = true }
+    }
     val color = style.color.takeIf { it != Color.Unspecified }?.toArgb() ?: tokens.colors.primary.toArgb()
     val accent = tokens.colors.accent.toArgb()
     val tertiary = tokens.colors.tertiary.toArgb()
@@ -181,7 +186,7 @@ internal fun MarkdownMathTextView(
             footnoteRaisePx = footnoteRaisePx,
             onOpenFile = onOpenFile,
             onOpenResource = onOpenResource,
-            openExternal = uriHandler::openUri,
+            openExternal = openExternal,
         )
     }
     var rendered by remember(
@@ -219,36 +224,39 @@ internal fun MarkdownMathTextView(
             footnoteRaisePx = footnoteRaisePx,
             onOpenFile = onOpenFile,
             onOpenResource = onOpenResource,
-            openExternal = uriHandler::openUri,
+            openExternal = openExternal,
         )
     }
 
     val configure: (TextView) -> Unit = { view -> configureMarkdownTextView(view, style, baseSizeSp, color, displayMode) }
-    AndroidView(
-        factory = { viewContext ->
-            TextView(viewContext).apply {
-                configure(this)
-                text = fallback
-            }
-        },
-        modifier = if (displayMode) {
-            modifier.wrapContentWidth().horizontalScroll(rememberScrollState()).testTag(testTag)
-        } else {
-            modifier.fillMaxWidth().testTag(testTag)
-        },
-        update = { view ->
-            configure(view)
-            if (view.text !== rendered) {
-                val selectionStart = Selection.getSelectionStart(view.text)
-                val selectionEnd = Selection.getSelectionEnd(view.text)
-                view.text = rendered
-                val currentText = view.text
-                if (selectionStart >= 0 && selectionEnd >= selectionStart && selectionEnd <= currentText.length && currentText is Spannable) {
-                    Selection.setSelection(currentText, selectionStart, selectionEnd)
+    Column(modifier = modifier) {
+        AndroidView(
+            factory = { viewContext ->
+                TextView(viewContext).apply {
+                    configure(this)
+                    text = fallback
                 }
-            }
-        },
-    )
+            },
+            modifier = if (displayMode) {
+                Modifier.wrapContentWidth().horizontalScroll(rememberScrollState()).testTag(testTag)
+            } else {
+                Modifier.fillMaxWidth().testTag(testTag)
+            },
+            update = { view ->
+                configure(view)
+                if (view.text !== rendered) {
+                    val selectionStart = Selection.getSelectionStart(view.text)
+                    val selectionEnd = Selection.getSelectionEnd(view.text)
+                    view.text = rendered
+                    val currentText = view.text
+                    if (selectionStart >= 0 && selectionEnd >= selectionStart && selectionEnd <= currentText.length && currentText is Spannable) {
+                        Selection.setSelection(currentText, selectionStart, selectionEnd)
+                    }
+                }
+            },
+        )
+        if (linkFailure.value) MarkdownLinkFailureNotice()
+    }
 }
 
 /** Builds a source-preserving Spannable; a missing map entry leaves its TeX readable as text. */

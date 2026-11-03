@@ -1433,6 +1433,9 @@ public object UiStrings {
     public const val DOT_SEPARATOR: String = "·"
     public const val CLOSE_HINT: String = "关闭提示"
 
+    // Markdown surface (NativeMarkdownBody.swift): an external link the OS cannot open.
+    public const val MARKDOWN_LINK_OPEN_FAILED: String = "打不开这个链接"
+
     // Transcript chrome (ChatPage.swift `transcript`).
     public const val LOAD_EARLIER: String = "加载更早消息"
     public const val LOADING_EARLIER: String = "正在加载…"
