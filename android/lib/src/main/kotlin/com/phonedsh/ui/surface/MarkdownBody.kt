@@ -19,6 +19,7 @@
 //   * a footnote reference is a small superscript (`:291-292`, 9 pt raised 6 pt).
 package com.phonedsh.ui.surface
 
+import android.content.ActivityNotFoundException
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +36,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -60,6 +62,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phonedsh.ui.ChatMetrics
+import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.UiTokens
@@ -72,6 +75,49 @@ internal const val MARKDOWN_TABLE_TAG: String = "pdsh.surface.markdown.table"
 
 /** Test tag of a display-math block. */
 internal const val MARKDOWN_MATH_TAG: String = "pdsh.surface.markdown.math"
+
+/** Test tag of the visible notice shown when an external link cannot be opened. */
+internal const val MARKDOWN_LINK_FAILURE_TAG: String = "pdsh.surface.markdown.link.failure"
+
+/**
+ * Opens [value] through the platform [uriHandler]. A missing handler activity or
+ * a security refusal becomes a visible notice through [onFailure] instead of an
+ * exception escaping the link tap.
+ *
+ * @return `true` when the platform accepted the URI.
+ */
+internal fun openMarkdownExternalUri(
+    uriHandler: androidx.compose.ui.platform.UriHandler,
+    value: String,
+    onFailure: () -> Unit,
+): Boolean = try {
+    uriHandler.openUri(value)
+    true
+} catch (_: ActivityNotFoundException) {
+    onFailure()
+    false
+} catch (_: SecurityException) {
+    onFailure()
+    false
+}
+
+/** The short notice under a block whose external link could not be opened. */
+@Composable
+internal fun MarkdownLinkFailureNotice(modifier: Modifier = Modifier) {
+    val tokens = LocalUiTokens.current
+    val type = LocalUiType.current
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag(MARKDOWN_LINK_FAILURE_TAG)
+            .padding(top = tokens.geometry.bannerGap),
+    ) {
+        BasicText(
+            text = UiStrings.MARKDOWN_LINK_OPEN_FAILED,
+            style = type.caption.copy(color = tokens.colors.danger),
+        )
+    }
+}
 
 /**
  * Renders one answer body.
@@ -88,7 +134,7 @@ public fun MarkdownBody(
     variant: MarkdownVariant = MarkdownVariant.NORMAL,
     imageSource: MarkdownImageSource? = null,
 ) {
-    val blocks = remember(markdown) { MarkdownParser.parse(markdown) }
+    val blocks = remember(markdown) { parseMarkdownOrPlain(markdown) }
     MarkdownBlocks(
         blocks = blocks,
         modifier = modifier,
@@ -540,6 +586,10 @@ internal fun MarkdownInlineText(
         )
         return
     }
+    val linkFailure = remember(inlines) { mutableStateOf(false) }
+    val openExternal: (String) -> Unit = { value ->
+        openMarkdownExternalUri(uriHandler, value) { linkFailure.value = true }
+    }
     val text = remember(
         inlines,
         style,
@@ -557,12 +607,19 @@ internal fun MarkdownInlineText(
             codeFontFamily,
             codeFontSize,
             tokens,
-            uriHandler,
+            openExternal,
             onOpenFile,
             onOpenResource,
         )
     }
-    BasicText(text = text, style = style, modifier = modifier)
+    if (linkFailure.value) {
+        Column(modifier = modifier) {
+            BasicText(text = text, style = style)
+            MarkdownLinkFailureNotice()
+        }
+    } else {
+        BasicText(text = text, style = style, modifier = modifier)
+    }
 }
 
 /** Builds the annotated string for a run of inline parts. */
@@ -572,7 +629,7 @@ private fun annotatedInlines(
     codeFontFamily: FontFamily?,
     codeFontSize: TextUnit,
     tokens: UiTokens,
-    uriHandler: androidx.compose.ui.platform.UriHandler,
+    openExternal: (String) -> Unit,
     onOpenFile: ((String) -> Unit)?,
     onOpenResource: ((String) -> Unit)?,
 ): AnnotatedString {
@@ -592,7 +649,7 @@ private fun annotatedInlines(
         codeFontFamily,
         codeFontSize,
         tokens,
-        uriHandler,
+        openExternal,
         onOpenFile,
         onOpenResource,
     )
@@ -605,7 +662,7 @@ private fun AnnotatedString.Builder.appendInlines(
     codeFontFamily: FontFamily?,
     codeFontSize: TextUnit,
     tokens: UiTokens,
-    uriHandler: androidx.compose.ui.platform.UriHandler,
+    openExternal: (String) -> Unit,
     onOpenFile: ((String) -> Unit)?,
     onOpenResource: ((String) -> Unit)?,
 ) {
@@ -618,7 +675,7 @@ private fun AnnotatedString.Builder.appendInlines(
                 codeFontFamily,
                 codeFontSize,
                 tokens,
-                uriHandler,
+                openExternal,
                 onOpenFile,
                 onOpenResource,
             )
@@ -628,7 +685,7 @@ private fun AnnotatedString.Builder.appendInlines(
                 codeFontFamily,
                 codeFontSize,
                 tokens,
-                uriHandler,
+                openExternal,
                 onOpenFile,
                 onOpenResource,
             )
@@ -638,7 +695,7 @@ private fun AnnotatedString.Builder.appendInlines(
                 codeFontFamily,
                 codeFontSize,
                 tokens,
-                uriHandler,
+                openExternal,
                 onOpenFile,
                 onOpenResource,
             )
@@ -664,14 +721,14 @@ private fun AnnotatedString.Builder.appendInlines(
                         codeFontFamily,
                         codeFontSize,
                         tokens,
-                        uriHandler,
+                        openExternal,
                         onOpenFile,
                         onOpenResource,
                     )
                 } else {
                     val listener = LinkInteractionListener {
                         when (target) {
-                            is MarkdownLinkTarget.Uri -> uriHandler.openUri(target.value)
+                            is MarkdownLinkTarget.Uri -> openExternal(target.value)
                             is MarkdownLinkTarget.WorkspacePath -> onOpenFile?.invoke(target.value)
                             is MarkdownLinkTarget.ResourceUri -> onOpenResource?.invoke(target.value)
                         }
@@ -694,7 +751,7 @@ private fun AnnotatedString.Builder.appendInlines(
                         codeFontFamily,
                         codeFontSize,
                         tokens,
-                        uriHandler,
+                        openExternal,
                         onOpenFile,
                         onOpenResource,
                     )

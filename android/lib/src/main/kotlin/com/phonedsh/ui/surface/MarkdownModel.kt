@@ -21,6 +21,12 @@ package com.phonedsh.ui.surface
 
 import java.net.URI
 
+/**
+ * Maximum recursive block nesting (quotes and list-item children) the parser
+ * descends before it degrades the remaining source to a plain-text paragraph.
+ */
+internal const val MAX_MARKDOWN_BLOCK_DEPTH: Int = 32
+
 /** Native markdown presentation variant; compact is used for expanded thinking. */
 public enum class MarkdownVariant {
     /** Full transcript typography and spacing. */
@@ -179,7 +185,16 @@ public object MarkdownParser {
     }
 
     /** Parses a line range; used for the body and recursively for a quote. */
-    private fun parseBlocks(lines: List<String>): List<MarkdownBlock> {
+    private fun parseBlocks(lines: List<String>, depth: Int = 0): List<MarkdownBlock> {
+        if (depth >= MAX_MARKDOWN_BLOCK_DEPTH) {
+            // Hostile input must stay on screen instead of exhausting the stack.
+            // The remaining source is kept verbatim as one plain paragraph.
+            return if (lines.isEmpty()) {
+                emptyList()
+            } else {
+                listOf(MarkdownBlock.Paragraph(listOf(MarkdownInline.Text(lines.joinToString("\n")))))
+            }
+        }
         val out = mutableListOf<MarkdownBlock>()
         val paragraph = mutableListOf<String>()
         fun flushParagraph() {
@@ -316,7 +331,7 @@ public object MarkdownParser {
                         quoted.add(lines[j].trim().removePrefix(">").removePrefix(" "))
                         j++
                     }
-                    out.add(MarkdownBlock.Quote(parseBlocks(quoted)))
+                    out.add(MarkdownBlock.Quote(parseBlocks(quoted, depth + 1)))
                     i = j
                 }
 
@@ -373,7 +388,7 @@ public object MarkdownParser {
                         item.copy(
                             inlines = if (standalone == null) item.inlines else emptyList(),
                             imageBlock = standalone,
-                            children = parseBlocks(childLines),
+                            children = parseBlocks(childLines, depth + 1),
                         )
                     }
                     out.add(MarkdownBlock.ListBlock(ordered, start, items))
@@ -626,6 +641,21 @@ public object MarkdownParser {
     private val BULLET = Regex("""^\s*[-*+]\s+(.*)$""")
     private val ORDERED = Regex("""^\s*(\d{1,9})[.)]\s+(.*)$""")
     private val TASK = Regex("""^\[([ xX])]\s+(.*)$""")
+}
+
+/**
+ * Parses [markdown] and falls back to one plain-text paragraph if the parser
+ * fails for any reason, including a [StackOverflowError] from hostile nesting.
+ * The original source stays on screen instead of taking the app down.
+ *
+ * @param markdown the projected answer body.
+ * @param parse the parser seam; production callers use [MarkdownParser.parse].
+ */
+internal fun parseMarkdownOrPlain(
+    markdown: String,
+    parse: (String) -> List<MarkdownBlock> = MarkdownParser::parse,
+): List<MarkdownBlock> = runCatching { parse(markdown) }.getOrElse {
+    listOf(MarkdownBlock.Paragraph(listOf(MarkdownInline.Text(markdown))))
 }
 
 /**
