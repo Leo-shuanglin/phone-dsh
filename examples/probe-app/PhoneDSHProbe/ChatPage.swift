@@ -236,6 +236,7 @@ struct ChatPage: View {
             }
             .buttonStyle(.plain)
             .disabled(model.currentSessionID == nil)
+            .accessibilityIdentifier("chat.session-title")
             .accessibilityHint("点按重命名会话")
             .padding(.horizontal, 16)
 
@@ -440,7 +441,7 @@ struct ChatPage: View {
                 .homeSheetChrome()
         }
         .sheet(isPresented: $showSettings) {
-            NavigationStack { SettingsPage() }
+            NavigationStack { SettingsPage(onOpenSession: { showSettings = false }) }
                 .homeSheetChrome()
         }
         .sheet(isPresented: $showSessionSettings) {
@@ -2085,7 +2086,7 @@ struct ChatPage: View {
             .disabled(!canSubmit)
             .transition(.scale(scale: 0.8).combined(with: .opacity))
             .animation(.easeOut(duration: 0.12), value: canSubmit)
-            .accessibilityLabel("发送消息")
+            .accessibilityLabel(sendButtonLabel)
         }
     }
 
