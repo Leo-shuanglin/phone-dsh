@@ -24,13 +24,14 @@ CI_TMP=${CI_TMP%/}/phone-dsh-ci
 IDF_VERSION_WANT=${CI_IDF_VERSION:-5.5.2}
 IOS_RUNTIME=${CI_IOS_RUNTIME:-26.5}
 
-STAGES="phone-spec phone-p0-conformance phone-cross-tree phone-compat phone-plugins phone-bundle-fresh phone-image phone-sdk phone-no-dsh-patch phone-hygiene phone-license phone-modules phone-gate-contracts phone-android-structure phone-android-tests phone-android-release phone-xcode-resolve"
+STAGES="phone-spec phone-p0-conformance phone-cross-tree phone-rust-tests phone-compat phone-plugins phone-bundle-fresh phone-image phone-sdk phone-no-dsh-patch phone-hygiene phone-license phone-modules phone-gate-contracts phone-android-structure phone-android-tests phone-android-release phone-xcode-resolve"
 
 stage_desc() {
     case "$1" in
         phone-spec)            echo "spec/v1 --full golden vectors, schemas and the spec tool unit tests" ;;
         phone-p0-conformance)  echo "Android-port P0 contract trees: catalog, bridge, gateway, trajectory, fixtures, host, platform, ui, page structure" ;;
-        phone-cross-tree)      echo "spec/tools/cross_check.py: the 8 invariants that only hold across two trees + its mutation tests" ;;
+        phone-cross-tree)      echo "spec/tools/cross_check.py: 8 cross-tree invariants + registry build/check + schema diff + mutation tests" ;;
+        phone-rust-tests)      echo "cargo test -p pdsh-wire -p pdsh-wal (SKIP without cargo; aggregate INCOMPLETE)" ;;
         phone-compat)          echo "M99 build-time compatibility gate over the shared TypeScript (PDSH_NODE or node)" ;;
         phone-plugins)         echo "plugins npm run typecheck + npm test (SKIP without node_modules)" ;;
         phone-bundle-fresh)    echo "the worker bundle in examples/probe-app/Bundle/worker is not older than the plugin sources it is built from (FAIL names artifact vs source vs rebuild command; SKIP when the gitignored bundle is absent)" ;;
@@ -77,6 +78,7 @@ android stages:
   src/test sources is tested, a module without them is not silently counted.
 
 phone-DSH stages:
+  CI_PROTOCOL_BASE       schema-diff comparison ref (default: origin/main; must exist locally)
   The phone-* checkers live in scripts/ci/ and each accepts --root DIR.
 EOF
 }
@@ -191,9 +193,21 @@ stage_phone_cross_tree() {
     done
     [ -f "$ROOT/spec/tools/cross_check.py" ] || { echo "missing checker: spec/tools/cross_check.py"; return 1; }
     ( cd "$ROOT" && "$PYTHON" spec/tools/cross_check.py --root "$ROOT" ) || return 1
+    [ -f "$ROOT/spec/tools/registry_build.py" ] || { echo "missing registry builder"; return 1; }
+    ( cd "$ROOT" && "$PYTHON" spec/tools/registry_build.py --root "$ROOT" --check ) || return 1
+    [ -f "$ROOT/spec/tools/registry_check.py" ] || { echo "missing registry checker"; return 1; }
+    ( cd "$ROOT" && "$PYTHON" spec/tools/registry_check.py --root "$ROOT" ) || return 1
+    [ -f "$ROOT/spec/tools/schema_diff.py" ] || { echo "missing schema diff checker"; return 1; }
+    ( cd "$ROOT" && "$PYTHON" spec/tools/schema_diff.py --root "$ROOT" --base "${CI_PROTOCOL_BASE:-origin/main}" ) || return 1
     # The mutation tests that keep the checker honest (each invariant has a
     # passing fixture and a mutation that must turn it red).
     ( cd "$ROOT" && "$PYTHON" -m unittest discover -s spec/tools -p 'test_*.py' )
+}
+
+stage_phone_rust_tests() {
+    command -v cargo >/dev/null 2>&1 || { skip "cargo not found: Rust wire/WAL tests were not run"; return; }
+    [ -f "$ROOT/shell/Cargo.toml" ] || { echo "missing shell/Cargo.toml"; return 1; }
+    ( cd "$ROOT/shell" && cargo test -p pdsh-wire -p pdsh-wal )
 }
 
 stage_phone_compat() {
@@ -286,6 +300,8 @@ stage_phone_gate_contracts() {
     "$PYTHON" "$ROOT/scripts/ci/scenario_evidence_test.py" || return 1
     "$PYTHON" "$ROOT/scripts/ci/scenario_batch_test.py" || return 1
     "$PYTHON" "$ROOT/scripts/ci/gates_test.py" || return 1
+    "$PYTHON" "$ROOT/scripts/ci/test_protocol_impact.py" || return 1
+    "$PYTHON" "$ROOT/scripts/ci/test_rust_stage.py" || return 1
     "$PYTHON" "$ROOT/scripts/ci/selftest.py" || return 1
 }
 
