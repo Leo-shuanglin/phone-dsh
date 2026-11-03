@@ -3450,6 +3450,9 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             val existing = runCatching { chatStore.load(chatId) }.getOrNull()
             if (existing == null) {
                 LogcatHostLog.warn("chat: content update refused session=$chatId (record_missing)")
+                mutableChat.update { live ->
+                    chatWriteFailureState(live, chatId, existing = null, outcome = null)
+                }
                 return@launch
             }
             runCatching {
@@ -3462,12 +3465,25 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     requestId = com.phonedsh.ui.state.StateRequestId("chat-content:${UUID.randomUUID()}"),
                     expectedRevision = com.phonedsh.ui.state.StateRevision(existing.revision),
                 )
-                check(receipt.outcome is ChatWriteOutcome.Persisted) { "chat content update not confirmed" }
+                if (receipt.outcome !is ChatWriteOutcome.Persisted) {
+                    val code = (receipt.outcome as? ChatWriteOutcome.Failed)?.code ?: "stale"
+                    LogcatHostLog.warn("chat: content update refused session=$chatId ($code)")
+                    // A refused transcript write must be visible, not log-only.
+                    mutableChat.update { live ->
+                        chatWriteFailureState(live, chatId, existing, receipt.outcome)
+                    }
+                    return@runCatching
+                }
                 val readback = chatStore.load(chatId)
                 check(readback?.nodes == nodes && readback.workspaceGroupId == existing.workspaceGroupId &&
                     readback.unknownFields == existing.unknownFields
                 ) { "chat metadata did not survive content update" }
-            }.onFailure { LogcatHostLog.warn("chat: save refused session=$chatId (${reasonOf(it as? Exception ?: Exception(it))})") }
+            }.onFailure {
+                LogcatHostLog.warn("chat: save refused session=$chatId (${reasonOf(it as? Exception ?: Exception(it))})")
+                mutableChat.update { live ->
+                    chatWriteFailureState(live, chatId, existing, outcome = null)
+                }
+            }
         }
     }
 
@@ -3922,6 +3938,29 @@ private fun newer(previous: Long?, next: Long?): Long? = when {
     previous == null -> next
     next == null -> previous
     else -> maxOf(previous, next)
+}
+
+/**
+ * The chat state after a refused transcript write.
+ *
+ * [existing] is the row read before the attempt (`null` when it is missing);
+ * [outcome] is the store receipt when one came back. The page's existing error
+ * banner is the only surface, so neither a missing row nor a non-`Persisted`
+ * receipt can stay log-only.
+ */
+internal fun chatWriteFailureState(
+    current: ChatUiState,
+    chatId: String,
+    existing: ChatRecord?,
+    outcome: ChatWriteOutcome?,
+): ChatUiState {
+    if (current.chatId != chatId) return current
+    val message = when {
+        existing == null -> "聊天记录不存在，本次内容没有保存。"
+        outcome is ChatWriteOutcome.Stale -> "聊天记录已在别处更新，本次内容没有保存；请重试。"
+        else -> "聊天记录没有保存，请重试。"
+    }
+    return current.copy(error = message, bannerDismissed = false)
 }
 
 /**

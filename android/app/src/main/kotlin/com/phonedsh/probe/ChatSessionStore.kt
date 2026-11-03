@@ -50,7 +50,8 @@ import com.phonedsh.ui.state.StateRevision
  *   process restart; the Worker's session id does not, which is why they are
  *   different values.
  * @param title the user's name for it; empty means 新会话 (the page's untitled word).
- * @param updatedAtMs the wall-clock instant of its last change, for the list order.
+ * @param updatedAtMs the wall-clock instant of its last change, clamped
+ *   monotonically for the list order (never the write-acceptance test).
  * @param workerSessionIds every Worker `session/create` id this conversation has
  *   used, oldest first. Each one is a journal row; keeping the list lets the
  *   session list claim them all so one conversation never lists twice. The last
@@ -126,7 +127,13 @@ internal class ChatSessionStore(private val store: DomainStore) {
         ?.toString(Charsets.UTF_8)
         ?.takeIf(String::isNotBlank)
 
-    /** Updates transcript content without replacing the latest row's metadata envelope. */
+    /**
+     * Updates transcript content without replacing the latest row's metadata envelope.
+     *
+     * The row revision is the concurrency authority; the wall clock is only the
+     * list-order hint, so an older [updatedAtMs] is clamped instead of refusing
+     * content written before a clock rollback.
+     */
     fun updateContent(
         id: String,
         title: String,
@@ -136,10 +143,9 @@ internal class ChatSessionStore(private val store: DomainStore) {
         requestId: StateRequestId,
         expectedRevision: StateRevision? = null,
     ): ChatWriteReceipt = mutate(requestId, id, expectedRevision) { current ->
-        require(updatedAtMs >= current.updatedAtMs) { "stale chat write for $id" }
         current.copy(
             title = title,
-            updatedAtMs = updatedAtMs,
+            updatedAtMs = maxOf(updatedAtMs, current.updatedAtMs),
             workerSessionIds = workerSessionIds.distinct(),
             nodes = nodes,
         )
@@ -196,14 +202,19 @@ internal class ChatSessionStore(private val store: DomainStore) {
         }
     }
 
-    /** Writes [record], replacing the row of the same id. */
+    /**
+     * Writes [record], replacing the row of the same id.
+     *
+     * A replacement is ordered by [ChatRecord.revision], not by the wall clock;
+     * [ChatRecord.updatedAtMs] is clamped so display order cannot regress.
+     */
     fun save(record: ChatRecord) {
         store.transaction {
             val latest = get(DOMAIN, key(record.id))?.toString(Charsets.UTF_8)?.let(::decodeOrNull)
-            require(latest == null || record.updatedAtMs >= latest.updatedAtMs) {
-                "stale chat write for ${record.id}"
-            }
-            val changed = record.copy(revision = (latest?.revision ?: 0L) + 1L)
+            val changed = record.copy(
+                updatedAtMs = maxOf(record.updatedAtMs, latest?.updatedAtMs ?: record.updatedAtMs),
+                revision = (latest?.revision ?: 0L) + 1L,
+            )
             put(DOMAIN, key(record.id), encode(changed).toByteArray(Charsets.UTF_8))
             check(get(DOMAIN, key(record.id))?.toString(Charsets.UTF_8)?.let(::decodeOrNull) == changed) {
                 "chat row readback differed after write"
