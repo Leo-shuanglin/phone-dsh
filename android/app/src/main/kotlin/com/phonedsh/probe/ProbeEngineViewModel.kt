@@ -127,6 +127,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
+import java.util.UUID
 
 /** Permission preset catalog and write capability measured from the DSH host. */
 internal data class PermissionDefaultsHostState(
@@ -1911,7 +1912,22 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         // A new conversation is a new session: it must not inherit the previous
         // one's 本 session 产物 attribution.
         sessionArtifacts.clear()
-        chatIo.launch { chatStore.save(ChatRecord(id, "", at, emptyList(), emptyList())) }
+        chatIo.launch {
+            runCatching {
+                val expectedCurrentId = chatStore.currentSessionId()
+                val record = ChatRecord(id, "", at, emptyList(), emptyList())
+                chatStore.save(record)
+                val stored = chatStore.load(id)
+                check(stored == record.copy(revision = stored?.revision ?: 0L)) { "new session readback mismatch" }
+                check(chatStore.selectCurrentSession(
+                    id,
+                    com.phonedsh.ui.state.StateRequestId("current-session:$id"),
+                    expectedCurrentId = expectedCurrentId,
+                ).outcome is ChatWriteOutcome.Persisted) { "current session selection not confirmed" }
+            }.onFailure { failure ->
+                LogcatHostLog.warn("chat: new session persistence failed session=$id (${reasonOf(failure as? Exception ?: Exception(failure))})")
+            }
+        }
         mutableSessions.update { snapshot ->
             snapshot.copy(
                 waiting = false,
@@ -1962,20 +1978,41 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     internal fun openChatSession(chatId: String) {
         if (mutableChat.value.running) return
         if (mutableChat.value.chatId == chatId) return
+        val originalChatId = mutableChat.value.chatId
         turnScope.launch {
-            val stored = withContext(Dispatchers.IO) { runCatching { chatStore.load(chatId) }.getOrNull() }
-            val known = mutableSessions.value.sessions.any { it.id == chatId }
-            val at = clock.nowMillis()
-            val record = stored ?: ChatRecord(
-                id = chatId,
-                title = "",
-                updatedAtMs = at,
-                // A journal id IS a Worker session id, so adopting it keeps the
-                // conversation continuable instead of starting a second one.
-                workerSessionIds = if (stored == null && known) listOf(chatId) else emptyList(),
-                nodes = emptyList(),
-            )
-            if (stored == null) chatIo.launch { chatStore.save(record) }
+            val selected = withContext(Dispatchers.IO) {
+                runCatching {
+                    val stored = chatStore.load(chatId)
+                    val persistedCurrentId = chatStore.currentSessionId()
+                    val known = mutableSessions.value.sessions.any { it.id == chatId }
+                    val at = clock.nowMillis()
+                    val record = stored ?: ChatRecord(
+                        id = chatId,
+                        title = "",
+                        updatedAtMs = at,
+                        workerSessionIds = if (known) listOf(chatId) else emptyList(),
+                        nodes = emptyList(),
+                        // A journal-only row did not report App folder ownership;
+                        // preserve it as unassigned instead of inventing 日常.
+                        workspaceGroupId = null,
+                    ).also { newRecord ->
+                        chatStore.save(newRecord)
+                        check(chatStore.load(chatId)?.id == chatId) { "adopted session readback failed" }
+                    }
+                    check(mutableChat.value.chatId == originalChatId || mutableChat.value.chatId == chatId) {
+                        "session selection was superseded"
+                    }
+                    val receipt = chatStore.selectCurrentSession(
+                        chatId,
+                        com.phonedsh.ui.state.StateRequestId("select-session:${UUID.randomUUID()}"),
+                        expectedCurrentId = persistedCurrentId,
+                    )
+                    check(receipt.outcome is ChatWriteOutcome.Persisted) { "session selection was not confirmed" }
+                    record
+                }.getOrNull()
+            } ?: return@launch
+            if (mutableChat.value.running || mutableChat.value.chatId != originalChatId) return@launch
+            val record = selected
             chatWorkerClaims = chatWorkerClaims + record.workerSessionIds
             mutableChat.value = record.toUiState()
             refreshChatSession()
@@ -1992,29 +2029,70 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         val trimmed = title.trim()
         if (trimmed.isEmpty() || chatId.isEmpty()) return false
         val at = clock.nowMillis()
-        if (mutableChat.value.chatId == chatId) {
-            mutableChat.update { it.copy(title = trimmed, updatedAtMs = at) }
-        }
         chatIo.launch {
             val existing = chatStore.load(chatId)
-            val nodes = if (mutableChat.value.chatId == chatId) {
-                mutableChat.value.nodes
-            } else {
-                existing?.nodes.orEmpty()
+            if (existing == null) {
+                val journalRowKnown = mutableSessions.value.sessions.any { it.id == chatId }
+                if (!journalRowKnown) {
+                    mutableSessions.update { it.copy(failure = "会话不存在，名称没有保存。") }
+                    return@launch
+                }
+                val adopted = ChatRecord(
+                    id = chatId,
+                    title = trimmed,
+                    updatedAtMs = at,
+                    workerSessionIds = listOf(chatId),
+                    nodes = emptyList(),
+                    workspaceGroupId = null,
+                )
+                val outcome = runCatching {
+                    chatStore.save(adopted)
+                    val readback = chatStore.load(chatId)
+                    check(readback == adopted.copy(revision = readback?.revision ?: 0L)) {
+                        "adopted session rename readback failed"
+                    }
+                    readback
+                }.getOrNull()
+                if (outcome != null) mutableSessions.update { snapshot ->
+                    snapshot.copy(
+                        sessions = snapshot.sessions.map {
+                            if (it.id == chatId) it.copy(title = trimmed, lastActivityMs = outcome.updatedAtMs) else it
+                        }.sortedByDescending { it.lastActivityMs ?: Long.MIN_VALUE },
+                        failure = null,
+                    )
+                } else mutableSessions.update { it.copy(failure = "会话名称没有保存；请刷新列表后重试。") }
+                return@launch
             }
-            val workers = (existing?.workerSessionIds.orEmpty() +
-                listOfNotNull(mutableChat.value.takeIf { it.chatId == chatId }?.workerSessionId))
-                .distinct()
-            chatStore.save(ChatRecord(chatId, trimmed, at, workers, nodes,
-                archived = existing?.archived ?: false, pinned = existing?.pinned ?: false,
-                workspaceID = existing?.workspaceID ?: "/dsh/workspace"))
-        }
-        mutableSessions.update { snapshot ->
-            snapshot.copy(
-                sessions = snapshot.sessions.map {
-                    if (it.id == chatId) it.copy(title = trimmed, lastActivityMs = at) else it
-                }.sortedByDescending { it.lastActivityMs ?: Long.MIN_VALUE },
+            val live = mutableChat.value.takeIf { it.chatId == chatId }
+            val receipt = chatStore.updateContent(
+                id = chatId,
+                title = trimmed,
+                updatedAtMs = maxOf(at, existing.updatedAtMs),
+                workerSessionIds = existing.workerSessionIds + listOfNotNull(live?.workerSessionId),
+                nodes = live?.nodes ?: existing.nodes,
+                requestId = com.phonedsh.ui.state.StateRequestId("session-rename:${UUID.randomUUID()}"),
+                expectedRevision = com.phonedsh.ui.state.StateRevision(existing.revision),
             )
+            if (receipt.outcome is ChatWriteOutcome.Persisted) {
+                if (mutableChat.value.chatId == chatId) {
+                    mutableChat.update { it.copy(title = trimmed, updatedAtMs = maxOf(at, existing.updatedAtMs)) }
+                }
+                val readback = chatStore.load(chatId)
+                if (readback?.title == trimmed && readback.workspaceGroupId == existing.workspaceGroupId &&
+                    readback.unknownFields == existing.unknownFields
+                ) mutableSessions.update { snapshot ->
+                    snapshot.copy(
+                        sessions = snapshot.sessions.map {
+                            if (it.id == chatId) it.copy(title = trimmed, lastActivityMs = readback.updatedAtMs) else it
+                        }.sortedByDescending { it.lastActivityMs ?: Long.MIN_VALUE },
+                        failure = null,
+                    )
+                } else mutableSessions.update { it.copy(failure = "会话名称已写入，但读取确认失败；请刷新列表。") }
+            } else if (receipt.outcome is ChatWriteOutcome.Stale) {
+                refreshSessions()
+            } else {
+                mutableSessions.update { it.copy(failure = "会话名称没有保存；请刷新列表后重试。") }
+            }
         }
         LogcatHostLog.info("chat: renamed session=$chatId title_chars=${trimmed.length}")
         return true
@@ -2756,34 +2834,70 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         val at = ui.updatedAtMs
         chatIo.launch {
             val existing = runCatching { chatStore.load(chatId) }.getOrNull()
-            val workers = (existing?.workerSessionIds.orEmpty() + listOfNotNull(workerSessionId)).distinct()
+            if (existing == null) {
+                LogcatHostLog.warn("chat: content update refused session=$chatId (record_missing)")
+                return@launch
+            }
             runCatching {
-                chatStore.save(ChatRecord(chatId, title, at, workers, nodes,
-                    archived = existing?.archived ?: false, pinned = existing?.pinned ?: false,
-                    workspaceID = existing?.workspaceID ?: "/dsh/workspace"))
+                val receipt = chatStore.updateContent(
+                    id = chatId,
+                    title = title,
+                    updatedAtMs = at,
+                    workerSessionIds = existing.workerSessionIds + listOfNotNull(workerSessionId),
+                    nodes = nodes,
+                    requestId = com.phonedsh.ui.state.StateRequestId("chat-content:${UUID.randomUUID()}"),
+                    expectedRevision = com.phonedsh.ui.state.StateRevision(existing.revision),
+                )
+                check(receipt.outcome is ChatWriteOutcome.Persisted) { "chat content update not confirmed" }
+                val readback = chatStore.load(chatId)
+                check(readback?.nodes == nodes && readback.workspaceGroupId == existing.workspaceGroupId &&
+                    readback.unknownFields == existing.unknownFields
+                ) { "chat metadata did not survive content update" }
             }.onFailure { LogcatHostLog.warn("chat: save refused session=$chatId (${reasonOf(it as? Exception ?: Exception(it))})") }
         }
     }
 
     /**
-     * Paints the conversations the previous process had.
+     * Paints the conversation selected before the previous process exited.
      *
-     * The newest record opens by default, which is the baseline's
-     * `currentSessionDefaultsKey` behaviour: a cold start shows the conversation
-     * the person left. Everything here is a read; a store that cannot be read
-     * leaves the screen empty rather than showing a fabricated one.
+     * `ChatSessionStore.currentSessionId` mirrors iOS's `chat.dsh.currentSessionID`.
+     * The newest active session is only a fallback when the selected id is absent,
+     * archived, or no longer readable.
      */
     private fun restoreChatSessions() {
+        val chatIdAtStart = mutableChat.value.chatId
         turnScope.launch {
-            val records = withContext(Dispatchers.IO) {
-                runCatching { chatStore.loadAll() }
+            val (records, persistedCurrentId) = withContext(Dispatchers.IO) {
+                runCatching { chatStore.loadAll() to chatStore.currentSessionId() }
                     .onFailure { LogcatHostLog.warn("chat: store not restored (${reasonOf(it as? Exception ?: Exception(it))})") }
-                    .getOrDefault(emptyList())
+                    .getOrDefault(emptyList<ChatRecord>() to null)
             }
-            if (records.isEmpty()) {
-                LogcatHostLog.info("chat: no stored conversation")
+            if (mutableChat.value.chatId != chatIdAtStart) return@launch
+            val selected = selectRestoredChatSession(records, persistedCurrentId)
+            if (selected == null) {
+                if (persistedCurrentId != null) withContext(Dispatchers.IO) {
+                    chatStore.clearCurrentSession(
+                        persistedCurrentId,
+                        com.phonedsh.ui.state.StateRequestId("clear-current-session:${UUID.randomUUID()}"),
+                    )
+                }
+                mutableSessions.update { it.copy(waiting = false, currentSessionID = null) }
+                LogcatHostLog.info("chat: no active stored conversation")
                 return@launch
             }
+            if (mutableChat.value.chatId != chatIdAtStart && mutableChat.value.chatId != selected.id) return@launch
+            val selectedReceipt = withContext(Dispatchers.IO) {
+                chatStore.selectCurrentSession(
+                    selected.id,
+                    com.phonedsh.ui.state.StateRequestId("restore-current-session:${UUID.randomUUID()}"),
+                    expectedCurrentId = persistedCurrentId,
+                )
+            }
+            if (selectedReceipt.outcome !is ChatWriteOutcome.Persisted) {
+                LogcatHostLog.warn("chat: selected conversation readback failed session=${selected.id}")
+                return@launch
+            }
+            if (mutableChat.value.chatId != chatIdAtStart && mutableChat.value.chatId != selected.id) return@launch
             chatWorkerClaims = records.flatMap { it.workerSessionIds }.toSet()
             applyChatRecords(records)
             mutableSessions.update { snapshot ->
@@ -2795,16 +2909,15 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                             HostSessionRecord(it.id, it.updatedAtMs, it.title, it.workspaceID, it.pinned)
                         },
                     ),
-                    currentSessionID = snapshot.currentSessionID ?: records.firstOrNull { !it.archived }?.id,
+                    currentSessionID = selected.id,
                 )
             }
-            val newest = records.firstOrNull { !it.archived } ?: return@launch
             if (!turnRunning.get() && mutableChat.value.chatId.isEmpty()) {
-                mutableChat.value = newest.toUiState()
+                mutableChat.value = selected.toUiState()
             }
             LogcatHostLog.info(
-                "chat: restored ${records.size} conversation(s) open=${newest.id} " +
-                    "rows=${newest.nodes.size} worker=${newest.workerSessionId ?: "-"}",
+                "chat: restored ${records.size} conversation(s) open=${selected.id} " +
+                    "rows=${selected.nodes.size} worker=${selected.workerSessionId ?: "-"}",
             )
         }
     }

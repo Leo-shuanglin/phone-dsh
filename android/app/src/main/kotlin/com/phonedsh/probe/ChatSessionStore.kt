@@ -109,6 +109,11 @@ internal data class ChatWorkspaceGroup(val id: String, val name: String, val rev
 internal fun workspaceGroupTitle(record: ChatRecord, groups: Collection<ChatWorkspaceGroup>): String =
     record.workspaceGroupId?.let { id -> groups.firstOrNull { it.id == id }?.name } ?: "未分配"
 
+/** Uses the persisted selection when it is active; otherwise falls back to newest active. */
+internal fun selectRestoredChatSession(records: List<ChatRecord>, preferredId: String?): ChatRecord? =
+    records.firstOrNull { it.id == preferredId && !it.archived }
+        ?: records.firstOrNull { !it.archived }
+
 /**
  * The two-way store over [DomainStore]'s `session` domain.
  *
@@ -116,6 +121,81 @@ internal fun workspaceGroupTitle(record: ChatRecord, groups: Collection<ChatWork
  * Android main thread (`DomainStore`'s threading rule).
  */
 internal class ChatSessionStore(private val store: DomainStore) {
+    /** The last selected non-device session, equivalent to iOS currentSessionDefaultsKey. */
+    fun currentSessionId(): String? = store.get(DOMAIN, CURRENT_SESSION_ID_KEY)
+        ?.toString(Charsets.UTF_8)
+        ?.takeIf(String::isNotBlank)
+
+    /** Updates transcript content without replacing the latest row's metadata envelope. */
+    fun updateContent(
+        id: String,
+        title: String,
+        updatedAtMs: Long,
+        workerSessionIds: List<String>,
+        nodes: List<UiStateNode>,
+        requestId: StateRequestId,
+        expectedRevision: StateRevision? = null,
+    ): ChatWriteReceipt = mutate(requestId, id, expectedRevision) { current ->
+        require(updatedAtMs >= current.updatedAtMs) { "stale chat write for $id" }
+        current.copy(
+            title = title,
+            updatedAtMs = updatedAtMs,
+            workerSessionIds = workerSessionIds.distinct(),
+            nodes = nodes,
+        )
+    }
+
+    /** Persists selection only for an existing active row and reads the key back. */
+    fun selectCurrentSession(
+        id: String,
+        requestId: StateRequestId,
+        expectedCurrentId: String? = currentSessionId(),
+    ): ChatWriteReceipt {
+        val revision = try {
+            store.transaction {
+                val currentId = get(DOMAIN, CURRENT_SESSION_ID_KEY)?.toString(Charsets.UTF_8)
+                if (currentId != expectedCurrentId) return@transaction -1L
+                val record = get(DOMAIN, key(id))?.toString(Charsets.UTF_8)?.let(::decodeOrNull)
+                    ?: return@transaction null
+                if (record.archived) return@transaction null
+                put(DOMAIN, CURRENT_SESSION_ID_KEY, id.toByteArray(Charsets.UTF_8))
+                check(get(DOMAIN, CURRENT_SESSION_ID_KEY)?.toString(Charsets.UTF_8) == id) {
+                    "current chat selection readback mismatch"
+                }
+                record.revision
+            }
+        } catch (failure: Exception) {
+            return ChatWriteReceipt(requestId, id, StateRevision(0), ChatWriteOutcome.Failed(failure.javaClass.simpleName))
+        }
+        return if (revision == -1L) {
+            ChatWriteReceipt(requestId, id, StateRevision(0), ChatWriteOutcome.Stale)
+        } else if (revision == null) {
+            ChatWriteReceipt(requestId, id, StateRevision(0), ChatWriteOutcome.Failed("session_unavailable"))
+        } else {
+            ChatWriteReceipt(requestId, id, StateRevision(revision), ChatWriteOutcome.Persisted)
+        }
+    }
+
+    /** Clears only the selected row the caller observed, then confirms the key is absent. */
+    fun clearCurrentSession(expectedId: String, requestId: StateRequestId): ChatWriteReceipt {
+        val revision = try {
+            store.transaction {
+                val current = get(DOMAIN, CURRENT_SESSION_ID_KEY)?.toString(Charsets.UTF_8)
+                if (current != expectedId) return@transaction null
+                delete(DOMAIN, CURRENT_SESSION_ID_KEY)
+                check(get(DOMAIN, CURRENT_SESSION_ID_KEY) == null) { "current chat selection clear mismatch" }
+                get(DOMAIN, key(expectedId))?.toString(Charsets.UTF_8)?.let(::decodeOrNull)?.revision ?: 0L
+            }
+        } catch (failure: Exception) {
+            return ChatWriteReceipt(requestId, expectedId, StateRevision(0), ChatWriteOutcome.Failed(failure.javaClass.simpleName))
+        }
+        return if (revision == null) {
+            ChatWriteReceipt(requestId, expectedId, StateRevision(0), ChatWriteOutcome.Stale)
+        } else {
+            ChatWriteReceipt(requestId, expectedId, StateRevision(revision), ChatWriteOutcome.Persisted)
+        }
+    }
+
     /** Writes [record], replacing the row of the same id. */
     fun save(record: ChatRecord) {
         store.transaction {
@@ -373,6 +453,8 @@ internal class ChatSessionStore(private val store: DomainStore) {
         const val GROUP_PREFIX: String = "workspace-group/"
         const val GROUP_SCHEMA: String = "pdsh-workspace-group/1"
         const val GROUP_REVISION_KEY: String = "workspace-group-meta/revision"
+        /** Mirrors iOS `ChatModel.currentSessionDefaultsKey`. */
+        const val CURRENT_SESSION_ID_KEY: String = "chat.dsh.currentSessionID"
 
         /** The envelope version this reader accepts. */
         const val SCHEMA: String = "pdsh-chat-session/1"

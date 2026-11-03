@@ -103,6 +103,7 @@ internal fun createHostChatSession(
     requestId: StateRequestId,
 ): PdshActionReceipt {
     return try {
+        val expectedCurrentId = store.currentSessionId()
         if (workspaceGroupId == ChatSessionStore.DEFAULT_WORKSPACE_GROUP_ID) {
             val seeded = store.ensureDefaultWorkspaceGroup(StateRequestId("default-folder:$sessionId"))
             check(seeded.outcome is ChatWriteOutcome.Persisted)
@@ -122,6 +123,12 @@ internal fun createHostChatSession(
         store.save(record)
         val stored = store.load(sessionId)
         check(stored == record.copy(revision = stored?.revision ?: 0L)) { "new session readback mismatch" }
+        val selected = store.selectCurrentSession(
+            sessionId,
+            StateRequestId("current-session:${requestId.value}"),
+            expectedCurrentId = expectedCurrentId,
+        )
+        check(selected.outcome is ChatWriteOutcome.Persisted) { "current session selection was not confirmed" }
         PdshActionReceipt(requestId, sessionId, StateRevision(stored!!.revision), PdshActionOutcome.SUCCEEDED)
     } catch (_: Exception) {
         PdshActionReceipt(requestId, sessionId, null, PdshActionOutcome.FAILED)

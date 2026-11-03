@@ -9,6 +9,7 @@ import com.phonedsh.domain.DomainStoreCore
 import com.phonedsh.domain.QuotaPolicy
 import com.phonedsh.domain.testing.InMemoryConnectionFactory
 import com.phonedsh.platform.Clock
+import com.phonedsh.ui.nav.confirms
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -76,6 +77,210 @@ class ChatSessionSnapshotTest {
         assertEquals("未分配", workspaceGroupTitle(store.load("chat-a")!!, store.loadWorkspaceGroups()))
         val unknown = ChatRecord("chat-b", "B", 11, emptyList(), emptyList(), workspaceGroupId = null)
         assertEquals("未分配", workspaceGroupTitle(unknown, store.loadWorkspaceGroups()))
+    }
+
+    @Test fun `create in folder worker persistence rename and cold reload retain metadata and current selection`() {
+        val database = domainStore()
+        val store = ChatSessionStore(database)
+        store.ensureDefaultWorkspaceGroup(StateRequestId("seed-default"))
+        store.putWorkspaceGroup(ChatWorkspaceGroup("ui-qa", "UI-PR22-QA"), StateRequestId("folder-create"))
+        val create = createHostChatSession(
+            store = store,
+            sessionId = "chat-ui-qa",
+            updatedAtMs = 100L,
+            workspaceGroupId = "ui-qa",
+            requestId = StateRequestId("create-in-folder"),
+        )
+        assertTrue(create.confirms(StateRequestId("create-in-folder"), "chat-ui-qa", null))
+        assertEquals("chat-ui-qa", store.currentSessionId())
+
+        val pending = pendingRequestNode("chat-ui-qa", PendingRemoteRequest(
+            "approval-1", "client-1", json("""{"reason":"confirm"}"""), "approval/request",
+        ))
+        val created = store.load("chat-ui-qa")!!
+        val withForwardMetadata = created.copy(
+            pinned = true,
+            pendingNodes = listOf(pending),
+            queuedPrompts = listOf("second prompt"),
+            unknownFields = mapOf("futureOwnerField" to JsonObject(mapOf("keep" to JsonBool(true)))),
+        )
+        store.save(withForwardMetadata)
+        val beforeWorkerPersist = store.load("chat-ui-qa")!!
+        val attached = store.updateContent(
+            id = beforeWorkerPersist.id,
+            title = "UI-PR22-QA",
+            updatedAtMs = 101L,
+            workerSessionIds = listOf("worker-ui-qa"),
+            nodes = listOf(contextLostNode("chat-ui-qa", "turn-1", "context retained")),
+            requestId = StateRequestId("worker-attach-persist"),
+            expectedRevision = StateRevision(beforeWorkerPersist.revision),
+        )
+        assertEquals(ChatWriteOutcome.Persisted, attached.outcome)
+
+        val beforeRename = store.load("chat-ui-qa")!!
+        val rename = store.updateContent(
+            id = beforeRename.id,
+            title = "Renamed QA chat",
+            updatedAtMs = 102L,
+            workerSessionIds = beforeRename.workerSessionIds,
+            nodes = beforeRename.nodes,
+            requestId = StateRequestId("rename-after-worker-attach"),
+            expectedRevision = StateRevision(beforeRename.revision),
+        )
+        assertEquals(ChatWriteOutcome.Persisted, rename.outcome)
+
+        // A newer record demonstrates that cold start must honor the stored id,
+        // not simply choose the row with the newest timestamp.
+        store.save(ChatRecord("chat-newer", "Newer", 200L, emptyList(), emptyList()))
+        val reloadedStore = ChatSessionStore(database)
+        val selectedId = reloadedStore.currentSessionId()
+        assertEquals("chat-ui-qa", selectedId)
+        val coldSelection = selectRestoredChatSession(reloadedStore.loadAll(), selectedId)
+        assertEquals("chat-ui-qa", coldSelection?.id)
+
+        val reloaded = reloadedStore.load("chat-ui-qa")!!
+        assertEquals("Renamed QA chat", reloaded.title)
+        assertEquals("ui-qa", reloaded.workspaceGroupId)
+        assertEquals(listOf("worker-ui-qa"), reloaded.workerSessionIds)
+        assertEquals("context retained", reloaded.nodes.single().text)
+        assertEquals(listOf("approval-1"), reloaded.pendingNodes?.map { (it.props["requestId"] as JsonString).value })
+        assertEquals(listOf("second prompt"), reloaded.queuedPrompts)
+        assertTrue(reloaded.pinned)
+        assertEquals(withForwardMetadata.unknownFields, reloaded.unknownFields)
+
+        val stale = reloadedStore.updateContent(
+            id = reloaded.id,
+            title = "stale overwrite",
+            updatedAtMs = 103L,
+            workerSessionIds = emptyList(),
+            nodes = emptyList(),
+            requestId = StateRequestId("stale-content-write"),
+            expectedRevision = StateRevision(beforeRename.revision),
+        )
+        assertEquals(ChatWriteOutcome.Stale, stale.outcome)
+        assertEquals("Renamed QA chat", reloadedStore.load(reloaded.id)?.title)
+        assertEquals("ui-qa", reloadedStore.load(reloaded.id)?.workspaceGroupId)
+        assertEquals(withForwardMetadata.unknownFields, reloadedStore.load(reloaded.id)?.unknownFields)
+    }
+
+    @Test fun `cold selection falls back only when stored current id is not active`() {
+        val database = domainStore()
+        val store = ChatSessionStore(database)
+        val older = ChatRecord("older", "Older", 10L, emptyList(), emptyList())
+        val newer = ChatRecord("newer", "Newer", 20L, emptyList(), emptyList())
+        val archived = ChatRecord("archived", "Archived", 30L, emptyList(), emptyList(), archived = true)
+        store.save(older)
+        store.save(newer)
+        store.save(archived)
+
+        assertEquals(
+            ChatWriteOutcome.Persisted,
+            store.selectCurrentSession("older", StateRequestId("select-older"), expectedCurrentId = null).outcome,
+        )
+        assertEquals(
+            ChatWriteOutcome.Stale,
+            store.selectCurrentSession("newer", StateRequestId("stale-select-newer"), expectedCurrentId = null).outcome,
+        )
+        val reloadedStore = ChatSessionStore(database)
+        assertEquals("older", reloadedStore.currentSessionId())
+
+        assertEquals("older", selectRestoredChatSession(listOf(newer, older), "older")?.id)
+        assertEquals("newer", selectRestoredChatSession(listOf(newer, older), "missing")?.id)
+        assertEquals("newer", selectRestoredChatSession(listOf(archived, newer), "archived")?.id)
+        assertNull(selectRestoredChatSession(listOf(archived), "archived"))
+    }
+
+    @Test fun `folder created session keeps grouping and unknown metadata through worker persist rename and cold reload`() {
+        val database = domainStore()
+        val store = ChatSessionStore(database)
+        store.ensureDefaultWorkspaceGroup(StateRequestId("seed-default"))
+        store.putWorkspaceGroup(ChatWorkspaceGroup("folder-qa", "UI-PR22-QA"), StateRequestId("folder-create"))
+
+        val created = createHostChatSession(
+            store = store,
+            sessionId = "chat-folder-qa",
+            updatedAtMs = 100L,
+            workspaceGroupId = "folder-qa",
+            requestId = StateRequestId("create-in-folder"),
+        )
+        assertTrue(created.confirms(StateRequestId("create-in-folder"), "chat-folder-qa", null))
+        assertEquals("chat-folder-qa", store.currentSessionId())
+
+        val pending = pendingRequestNode("chat-folder-qa", PendingRemoteRequest(
+            "ask-folder", "client-folder", json("""{"reason":"confirm"}"""), "approval/request",
+        ))
+        val initial = store.load("chat-folder-qa")!!
+        val seededMetadata = initial.copy(
+            pinned = true,
+            pendingNodes = listOf(pending),
+            queuedPrompts = listOf("queued prompt"),
+            unknownFields = mapOf("futureOwnerField" to JsonObject(mapOf("keep" to JsonBool(true)))),
+        )
+        store.save(seededMetadata)
+        val beforeWorkerPersist = store.load("chat-folder-qa")!!
+
+        val workerAttached = store.updateContent(
+            id = "chat-folder-qa",
+            title = "UI-PR22-QA",
+            updatedAtMs = 101L,
+            workerSessionIds = listOf("worker-folder-qa"),
+            nodes = listOf(sessionNode("chat-folder-qa")),
+            requestId = StateRequestId("worker-attached-persist"),
+            expectedRevision = StateRevision(beforeWorkerPersist.revision),
+        )
+        assertEquals(ChatWriteOutcome.Persisted, workerAttached.outcome)
+        val attached = store.load("chat-folder-qa")!!
+        assertEquals("folder-qa", attached.workspaceGroupId)
+        assertEquals(seededMetadata.unknownFields, attached.unknownFields)
+        assertEquals(listOf("ask-folder"), attached.pendingNodes?.map { (it.props["requestId"] as JsonString).value })
+        assertEquals(listOf("queued prompt"), attached.queuedPrompts)
+        assertTrue(attached.pinned)
+
+        val renamed = store.updateContent(
+            id = "chat-folder-qa",
+            title = "Renamed in folder",
+            updatedAtMs = 102L,
+            workerSessionIds = attached.workerSessionIds,
+            nodes = attached.nodes,
+            requestId = StateRequestId("rename-after-worker-attach"),
+            expectedRevision = StateRevision(attached.revision),
+        )
+        assertEquals(ChatWriteOutcome.Persisted, renamed.outcome)
+
+        val coldStore = ChatSessionStore(database)
+        val reloaded = coldStore.load("chat-folder-qa")!!
+        assertEquals("Renamed in folder", reloaded.title)
+        assertEquals("folder-qa", reloaded.workspaceGroupId)
+        assertEquals("/dsh/workspace", reloaded.workspaceID)
+        assertEquals(listOf("worker-folder-qa"), reloaded.workerSessionIds)
+        assertEquals(seededMetadata.unknownFields, reloaded.unknownFields)
+        assertEquals(listOf("queued prompt"), reloaded.queuedPrompts)
+        assertTrue(reloaded.pinned)
+        assertEquals("chat-folder-qa", coldStore.currentSessionId())
+
+        val stale = coldStore.updateContent(
+            id = "chat-folder-qa",
+            title = "stale rename",
+            updatedAtMs = 103L,
+            workerSessionIds = emptyList(),
+            nodes = emptyList(),
+            requestId = StateRequestId("stale-content-write"),
+            expectedRevision = StateRevision(attached.revision),
+        )
+        assertEquals(ChatWriteOutcome.Stale, stale.outcome)
+        assertEquals("Renamed in folder", coldStore.load("chat-folder-qa")?.title)
+        assertEquals("folder-qa", coldStore.load("chat-folder-qa")?.workspaceGroupId)
+    }
+
+    @Test fun `cold restore prefers persisted current selection over newer session and ignores archived selection`() {
+        val olderSelected = ChatRecord("selected-old", "Selected", 10L, emptyList(), emptyList())
+        val newer = ChatRecord("newer", "Newer", 20L, emptyList(), emptyList())
+        val archived = ChatRecord("archived", "Archived", 30L, emptyList(), emptyList(), archived = true)
+
+        assertEquals(olderSelected, selectRestoredChatSession(listOf(newer, olderSelected), "selected-old"))
+        assertEquals(newer, selectRestoredChatSession(listOf(newer, olderSelected), "missing"))
+        assertEquals(newer, selectRestoredChatSession(listOf(archived, newer), "archived"))
+        assertNull(selectRestoredChatSession(listOf(archived), "archived"))
     }
 
     @Test fun `日常 group is seeded once without overwriting an existing name`() {
