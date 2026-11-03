@@ -38,9 +38,39 @@ internal fun ChatSessionSnapshot.withProjectionUpdate(measured: ChatSessionSnaps
     tokenUsage = measured.tokenUsage,
     contextPressure = measured.contextPressure,
     contextBreakdown = measured.contextBreakdown,
-    queueItems = measured.queueItems,
+    queueItems = mergeQueueProjection(queueItems, measured.queueItems),
     subagents = measured.subagents,
 )
+
+/**
+ * The input dock is the DSH `next-turn` lane. A poll must not erase the action
+ * marker of a row whose update RPC is still in flight, or the user can submit
+ * the same edit/remove twice while the first transaction is unresolved.
+ *
+ * The measured row still owns its text/lane/capabilities; only the transient
+ * action fields survive from the old row with the same durable id.
+ */
+internal fun mergeQueueProjection(
+    current: List<ManagedQueueItemState>?,
+    measured: List<ManagedQueueItemState>?,
+): List<ManagedQueueItemState>? {
+    if (measured == null) return null
+    if (current == null) return measured
+    val inFlight = current.mapNotNull { row ->
+        val id = row.id as? QueueItemId.Durable ?: return@mapNotNull null
+        if (!row.queueActionInFlight()) return@mapNotNull null
+        id.value to row
+    }.toMap()
+    if (inFlight.isEmpty()) return measured
+    return measured.map { row ->
+        val id = (row.id as? QueueItemId.Durable)?.value ?: return@map row
+        val prior = inFlight[id] ?: return@map row
+        row.copy(busy = prior.busy, actionRequestId = prior.actionRequestId, receipt = prior.receipt)
+    }
+}
+
+private fun ManagedQueueItemState.queueActionInFlight(): Boolean =
+    busy == true || (actionRequestId != null && receipt?.requestId != actionRequestId)
 
 /** Safe path for opening one catalog Worker id without substituting a new session. */
 internal sealed interface SubagentSessionTarget {
@@ -136,28 +166,31 @@ internal fun sessionSnapshotOf(
     }
     val inbox = values?.get("inbox") as? JsonObject
     val queueItems = inbox?.let { queue ->
-        listOf("next-turn", "next-step").flatMap { lane ->
-            (queue[lane] as? JsonArray)?.values.orEmpty().mapNotNull { raw ->
-                val item = raw as? JsonObject ?: return@mapNotNull null
-                val id = item.string("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
-                val content = (item["content"] as? JsonArray)?.values.orEmpty()
-                val parts = content.mapNotNull { part ->
-                    val value = part as? JsonObject ?: return@mapNotNull null
-                    if (value.string("type") != "text") return@mapNotNull null
-                    value.string("text")
-                }
-                val text = parts.joinToString("\n")
-                ManagedQueueItemState(
-                    id = QueueItemId.Durable(id),
-                    text = text,
-                    sessionId = sessionId,
-                    lane = lane,
-                    state = QueueItemStatus.QUEUED,
-                    canEdit = text.isNotBlank() && parts.size == content.size,
-                    canRemove = true,
-                    canSteer = false,
-                )
+        // DSH's QueueDock renders only next-turn. A next-step row is the running
+        // turn's steered message and is already represented in the transcript.
+        (queue["next-turn"] as? JsonArray)?.values.orEmpty().mapNotNull { raw ->
+            val item = raw as? JsonObject ?: return@mapNotNull null
+            val id = item.string("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+            val content = (item["content"] as? JsonArray)?.values.orEmpty()
+            val parts = content.mapNotNull { part ->
+                val value = part as? JsonObject ?: return@mapNotNull null
+                if (value.string("type") != "text") return@mapNotNull null
+                value.string("text")
             }
+            val text = parts.joinToString("\n")
+            val sourceRpcId = (item["source"] as? JsonObject)
+                ?.string("rpcId")?.takeIf(String::isNotBlank)
+            ManagedQueueItemState(
+                id = QueueItemId.Durable(id),
+                text = text,
+                sessionId = sessionId,
+                lane = "next-turn",
+                state = QueueItemStatus.QUEUED,
+                canEdit = text.isNotBlank() && parts.size == content.size,
+                canRemove = true,
+                canSteer = false,
+                promptRequestId = sourceRpcId?.let(::StateRequestId),
+            )
         }
     }
     val commands = when (commandCatalog) {

@@ -1037,11 +1037,23 @@ public sealed interface QueueItemId {
 
 public enum class QueueItemStatus { QUEUED, SENDING, STEERED }
 
-/** Durable rows keep their actionable IDs; local echoes are never paired by text. */
+/**
+ * Durable rows keep their actionable IDs; local echoes are never paired by text.
+ *
+ * DSH's QueueDock removes a pending submission once its `source.rpcId` appears
+ * in the inbox. The same identity rule applies here: a durable row replaces the
+ * local echo for that exact backend prompt, including a failed echo left by an
+ * ambiguous prompt response.
+ */
 public fun reconcileQueueRows(
     durable: List<ManagedQueueItemState>,
     local: List<ManagedQueueItemState>,
-): List<ManagedQueueItemState> = durable + local
+): List<ManagedQueueItemState> {
+    val durablePromptIds = durable.mapNotNull { it.promptRequestId }.toSet()
+    return durable + local.filterNot { item ->
+        item.promptRequestId != null && item.promptRequestId in durablePromptIds
+    }
+}
 
 /** Retire only the local echo for the exact backend prompt acknowledged and read back. */
 public fun retireAcceptedQueuePrompt(
@@ -1049,6 +1061,23 @@ public fun retireAcceptedQueuePrompt(
     promptRequestId: StateRequestId,
 ): List<ManagedQueueItemState> = local.filterNot { item ->
     item.id is QueueItemId.Local && item.promptRequestId == promptRequestId
+}
+
+/**
+ * A live inbox proves acceptance of every local echo whose backend rpcId it
+ * carries. Retire those echoes instead of only hiding them at render time: once
+ * the durable row is consumed, a retained echo would reappear as a ghost row.
+ */
+public fun retireQueuePromptsPresentIn(
+    local: List<ManagedQueueItemState>,
+    durable: List<ManagedQueueItemState>,
+): List<ManagedQueueItemState> {
+    if (local.isEmpty() || durable.isEmpty()) return local
+    val observed = durable.mapNotNull { it.promptRequestId }.toSet()
+    if (observed.isEmpty()) return local
+    return local.filterNot { item ->
+        item.promptRequestId != null && item.promptRequestId in observed
+    }
 }
 
 /** The complete screen state of the chat page. */

@@ -354,6 +354,16 @@ public fun ChatPage(
     var subagentCatalogOpen by remember { mutableStateOf(false) }
     var queueEditItem by remember { mutableStateOf<ManagedQueueItemState?>(null) }
     var queueEditDraft by remember { mutableStateOf("") }
+    var queueEditNotice by remember { mutableStateOf<String?>(null) }
+    // The row can be claimed by the running turn while its editor is open. DSH
+    // closes that editor instead of letting a save silently hit no row.
+    LaunchedEffect(queueEditItem?.id, state.queueItems) {
+        val editing = queueEditItem ?: return@LaunchedEffect
+        if (state.queueItems.orEmpty().none { it.id == editing.id }) {
+            queueEditItem = null
+            queueEditNotice = UiStrings.CHAT_QUEUE_EDIT_ITEM_GONE
+        }
+    }
     // iOS `ChatPage.swift:145-154 sessionTitle`: a real session name wins; a
     // conversation that already has a user turn reads 当前会话; only a fresh one
     // reads 新会话. The page used to fall back to the *product name* ("PDSH"), so
@@ -510,9 +520,12 @@ public fun ChatPage(
                 steerSubmissionAvailability = steerSubmissionAvailability,
                 stopAvailability = stopAvailability,
                 onEditQueueItem = { item ->
+                    queueEditNotice = null
                     queueEditItem = item
                     queueEditDraft = item.text
                 },
+                queueEditNotice = queueEditNotice,
+                onDismissQueueEditNotice = { queueEditNotice = null },
             )
         }
     }
@@ -536,9 +549,16 @@ public fun ChatPage(
             onSave = {
                 val text = queueEditDraft.trim()
                 val callback = (queueEditAvailability as? PdshActionAvailability.Available)?.callback
-                if (text.isNotEmpty() && item.canEdit == true && !queueActionPending(item) && callback != null) {
-                    callback(item, text, nextQueueActionRequestId())
-                    queueEditItem = null
+                val stillQueued = state.queueItems.orEmpty().any { it.id == item.id }
+                when {
+                    !stillQueued -> {
+                        queueEditItem = null
+                        queueEditNotice = UiStrings.CHAT_QUEUE_EDIT_ITEM_GONE
+                    }
+                    text.isNotEmpty() && item.canEdit == true && !queueActionPending(item) && callback != null -> {
+                        callback(item, text, nextQueueActionRequestId())
+                        queueEditItem = null
+                    }
                 }
             },
             canSave = queueEditDraft.trim().isNotEmpty() && item.canEdit == true && !queueActionPending(item) &&
@@ -2357,6 +2377,8 @@ private fun ComposerDock(
     steerSubmissionAvailability: PdshActionAvailability<(String, StateRequestId) -> Unit>,
     stopAvailability: PdshActionAvailability<(StateRequestId) -> Unit>,
     onEditQueueItem: (ManagedQueueItemState) -> Unit,
+    queueEditNotice: String? = null,
+    onDismissQueueEditNotice: () -> Unit = {},
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -2505,6 +2527,9 @@ private fun ComposerDock(
             }
             if (composer.fileImportNotice != null) {
                 NoticeLine(text = composer.fileImportNotice, onClose = onDismissNotice)
+            }
+            queueEditNotice?.let { notice ->
+                NoticeLine(text = notice, onClose = onDismissQueueEditNotice)
             }
             if (truncated) {
                 NoticeLine(text = UiStrings.COMPOSER_TRUNCATED, onClose = { truncated = false })

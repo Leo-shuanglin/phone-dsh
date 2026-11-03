@@ -146,6 +146,58 @@ class ChatScreenStateTest {
     }
 
     @Test
+    fun `durable row with the same source rpc id replaces its local sending echo`() {
+        val prompt = StateRequestId("prompt-accepted")
+        val durable = ManagedQueueItemState(
+            id = QueueItemId.Durable("q-accepted"),
+            text = "accepted text",
+            state = QueueItemStatus.QUEUED,
+            promptRequestId = prompt,
+        )
+        val local = ManagedQueueItemState(
+            id = QueueItemId.Local("local-echo"),
+            text = "accepted text",
+            state = QueueItemStatus.SENDING,
+            promptRequestId = prompt,
+        )
+
+        val merged = reconcileQueueRows(listOf(durable), listOf(local))
+
+        assertEquals(listOf(QueueItemId.Durable("q-accepted")), merged.map { it.id })
+        assertEquals(QueueItemStatus.SENDING, local.state)
+    }
+
+    @Test
+    fun `an observed durable prompt retires its local echo before it can reappear`() {
+        val prompt = StateRequestId("prompt-observed")
+        val durable = listOf(
+            ManagedQueueItemState(
+                id = QueueItemId.Durable("q-observed"),
+                text = "accepted text",
+                promptRequestId = prompt,
+            ),
+        )
+        val local = listOf(
+            ManagedQueueItemState(
+                id = QueueItemId.Local("local-echo"),
+                text = "accepted text",
+                state = QueueItemStatus.SENDING,
+                promptRequestId = prompt,
+            ),
+            ManagedQueueItemState(
+                id = QueueItemId.Local("unrelated"),
+                text = "not accepted yet",
+                state = QueueItemStatus.SENDING,
+                promptRequestId = StateRequestId("prompt-other"),
+            ),
+        )
+
+        val remaining = retireQueuePromptsPresentIn(local, durable)
+
+        assertEquals(listOf(QueueItemId.Local("unrelated")), remaining.map { it.id })
+    }
+
+    @Test
     fun `host receipts and scopes remain explicit and unknown facts stay null`() {
         val host = ChatHostFacts(
             plan = PlanApprovalState(StateRequestId("plan"), "# Plan", PlanApprovalStatus.PENDING),

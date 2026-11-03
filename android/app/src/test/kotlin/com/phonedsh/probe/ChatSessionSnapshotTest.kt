@@ -362,23 +362,56 @@ class ChatSessionSnapshotTest {
         assertEquals("上一段上下文已丢失", restored.nodes.single().text)
     }
 
-    @Test fun `queue projection preserves durable item ids lane and edit capability`() {
+    @Test fun `queue projection exposes only the next-turn dock rows and keeps their source rpc id`() {
         val snapshot = sessionSnapshotOf(
             projections = json("""{"values":{"inbox":{
-                "next-turn":[{"id":"q-next","content":[{"type":"text","text":"queued"}]}],
-                "next-step":[{"id":"q-step","content":[{"type":"text","text":"steered"}]}]
+                "next-turn":[{"id":"q-next","content":[{"type":"text","text":"queued"}],
+                    "source":{"kind":"user","rpcId":"prompt-one"}}],
+                "next-step":[{"id":"q-step","content":[{"type":"text","text":"steered"}],
+                    "source":{"kind":"user","rpcId":"prompt-two"}}]
             }}}"""),
             catalog = null,
             commandCatalog = null,
             sessionId = "worker-session",
         )
         val rows = snapshot.queueItems!!
-        assertEquals(2, rows.size)
+        // The input dock renders only next-turn, exactly like DSH's QueueDock;
+        // a next-step row belongs to the running turn, not to the dock.
+        assertEquals(1, rows.size)
         assertEquals(QueueItemId.Durable("q-next"), rows[0].id)
         assertEquals("worker-session", rows[0].sessionId)
         assertEquals("next-turn", rows[0].lane)
         assertEquals(true, rows[0].canEdit)
-        assertEquals("next-step", rows[1].lane)
+        assertEquals(StateRequestId("prompt-one"), rows[0].promptRequestId)
+        assertTrue(rows.none { it.id == QueueItemId.Durable("q-step") })
+    }
+
+    @Test fun `projection refresh keeps the in-flight marker on the same durable queue id`() {
+        val actionRequest = StateRequestId("queue-action-1")
+        val receipt = QueueActionReceipt(actionRequest, QueueAction.EDIT, CommandOutcome.FAILED, "waiting")
+        val current = ChatSessionSnapshot(queueItems = listOf(
+            ManagedQueueItemState(
+                id = QueueItemId.Durable("q-busy"),
+                text = "old text",
+                busy = true,
+                actionRequestId = actionRequest,
+                receipt = receipt,
+            ),
+            ManagedQueueItemState(QueueItemId.Durable("q-gone"), "already consumed"),
+        ))
+        val measured = ChatSessionSnapshot(queueItems = listOf(
+            ManagedQueueItemState(QueueItemId.Durable("q-busy"), "new text"),
+            ManagedQueueItemState(QueueItemId.Durable("q-new"), "added"),
+        ))
+
+        val merged = current.withProjectionUpdate(measured)
+
+        val busy = merged.queueItems!!.first { it.id == QueueItemId.Durable("q-busy") }
+        assertEquals("new text", busy.text)
+        assertEquals(true, busy.busy)
+        assertEquals(actionRequest, busy.actionRequestId)
+        assertEquals(receipt, busy.receipt)
+        assertEquals(listOf(QueueItemId.Durable("q-busy"), QueueItemId.Durable("q-new")), merged.queueItems!!.map { it.id })
     }
 
     @Test fun `legacy chat row keeps unknown envelope fields and reports missing queue as unknown`() {

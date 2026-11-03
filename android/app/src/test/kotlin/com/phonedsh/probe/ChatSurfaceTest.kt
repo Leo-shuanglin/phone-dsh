@@ -20,6 +20,8 @@ import com.phonedsh.hostevents.HostEventProjection
 import com.phonedsh.ui.state.ChatAttachment
 import com.phonedsh.ui.state.ChatPhase
 import com.phonedsh.ui.state.ChatRow
+import com.phonedsh.ui.state.ManagedQueueItemState
+import com.phonedsh.ui.state.QueueItemId
 import com.phonedsh.ui.state.SessionStats
 import com.phonedsh.ui.state.SessionTokenUsage
 import com.phonedsh.ui.state.ContextPressure
@@ -55,6 +57,36 @@ class ChatSurfaceTest {
         assertEquals(snapshot.contextPressure?.percent, state.contextPercent)
         assertEquals(snapshot.contextBreakdown, state.contextBreakdown)
         assertEquals(ComposerStatsMode.COMPACT, state.composerStatsMode)
+    }
+
+    @Test
+    fun `only next-turn queue rows expose the steer action`() {
+        val state = chatScreenState(
+            ui = ChatUiState(
+                chatId = "chat",
+                running = true,
+                sessionSnapshot = ChatSessionSnapshot(queueItems = listOf(
+                    ManagedQueueItemState(
+                        id = QueueItemId.Durable("q-next-step"),
+                        text = "steered into the current turn",
+                        lane = "next-step",
+                    ),
+                    ManagedQueueItemState(
+                        id = QueueItemId.Durable("q-next-turn"),
+                        text = "waiting for the next turn",
+                        lane = "next-turn",
+                    ),
+                )),
+            ),
+            engineStarted = true,
+            providerNeedsKey = false,
+            canSend = true,
+            canSteer = true,
+        )
+
+        val rows = state.queueItems.orEmpty().associateBy { it.id }
+        assertEquals(false, rows[QueueItemId.Durable("q-next-step")]?.canSteer)
+        assertEquals(true, rows[QueueItemId.Durable("q-next-turn")]?.canSteer)
     }
 
     @Test

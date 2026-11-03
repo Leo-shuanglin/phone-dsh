@@ -83,6 +83,14 @@ import com.phonedsh.ui.surface.preview.WorkspacePreviewSource
 import com.phonedsh.ui.nav.confirms
 import com.phonedsh.ui.state.ChatAttachment
 import com.phonedsh.ui.state.ChatScreenState
+import com.phonedsh.ui.state.CommandOutcome
+import com.phonedsh.ui.state.ManagedQueueItemState
+import com.phonedsh.ui.state.QueueAction
+import com.phonedsh.ui.state.QueueActionReceipt
+import com.phonedsh.ui.state.QueueItemId
+import com.phonedsh.ui.state.QueueItemStatus
+import com.phonedsh.ui.state.StateRequestId
+import com.phonedsh.ui.state.retireQueuePromptsPresentIn
 import com.phonedsh.loopback.ChannelCloseCause
 import com.phonedsh.loopback.LoopbackChannelHandler
 import com.phonedsh.loopback.LoopbackConnection
@@ -206,6 +214,377 @@ internal class ChatRecordRepair(private val store: ChatSessionStore) {
             onFailure(record, failure)
             record
         }
+    }
+}
+
+/** The prompt the Worker receives: the typed text plus the workspace paths. */
+internal fun composeChatPrompt(typed: String, attachments: List<ChatAttachment>): String {
+    val references = attachments.mapNotNull { it.path }
+    if (references.isEmpty()) return typed
+    val block = buildString {
+        append("已附加的文件（工作区路径，可用工具读取）：")
+        references.forEach { append('\n').append("- ").append(it) }
+    }
+    return listOf(typed, block).filter { it.isNotBlank() }.joinToString("\n\n")
+}
+
+/**
+ * The durable queue RPC seam behind [ChatQueueActions].
+ *
+ * Production binds one [DshTurnClient]; tests bind a scripted inbox so every
+ * assertion can be made against the real state transition rather than a mock
+ * invocation.
+ */
+internal interface ChatQueueTransport {
+    suspend fun updateQueue(
+        workerSessionId: String,
+        itemId: String,
+        action: QueueAction,
+        replacement: String?,
+    )
+
+    suspend fun readQueue(workerSessionId: String): List<ManagedQueueItemState>
+
+    suspend fun prompt(workerSessionId: String, text: String, requestId: String, mode: String)
+}
+
+private const val QUEUE_ITEM_NOT_FOUND = "session/queue-item-not-found"
+private const val QUEUE_STEER_UNAVAILABLE = "session/steer-unavailable"
+
+/** The action RPC failed; [rows] is the fresh inbox when the read-back succeeded. */
+private class QueueActionFailure(
+    val error: Exception,
+    val rows: List<ManagedQueueItemState>?,
+) : Exception(error)
+
+private val STEER_SILENT_FAILURES = setOf(QUEUE_STEER_UNAVAILABLE, QUEUE_ITEM_NOT_FOUND)
+
+/**
+ * The queue half of the chat ViewModel: the one place that owns the optimistic
+ * action marker, the `session/updateQueue` transaction, its projection read-back
+ * and the local SENDING echo.
+ *
+ * It is a plain object over the same [MutableStateFlow] the ViewModel publishes
+ * so the JVM suite drives the production transitions through
+ * [ChatQueueTransport]; the ViewModel methods are thin bindings to this class.
+ */
+internal class ChatQueueActions(
+    private val chat: MutableStateFlow<ChatUiState>,
+    private val scope: CoroutineScope,
+    private val transport: ChatQueueTransport,
+    private val refresh: () -> Unit = {},
+    private val log: (String) -> Unit = {},
+) {
+    /** Mutate one durable DSH queue item, then read the projection back before publishing success. */
+    fun updateQueueItem(
+        item: ManagedQueueItemState,
+        action: QueueAction,
+        requestId: StateRequestId,
+        replacement: String? = null,
+    ): Boolean {
+        val current = chat.value
+        val worker = current.workerSessionId ?: return false
+        val itemId = (item.id as? QueueItemId.Durable)?.value ?: return false
+        if (action == QueueAction.QUEUE) return false
+        if (current.chatId.isBlank() || item.actionRequestId != null && item.busy == true) return false
+        if (item.canEdit != true && action == QueueAction.EDIT) return false
+        if (item.canRemove != true && action == QueueAction.REMOVE) return false
+        if (item.canSteer != true && action == QueueAction.STEER) return false
+        if (action == QueueAction.EDIT && replacement.isNullOrBlank()) return false
+        val appChatId = current.chatId
+        val activeItems = current.sessionSnapshot.queueItems ?: return false
+        if (activeItems.none { (it.id as? QueueItemId.Durable)?.value == itemId }) return false
+
+        chat.update { live ->
+            if (live.chatId != appChatId || live.workerSessionId != worker) live else live.copy(
+                sessionSnapshot = live.sessionSnapshot.copy(
+                    queueItems = activeItems.map { row ->
+                        if ((row.id as? QueueItemId.Durable)?.value == itemId) {
+                            row.copy(busy = true, actionRequestId = requestId, receipt = null)
+                        } else row
+                    },
+                ),
+            )
+        }
+        scope.launch {
+            val outcome = try {
+                Result.success(run {
+                    transport.updateQueue(worker, itemId, action, replacement)
+                    val rows = transport.readQueue(worker)
+                    val updated = rows.firstOrNull { (it.id as? QueueItemId.Durable)?.value == itemId }
+                    val confirmed = when (action) {
+                        QueueAction.QUEUE -> false
+                        QueueAction.EDIT -> updated?.text == replacement
+                        QueueAction.REMOVE -> updated == null
+                        QueueAction.STEER -> updated == null || updated.lane != item.lane
+                    }
+                    check(confirmed) { "queue action was not reflected by the refreshed inbox" }
+                    rows
+                })
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // A failed mutation is not a reason to republish the snapshot
+                // captured before the RPC: rows may have been claimed, removed or
+                // added while it ran. Read the inbox again and fall back to the
+                // *current* state only when that read also fails.
+                val freshRows = try {
+                    transport.readQueue(worker)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (readFailure: Exception) {
+                    log("CHAT_QUEUE_READBACK_FAILED reason=${readFailure.message?.substringBefore('\n')}")
+                    null
+                }
+                Result.failure(QueueActionFailure(failure, freshRows))
+            }
+            chat.update { live ->
+                if (live.chatId != appChatId || live.workerSessionId != worker) return@update live
+                val rows = outcome.getOrNull()
+                if (rows != null) {
+                    val successReceipt = QueueActionReceipt(
+                        requestId = requestId,
+                        action = action,
+                        outcome = CommandOutcome.SUCCEEDED,
+                        sessionId = worker,
+                        itemId = itemId,
+                    )
+                    live.copy(sessionSnapshot = live.sessionSnapshot.copy(
+                        queueItems = when (action) {
+                            QueueAction.QUEUE -> rows
+                            QueueAction.REMOVE -> rows
+                            else -> rows.map { row ->
+                                if ((row.id as? QueueItemId.Durable)?.value == itemId) {
+                                    row.copy(busy = false, actionRequestId = requestId, receipt = successReceipt)
+                                } else row
+                            }
+                        },
+                    ))
+                } else {
+                    val failed = outcome.exceptionOrNull()
+                    val failure = (failed as? QueueActionFailure)?.error ?: failed
+                    val code = (failure as? DshTurnException)?.code
+                    val stillThere = live.sessionSnapshot.queueItems
+                    val measured = (failed as? QueueActionFailure)?.rows ?: stillThere
+                    if (measured == null) return@update live
+                    val targetGone = code == QUEUE_ITEM_NOT_FOUND
+                    // DSH's client silently converges steer-unavailable and
+                    // queue-item-not-found; only a real edit/remove failure keeps
+                    // a visible receipt on a row that is still in the inbox.
+                    val silentSteerFailure = action == QueueAction.STEER &&
+                        code in STEER_SILENT_FAILURES
+                    if (!silentSteerFailure && !targetGone) {
+                        log("CHAT_QUEUE_ACTION_FAILED action=$action code=${code ?: "-"}")
+                    }
+                    val failureReceipt = QueueActionReceipt(
+                        requestId = requestId,
+                        action = action,
+                        outcome = CommandOutcome.FAILED,
+                        message = failure?.message?.substringBefore('\n')?.take(180) ?: "队列操作未确认",
+                        sessionId = worker,
+                        itemId = itemId,
+                    )
+                    val nextRows = when {
+                        targetGone -> measured.filterNot {
+                            (it.id as? QueueItemId.Durable)?.value == itemId
+                        }
+                        silentSteerFailure -> measured.map { row ->
+                            if ((row.id as? QueueItemId.Durable)?.value == itemId) {
+                                row.copy(busy = false, actionRequestId = null, receipt = null)
+                            } else row
+                        }
+                        else -> measured.map { row ->
+                            if ((row.id as? QueueItemId.Durable)?.value == itemId) {
+                                row.copy(busy = false, actionRequestId = requestId, receipt = failureReceipt)
+                            } else row
+                        }
+                    }
+                    live.copy(sessionSnapshot = live.sessionSnapshot.copy(queueItems = nextRows))
+                }
+            }
+        }
+        return true
+    }
+
+    /** Queue or steer a new user submission to the exact live Worker session. */
+    fun submitWhileRunning(
+        workerSessionId: String,
+        requestId: StateRequestId,
+        text: String,
+        mode: com.phonedsh.ui.state.EnterMode,
+    ): Boolean {
+        val current = chat.value
+        val trimmed = text.trim()
+        if (workerSessionId.isBlank() || current.workerSessionId != workerSessionId || !current.running ||
+            trimmed.isEmpty() || (mode == com.phonedsh.ui.state.EnterMode.STEER && current.attachments.isNotEmpty())
+        ) return false
+        // A retry of an ambiguous busy submission reuses its own backend prompt
+        // identity. Matching by text would conflate duplicate messages.
+        val promptRequestId = current.retryBusyPromptRequestId
+            ?: StateRequestId("pdsh-prompt-" + java.util.UUID.randomUUID().toString())
+        val existing = current.localQueueItems.firstOrNull { it.promptRequestId == promptRequestId }
+        val localId = existing?.id ?: QueueItemId.Local(promptRequestId.value)
+        val localItemId = (localId as? QueueItemId.Local)?.value ?: return false
+        val queueAction = if (mode == com.phonedsh.ui.state.EnterMode.STEER) QueueAction.STEER else QueueAction.QUEUE
+        val localItem = ManagedQueueItemState(
+            id = localId,
+            text = trimmed,
+            sessionId = workerSessionId,
+            lane = if (mode == com.phonedsh.ui.state.EnterMode.STEER) "steered" else "next-turn",
+            state = if (mode == com.phonedsh.ui.state.EnterMode.STEER) QueueItemStatus.STEERED else QueueItemStatus.SENDING,
+            canEdit = false,
+            canRemove = false,
+            canSteer = false,
+            busy = true,
+            actionRequestId = requestId,
+            promptRequestId = promptRequestId,
+        )
+        val attachments = current.attachments
+        val prompt = composeChatPrompt(trimmed, attachments)
+        chat.update { live ->
+            if (live.chatId != current.chatId || live.workerSessionId != workerSessionId || !live.running) live else {
+                live.copy(
+                    localQueueItems = live.localQueueItems.filterNot { it.id == localId } + localItem,
+                    retryBusyPromptRequestId = null,
+                )
+            }
+        }
+        scope.launch {
+            try {
+                transport.prompt(
+                    workerSessionId = workerSessionId,
+                    text = prompt,
+                    requestId = promptRequestId.value,
+                    mode = if (mode == com.phonedsh.ui.state.EnterMode.STEER) "steer" else "queue",
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // The prompt did not return success. Keep the echo visible as a
+                // failed row (not a SENDING spinner), and retain its identity so a
+                // retry reuses the same rpcId instead of posting a duplicate.
+                log("CHAT_QUEUE_PROMPT_FAILED reason=${failure.message?.substringBefore('\n')}")
+                chat.update { live ->
+                    if (live.chatId != current.chatId || live.workerSessionId != workerSessionId) live else live.copy(
+                        localQueueItems = live.localQueueItems.map { item ->
+                            if (item.id == localId && item.actionRequestId == requestId) item.copy(
+                                // SENDING rows live in the spinner-only slot; a
+                                // failed submission must move to the actionable dock
+                                // where its receipt is rendered.
+                                state = if (item.state == QueueItemStatus.SENDING) {
+                                    QueueItemStatus.QUEUED
+                                } else {
+                                    item.state
+                                },
+                                busy = false,
+                                receipt = QueueActionReceipt(
+                                    requestId = requestId,
+                                    action = queueAction,
+                                    outcome = CommandOutcome.FAILED,
+                                    message = failure.message?.substringBefore('\n')?.take(180) ?: "请求结果未确认",
+                                    sessionId = workerSessionId,
+                                    itemId = localItemId,
+                                ),
+                            ) else item
+                        },
+                        retryBusyPromptRequestId = promptRequestId.takeIf {
+                            live.draft.trim() == trimmed && live.attachments == attachments
+                        },
+                    )
+                }
+                // The prompt may have been accepted before the response was lost.
+                // A fresh projection then supplies the durable row whose
+                // source.rpcId retires this echo at the page boundary.
+                refresh()
+                return@launch
+            }
+
+            // The successful prompt RPC acknowledges this exact request ID. Retire
+            // the local echo now: a projection read-back is a separate, best-effort
+            // refresh and must never turn an accepted prompt into a spinner.
+            chat.update { live ->
+                if (live.chatId != current.chatId || live.workerSessionId != workerSessionId) live else {
+                    live.copy(
+                        draft = if (live.draft.trim() == trimmed) "" else live.draft,
+                        attachments = if (live.attachments == attachments) emptyList() else live.attachments,
+                        lastSubmission = trimmed,
+                        lastAttachments = attachments,
+                        localQueueItems = com.phonedsh.ui.state.retireAcceptedQueuePrompt(
+                            live.localQueueItems,
+                            promptRequestId,
+                        ),
+                        retryBusyPromptRequestId = null,
+                    )
+                }
+            }
+            val after = try {
+                transport.readQueue(workerSessionId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                log("CHAT_QUEUE_PROMPT_READBACK_FAILED reason=${failure.message?.substringBefore('\n')}")
+                null
+            }
+            if (after != null) {
+                chat.update { live ->
+                    if (live.chatId != current.chatId || live.workerSessionId != workerSessionId) live else {
+                        live.copy(
+                            sessionSnapshot = live.sessionSnapshot.copy(queueItems = after),
+                            localQueueItems = retireQueuePromptsPresentIn(live.localQueueItems, after),
+                        )
+                    }
+                }
+            }
+            refresh()
+        }
+        return true
+    }
+}
+
+/** Production binding of [ChatQueueTransport] to the one live Worker channel. */
+private class DshChatQueueTransport(
+    channel: com.phonedsh.dsh.host.HostChannel,
+    log: (String) -> Unit,
+) : ChatQueueTransport {
+    private val client = DshTurnClient(channel, log)
+
+    override suspend fun updateQueue(
+        workerSessionId: String,
+        itemId: String,
+        action: QueueAction,
+        replacement: String?,
+    ) {
+        val actionValue = when (action) {
+            QueueAction.QUEUE -> error("new queue submissions use session/prompt")
+            QueueAction.EDIT -> JsonObject(linkedMapOf(
+                "kind" to JsonString("edit"),
+                "content" to JsonArray(listOf(JsonObject(mapOf(
+                    "type" to JsonString("text"),
+                    "text" to JsonString(requireNotNull(replacement)),
+                )))),
+            ))
+            QueueAction.REMOVE -> JsonObject(mapOf("kind" to JsonString("remove")))
+            QueueAction.STEER -> JsonObject(mapOf("kind" to JsonString("steer")))
+        }
+        client.call("session/updateQueue", JsonObject(mapOf("request" to JsonObject(mapOf(
+            "sessionId" to JsonString(workerSessionId),
+            "itemId" to JsonString(itemId),
+            "action" to actionValue,
+        )))))
+    }
+
+    override suspend fun readQueue(workerSessionId: String): List<ManagedQueueItemState> =
+        sessionSnapshotOf(
+            client.call("session/projections", JsonObject(mapOf(
+                "request" to JsonObject(mapOf("sessionId" to JsonString(workerSessionId))),
+            ))),
+            catalog = null,
+            commandCatalog = null,
+            sessionId = workerSessionId,
+        ).queueItems ?: error("inbox projection unavailable")
+
+    override suspend fun prompt(workerSessionId: String, text: String, requestId: String, mode: String) {
+        client.prompt(sessionId = workerSessionId, text = text, requestId = requestId, mode = mode)
     }
 }
 
@@ -1329,6 +1708,17 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     private val turnScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    /** The ViewModel's queue transaction, bound to the same state and Worker channel. */
+    private val chatQueueActions: ChatQueueActions by lazy {
+        ChatQueueActions(
+            chat = mutableChat,
+            scope = turnScope,
+            transport = DshChatQueueTransport(host.channel, ::logTurn),
+            refresh = { refreshChatSession() },
+            log = ::logTurn,
+        )
+    }
+
     init {
         // budgets.md §4 evidence: the raw ceiling and the row it selects. The
         // host prints the row it was given (its `budget tier:` line); this one
@@ -2034,9 +2424,21 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     projections, modes, commands, models, sessionId = worker, sessionList = sessions,
                 )
                 mutableChat.update { live ->
-                    if (live.chatId != current.chatId || live.workerSessionId != worker) live else live.copy(
-                        sessionSnapshot = if (full) measured else live.sessionSnapshot.withProjectionUpdate(measured),
-                    )
+                    if (live.chatId != current.chatId || live.workerSessionId != worker) {
+                        live
+                    } else {
+                        val snapshot = if (full) measured else live.sessionSnapshot.withProjectionUpdate(measured)
+                        live.copy(
+                            sessionSnapshot = snapshot,
+                            // A projection that shows this rpcId is durable proof
+                            // the prompt was accepted; drop the local echo so it
+                            // cannot resurface as a ghost after consumption.
+                            localQueueItems = retireQueuePromptsPresentIn(
+                                live.localQueueItems,
+                                snapshot.queueItems.orEmpty(),
+                            ),
+                        )
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -2062,116 +2464,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         action: com.phonedsh.ui.state.QueueAction,
         requestId: com.phonedsh.ui.state.StateRequestId,
         replacement: String? = null,
-    ): Boolean {
-        val current = mutableChat.value
-        val worker = current.workerSessionId ?: return false
-        val itemId = (item.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value ?: return false
-        if (action == com.phonedsh.ui.state.QueueAction.QUEUE) return false
-        if (current.chatId.isBlank() || item.actionRequestId != null && item.busy == true) return false
-        if (item.canEdit != true && action == com.phonedsh.ui.state.QueueAction.EDIT) return false
-        if (item.canRemove != true && action == com.phonedsh.ui.state.QueueAction.REMOVE) return false
-        if (item.canSteer != true && action == com.phonedsh.ui.state.QueueAction.STEER) return false
-        if (action == com.phonedsh.ui.state.QueueAction.EDIT && replacement.isNullOrBlank()) return false
-        val appChatId = current.chatId
-        val activeItems = current.sessionSnapshot.queueItems ?: return false
-        if (activeItems.none { (it.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == itemId }) return false
-
-        mutableChat.update { live ->
-            if (live.chatId != appChatId || live.workerSessionId != worker) live else live.copy(
-                sessionSnapshot = live.sessionSnapshot.copy(
-                    queueItems = activeItems.map { row ->
-                        if ((row.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == itemId) {
-                            row.copy(busy = true, actionRequestId = requestId, receipt = null)
-                        } else row
-                    },
-                ),
-            )
-        }
-        turnScope.launch(Dispatchers.IO) {
-            val outcome = try {
-                Result.success(run {
-                val client = DshTurnClient(host.channel, ::logTurn)
-                val actionValue = when (action) {
-                    com.phonedsh.ui.state.QueueAction.QUEUE -> error("new queue submissions use session/prompt")
-                    com.phonedsh.ui.state.QueueAction.EDIT -> JsonObject(linkedMapOf(
-                        "kind" to JsonString("edit"),
-                        "content" to JsonArray(listOf(JsonObject(mapOf(
-                            "type" to JsonString("text"),
-                            "text" to JsonString(requireNotNull(replacement)),
-                        )))),
-                    ))
-                    com.phonedsh.ui.state.QueueAction.REMOVE -> JsonObject(mapOf("kind" to JsonString("remove")))
-                    com.phonedsh.ui.state.QueueAction.STEER -> JsonObject(mapOf("kind" to JsonString("steer")))
-                }
-                client.call("session/updateQueue", JsonObject(mapOf("request" to JsonObject(mapOf(
-                    "sessionId" to JsonString(worker),
-                    "itemId" to JsonString(itemId),
-                    "action" to actionValue,
-                )))))
-                val projections = client.call("session/projections", JsonObject(mapOf(
-                    "request" to JsonObject(mapOf("sessionId" to JsonString(worker))),
-                )))
-                val rows = sessionSnapshotOf(projections, null, null, null, sessionId = worker).queueItems
-                    ?: error("inbox projection unavailable")
-                val updated = rows.firstOrNull { (it.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == itemId }
-                val confirmed = when (action) {
-                    com.phonedsh.ui.state.QueueAction.QUEUE -> false
-                    com.phonedsh.ui.state.QueueAction.EDIT -> updated?.text == replacement
-                    com.phonedsh.ui.state.QueueAction.REMOVE -> updated == null
-                    com.phonedsh.ui.state.QueueAction.STEER -> updated == null || updated.lane != item.lane
-                }
-                check(confirmed) { "queue action was not reflected by the refreshed inbox" }
-                rows
-                })
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                Result.failure(failure)
-            }
-            mutableChat.update { live ->
-                if (live.chatId != appChatId || live.workerSessionId != worker) return@update live
-                val rows = outcome.getOrNull()
-                if (rows != null) {
-                    val successReceipt = com.phonedsh.ui.state.QueueActionReceipt(
-                        requestId = requestId,
-                        action = action,
-                        outcome = com.phonedsh.ui.state.CommandOutcome.SUCCEEDED,
-                        sessionId = worker,
-                        itemId = itemId,
-                    )
-                    live.copy(sessionSnapshot = live.sessionSnapshot.copy(
-                        queueItems = when (action) {
-                            com.phonedsh.ui.state.QueueAction.QUEUE -> rows
-                            com.phonedsh.ui.state.QueueAction.REMOVE -> rows
-                            else -> rows.map { row ->
-                                if ((row.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == itemId) {
-                                    row.copy(busy = false, actionRequestId = requestId, receipt = successReceipt)
-                                } else row
-                            }
-                        },
-                    ))
-                } else {
-                    val failure = outcome.exceptionOrNull()
-                    val failureReceipt = com.phonedsh.ui.state.QueueActionReceipt(
-                        requestId = requestId,
-                        action = action,
-                        outcome = com.phonedsh.ui.state.CommandOutcome.FAILED,
-                        message = failure?.message?.substringBefore('\n')?.take(180) ?: "队列操作未确认",
-                        sessionId = worker,
-                        itemId = itemId,
-                    )
-                    live.copy(sessionSnapshot = live.sessionSnapshot.copy(
-                        queueItems = activeItems.map { row ->
-                            if ((row.id as? com.phonedsh.ui.state.QueueItemId.Durable)?.value == itemId) {
-                                row.copy(busy = false, actionRequestId = requestId, receipt = failureReceipt)
-                            } else row
-                        },
-                    ))
-                }
-            }
-        }
-        return true
-    }
+    ): Boolean = chatQueueActions.updateQueueItem(item, action, requestId, replacement)
 
     internal fun runChatCommand(line: String, showResult: Boolean = true) {
         val current = mutableChat.value
@@ -2942,113 +3235,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         requestId: com.phonedsh.ui.state.StateRequestId,
         text: String,
         mode: com.phonedsh.ui.state.EnterMode,
-    ): Boolean {
-        val current = mutableChat.value
-        val trimmed = text.trim()
-        if (workerSessionId.isBlank() || current.workerSessionId != workerSessionId || !current.running ||
-            trimmed.isEmpty() || (mode == com.phonedsh.ui.state.EnterMode.STEER && current.attachments.isNotEmpty())
-        ) return false
-        // A retry of an ambiguous busy submission reuses its own backend prompt
-        // identity. Matching by text would conflate duplicate messages.
-        val promptRequestId = current.retryBusyPromptRequestId
-            ?: com.phonedsh.ui.state.StateRequestId("pdsh-prompt-" + java.util.UUID.randomUUID().toString())
-        val existing = current.localQueueItems.firstOrNull { it.promptRequestId == promptRequestId }
-        val localId = existing?.id ?: com.phonedsh.ui.state.QueueItemId.Local(promptRequestId.value)
-        val localItemId = (localId as? com.phonedsh.ui.state.QueueItemId.Local)?.value ?: return false
-        val queueAction = if (mode == com.phonedsh.ui.state.EnterMode.STEER)
-            com.phonedsh.ui.state.QueueAction.STEER else com.phonedsh.ui.state.QueueAction.QUEUE
-        val localItem = com.phonedsh.ui.state.ManagedQueueItemState(
-            id = localId,
-            text = trimmed,
-            sessionId = workerSessionId,
-            lane = if (mode == com.phonedsh.ui.state.EnterMode.STEER) "steered" else "next-turn",
-            state = if (mode == com.phonedsh.ui.state.EnterMode.STEER)
-                com.phonedsh.ui.state.QueueItemStatus.STEERED else com.phonedsh.ui.state.QueueItemStatus.SENDING,
-            canEdit = false,
-            canRemove = false,
-            canSteer = false,
-            busy = true,
-            actionRequestId = requestId,
-            promptRequestId = promptRequestId,
-        )
-        val attachments = current.attachments
-        val prompt = composeChatPrompt(trimmed, attachments)
-        mutableChat.update { live ->
-            if (live.chatId != current.chatId || live.workerSessionId != workerSessionId || !live.running) live else {
-                live.copy(
-                    localQueueItems = live.localQueueItems.filterNot { it.id == localId } + localItem,
-                    retryBusyPromptRequestId = null,
-                )
-            }
-        }
-        turnScope.launch(Dispatchers.IO) {
-            try {
-                val client = DshTurnClient(host.channel, ::logTurn)
-                suspend fun readQueueProjection(): List<com.phonedsh.ui.state.ManagedQueueItemState> =
-                    sessionSnapshotOf(
-                        client.call("session/projections", JsonObject(mapOf(
-                            "request" to JsonObject(mapOf("sessionId" to JsonString(workerSessionId))),
-                        ))),
-                        catalog = null,
-                        commandCatalog = null,
-                        sessionId = workerSessionId,
-                    ).queueItems ?: error("inbox projection unavailable")
-
-                client.prompt(
-                    sessionId = workerSessionId,
-                    text = prompt,
-                    requestId = promptRequestId.value,
-                    mode = if (mode == com.phonedsh.ui.state.EnterMode.STEER) "steer" else "queue",
-                )
-                val after = readQueueProjection()
-                // The successful prompt RPC acknowledges this exact request ID.
-                // A fresh projection may already be empty because the worker
-                // consumed it; do not infer its identity from text or row counts.
-
-                mutableChat.update { live ->
-                    if (live.chatId != current.chatId || live.workerSessionId != workerSessionId) live else {
-                        live.copy(
-                            draft = if (live.draft.trim() == trimmed) "" else live.draft,
-                            attachments = if (live.attachments == attachments) emptyList() else live.attachments,
-                            lastSubmission = trimmed,
-                            lastAttachments = attachments,
-                            localQueueItems = com.phonedsh.ui.state.retireAcceptedQueuePrompt(
-                                live.localQueueItems,
-                                promptRequestId,
-                            ),
-                            retryBusyPromptRequestId = null,
-                            sessionSnapshot = live.sessionSnapshot.copy(queueItems = after),
-                        )
-                    }
-                }
-                refreshChatSession()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                mutableChat.update { live ->
-                    if (live.chatId != current.chatId || live.workerSessionId != workerSessionId) live else live.copy(
-                        localQueueItems = live.localQueueItems.map { item ->
-                            if (item.id == localId && item.actionRequestId == requestId) item.copy(
-                                busy = false,
-                                receipt = com.phonedsh.ui.state.QueueActionReceipt(
-                                    requestId = requestId,
-                                    action = queueAction,
-                                    outcome = com.phonedsh.ui.state.CommandOutcome.FAILED,
-                                    message = failure.message?.substringBefore('\n')?.take(180) ?: "请求结果未确认",
-                                    sessionId = workerSessionId,
-                                    itemId = localItemId,
-                                ),
-                            ) else item
-                        },
-                        retryBusyPromptRequestId = promptRequestId.takeIf {
-                            live.draft.trim() == trimmed && live.attachments == attachments
-                        },
-                    )
-                }
-            }
-        }
-        return true
-    }
+    ): Boolean = chatQueueActions.submitWhileRunning(workerSessionId, requestId, text, mode)
 
     /** Retry the original failed input in its existing session without adding a second user row. */
     internal fun retryFailedChat(sessionId: String, requestId: com.phonedsh.ui.state.StateRequestId): Boolean {
@@ -3606,17 +3793,6 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     "rows=${selected.nodes.size} worker=${selected.workerSessionId ?: "-"}",
             )
         }
-    }
-
-    /** The prompt the Worker receives: the typed text plus the workspace paths. */
-    private fun composeChatPrompt(typed: String, attachments: List<ChatAttachment>): String {
-        val references = attachments.mapNotNull { it.path }
-        if (references.isEmpty()) return typed
-        val block = buildString {
-            append("已附加的文件（工作区路径，可用工具读取）：")
-            references.forEach { append('\n').append("- ").append(it) }
-        }
-        return listOf(typed, block).filter { it.isNotBlank() }.joinToString("\n\n")
     }
 
     override fun onCleared() {
