@@ -122,7 +122,31 @@ internal data class HostReadings(
     val permissions: HostPermissionReadings,
     val permissionAsks: Set<String> = emptySet(),
     val permissionInFlight: PhoneCapability? = null,
+    /**
+     * The D14 failure the controller is holding, when the host booted or ended
+     * in `Failed`. The runtime page's 最近出錯 reads this before the turn
+     * state: a host that cannot admit writes is the newer, stronger failure
+     * even when the last chat turn completed.
+     */
+    val hostFailure: HostFailureReading? = null,
 )
+
+/**
+ * One D14 failure, projected for the runtime page.
+ *
+ * [code] is the closed `ControllerFailure` vocabulary; [detail] is the
+ * workspace-relative reason the store recorded (`LogException.detail`, never a
+ * record body). A cold boot restores the code from `host-state.json`; a live
+ * failure normally carries both.
+ */
+internal data class HostFailureReading(
+    val code: String,
+    val detail: String? = null,
+) {
+    /** The text the runtime page shows; a code alone is still a real reason. */
+    val message: String
+        get() = detail?.takeIf { it.isNotBlank() } ?: code
+}
 
 /**
  * Projects the host's readings into every page's facts.
@@ -271,11 +295,7 @@ internal fun buildNavFacts(
                 // 读取不到; a `RuntimeLastError(null)` means "it read it and there was
                 // no error". Conflating the two would let an idle app claim it had
                 // no failures, which is a claim it has not earned.
-                lastError = when (turn) {
-                    AppTurnState.Idle, AppTurnState.Running -> null
-                    is AppTurnState.Completed -> RuntimeLastError(message = null)
-                    is AppTurnState.Failed -> RuntimeLastError(message = turn.reason)
-                },
+                lastError = runtimeLastError(turn, readings.hostFailure),
             ),
         ),
         // The App's own /v1/http policy is exactly this one exact-origin rule.
@@ -525,6 +545,28 @@ internal data class HostSessionsFacts(
  * @param turn the one turn's UI state.
  * @param snapshot what the host read from the journal lane and its own turns.
  */
+/**
+ * The runtime page's 最近出錯.
+ *
+ * D14 `Failed` wins over the turn state: the host is the layer that owns
+ * durability, and a host that cannot open admission is the failure a user can
+ * act on even when the last turn finished normally. `null` still means "this
+ * host has not read it", and `RuntimeLastError(null)` means "it read it and
+ * there was no error" — the distinction the runtime page renders as
+ * 读取不到 versus 无错误.
+ */
+internal fun runtimeLastError(
+    turn: AppTurnState,
+    hostFailure: HostFailureReading?,
+): RuntimeLastError? {
+    if (hostFailure != null) return RuntimeLastError(message = hostFailure.message)
+    return when (turn) {
+        AppTurnState.Idle, AppTurnState.Running -> null
+        is AppTurnState.Completed -> RuntimeLastError(message = null)
+        is AppTurnState.Failed -> RuntimeLastError(message = turn.reason)
+    }
+}
+
 internal fun buildSessionsFacts(
     state: EngineState,
     turn: AppTurnState,

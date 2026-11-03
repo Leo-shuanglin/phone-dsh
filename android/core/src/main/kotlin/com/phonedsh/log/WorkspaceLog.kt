@@ -305,6 +305,15 @@ class WorkspaceLog(
     private var ready: Boolean = false
     private var fatal: LogException? = null
 
+    /**
+     * `true` while the only records not yet materialized are records recovery
+     * left in the WAL. A settlement then has to stream those records back from
+     * the retained segments instead of reading [pending], which recovery never
+     * filled (holding a 100k-record tail on the heap is what `budgets.md` §4
+     * forbids).
+     */
+    private var recoveryHeldResync: Boolean = false
+
     /** The next mutation number, `max(last_mseq, WAL tail) + 1` (D17). */
     var nextMseq: Long = 0L
         private set
@@ -331,6 +340,7 @@ class WorkspaceLog(
     private val segmentsWritten = LinkedHashSet<Path>()
     private val changes = EpochChanges(paths)
     private val materializer = Materializer(paths, paths.materializedDirectory, changes)
+    @Volatile
     private var resync: ResyncRequest? = null
     private val pending = ArrayList<WalRecord.Mutation>()
 
@@ -421,6 +431,51 @@ class WorkspaceLog(
         outcome = result
         result
     }
+
+    /**
+     * Clears the cached recovery result and the sticky host failure so
+     * [recover] can really run again in this process (`budgets.md` §2
+     * `Failed -> Recovering`: "re-run recovery").
+     *
+     * A previous [recover] returns its first outcome by design (it is the cold
+     * boot path), and a failed [closeEpoch] makes [ensureReady] throw forever.
+     * An explicit user reset is the one signal that may re-open that path, so
+     * this method discards only in-memory state: no WAL record, manifest byte
+     * or materialized file is touched. The next [recover] re-reads the
+     * checkpoint and rebuilds the in-memory segment bookkeeping from disk.
+     *
+     * Callers must only use this while no write is in flight — the D14
+     * `Failed -> Recovering` row is admission-closed and the failed Worker has
+     * been stopped by then.
+     */
+    suspend fun resetForRecovery() = mutex.withLock {
+        outcome = null
+        ready = false
+        fatal = null
+        resync = null
+        recoveryHeldResync = false
+        pending.clear()
+        changes.clear()
+        summaries.clear()
+        segmentsWritten.clear()
+        currentSegment = null
+        epoch = 1
+        lastMseq = 0L
+        nextMseq = 0L
+        materializedUptoMseq = 0L
+        lastDurableEpoch = 0
+        liveAllocator = MseqAllocator(lastMseq = 0L, nextMseq = 1L)
+    }
+
+    /**
+     * The one outstanding §5.1 repair request, or `null`.
+     *
+     * Read by the host's periodic epoch-close guard: a close with an
+     * unrepaired mismatch is a fail-loud condition (`wal.md` §5.2), so the
+     * periodic lane defers the close and records the path and mseq instead of
+     * turning a transient repair into `Failed`.
+     */
+    fun outstandingResync(): ResyncRequest? = resync
 
     /**
      * Appends one mutation and materializes it (`wal.md` §5, D8).
@@ -648,8 +703,13 @@ class WorkspaceLog(
         val resyncMseqs = LinkedHashMap<String, Long>()
         val staleReports = LinkedHashMap<WalSegmentName, StaleSegment>()
         var replayed: List<RecoveredSegment>
+        // A pass that started from an empty tree has already performed the
+        // strongest rebuild the WAL can support. Another one cannot settle a
+        // mismatch that the first from-empty replay met.
+        var rebuiltFromEmpty = false
 
         if (plan.fullReconcile) {
+            rebuiltFromEmpty = parsed.manifest == null
             val run = stagedReconcile(
                 hadManifest = parsed.manifest != null,
                 baseWatermark = watermark,
@@ -684,6 +744,9 @@ class WorkspaceLog(
                     // §7.2: divergence rebuilds the whole copy from the WAL only
                     // when the retained mutations start at mseq 1.
                     changes.clear()
+                    resyncPaths.clear()
+                    resyncMseqs.clear()
+                    rebuiltFromEmpty = true
                     val rebuilt = stagedReconcile(
                         hadManifest = false,
                         baseWatermark = 0L,
@@ -696,8 +759,18 @@ class WorkspaceLog(
                         staleTouched = staleTouched,
                     )
                     watermark = rebuilt.watermark
+                    replayed = rebuilt.segments
                     fullReconcileRan = true
                     verifyStale(plan, replayNames, facts, staleTouched, staleReports)
+                    if (staleReports.values.any { it.divergences.isNotEmpty() }) {
+                        val first = staleReports.values
+                            .first { it.divergences.isNotEmpty() }
+                        return RecoveryOutcome.Failed(
+                            "WAL_CORRUPT",
+                            "the materialized copy still diverges after a rebuild from the " +
+                                "retained WAL: ${first.divergences.first()}",
+                        )
+                    }
                 } else {
                     val first = staleReports.values
                         .first { it.divergences.isNotEmpty() }
@@ -710,6 +783,58 @@ class WorkspaceLog(
             }
             if (!fullReconcileRan) {
                 fsyncChanges(changes)
+            }
+        }
+
+        // wal.md §5.1/§7.2: a startup replay that leaves a base mismatch must
+        // run the full-tree reconcile. When the retained mutations start at
+        // mseq 1, the WAL alone is a complete derivation of the copy, so the
+        // same rebuild the stale-divergence path uses is allowed and is what
+        // distinguishes a copy that runs ahead of its checkpoint from a real
+        // loss. The D9 check runs unchanged during the rebuild; a genuine
+        // mismatch still stops it and is reported as an outstanding resync.
+        if (resyncPaths.isNotEmpty() && !rebuiltFromEmpty) {
+            if (!retainedStartsAtOne(facts, replayNames)) {
+                val path = resyncPaths.first()
+                val mseq = resyncMseqs[path] ?: (watermark + 1)
+                val ranges = mutationRanges(facts, replayNames)
+                val firstRetained = ranges.firstOrNull()?.first
+                return RecoveryOutcome.Failed(
+                    "WAL_RESYNC_UNREPAIRED",
+                    "the startup replay held $path at mseq $mseq, but the retained WAL does " +
+                        "not cover mseq 1 with no hole (first_mseq=${firstRetained ?: "none"}, " +
+                        "ranges=${ranges.joinToString { "${it.first}..${it.last}" }}). " +
+                        "The materialized copy cannot be rebuilt from an incomplete WAL; " +
+                        "the WAL, manifest and materialized copy are kept and the workspace " +
+                        "stays Failed",
+                )
+            }
+            changes.clear()
+            resyncPaths.clear()
+            resyncMseqs.clear()
+            rebuiltFromEmpty = true
+            val rebuilt = stagedReconcile(
+                hadManifest = false,
+                baseWatermark = 0L,
+                names = replayNames,
+                targetTail = plan.effectiveTail,
+                resyncPaths = resyncPaths,
+                resyncMseqs = resyncMseqs,
+                retention = null,
+                staleNames = staleNames,
+                staleTouched = staleTouched,
+            )
+            watermark = rebuilt.watermark
+            replayed = rebuilt.segments
+            fullReconcileRan = true
+            verifyStale(plan, replayNames, facts, staleTouched, staleReports)
+            if (staleReports.values.any { it.divergences.isNotEmpty() }) {
+                val first = staleReports.values.first { it.divergences.isNotEmpty() }
+                return RecoveryOutcome.Failed(
+                    "WAL_CORRUPT",
+                    "the materialized copy still diverges after a rebuild from the retained " +
+                        "WAL: ${first.divergences.first()}",
+                )
             }
         }
 
@@ -771,9 +896,11 @@ class WorkspaceLog(
         lastDurableEpoch = durableEpoch
         epoch = plan.nextEpoch
         currentSegment = null
-        resync = resyncPaths.firstOrNull()?.let { path ->
+        val resyncRequests = resyncPaths.map { path ->
             ResyncRequest(path, resyncMseqs[path] ?: lastMseq)
         }
+        resync = resyncRequests.firstOrNull()
+        recoveryHeldResync = resyncRequests.isNotEmpty()
         changes.clear()
 
         return RecoveryOutcome.Recovered(
@@ -793,6 +920,7 @@ class WorkspaceLog(
             materializedUptoMseq = watermark,
             fullReconcile = fullReconcileRan,
             resyncRequired = resyncPaths,
+            resyncRequests = resyncRequests,
         )
     }
 
@@ -1554,6 +1682,7 @@ class WorkspaceLog(
                 val request = ResyncRequest(result.path, record.mseq)
                 resync = request
                 pending.add(record)
+                recoveryHeldResync = false
                 sink.onEvent(WalLogEvent.ResyncRequired(result.path, record.mseq))
                 request
             }
@@ -1565,6 +1694,12 @@ class WorkspaceLog(
      * the path's pending appended records are re-applied under D9 (usually
      * skipped because the repair already contains the bytes), and the watermark
      * then advances across every record it had held back.
+     *
+     * A resync left by recovery has no entries in [pending] for the records
+     * that were already in the WAL: keeping them there would put the whole
+     * deferred tail on the heap. While [recoveryHeldResync] is set, the records
+     * between the watermark and the repair write are streamed back from the
+     * retained segments, one body at a time, and applied in mseq order.
      */
     private fun settle(held: ResyncRequest): ResyncRequest? {
         val repair = pending.lastOrNull {
@@ -1578,6 +1713,41 @@ class WorkspaceLog(
             }
             else -> Unit
         }
+        if (recoveryHeldResync) {
+            // Apply the repair once as the new base so the deferred appended
+            // records can skip their already-present bytes, then replay the
+            // deferred range in mseq order (the repair is re-applied at its own
+            // position, which is idempotent for a complete write and keeps a
+            // later complete write for the same path from being clobbered by
+            // an older one).
+            streamRetainedMutations(
+                afterMseq = materializedUptoMseq,
+                beforeMseq = repair.mseq + 1,
+            ) { record ->
+                if (record.mseq != materializedUptoMseq + 1) {
+                    // The retained ranges were proven contiguous by recovery;
+                    // a hole here is a host defect, not a reason to skip a
+                    // record. Keep the resync outstanding and fail the close.
+                    return@streamRetainedMutations false
+                }
+                when (val outcome = materializer.apply(record.body)) {
+                    is MaterializeOutcome.Resync -> {
+                        resync = ResyncRequest(outcome.path, record.mseq)
+                        return@streamRetainedMutations false
+                    }
+                    else -> materializedUptoMseq = record.mseq
+                }
+                true
+            }
+            if (materializedUptoMseq >= repair.mseq) {
+                pending.removeAll { it.mseq == repair.mseq }
+            }
+            // A new mismatch deeper in the deferred tail must keep the
+            // watermark where it is; do not apply later pending records over it.
+            if (resync?.path != held.path || resync?.mseq != held.mseq) {
+                return resync
+            }
+        }
         val ordered = pending.sortedBy { it.mseq }
         for (record in ordered) {
             if (record.mseq <= materializedUptoMseq) {
@@ -1589,8 +1759,6 @@ class WorkspaceLog(
                 is MaterializeOutcome.Resync -> {
                     val request = ResyncRequest(outcome.path, record.mseq)
                     resync = request
-                    pending.removeAll { it.mseq >= record.mseq }
-                    pending.addAll(ordered.filter { it.mseq >= record.mseq })
                     return request
                 }
                 else -> {
@@ -1599,12 +1767,42 @@ class WorkspaceLog(
                 }
             }
         }
-        if (pending.isEmpty()) {
+        if (pending.isEmpty() && resync?.path == held.path) {
             resync = null
+            recoveryHeldResync = false
             return null
         }
         return resync
     }
+
+    /**
+     * Streams the retained mutations in `mseq` order into [action].
+     *
+     * Only one record body is alive at a time ([WalSegmentReader]); the caller
+     * sees a bounded-memory view of the tail that recovery deferred. Returning
+     * `false` stops the scan.
+     */
+    private fun streamRetainedMutations(
+        afterMseq: Long,
+        beforeMseq: Long,
+        action: (WalRecord.Mutation) -> Boolean,
+    ) {
+        if (beforeMseq <= afterMseq) return
+        var keepGoing = true
+        for (name in summaries.keys.sorted()) {
+            if (!keepGoing) break
+            WalSegmentReader.open(paths, name).use { reader ->
+                reader.forEachRecord { record ->
+                    if (keepGoing && record is WalRecord.Mutation &&
+                        record.mseq > afterMseq && record.mseq < beforeMseq
+                    ) {
+                        keepGoing = action(record)
+                    }
+                }
+            }
+        }
+    }
+
 
     // ---------------------------------------------------------------------
     // Manifest and durability helpers

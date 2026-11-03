@@ -30,6 +30,7 @@ import com.phonedsh.log.WorkspaceLog
 import com.phonedsh.platform.EngineHostState
 import com.phonedsh.platform.NetworkPath
 import com.phonedsh.platform.testing.FakePlatform
+import com.phonedsh.loopback.ChannelCloseCause
 import com.phonedsh.wire.WireCodec
 import java.nio.ByteBuffer
 import kotlinx.coroutines.CoroutineScope
@@ -456,6 +457,107 @@ class VfsSinkTest {
         }
     }
 
+    // ---- 8. one outstanding VFS_RESYNC per path, one re-request per HELLO --
+
+    /**
+     * The device storm's host half: while a repair is outstanding, every
+     * further append used to emit another `VFS_RESYNC`, and the Worker answered
+     * each one with a whole-file write at a fresh mseq. `wal.md` §5.1 allows at
+     * most one outstanding resync per path; `channel.md` §9 item 6 re-requests
+     * it once after a reconnect.
+     */
+    @Test
+    fun aHeldResyncIsSentOnceAndResentOnceAfterHello() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val first = connect(host)
+                send(host, first, mutFrame(mseq = 1, path = HELD, text = "abc", seq = 2))
+                send(host, first, appendedFrame(mseq = 2, path = HELD, appendFrom = 10, text = "xyz", seq = 3))
+                send(host, first, appendedFrame(mseq = 3, path = HELD, appendFrom = 13, text = "123", seq = 4))
+
+                val beforeReconnect = fieldsOf(first, HostFrame.VFS_RESYNC)
+                assertEquals("one outstanding resync per path", 1, beforeReconnect.size)
+                assertEquals(HELD, beforeReconnect.single().getString("path"))
+                assertEquals("all appends are still WAL records", 4L, log.nextMseq)
+
+                runBlocking { host.channel.onClosed(first, ChannelCloseCause.CLIENT_CLOSED) }
+                val second = connect(host)
+                val afterReconnect = fieldsOf(second, HostFrame.VFS_RESYNC)
+                assertEquals("the outstanding path is re-requested once after HELLO", 1, afterReconnect.size)
+                assertEquals(HELD, afterReconnect.single().getString("path"))
+
+                // The Worker's complete write at the next mseq is the §5.1
+                // repair; it settles every deferred append and advances the
+                // contiguous watermark to the repair's own record.
+                send(host, second, mutFrame(mseq = 4, path = HELD, text = "abcdefghijxyz123", seq = 2))
+                assertEquals(4L, log.materializedUptoMseq)
+                assertEquals(4L, runBlocking { host.closeEpoch() })
+                assertTrue(fieldsOf(second, HostFrame.VFS_RESYNC).size == 1)
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    /**
+     * A resync left by recovery is not in the sink's `pending` list: the
+     * records are in the WAL and are streamed back only when the Worker's
+     * repair arrives. Before the fix the sink never learned about the recovery
+     * request and the settled watermark never moved.
+     */
+    @Test
+    fun aRecoveryHeldResyncIsRequestedAfterHelloAndSettlesFromTheWal() {
+        FakePlatform().use { platform ->
+            // Build the genuine torn base: a complete "abc" write, then an
+            // append that claims a 6-byte base. A from-empty rebuild hits the
+            // same D9 mismatch, so recovery leaves the resync outstanding.
+            runBlocking {
+                val fixture = newLog(platform)
+                assertTrue(fixture.recover() is RecoveryOutcome.Recovered)
+                fixture.appendMutation(
+                    com.phonedsh.log.MutationBody(
+                        op = com.phonedsh.log.VfsOp.WRITE,
+                        mode = 420,
+                        path = HELD,
+                        data = "abc".toByteArray(Charsets.UTF_8),
+                        entryChanged = true,
+                    ),
+                )
+                fixture.closeEpoch()
+                fixture.appendMutation(
+                    com.phonedsh.log.MutationBody(
+                        op = com.phonedsh.log.VfsOp.WRITE,
+                        mode = 420,
+                        path = HELD,
+                        data = "ghi".toByteArray(Charsets.UTF_8),
+                        appended = true,
+                        appendFrom = 6L,
+                    ),
+                )
+            }
+
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                assertEquals("recovery left the mismatch in force", 1L, log.materializedUptoMseq)
+                val connection = connect(host)
+                val resync = fieldsOf(connection, HostFrame.VFS_RESYNC)
+                assertEquals("the recovered request is sent after HELLO", 1, resync.size)
+                assertEquals(HELD, resync.single().getString("path"))
+
+                send(host, connection, mutFrame(mseq = 3, path = HELD, text = "abcdefghi", seq = 2))
+                assertEquals("the repair read the deferred WAL records back", 3L, log.materializedUptoMseq)
+                assertEquals(3L, runBlocking { host.closeEpoch() })
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private fun newLog(platform: FakePlatform): WorkspaceLog = WorkspaceLog(
@@ -526,6 +628,21 @@ class VfsSinkTest {
         return WireCodec.encode(fields, seq = seq)
     }
 
+    /** An appended VFS_MUT: `mflags` bit 1 plus the suffix's base offset. */
+    private fun appendedFrame(
+        mseq: Long,
+        path: String,
+        appendFrom: Long,
+        text: String,
+        seq: Long,
+    ): ByteArray {
+        val data = text.toByteArray(Charsets.UTF_8)
+        val fields = """{"type":"VFS_MUT","fields":{""" +
+            """"append_from":$appendFrom,"data_hex":"${hex(data)}","data_len":${data.size},""" +
+            """"mflags":2,"mode":420,"mseq":$mseq,"op":1,"path":"$path"}}"""
+        return WireCodec.encode(fields, seq = seq)
+    }
+
     private fun barrierFrame(wantLevel: Int, uptoMseq: Long): ByteArray = WireCodec.encode(
         """{"type":"VFS_BARRIER","fields":{"upto_mseq":$uptoMseq,"want_level":$wantLevel}}""",
         seq = 3,
@@ -575,5 +692,8 @@ class VfsSinkTest {
 
         /** The 480 mutation window the P22/P26 device log recorded. */
         const val STALLED_MSEQS: Long = 480L
+
+        /** The workspace-relative path these resync tests hold. */
+        const val HELD = "/dsh/workspace/held.txt"
     }
 }

@@ -32,8 +32,14 @@ import com.phonedsh.dsh.journal.JournalPaths
 import com.phonedsh.dsh.journal.JournalStore
 import com.phonedsh.dsh.journal.journalFrame
 import com.phonedsh.dsh.journal.journalRecord
+import com.phonedsh.log.BootId as LogBootId
 import com.phonedsh.log.LogException
 import com.phonedsh.log.LogFailure
+import com.phonedsh.log.MutationBody
+import com.phonedsh.log.RecoveryOutcome
+import com.phonedsh.log.VfsOp
+import com.phonedsh.log.WalPaths
+import com.phonedsh.log.WorkspaceLog
 import com.phonedsh.platform.EngineHostState
 import com.phonedsh.platform.testing.FakePlatform
 import com.phonedsh.wire.WalException
@@ -149,10 +155,12 @@ class HostFailureWiringTest {
             val wal = FakeHostWal(
                 closeFailure = LogException(
                     LogFailure.RESYNC_UNREPAIRED,
-                    "the epoch close found an unrepaired base mismatch",
+                    "cannot close epoch 1: the base mismatch at /dsh/workspace/held.txt " +
+                        "(mseq 7) is unrepaired",
                 ),
             )
-            val host = newHost(platform, wal = wal)
+            val logSink = RecordingHostLog()
+            val host = newHost(platform, wal = wal, log = logSink)
             startHost(platform, host)
             try {
                 val thrown = runBlocking {
@@ -167,6 +175,23 @@ class HostFailureWiringTest {
                 assertEquals(ControllerFailure.UNREPAIRED_BASE_MISMATCH, host.controller.lastFailure)
                 assertEquals(HostState.FAILED, host.controller.state)
                 assertEquals(Admission.CLOSED, host.controller.admission)
+                // The device log only had the code, so the held path and mseq
+                // were invisible. They are now in both the D14 reason and the
+                // host log line.
+                assertTrue(
+                    "lastFailureDetail must name the path: ${host.controller.lastFailureDetail}",
+                    host.controller.lastFailureDetail?.contains("/dsh/workspace/held.txt") == true,
+                )
+                assertTrue(
+                    "lastFailureDetail must name the mseq: ${host.controller.lastFailureDetail}",
+                    host.controller.lastFailureDetail?.contains("mseq 7") == true,
+                )
+                assertTrue(
+                    "logcat must carry the same path and mseq: ${logSink.messages}",
+                    logSink.messages.any {
+                        it.contains("/dsh/workspace/held.txt") && it.contains("mseq 7")
+                    },
+                )
             } finally {
                 host.stop()
             }
@@ -259,6 +284,116 @@ class HostFailureWiringTest {
         }
     }
 
+    /**
+     * The cold-start deadlock, at the facade: `Failed -> Recovering` is a real
+     * recovery, not a planned restart, so it must not close the epoch before
+     * the Worker exists. The real `WorkspaceLog` leaves a genuine resync
+     * outstanding; a close first would set the sticky fatal and D14 would go
+     * back to `Failed` before any Worker could answer.
+     */
+    @Test
+    fun userResetRerunsRealRecoveryWithoutClosingBeforeTheWorkerStarts() {
+        FakePlatform().use { platform ->
+            runBlocking {
+                val fixture = WorkspaceLog(
+                    paths = WalPaths(platform.tempDir),
+                    durability = platform,
+                    clock = platform,
+                    bootId = LogBootId.random(),
+                )
+                assertTrue(fixture.recover() is RecoveryOutcome.Recovered)
+                fixture.appendMutation(
+                    MutationBody(
+                        op = VfsOp.WRITE,
+                        mode = 420,
+                        path = "/dsh/workspace/held.txt",
+                        data = "abc".toByteArray(Charsets.UTF_8),
+                        entryChanged = true,
+                    ),
+                )
+                fixture.closeEpoch()
+                fixture.appendMutation(
+                    MutationBody(
+                        op = VfsOp.WRITE,
+                        mode = 420,
+                        path = "/dsh/workspace/held.txt",
+                        data = "ghi".toByteArray(Charsets.UTF_8),
+                        appended = true,
+                        appendFrom = 6L,
+                    ),
+                )
+            }
+
+            val log = WorkspaceLog(
+                paths = WalPaths(platform.tempDir),
+                durability = platform,
+                clock = platform,
+                bootId = LogBootId.random(),
+            )
+            val controller = ControllerStateMachine.boot(
+                persistedState = HostState.FAILED,
+                persistedFailure = ControllerFailure.UNREPAIRED_BASE_MISMATCH,
+                persistedFailureDetail = "a prior close held the resync",
+            )
+            val host = DefaultPhoneDshHost(
+                engine = platform.engine,
+                controller = controller,
+                clock = platform,
+                signals = platform,
+                notifier = platform,
+                wal = log.asHostWal(),
+                scope = CoroutineScope(Dispatchers.Unconfined),
+                logger = HostLog.None,
+            )
+            try {
+                host.start()
+                runBlocking { withTimeout(5_000) { host.ready.first { it } } }
+                assertEquals("the first boot started the Worker", 1, platform.engine.startCount)
+
+                assertTrue(host.resetFailure())
+                runBlocking {
+                    withTimeout(5_000) {
+                        while (platform.engine.startCount < 2 || !host.ready.value) {
+                            kotlinx.coroutines.delay(5)
+                        }
+                    }
+                }
+
+                // No epoch close ran before the replacement Worker: the reset
+                // is a real recovery, and the log still exposes the resync.
+                assertEquals(HostState.RECOVERING, controller.state)
+                assertNull("a successful reset clears the old failure", controller.lastFailure)
+                assertNotNull("recovery ran again and left the resync for the Worker", log.recovery)
+
+                val connection = connect(host)
+                assertTrue(
+                    "the recovered resync is re-requested after HELLO",
+                    connection.sent.any { HostFrame.typeOf(it) == HostFrame.VFS_RESYNC },
+                )
+                // The Worker's complete write at the next mseq is the repair.
+                runBlocking {
+                    host.channel.onBinary(
+                        connection,
+                        writeFrame(
+                            mseq = 3,
+                            path = "/dsh/workspace/held.txt",
+                            text = "abcdefghi",
+                            seq = 2,
+                        ),
+                    )
+                }
+                assertEquals(3L, log.materializedUptoMseq)
+                assertEquals(3L, runBlocking { host.closeEpoch() })
+
+                platform.engine.setState(EngineHostState.Running("http://127.0.0.1:41234", 41234))
+                runBlocking { withTimeout(5_000) { host.state.first { it == HostState.RUNNING } } }
+                assertEquals(Admission.OPEN, controller.admission)
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
     // ---- the closed mapping itself -----------------------------------------
 
     @Test
@@ -308,6 +443,7 @@ class HostFailureWiringTest {
         controller: ControllerStateMachine = ControllerStateMachine.boot(persistedState = null),
         wal: HostWal? = null,
         journal: JournalStore? = null,
+        log: HostLog = HostLog.None,
     ): DefaultPhoneDshHost = DefaultPhoneDshHost(
         engine = platform.engine,
         controller = controller,
@@ -317,7 +453,7 @@ class HostFailureWiringTest {
         wal = wal,
         journal = journal,
         scope = CoroutineScope(Dispatchers.Unconfined),
-        logger = HostLog.None,
+        logger = log,
     )
 
     /** `start()`, wait for the final HELLO, then drive D14 to `Running`. */
@@ -357,6 +493,15 @@ class HostFailureWiringTest {
             """"append_from":0,"data_hex":"${hex(data)}","data_len":${data.size},""" +
             """"mflags":1,"mode":420,"mseq":$mseq,"op":1,"path":"/dsh/workspace/failure.txt"}}"""
         return WireCodec.encode(fields, seq)
+    }
+
+    /** A complete write with a caller-chosen path and bytes. */
+    private fun writeFrame(mseq: Long, path: String, text: String, seq: Long): ByteArray {
+        val data = text.toByteArray(Charsets.UTF_8)
+        val fields = """{"type":"VFS_MUT","fields":{""" +
+            """"append_from":0,"data_hex":"${hex(data)}","data_len":${data.size},""" +
+            """"mflags":1,"mode":420,"mseq":$mseq,"op":1,"path":"$path"}}"""
+        return WireCodec.encode(fields, seq = seq)
     }
 
     private fun hex(bytes: ByteArray): String = buildString {

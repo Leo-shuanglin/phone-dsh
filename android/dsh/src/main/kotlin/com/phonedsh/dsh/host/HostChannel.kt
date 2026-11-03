@@ -317,7 +317,12 @@ class HostChannel(
             )
             return
         }
-        sendHostHello(connection)
+        if (sendHostHello(connection)) {
+            // channel.md §9 item 6: a path still waiting for a resync is
+            // re-requested after HELLO. Called after sendHostHello released
+            // sendMutex, because the sink's send takes it again.
+            vfs?.onHelloAnswered()
+        }
     }
 
     /**
@@ -903,13 +908,13 @@ class HostChannel(
      * decode. A transport failure is recorded the same way; `:net` reports the
      * close through [onClosed].
      */
-    private suspend fun sendHostHello(connection: LoopbackConnection) {
+    private suspend fun sendHostHello(connection: LoopbackConnection): Boolean {
         if (!ready()) {
             logger.info(
                 "worker HELLO on ${connection.id} before recovery finished; " +
                     "not answering yet (the HELLO watermark is not final)",
             )
-            return
+            return false
         }
         val firstHello = synchronized(lock) {
             val first = answered.add(connection.id)
@@ -926,7 +931,7 @@ class HostChannel(
                 "worker sent a second HELLO on ${connection.id}; not answering it " +
                     "(duplicate host HELLO is PROTO_MISMATCH, channel.md §4.1)",
             )
-            return
+            return false
         }
         sendMutex.withLock {
             val value = hello()
@@ -939,7 +944,7 @@ class HostChannel(
                 val reason = describeFailure(failure)
                 noteError(reason)
                 logger.error("host HELLO not encoded: $reason")
-                return
+                return false
             }
             try {
                 connection.sendBinary(frame)
@@ -949,7 +954,7 @@ class HostChannel(
                 val reason = "host HELLO not sent (${failure.javaClass.simpleName})"
                 noteError(reason)
                 logger.error("$reason on ${connection.id}")
-                return
+                return false
             }
             synchronized(lock) {
                 framesToWorkerInternal += 1
@@ -963,6 +968,7 @@ class HostChannel(
                     "session_epoch=${value.sessionEpoch}, ${value.watermark.provenance}",
             )
         }
+        return true
     }
 
     /**

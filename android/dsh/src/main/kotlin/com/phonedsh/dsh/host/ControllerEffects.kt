@@ -112,7 +112,9 @@ internal class ControllerEffects(
                         ongoing = false,
                         action = null,
                     )
-                    logger.warn("notified failure: $code")
+                    logger.warn(
+                        "notified failure: $code" + (detail?.let { " detail=$it" } ?: ""),
+                    )
                 }
 
                 // Performed by the host facade rather than by a notification:

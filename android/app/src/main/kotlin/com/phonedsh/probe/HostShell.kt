@@ -322,6 +322,9 @@ internal fun HostShell(
     }
     val facts: PdshNavFacts = remember(
         state,
+        // The runtime page's 最近出錯 reads the D14 failure, so a host-state
+        // change must rebuild the facts even when the engine and turn did not.
+        hostState,
         handshake,
         turn,
         backgroundRevision,
