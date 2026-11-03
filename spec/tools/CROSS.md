@@ -74,3 +74,16 @@ Exit code 0 means all eight hold; 1 means at least one failed; 2 is a usage/root
   until its owning checker is added there, which keeps the coverage claim executable.
 - When an invariant fails, the finding is for the tree owner. This tool does not choose a
   side or edit a contract to make itself green.
+
+## Protocol registry (same CI stage)
+
+`phone-cross-tree` also runs `registry_check.py --root .` and discovers its mutation
+tests with the existing tool suite. The embedded schema in `spec/registry.json`
+validates each entry; all references must exist, each glob must reach a file, and
+IDs, owner roles, source cells and structured triggers must agree with baseline
+sections 3/4. Brace alternatives and segment-aware `**` are supported. Exclusions
+and bridge content predicates remain explicit. Empty `status` means the row makes
+no implementation-status assertion; it does not mean `implemented`. Source cells
+preserve qualifiers such as draft authority, non-runtime evidence and partial ends.
+This verifies transcription and reachability; it cannot prove semantic conformance
+of a linked implementation. No runtime message/schema/golden is changed.
