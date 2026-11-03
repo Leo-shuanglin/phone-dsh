@@ -151,41 +151,61 @@ private fun mergeSubagentHistory(
     .sortedWith(compareBy<UiStateNode> { it.seq }.thenBy { it.nodeID })
 
 /**
- * The state half of 停止, used by `stopChat` and by the JVM stop test.
+ * The stop transaction: one atomic state update and one call to the App's
+ * existing `persistChat` writer.
  *
- * Resetting `turnRunning` here is what lets the very next send pass
- * `submitChat`'s in-flight check instead of being refused by the stopped job.
- * The worker session id stays untouched.
+ * The writer is injected so the JVM suite can drive this production object with
+ * a real [ChatSessionStore], while the ViewModel passes its one `persistChat`
+ * method. There is deliberately no second persistence implementation here: the
+ * other chat lane's metadata fixes must reach stop as well.
+ *
+ * Resetting `turnRunning` is what lets the very next send pass `submitChat`'s
+ * in-flight check; the worker session id is left untouched.
  */
-internal fun stopChatTurnState(
-    current: ChatUiState,
-    atMs: Long,
-    turnRunning: AtomicBoolean,
-): ChatUiState {
-    turnRunning.set(false)
-    return if (current.running) current.markStopped(atMs) else current
+internal class ChatStopWiring(
+    private val chat: MutableStateFlow<ChatUiState>,
+    private val turnRunning: AtomicBoolean,
+    private val persist: (String) -> Unit,
+) {
+    fun stop(chatId: String, atMs: Long): ChatUiState {
+        chat.update { live ->
+            if (live.chatId != chatId) {
+                live
+            } else {
+                turnRunning.set(false)
+                if (live.running) live.markStopped(atMs) else live
+            }
+        }
+        val stopped = chat.value
+        persist(chatId)
+        return stopped
+    }
 }
 
 /**
- * Persists the stopped transcript through the same store update the normal
- * `persistChat` uses, without touching `persistChat`'s body (another lane owns
- * it). `stopChat` calls this on its serialised IO scope; the JVM test calls it
- * directly with a real [ChatSessionStore].
+ * The stored-record repair shared by `openChatSession` and
+ * `restoreChatSessions`.
+ *
+ * The repair is synchronous and touches disk, so callers run it on their IO
+ * dispatcher. [restore] keeps one bad row from discarding the rest of the list.
  */
-internal fun persistStoppedChat(store: ChatSessionStore, ui: ChatUiState) {
-    if (ui.chatId.isEmpty()) return
-    val existing = store.load(ui.chatId) ?: return
-    val receipt = store.updateContent(
-        id = ui.chatId,
-        title = ui.title,
-        updatedAtMs = ui.updatedAtMs,
-        workerSessionIds = existing.workerSessionIds + listOfNotNull(ui.workerSessionId),
-        nodes = ui.nodes,
-        requestId = com.phonedsh.ui.state.StateRequestId("chat-stop:${UUID.randomUUID()}"),
-        expectedRevision = com.phonedsh.ui.state.StateRevision(existing.revision),
-    )
-    check(receipt.outcome is ChatWriteOutcome.Persisted) { "stopped chat write not confirmed" }
-    check(store.load(ui.chatId)?.nodes == ui.nodes) { "stopped chat nodes readback mismatch" }
+internal class ChatRecordRepair(private val store: ChatSessionStore) {
+    fun open(record: ChatRecord, liveChatId: String, turnRunning: Boolean): ChatRecord =
+        store.repairStaleChatTurns(record, liveTurn = turnRunning && liveChatId == record.id)
+
+    fun restore(
+        records: List<ChatRecord>,
+        liveChatId: String,
+        turnRunning: Boolean,
+        onFailure: (ChatRecord, Throwable) -> Unit = { _, _ -> },
+    ): List<ChatRecord> = records.map { record ->
+        try {
+            open(record, liveChatId, turnRunning)
+        } catch (failure: Throwable) {
+            onFailure(record, failure)
+            record
+        }
+    }
 }
 
 /** Permission preset catalog and write capability measured from the DSH host. */
@@ -1263,6 +1283,12 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
     private val mutableChat = MutableStateFlow(ChatUiState())
 
+    /**
+     * 停止's one state+persist path. The writer is this ViewModel's existing
+     * `persistChat`, so metadata fixes in that method apply to stop too.
+     */
+    private val chatStop = ChatStopWiring(mutableChat, turnRunning) { persistChat(it) }
+
     /** The chat screen's host state; the App's one writer is this view model. */
     internal val chat: StateFlow<ChatUiState> = mutableChat.asStateFlow()
     internal val currentChatId: String get() = mutableChat.value.chatId
@@ -2256,8 +2282,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                         // open TURN. This conversation is not running here, so close
                         // it and persist before the screen paints it.
                         runCatching {
-                            repairStoredChatForOpen(
-                                store = chatStore,
+                            ChatRecordRepair(chatStore).open(
                                 record = opened,
                                 liveChatId = mutableChat.value.chatId,
                                 turnRunning = mutableChat.value.running,
@@ -3209,18 +3234,11 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         // TURN node is what keeps the composer in RUNNING across restarts. The
         // fallback row is used only when TURN_STARTED never reached us.
         val at = clock.nowMillis()
-        // This seam also clears `turnRunning`; without it the very next send
-        // would still be refused by `submitChat`'s in-flight check. Run it on the
-        // latest state so a draft typed while stopping is not rolled back.
-        mutableChat.update { live ->
-            if (live.chatId != current.chatId) live else stopChatTurnState(live, at, turnRunning)
-        }
-        val stopped = mutableChat.value
+        // This transaction also clears `turnRunning` and invokes the shared
+        // `persistChat` writer, so the closed turn is stored without a second
+        // metadata-writing implementation.
+        chatStop.stop(current.chatId, at)
         refreshChatSession()
-        chatIo.launch {
-            runCatching { persistStoppedChat(chatStore, stopped) }
-                .onFailure { LogcatHostLog.warn("chat: stopped state not saved session=${current.chatId} (${reasonOf(it as? Exception ?: Exception(it))})") }
-        }
         LogcatHostLog.info("APP_CHAT_TURN_STOPPED session=${current.chatId}")
     }
 
@@ -3462,18 +3480,14 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     // Every stored conversation but the one really running here is
                     // safe to repair: the old stop path persisted its open TURN, so
                     // a cold start would otherwise reopen it as RUNNING forever.
-                    val loaded = chatStore.loadAll().map { record ->
-                        runCatching {
-                            repairStoredChatForOpen(
-                                store = chatStore,
-                                record = record,
-                                liveChatId = liveChatId,
-                                turnRunning = live,
-                            )
-                        }.onFailure {
-                            LogcatHostLog.warn("chat: stale turn repair failed session=${record.id} (${reasonOf(it as? Exception ?: Exception(it))})")
-                        }.getOrDefault(record)
-                    }
+                    val loaded = ChatRecordRepair(chatStore).restore(
+                        records = chatStore.loadAll(),
+                        liveChatId = liveChatId,
+                        turnRunning = live,
+                        onFailure = { record, failure ->
+                            LogcatHostLog.warn("chat: stale turn repair failed session=${record.id} (${reasonOf(failure as? Exception ?: Exception(failure))})")
+                        },
+                    )
                     loaded to chatStore.currentSessionId()
                 }
                     .onFailure { LogcatHostLog.warn("chat: store not restored (${reasonOf(it as? Exception ?: Exception(it))})") }
