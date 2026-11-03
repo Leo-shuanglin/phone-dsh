@@ -2,15 +2,15 @@
   "schema": "pdsh.android-pr22-source-map/1",
   "status": "UNACCEPTED_AUDIT",
   "generated_from": {
-    "android_candidate": "aa2e1aa (prepared Fleet tree; candidate changes pinned in 9f09ef1)",
+    "android_candidate": "59e05d39cf98c145560c2e6425ddea63756eae43",
     "android_pr14": "8c2eeab7b29728ebd0a54b71b5deaab07e5ac6eb",
     "ios_pr22": "edd687463cd24b9c969914a13fa1da268df016fe",
-    "shared_main": "45de1121ee8b6df4323609ae45e66caa0d0fe29a",
+    "shared_main": "2695fd21d2d32369c5b3c8b8ae4cc736819b7d74",
     "authority": "PR22 iOS sources + docs/design/ios-home-design-spec-no-overview.html (430x932pt)"
   },
   "status_legend": {
-    "implemented-on-candidate": "Surface exists on the prepared candidate and no blocking structural gap was found in this audit; it is still UNACCEPTED.",
-    "partial": "Surface exists but at least one PR22 element (route, control, action, design value or host binding) is missing or still on legacy 402pt tokens.",
+    "implemented-on-candidate": "The mapped source implementation is present on the candidate; this remains UNACCEPTED until the acceptance receipts are complete.",
+    "partial": "The surface exists, but a PR22 route, control, action, design value, host binding, or source/visual verification remains incomplete.",
     "missing": "No Android implementation was found.",
     "unverifiable": "Source exists but the contract is native/device-only and cannot be verified by the JVM suite on this Linux host."
   },
@@ -310,22 +310,23 @@
         {
           "path": "android/lib/src/main/kotlin/com/phonedsh/ui/UiMetrics.kt",
           "anchors": [
-            "The 402 pt parity yardstick"
+            "public const val BASELINE_WIDTH_PT: Int = 430"
           ]
         },
         {
           "path": "android/lib/src/main/kotlin/com/phonedsh/ui/ChatMetrics.kt",
           "anchors": [
-            "402 pt"
+            "public const val CONTENT_COLUMN_WIDTH_PT: Int = 390"
           ]
         }
       ],
       "evidence": [
         "anchor: docs/design/ios-home-design-spec-no-overview.html#diff",
-        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/UiMetrics.kt#402"
+        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/UiMetrics.kt#BASELINE_WIDTH_PT",
+        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/ChatMetrics.kt#CONTENT_COLUMN_WIDTH_PT"
       ],
-      "notes": "The PR22 gap analysis explicitly says the existing iOS tokens are the 402pt official-web values and the new design is 430pt. Android still documents and measures the 402pt yardstick, so this row is the root cause of the per-surface gaps above.",
-      "limitation": "Audit confirms the candidate did not move from 402pt to 430pt."
+      "notes": "The current Android source owns a 430×932 pt capture frame (`UiMetrics.BASELINE_WIDTH_PT`) and a 390 pt content column (`ChatMetrics.CONTENT_COLUMN_WIDTH_PT`). The old 402 pt frame is no longer the metric owner. This row remains partial because source anchors do not establish page-by-page screenshot parity.",
+      "limitation": "The 430 pt source authority is present; page-level visual and interaction acceptance remains separate and is not claimed by this map."
     },
     {
       "id": "home-spec-chrome",
@@ -420,7 +421,7 @@
           "path": "android/app/src/main/kotlin/com/phonedsh/probe/HostShell.kt",
           "anchors": [
             "internal fun HostShell",
-            "PdshDrawer(",
+            "HomeDrawer(",
             "HostHomeScreen("
           ]
         },
@@ -435,13 +436,13 @@
         "anchor: examples/probe-app/PhoneDSHProbe/NativeShell.swift#ChatPage(openDrawer",
         "anchor: android/app/src/main/kotlin/com/phonedsh/probe/HostShell.kt#HostHomeScreen"
       ],
-      "notes": "PR22 NativeShell makes ChatPage the home face and mounts HomeDrawer as the overlay. Android HostHomeScreen renders HostSessionsScreen (the sessions list) as the product home and mounts the old PdshDrawer; ChatPage is reached only as a pushed route. This is the structural home-routing defect called out by the owner.",
-      "limitation": "The product root is still SessionsPage, not the PR22 ChatPage home."
+      "notes": "The Android shell now mounts the PR22 HomeDrawer overlay (`HostShell.kt`), but its default home slot still renders HostHomeScreen/HostSessionsScreen; ChatPage remains a pushed route rather than the launch home. The drawer renderer is present, while the root-face routing mismatch remains partial.",
+      "limitation": "Default launch still uses the sessions home, not ChatPage; this is a real root-routing gap."
     },
     {
       "id": "signature-bubble",
       "kind": "signature",
-      "status": "partial",
+      "status": "implemented-on-candidate",
       "ios": [
         {
           "path": "examples/probe-app/PhoneDSHProbe/HomeSpec.swift",
@@ -465,16 +466,19 @@
           "anchors": [
             "public fun ChatBubble",
             "BubbleRole.USER",
-            "RoundedCornerShape(tokens.radius.bubble)"
+            "topEnd = HomeMetrics.BUBBLE_TOP_TRAILING_RADIUS_PT.dp",
+            "color = tokens.colors.userBubble"
           ]
         }
       ],
       "evidence": [
         "anchor: examples/probe-app/PhoneDSHProbe/HomeSpec.swift#bubbleShape",
-        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/surface/Bubble.kt#ChatBubble"
+        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/surface/Bubble.kt#ChatBubble",
+        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/HomeMetrics.kt#BUBBLE_TOP_TRAILING_RADIUS_PT",
+        "anchor: spec/ui/v1/tokens.json#colors.userBubble"
       ],
-      "notes": "Android ChatBubble draws RoundedCornerShape(radius.bubble=20) on all four corners and fills with colors.userBubble (tokens value #EDF3FE). PR22 draws radius 24 with the top-trailing corner square and fill #E8E8E8. The signature surface is therefore visually different.",
-      "limitation": "Bubble radius/corner/fill do not match PR22."
+      "notes": "The current Android user bubble reads the HomeSpec-derived 24 pt bubble radius, the top-trailing radius override, and the userBubble fill token (#E8E8E8 light). The previous all-corners RoundedCornerShape anchor was stale; the live code now expresses the asymmetric source shape.",
+      "limitation": "This is source-level implementation evidence only; it is not a simulator screenshot or Fleet acceptance receipt."
     },
     {
       "id": "signature-tool-row",
@@ -752,17 +756,19 @@
           "path": "android/lib/src/main/kotlin/com/phonedsh/ui/page/SettingsPage.kt",
           "anchors": [
             "public fun SettingsPage",
-            "public fun GeneralTabBody",
-            "SettingsSegmentedPicker("
+            "SettingsIndexSection(\"modelsAgents\"",
+            "SettingsSectionLabel(section.title",
+            "SettingsIndexRow(entry"
           ]
         }
       ],
       "evidence": [
         "anchor: examples/probe-app/PhoneDSHProbe/SettingsPage.swift#struct SettingsPage",
-        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/page/SettingsPage.kt#public fun SettingsPage"
+        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/page/SettingsPage.kt#SettingsIndexSection",
+        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/page/SettingsPage.kt#SettingsIndexList"
       ],
-      "notes": "PR22 SettingsPage is a grouped phone-settings List (模型与智能体 / 权限与隐私 / 对话 / 会话与文件 / 引擎 / 关于). Android still draws the five-tab segmented picker as the primary shell and folds the PR22 subpages into the old 通用 tab; the title KDoc still describes the pre-PR22 five-tab sheet.",
-      "limitation": "See note: at least one PR22 element is absent or still on legacy 402pt tokens."
+      "notes": "Android now renders the grouped PR22 settings index from SettingsIndexSection models and passes each section title and entry through SettingsSectionLabel/SettingsIndexRow. The old SettingsSegmentedPicker is not the root screen. This map records the actual grouped renderer; complete interaction and visual acceptance remains UNACCEPTED.",
+      "limitation": "The root grouped index is present; remaining settings subpage or host-operation gaps are tracked by their own entries and receipts."
     },
     {
       "id": "page-modelprovidersettingspage",
@@ -1448,17 +1454,25 @@
         {
           "path": "android/lib/src/main/kotlin/com/phonedsh/ui/page/SettingsPage.kt",
           "anchors": [
-            "public fun GeneralTabBody",
-            "SettingsSegmentedPicker("
+            "SettingsIndexPage.CONVERSATION -> ConversationSettingsPage("
+          ]
+        },
+        {
+          "path": "android/lib/src/main/kotlin/com/phonedsh/ui/page/ConversationSettingsPage.kt",
+          "anchors": [
+            "public fun ConversationSettingsPage(",
+            "SettingsSectionLabel(native(\"工作步骤\"",
+            "DeveloperToolsRow(preferences.developerTools, onToggleDeveloperTools, languageId)"
           ]
         }
       ],
       "evidence": [
-        "anchor: examples/probe-app/PhoneDSHProbe/SettingsPage.swift#ConversationSettingsPage",
-        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/page/SettingsPage.kt#GeneralTabBody"
+        "anchor: examples/probe-app/PhoneDSHProbe/SettingsPage.swift#struct ConversationSettingsPage",
+        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/page/SettingsPage.kt#SettingsIndexPage.CONVERSATION",
+        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/page/ConversationSettingsPage.kt#public fun ConversationSettingsPage"
       ],
-      "notes": "PR22 工作过程 is a standalone page (显示方式/收起时机/显示代码工作视图 + 任务进行中发送/性能与用量). Android folds these into the old 通用 tab and has not added the page or the grouped navigation to it.",
-      "limitation": "ConversationSettingsPage is not a page in Android."
+      "notes": "The standalone Android ConversationSettingsPage is now rooted from the grouped Settings index. Its Work steps and Sending/usage groups include the transcript, collapse, busy-send, performance, and developer-tools controls. The prior anchor pointed at the removed segmented-picker shell.",
+      "limitation": "Source implementation is mapped; acceptance is still UNACCEPTED and host callback behavior must be checked from its own current route/receipt evidence."
     },
     {
       "id": "subpage-archived-sessions",
@@ -1494,17 +1508,26 @@
       ],
       "android": [
         {
+          "path": "android/lib/src/main/kotlin/com/phonedsh/ui/page/PermissionDefaultsPage.kt",
+          "anchors": [
+            "public fun PermissionDefaultsPage(",
+            "onClick = onSelect?.let"
+          ]
+        },
+        {
           "path": "android/lib/src/main/kotlin/com/phonedsh/ui/page/SettingsPage.kt",
           "anchors": [
-            "public fun PermissionDefaultsPage"
+            "SettingsIndexPage.PERMISSION_DEFAULTS -> PermissionDefaultsPage("
           ]
         }
       ],
       "evidence": [
-        "anchor: examples/probe-app/PhoneDSHProbe/SettingsPage.swift#PermissionDefaultsPage",
-        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/page/SettingsPage.kt#PermissionDefaultsPage"
+        "anchor: examples/probe-app/PhoneDSHProbe/SettingsPage.swift#struct PermissionDefaultsPage",
+        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/page/PermissionDefaultsPage.kt#public fun PermissionDefaultsPage",
+        "anchor: android/lib/src/main/kotlin/com/phonedsh/ui/page/SettingsPage.kt#SettingsIndexPage.PERMISSION_DEFAULTS"
       ],
-      "notes": "The permission-defaults child page exists with tests, but its write is refused by the host (DefaultPermissionTier -> false), so the PR22 save semantics are not live."
+      "notes": "The page is implemented in its own composable and reached from the grouped Settings index; option taps are tied to the provided onSelect callback and current enabled/busy/readback state. The previous anchor targeted a stale declaration in SettingsPage.kt.",
+      "limitation": "This implementation status does not accept the candidate; the Fleet baseline and acceptance receipts remain UNACCEPTED."
     },
     {
       "id": "subpage-about",
