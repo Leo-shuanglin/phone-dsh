@@ -608,6 +608,60 @@ class Pr22ConstructTest(unittest.TestCase):
         self.assertTrue(embedded["ArchivedSessionsPage"])
 
 
+class LicensesSingleRegionTest(unittest.TestCase):
+    def _extract(self, content: str) -> dict:
+        swift = """import SwiftUI
+struct LicensesPage: View {
+    var body: some View {
+""" + content + """
+    }
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path = root / "examples/probe-app/PhoneDSHProbe/SettingsPage.swift"
+            source_path.parent.mkdir(parents=True)
+            source_path.write_text(swift, encoding="utf-8")
+            source = E.Source(source_path, root)
+            return E.PageExtractor(source, "LicensesPage").run(E.page_structs(source))
+
+    def test_exact_two_direct_license_rows_are_classified_as_one_region(self) -> None:
+        page = self._extract('''
+        List {
+            LabeledContent("SwiftTerm", value: "MIT")
+            LabeledContent("swift-nio", value: "Apache 2.0")
+        }
+        .homeGroupedList()
+        .navigationTitle("开源许可")
+''')
+        self.assertEqual("single-region", page["sectionModel"])
+        self.assertIn("direct LabeledContent license entries", page["sectionNote"])
+        self.assertEqual(["SwiftTerm", "swift-nio"],
+                         [row["label"] for row in page["sections"][0]["rows"]])
+
+    def test_a_section_or_extra_direct_child_disables_that_classification(self) -> None:
+        with_section = self._extract('''
+        List {
+            Section {
+                LabeledContent("SwiftTerm", value: "MIT")
+                LabeledContent("swift-nio", value: "Apache 2.0")
+            }
+        }
+''')
+        self.assertEqual("section", with_section["sectionModel"])
+        self.assertIsNone(with_section["sectionNote"])
+
+        with_extra_row = self._extract('''
+        List {
+            LabeledContent("SwiftTerm", value: "MIT")
+            LabeledContent("swift-nio", value: "Apache 2.0")
+            Text("More licenses")
+        }
+''')
+        self.assertNotEqual("single-region", with_extra_row["sectionModel"])
+        self.assertIsNone(with_extra_row["sectionNote"])
+
+
 class ChromeContractTest(unittest.TestCase):
     """HomeDrawer/HomeSpec are chrome, not `*Page`, but must not leave the gate."""
 

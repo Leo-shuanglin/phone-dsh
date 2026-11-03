@@ -3,8 +3,8 @@
   "page": "LicensesPage",
   "pageId": "licenses",
   "structure": "swiftui-view",
-  "sectionModel": "unmodeled",
-  "sectionNote": null,
+  "sectionModel": "single-region",
+  "sectionNote": "one flat List of direct LabeledContent license entries with no Section headers; Android renders its host-reported platform catalog in one grouped card. The catalogs are platform-specific and their rows are not compared here",
   "title": {
     "text": "开源许可",
     "provenance": "SettingsPage.swift:415",

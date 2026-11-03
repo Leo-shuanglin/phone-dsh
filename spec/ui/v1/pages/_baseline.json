@@ -1,6 +1,6 @@
 {
  "schema": "pdsh.ui.page-structure-baseline/1",
- "note": "Reconciled against iOS PR22 and current Android source. This ratchet holds 35 observed divergences on 5 pages and only shrinks. Nine resolved plugin-inventory, Shell and session-artifact labels were removed after source-backed UI fixes. No divergence, waiver or whitelist entry was added; the 16 new strict findings remain visible. UI/pixel and live interaction acceptance are separate.",
+ "note": "Reconciled against iOS PR22 and current Android source. This ratchet holds 33 observed divergences on 4 pages and only shrinks. The two implemented About findings and the nine previously resolved plugin-inventory, Shell and session-artifact records were removed. No divergence, waiver or whitelist entry was added. Remaining strict findings stay visible; source provenance does not establish complete UI/pixel or interaction acceptance.",
  "contracts": 34,
  "divergences": [
   {
@@ -226,20 +226,6 @@
    "name": "<untitled: settingField(field, namespace: group.namespace, writable: group.writable)>",
    "lane": "F",
    "reason": "PR22 restructured NativeConfigurationPage into 本机管理范围/iPhone Worker 限制/工具/新会话默认权限/实验插件/已加载插件 plus data-driven settings groups. Android NativeConfigurationPage.kt still renders the pre-PR22 内置插件设置 index and its older actions, so this section/action is a real current difference. Lane F rebuilds the page. This row is `<untitled: settingField(field, namespace: group.namespace, writable: group.writable)>` (unresolved-section)."
-  },
-  {
-   "page": "settings-about",
-   "kind": "missing-section",
-   "name": "Phone DSH",
-   "lane": "G",
-   "reason": "PR22's SettingsAboutPage is a logo/Phone DSH card plus a 版本/构建 card. Android AboutPage.kt still renders the old single 版本号 card, so the logo row and the 版本 label differ. Lane G owns the about page. This row is `Phone DSH` (missing-section)."
-  },
-  {
-   "page": "settings-about",
-   "kind": "missing-section",
-   "name": "版本",
-   "lane": "G",
-   "reason": "PR22's SettingsAboutPage is a logo/Phone DSH card plus a 版本/构建 card. Android AboutPage.kt still renders the old single 版本号 card, so the logo row and the 版本 label differ. Lane G owns the about page. This row is `版本` (missing-section)."
   },
   {
    "page": "workspace-folders",

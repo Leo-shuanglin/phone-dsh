@@ -101,6 +101,7 @@ import com.phonedsh.ui.page.ShellRun
 import com.phonedsh.ui.page.ShellSnapshot
 import com.phonedsh.ui.nav.PdshNavFacts
 import com.phonedsh.ui.page.BusyEnterMode
+import com.phonedsh.ui.page.ChatSubagentEntry
 import com.phonedsh.ui.page.FactState
 import java.io.File
 import java.net.HttpURLConnection
@@ -128,6 +129,20 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import java.util.UUID
+
+private data class SubagentHistoryPage(
+    val nodes: List<UiStateNode>,
+    val window: SubagentTranscriptWindow,
+)
+
+private class SubagentHistoryReadFailure(message: String, val terminalPagination: Boolean = false) : Exception(message)
+
+private fun mergeSubagentHistory(
+    existing: List<UiStateNode>,
+    refreshed: List<UiStateNode>,
+): List<UiStateNode> = (existing + refreshed)
+    .distinctBy(UiStateNode::nodeID)
+    .sortedWith(compareBy<UiStateNode> { it.seq }.thenBy { it.nodeID })
 
 /** Permission preset catalog and write capability measured from the DSH host. */
 internal data class PermissionDefaultsHostState(
@@ -1034,6 +1049,9 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     internal val chat: StateFlow<ChatUiState> = mutableChat.asStateFlow()
     internal val currentChatId: String get() = mutableChat.value.chatId
 
+    /** One request-bound child-session open at a time; never retarget a late history read. */
+    private var activeSubagentOpenRequestId: String? = null
+
     /**
      * The Worker session ids a chat record has claimed.
      *
@@ -1701,28 +1719,34 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     "agentId" to JsonString(worker),
                 )), timeoutMillis = 5_000) }.getOrNull() else null
                 val models = if (full) runCatching { client.call("session/modelCatalog", timeoutMillis = 5_000) }.getOrNull() else null
+                // DSHManagementModel reads session/list beside this exact
+                // projection. Its rows supply the subagent activity and the
+                // verified Worker identities the catalog may open.
+                val sessions = runCatching { client.call("session/list", timeoutMillis = 5_000) }.getOrNull()
                 // Read the changing projection last. Slow catalog reads must not
                 // let an older goal/model/permission overwrite a later refresh.
                 val projections = client.call("session/projections", JsonObject(mapOf(
                     "request" to JsonObject(mapOf("sessionId" to JsonString(worker))),
                 )), timeoutMillis = 5_000)
-                val measured = sessionSnapshotOf(projections, modes, commands, models, sessionId = worker)
+                val measured = sessionSnapshotOf(
+                    projections, modes, commands, models, sessionId = worker, sessionList = sessions,
+                )
                 mutableChat.update { live ->
                     if (live.chatId != current.chatId || live.workerSessionId != worker) live else live.copy(
-                        sessionSnapshot = if (full) measured else live.sessionSnapshot.copy(
-                            goal = measured.goal, todos = measured.todos,
-                        ),
+                        sessionSnapshot = if (full) measured else live.sessionSnapshot.withProjectionUpdate(measured),
                     )
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 logTurn("CHAT_SNAPSHOT_REFRESH_FAILED reason=${reasonOf(failure)}")
-                mutableChat.update { live -> if (live.chatId != current.chatId) live else live.copy(
-                    sessionSnapshot = live.sessionSnapshot.copy(
-                        accessError = "没读到权限,再试一次。", commandsError = "没读到命令,再试一次。",
-                    ),
-                ) }
+                // A failed session/projection read is not evidence that the
+                // independently read permission/command catalogs disappeared.
+                // Keep their last good values, and never attach a stale error to
+                // another Worker session that became current while this read ran.
+                if (mutableChat.value.chatId != current.chatId ||
+                    mutableChat.value.workerSessionId != worker
+                ) return@launch
             } finally {
                 snapshotRefreshInFlight.set(false)
                 if (snapshotFullRefreshQueued.getAndSet(false)) refreshChatSession(full = true)
@@ -2023,6 +2047,293 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                 "chat: opened session=$chatId rows=${record.nodes.size} " +
                     "worker=${record.workerSessionId ?: "-"}",
             )
+        }
+    }
+
+    /**
+     * Opens one Worker id from the current subagent projection. The full history
+     * page is read before changing the current chat, so a missing/malformed Worker
+     * response leaves the parent conversation in place instead of opening a blank
+     * app session.
+     *
+     * @return null only after the existing Worker identity and transcript page
+     *   were read, persisted to the app's existing chat record, and selected by CAS.
+     */
+    internal suspend fun openSubagentSession(entry: ChatSubagentEntry): String? {
+        val parent = mutableChat.value
+        val parentChatId = parent.chatId
+        val parentWorkerId = parent.workerSessionId
+        val projected = parent.sessionSnapshot.subagents?.firstOrNull {
+            it.workerSessionId == entry.workerSessionId
+        }
+        if (parentChatId.isBlank() || parentWorkerId.isNullOrBlank()) {
+            return "当前会话没有已确认的 Worker 身份，未打开子会话。"
+        }
+        if (parent.running || parent.pendingNodes.isNotEmpty()) {
+            return "请先结束当前任务并处理待回复请求，再打开子会话。"
+        }
+        if (projected == null || projected != entry || !entry.canOpen) {
+            return "子会话未在当前 Worker 目录中确认，或仍在运行；未打开。"
+        }
+
+        val requestId = UUID.randomUUID().toString()
+        activeSubagentOpenRequestId = requestId
+        fun stillOnParent(): Boolean =
+            activeSubagentOpenRequestId == requestId &&
+                mutableChat.value.chatId == parentChatId &&
+                mutableChat.value.workerSessionId == parentWorkerId &&
+                mutableChat.value.sessionSnapshot.subagents?.any {
+                    it.workerSessionId == entry.workerSessionId && it.canOpen
+                } == true
+
+        try {
+            val records = withContext(Dispatchers.IO) { chatStore.loadAll() }
+            val target = resolveSubagentSessionTarget(entry, records)
+                ?: return "子会话身份与本机记录不一致，未切换当前会话。"
+            val existing = when (target) {
+                is SubagentSessionTarget.CachedRecord -> target.record
+                is SubagentSessionTarget.AdoptKnownWorker -> target.existingRecord
+            }
+            val targetChatId = existing?.id ?: entry.workerSessionId
+            // Reopening an App-owned record still follows the current Worker cursor
+            // and reads its durable page, matching iOS `openManagedSession`. The
+            // cached transcript is merged below so a bounded page never drops older
+            // rows already saved on this device.
+            val history = withContext(Dispatchers.IO) {
+                readSubagentHistoryPage(entry.workerSessionId, targetChatId)
+            }
+            if (!stillOnParent()) return "当前会话已切换，未打开子会话。"
+
+            val expectedCurrentId = withContext(Dispatchers.IO) { chatStore.currentSessionId() }
+            if (expectedCurrentId != parentChatId) {
+                return "当前会话选择已变化，子会话未打开。"
+            }
+            val record = withContext(Dispatchers.IO) {
+                when {
+                    existing != null -> {
+                        check(!existing.archived) { "archived subagent record cannot become current" }
+                        val title = existing.title.ifBlank { entry.sessionTitle.orEmpty() }
+                        val updatedAt = maxOf(existing.updatedAtMs, entry.updatedAtMs ?: existing.updatedAtMs)
+                        val receipt = chatStore.updateContent(
+                            id = existing.id,
+                            title = title,
+                            updatedAtMs = updatedAt,
+                            workerSessionIds = (existing.workerSessionIds + entry.workerSessionId).distinct(),
+                            nodes = mergeSubagentHistory(existing.nodes, history.nodes),
+                            requestId = com.phonedsh.ui.state.StateRequestId("subagent-history:$requestId"),
+                            expectedRevision = com.phonedsh.ui.state.StateRevision(existing.revision),
+                        )
+                        check(receipt.outcome is ChatWriteOutcome.Persisted) { "subagent transcript write was not confirmed" }
+                        chatStore.load(existing.id)?.also { readback ->
+                            check(readback.workerSessionId == entry.workerSessionId &&
+                                readback.nodes == mergeSubagentHistory(existing.nodes, history.nodes) &&
+                                readback.workspaceGroupId == existing.workspaceGroupId &&
+                                readback.unknownFields == existing.unknownFields
+                            ) { "subagent transcript readback mismatch" }
+                        } ?: error("subagent chat record disappeared after its write")
+                    }
+                    else -> {
+                        val created = ChatRecord(
+                            id = entry.workerSessionId,
+                            title = entry.sessionTitle.orEmpty(),
+                            updatedAtMs = entry.updatedAtMs ?: 0L,
+                            workerSessionIds = listOf(entry.workerSessionId),
+                            nodes = history.nodes,
+                            workspaceID = null,
+                            workspaceGroupId = null,
+                        )
+                        chatStore.save(created)
+                        chatStore.load(created.id)?.also { readback ->
+                            check(readback.workerSessionId == entry.workerSessionId &&
+                                readback.nodes == created.nodes &&
+                                readback.workspaceGroupId == null
+                            ) { "adopted Worker transcript readback mismatch" }
+                        } ?: error("adopted Worker record disappeared after its write")
+                    }
+                }
+            }
+            if (!stillOnParent()) return "当前会话已切换，子会话未打开。"
+            val selection = withContext(Dispatchers.IO) {
+                chatStore.selectCurrentSession(
+                    record.id,
+                    com.phonedsh.ui.state.StateRequestId("subagent-select:$requestId"),
+                    expectedCurrentId = parentChatId,
+                )
+            }
+            if (selection.outcome !is ChatWriteOutcome.Persisted) {
+                return "子会话已读取，但当前会话选择没有确认。"
+            }
+            if (!stillOnParent()) {
+                withContext(Dispatchers.IO) {
+                    chatStore.selectCurrentSession(
+                        parentChatId,
+                        com.phonedsh.ui.state.StateRequestId("subagent-restore:$requestId"),
+                        expectedCurrentId = record.id,
+                    )
+                }
+                return "当前会话已变化，子会话没有切换到屏幕。"
+            }
+
+            chatWorkerClaims = chatWorkerClaims + record.workerSessionIds
+            mutableChat.value = record.toUiState().copy(
+                sessionSnapshot = ChatSessionSnapshot(),
+                subagentTranscript = history.window,
+            )
+            val listing = HostSessionRecord(
+                id = record.id,
+                lastActivityMs = entry.updatedAtMs,
+                title = record.title,
+                workspaceID = record.workspaceID,
+                pinned = record.pinned,
+            )
+            mutableSessions.update { snapshot ->
+                snapshot.copy(
+                    waiting = false,
+                    sessions = mergeSessions(emptyList(), snapshot.sessions + listing),
+                    currentSessionID = record.id,
+                )
+            }
+            refreshChatSession(full = true)
+            return null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            LogcatHostLog.warn("subagent: history open refused worker=${entry.workerSessionId} (${reasonOf(failure)})")
+            return if (failure is SubagentHistoryReadFailure) failure.message
+                else "未能读取并确认这个子会话的历史，本次没有切换。"
+        } finally {
+            if (activeSubagentOpenRequestId == requestId) activeSubagentOpenRequestId = null
+        }
+    }
+
+    /** Read the latest bounded page, following the source's durable Worker cursor first. */
+    private suspend fun readSubagentHistoryPage(
+        workerSessionId: String,
+        chatId: String,
+        throughSeq: Long? = null,
+        beforeSeq: Long? = null,
+    ): SubagentHistoryPage {
+        val client = DshTurnClient(host.channel, ::logTurn)
+        val cursor = throughSeq ?: readSubagentHistoryCursor(client, workerSessionId)
+        if (cursor < 0) {
+            return SubagentHistoryPage(
+                nodes = emptyList(),
+                window = SubagentTranscriptWindow(workerSessionId, null, null, hasMore = false),
+            )
+        }
+        val request = linkedMapOf<String, JsonValue>(
+            "address" to JsonObject(mapOf(
+                "kind" to JsonString("session"),
+                "sessionId" to JsonString(workerSessionId),
+            )),
+            "throughSeq" to JsonNumber(cursor.toString()),
+            "maxMessages" to JsonNumber(SUBAGENT_HISTORY_PAGE_SIZE.toString()),
+        )
+        beforeSeq?.let { request["beforeSeq"] = JsonNumber(it.toString()) }
+        val response = client.call(
+            "session/page",
+            JsonObject(mapOf("request" to JsonObject(request))),
+            timeoutMillis = SUBAGENT_HISTORY_TIMEOUT_MILLIS,
+        ) as? JsonObject ?: throw SubagentHistoryReadFailure("子会话没有返回可读的历史页。")
+        val records = (response["records"] as? JsonArray)?.values
+            ?: throw SubagentHistoryReadFailure("子会话没有返回历史记录集合。")
+        val rawEvents = records.mapNotNull { value ->
+            (value as? JsonObject)?.get("event") as? JsonObject
+        }
+        val projected = projectSubagentHistory(chatId, rawEvents)
+        projected.unsupportedReason?.let { throw SubagentHistoryReadFailure(it) }
+        val firstSequence = rawEvents.mapNotNull { raw ->
+            (raw["seq"] as? JsonNumber)?.asLongOrNull()
+        }.minOrNull()
+        val hasMore = (response["hasMore"] as? JsonBool)?.value ?: false
+        if (hasMore && firstSequence == null) {
+            throw SubagentHistoryReadFailure("子会话的历史还有更早记录，但没有可用的分页游标；未打开。", terminalPagination = true)
+        }
+        return SubagentHistoryPage(
+            nodes = projected.nodes,
+            window = SubagentTranscriptWindow(
+                workerSessionId = workerSessionId,
+                throughSeq = cursor,
+                beforeSeq = firstSequence,
+                hasMore = hasMore,
+            ),
+        )
+    }
+
+    private suspend fun readSubagentHistoryCursor(client: DshTurnClient, workerSessionId: String): Long {
+        val follow = client.follow(workerSessionId, maxMessages = 1)
+        try {
+            return withTimeout(SUBAGENT_HISTORY_TIMEOUT_MILLIS) {
+                while (true) {
+                    val item = follow.next(timeoutMillis = SUBAGENT_HISTORY_TIMEOUT_MILLIS)
+                        ?: throw SubagentHistoryReadFailure("子会话没有返回历史游标。")
+                    when ((item["type"] as? JsonString)?.value) {
+                        "error" -> throw SubagentHistoryReadFailure("子会话历史读取失败。")
+                        "end" -> throw SubagentHistoryReadFailure("子会话历史流在游标前结束。")
+                        "item" -> {
+                            val value = item["value"] as? JsonObject ?: continue
+                            if ((value["type"] as? JsonString)?.value == "snapshot") {
+                                return@withTimeout (value["cursor"] as? JsonNumber)?.asLongOrNull()
+                                    ?: throw SubagentHistoryReadFailure("子会话历史没有提供游标。")
+                            }
+                        }
+                    }
+                }
+                @Suppress("UNREACHABLE_CODE")
+                -1L
+            }
+        } finally {
+            follow.close()
+        }
+    }
+
+    /** Load one earlier Worker page; the page keeps the same throughSeq snapshot. */
+    internal fun loadEarlierSubagentTranscript() {
+        val current = mutableChat.value
+        val window = current.subagentTranscript ?: return
+        val before = window.beforeSeq ?: return
+        val through = window.throughSeq ?: return
+        if (!window.hasMore || window.loadingEarlier || current.workerSessionId != window.workerSessionId) return
+        mutableChat.update { live ->
+            if (live.chatId != current.chatId || live.workerSessionId != window.workerSessionId) live
+            else live.copy(subagentTranscript = window.copy(loadingEarlier = true, error = null))
+        }
+        turnScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                readSubagentHistoryPage(
+                    workerSessionId = window.workerSessionId,
+                    chatId = current.chatId,
+                    throughSeq = through,
+                    beforeSeq = before,
+                ).also { page ->
+                    if (!subagentHistoryCursorAdvanced(before, page.window.beforeSeq)) {
+                        throw SubagentHistoryReadFailure("更早的子会话历史没有推进分页游标；请稍后重试。", terminalPagination = true)
+                    }
+                }
+            }
+            mutableChat.update { live ->
+                val liveWindow = live.subagentTranscript
+                if (live.chatId != current.chatId || live.workerSessionId != window.workerSessionId ||
+                    liveWindow?.beforeSeq != before || liveWindow.throughSeq != through
+                ) return@update live
+                result.fold(
+                    onSuccess = { page ->
+                        val merged = (page.nodes + live.nodes).distinctBy { it.nodeID }.sortedBy { it.seq }
+                        live.copy(
+                            nodes = merged,
+                            subagentTranscript = page.window,
+                        )
+                    },
+                    onFailure = { failure ->
+                        live.copy(subagentTranscript = transcriptAfterSubagentPageFailure(
+                            window = liveWindow,
+                            message = (failure as? SubagentHistoryReadFailure)?.message
+                                ?: "未能读取更早的子会话历史。",
+                            terminalPagination = (failure as? SubagentHistoryReadFailure)?.terminalPagination == true,
+                        ))
+                    },
+                )
+            }
         }
     }
 
@@ -3206,6 +3517,10 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     private fun onWorkerConsole(text: String) {
         if (text.contains("XL_DSH_READY")) {
             Log.i(TAG_TURN, "APP_WORKER_READY")
+            // A cold restore may try the projection before the Worker has
+            // registered its channel. Once this exact Worker announces ready,
+            // re-read the current session's facts; no new Worker/session is made.
+            refreshChatSession(full = true)
         }
     }
 
@@ -3236,6 +3551,10 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
 
         const val HOST_READY_TIMEOUT_MILLIS = 180_000L
         const val ENGINE_READY_TIMEOUT_MILLIS = 180_000L
+        /** One source-aligned Worker page; older pages remain explicitly loadable. */
+        const val SUBAGENT_HISTORY_PAGE_SIZE = 60
+        /** A stalled cursor/page read leaves the currently selected conversation intact. */
+        const val SUBAGENT_HISTORY_TIMEOUT_MILLIS = 10_000L
 
     }
 }

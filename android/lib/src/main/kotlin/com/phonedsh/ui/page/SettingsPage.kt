@@ -381,6 +381,10 @@ public data class SettingsFacts(
     public val archivedSessionCount: Int? = null,
     /** Permission grant summary read from the host; null means unread. */
     public val phonePermissionSummary: String? = null,
+    /** Android package `versionCode`; null means the host did not report the build value. */
+    public val buildNumber: String? = null,
+    /** Raw package version for About; the index may use a separate signing-qualified label. */
+    public val rawVersionName: String? = null,
 )
 
 /** The web-search page's summary; kept for the host's snapshot, not drawn here. */

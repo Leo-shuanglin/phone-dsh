@@ -191,6 +191,154 @@ class VerifiedSettingsIndexModelTests(unittest.TestCase):
         self.assertIsNone(self._read(source))
 
 
+ABOUT_ROW_MODEL = '''
+data class AboutRowView(val id: String, val title: String, val value: String?)
+data class AboutSectionView(val id: String, val title: String,
+    val rows: List<AboutRowView>)
+data class AboutScreenState(val sections: List<AboutSectionView>) {
+    companion object {
+        const val VERSION_SECTION_ID = "about.version"
+        fun from(): AboutScreenState {
+            val versionRows = listOf(
+                AboutRowView(id = "version.version", title = "版本", value = "0.1.0"),
+                AboutRowView(id = "version.build", title = "构建", value = "42"),
+            )
+            val sections = buildList {
+                add(AboutSectionView(VERSION_SECTION_ID, "版本", versionRows))
+            }
+            return AboutScreenState(sections = sections)
+        }
+    }
+}
+@Composable fun AboutPage(state: AboutScreenState) {
+    BasicText(text = "Phone DSH")
+    val cards = state.sections.map { section ->
+        section to section.rows.filter { row -> !row.id.isEmpty() }
+    }
+    cards.forEach { (section, rows) ->
+        SettingsGroupCard {
+            rows.forEach { row -> SettingsFormRow(title = row.title, value = row.value) }
+        }
+    }
+}
+'''
+
+
+class VerifiedAboutRowModelTests(unittest.TestCase):
+    def test_about_rows_are_resolved_only_through_the_page_renderer(self):
+        source = ABOUT_ROW_MODEL
+        rows = check.android_row_positions(source, check.mask_kotlin(source), {}, {})
+        self.assertEqual(["Phone DSH", "版本", "构建"], [label for label, _ in rows])
+
+    def test_about_model_without_the_matching_renderer_does_not_satisfy_rows(self):
+        source = ABOUT_ROW_MODEL.replace(
+            "SettingsFormRow(title = row.title, value = row.value)",
+            "BasicText(text = row.title)",
+        )
+        rows = check.android_row_positions(source, check.mask_kotlin(source), {}, {})
+        self.assertEqual(["Phone DSH"], [label for label, _ in rows])
+
+
+class VerifiedDeveloperToolsRowTests(unittest.TestCase):
+    SOURCE = '''
+@Composable fun ConversationSettingsPage(preferences: SettingsPreferences,
+    onToggleDeveloperTools: ((Boolean) -> Unit)?, languageId: String?) {
+    DeveloperToolsRow(preferences.developerTools, onToggleDeveloperTools, languageId)
+}
+@Composable private fun DeveloperToolsRow(value: FactState,
+    onToggle: ((Boolean) -> Unit)?, languageId: String?) {
+    val label = UiStrings.settingsNativeText(languageId, UiStrings.WORK_DETAILS_CODE_VIEW, UiStrings.WORK_DETAILS_CODE_VIEW_EN)
+    val known = value != FactState.UNKNOWN && onToggle != null
+    val checked = value == FactState.YES
+    if (!known) return
+    SettingsRowFrame(role = Role.Switch, onClick = { onToggle?.invoke(!checked) }) {
+        SettingsRowLabel(text = label)
+        SettingsSwitch(checked = checked, enabled = true)
+    }
+}
+'''
+
+    def _actions(self, source: str):
+        strings = {
+            "WORK_DETAILS_CODE_VIEW": "显示代码工作视图",
+            "WORK_DETAILS_CODE_VIEW_EN": "Show code work",
+        }
+        return check.android_actions(source, check.mask_kotlin(source), strings, {})[0]
+
+    def test_localized_developer_toggle_is_read_from_its_verified_switch_helper(self):
+        self.assertEqual(["显示代码工作视图"], self._actions(self.SOURCE))
+
+    def test_missing_renderer_callback_or_callsite_does_not_count_as_an_action(self):
+        no_callback = self.SOURCE.replace(
+            "onClick = { onToggle?.invoke(!checked) }", "onClick = {}")
+        no_callsite = self.SOURCE.replace(
+            "DeveloperToolsRow(preferences.developerTools, onToggleDeveloperTools, languageId)",
+            "Unit")
+        no_label = self.SOURCE.replace(
+            "SettingsRowLabel(text = label)", "SettingsRowLabel(text = \"\")")
+        self.assertEqual([], self._actions(no_callback))
+        self.assertEqual([], self._actions(no_callsite))
+        self.assertEqual([], self._actions(no_label))
+
+
+class VerifiedChatArtifactsRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / check.ANDROID_UI_REL / "nav").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        import shutil
+        shutil.rmtree(self.root)
+
+    def _write(self, body: str) -> bool:
+        path = self.root / check.ANDROID_UI_REL / "nav" / "PdshNavHost.kt"
+        path.write_text(body)
+        return check.verified_chat_artifact_route_binding(self.root)
+
+    def test_direct_chat_route_callback_makes_the_artifact_action_unconditional(self):
+        self.assertTrue(self._write('''
+fun PdshNavHost(route: PdshRoute) {
+    when (route) { PdshRoute.Chat -> ChatRoute() }
+}
+fun ChatRoute() {
+    ChatPage(onOpenArtifacts = {
+        onNavigate(PdshRoute.SessionArtifacts(state?.sessionID.orEmpty()))
+    })
+}
+'''))
+
+    def test_missing_or_conditional_route_callback_is_not_promoted(self):
+        self.assertFalse(self._write('''
+fun PdshNavHost(route: PdshRoute) {
+    when (route) { PdshRoute.Chat -> ChatRoute() }
+}
+fun ChatRoute() { ChatPage() }
+'''))
+        self.assertFalse(self._write('''
+fun PdshNavHost(route: PdshRoute) {
+    when (route) { PdshRoute.Chat -> ChatRoute() }
+}
+fun ChatRoute(available: Boolean) {
+    ChatPage(onOpenArtifacts = if (available) ({ onNavigate(PdshRoute.SessionArtifacts("s")) }) else null)
+}
+'''))
+
+
+    def test_conditional_lambda_bodies_are_not_promoted(self):
+        for condition in ("if(available)", "if (available)", "if\n(available)"):
+            with self.subTest(condition=condition):
+                self.assertFalse(self._write("""
+fun PdshNavHost(route: PdshRoute) {
+    when (route) { PdshRoute.Chat -> ChatRoute() }
+}
+fun ChatRoute(available: Boolean) {
+    ChatPage(onOpenArtifacts = { CONDITION
+        onNavigate(PdshRoute.SessionArtifacts(state?.sessionID.orEmpty()))
+    })
+}
+""".replace("CONDITION", condition)))
+
+
 class DrawerActionExtractionTests(unittest.TestCase):
     def test_wrapper_trailing_click_lambda_does_not_hide_its_first_label(self):
         source = '''

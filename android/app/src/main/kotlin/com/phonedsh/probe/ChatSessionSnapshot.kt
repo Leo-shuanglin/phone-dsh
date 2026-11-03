@@ -3,6 +3,7 @@ package com.phonedsh.probe
 
 import com.phonedsh.agentcore.*
 import com.phonedsh.dsh.turn.PendingRemoteRequest
+import com.phonedsh.ui.page.ChatSubagentEntry
 import com.phonedsh.ui.projection.*
 import com.phonedsh.ui.state.*
 
@@ -25,7 +26,48 @@ internal data class ChatSessionSnapshot(
     val contextBreakdown: ContextBreakdown? = null,
     /** Durable DSH inbox rows; null means the projection has not reported inbox. */
     val queueItems: List<ManagedQueueItemState>? = null,
+    /** Current Worker subagent projection; null means it was not reported. */
+    val subagents: List<ChatSubagentEntry>? = null,
 )
+
+/** A projection poll refreshes live facts without replacing catalogs it did not read. */
+internal fun ChatSessionSnapshot.withProjectionUpdate(measured: ChatSessionSnapshot): ChatSessionSnapshot = copy(
+    goal = measured.goal,
+    todos = measured.todos,
+    sessionStats = measured.sessionStats,
+    tokenUsage = measured.tokenUsage,
+    contextPressure = measured.contextPressure,
+    contextBreakdown = measured.contextBreakdown,
+    queueItems = measured.queueItems,
+    subagents = measured.subagents,
+)
+
+/** Safe path for opening one catalog Worker id without substituting a new session. */
+internal sealed interface SubagentSessionTarget {
+    public data class CachedRecord(val record: ChatRecord) : SubagentSessionTarget
+    public data class AdoptKnownWorker(
+        val workerSessionId: String,
+        val existingRecord: ChatRecord?,
+    ) : SubagentSessionTarget
+}
+
+/** Returns null unless the projection/list supplied this exact resumable Worker id. */
+internal fun resolveSubagentSessionTarget(
+    entry: ChatSubagentEntry,
+    records: List<ChatRecord>,
+): SubagentSessionTarget? {
+    if (!entry.canOpen || entry.workerSessionId.isBlank()) return null
+    val mapped = records.firstOrNull { entry.workerSessionId in it.workerSessionIds }
+    if (mapped != null && (mapped.archived || mapped.workerSessionId != entry.workerSessionId)) return null
+    // An App-owned chat's stored transcript is reusable when it owns this exact
+    // active Worker id. A catalog-adopted row keyed by the Worker id itself may
+    // hold only a recent remote page, so it must re-read `session/page` for its
+    // cursor before it can claim the transcript is complete.
+    if (mapped != null && mapped.id != entry.workerSessionId && mapped.nodes.isNotEmpty()) {
+        return SubagentSessionTarget.CachedRecord(mapped)
+    }
+    return SubagentSessionTarget.AdoptKnownWorker(entry.workerSessionId, mapped)
+}
 
 internal data class ChatModelRoute(val provider: String, val model: String,
     val efforts: List<EffortOption>, val defaultEffort: String?)
@@ -36,6 +78,7 @@ internal fun sessionSnapshotOf(
     commandCatalog: JsonValue?,
     modelCatalog: JsonValue? = null,
     sessionId: String? = null,
+    sessionList: JsonValue? = null,
 ): ChatSessionSnapshot {
     val values = (projections as? JsonObject)?.get("values") as? JsonObject
     val sessionStats = values?.get("sessionStats").asSessionStats()
@@ -54,6 +97,29 @@ internal fun sessionSnapshotOf(
     val current = (values?.get("permissions") as? JsonObject)?.string("currentValue")
     val selection = values?.get("modelSelection") as? JsonObject
     val selected = ((selection?.get("next") as? JsonObject) ?: (selection?.get("lastUsed") as? JsonObject))
+    val sessionRows = ((sessionList as? JsonObject)?.get("items") as? JsonArray)?.values
+    val sessionFacts = sessionRows.orEmpty().mapNotNull { raw ->
+        val row = raw as? JsonObject ?: return@mapNotNull null
+        val id = row.string("sessionId") ?: return@mapNotNull null
+        id to row
+    }.toMap()
+    val subagents = (values?.get("subagentCatalog") as? JsonArray)?.values?.mapNotNull { raw ->
+        val row = raw as? JsonObject ?: return@mapNotNull null
+        val id = row.string("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+        val session = sessionFacts[id]
+        val sessionTitle = ((session?.get("projections") as? JsonObject)?.get("values") as? JsonObject)
+            ?.string("title")?.takeIf(String::isNotBlank)
+        ChatSubagentEntry(
+            workerSessionId = id,
+            label = row.string("label"),
+            mode = row.string("mode"),
+            parentSessionId = row.string("parentSessionId"),
+            running = (session?.get("running") as? JsonBool)?.value,
+            workerSessionKnown = if (sessionRows == null) null else session != null,
+            sessionTitle = sessionTitle,
+            updatedAtMs = (session?.get("updatedAt") as? JsonNumber)?.asLongOrNull(),
+        )
+    }
     val routes = ((modelCatalog as? JsonObject)?.get("groups") as? JsonArray)?.values.orEmpty().flatMap { raw ->
         val group = raw as? JsonObject ?: return@flatMap emptyList()
         val provider = group.string("id") ?: return@flatMap emptyList()
@@ -130,6 +196,7 @@ internal fun sessionSnapshotOf(
         contextPressure = contextPressure,
         contextBreakdown = contextBreakdown,
         queueItems = queueItems,
+        subagents = subagents,
     )
 }
 

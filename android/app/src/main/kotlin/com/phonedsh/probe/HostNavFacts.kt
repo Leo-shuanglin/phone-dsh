@@ -348,15 +348,11 @@ internal fun buildNavFacts(
             // effective allow list, so the address count stays unread, not 1.
             egressAddressCount = null,
             busyEnterMode = preferences.busyEnterMode,
-            // The 关于 page's 版本 row. Both halves are build facts, not device
-            // reads: the version name is this APK's `versionName`, and the
-            // signature sentence is the one the build baked in
-            // (`BuildConfig.SIGNING_NOTICE`, the same sentence the manifest's
-            // `pdshSigningNotice` meta-data and the 关于 page carry). A single
-            // string on purpose — the row is free text, and naming the signature
-            // next to the version is what makes a side-loaded debug APK
-            // distinguishable from a release one on the page itself.
+            // The index keeps its signing-qualified APK label. About receives
+            // the raw version and build code as separate package facts.
             versionName = BuildConfig.VERSION_NAME + " · " + BuildConfig.SIGNING_NOTICE,
+            buildNumber = BuildConfig.VERSION_CODE.toString(),
+            rawVersionName = BuildConfig.VERSION_NAME,
             engineStarted = engineFact,
             // The platform appendix reads are the same three this file always had.
             platform = SettingsPlatformFacts(

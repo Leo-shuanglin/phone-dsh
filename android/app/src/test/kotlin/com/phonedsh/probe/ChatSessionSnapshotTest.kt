@@ -4,6 +4,7 @@ package com.phonedsh.probe
 import com.phonedsh.agentcore.*
 import com.phonedsh.dsh.turn.PendingRemoteRequest
 import com.phonedsh.hostevents.HostEvent
+import com.phonedsh.ui.page.ChatSubagentEntry
 import com.phonedsh.ui.state.*
 import com.phonedsh.domain.DomainStoreCore
 import com.phonedsh.domain.QuotaPolicy
@@ -362,6 +363,31 @@ class ChatSessionSnapshotTest {
         assertNull(snapshot.accessError)
     }
 
+    @Test fun `projection polling updates live metrics without discarding unread catalogs`() {
+        val prior = sessionSnapshotOf(
+            json("""{"values":{"permissions":{"currentValue":"read-only"}}}"""),
+            json("""{"options":[{"value":"read-only","label":"Read only"}]}"""),
+            json("""[{"name":"clear","description":"Clear"}]"""),
+        )
+        assertTrue(prior.accessModes.isNotEmpty())
+        assertEquals("read-only", prior.currentAccessMode?.id)
+        assertTrue(prior.commands.isNotEmpty())
+        val poll = sessionSnapshotOf(json("""{"values":{
+          "tokenUsage":{"uncachedInputTokens":100,"outputTokens":20,"cacheReadTokens":80,"cacheWriteTokens":10},
+          "contextPressure":{"projectedTokens":900,"contextWindow":1000},
+          "subagentCatalog":[]
+        }}"""), null, null)
+        val merged = prior.withProjectionUpdate(poll)
+        assertEquals(prior.accessModes, merged.accessModes)
+        assertEquals(prior.currentAccessMode, merged.currentAccessMode)
+        assertEquals(prior.commands, merged.commands)
+        assertEquals(prior.accessError, merged.accessError)
+        assertEquals(prior.commandsError, merged.commandsError)
+        assertEquals(210L, merged.tokenUsage?.totalTokens)
+        assertEquals(90, merged.contextPressure?.percent)
+        assertEquals(emptyList<ChatSubagentEntry>(), merged.subagents)
+    }
+
     @Test fun `session metrics project only complete valid host facts`() {
         val snapshot = sessionSnapshotOf(json("""{"values":{
           "sessionStats":{"turns":4,"steps":9,"llmMs":1200.5,"toolMs":300,
@@ -415,6 +441,156 @@ class ChatSessionSnapshotTest {
         assertNull(aggregateOverflow.tokenUsage)
     }
 
+    @Test fun `subagent projection distinguishes unread empty known and activity facts`() {
+        val unread = sessionSnapshotOf(
+            json("""{"values":{"todos":[]}}"""), null, null,
+            sessionId = "worker-parent",
+        )
+        assertNull(unread.subagents)
+
+        val empty = sessionSnapshotOf(
+            json("""{"values":{"subagentCatalog":[]}}"""), null, null,
+            sessionId = "worker-parent",
+            sessionList = json("""{"items":[]}"""),
+        )
+        assertEquals(emptyList<ChatSubagentEntry>(), empty.subagents)
+
+        val measured = sessionSnapshotOf(
+            json("""{"values":{"subagentCatalog":[
+              {"id":"worker-child","label":"Read the source","mode":"continuable","parentSessionId":"worker-parent"}
+            ]}}"""), null, null,
+            sessionId = "worker-parent",
+            sessionList = json("""{"items":[{"sessionId":"worker-child","running":false,
+              "updatedAt":1234,"projections":{"values":{"title":"Read the source"}}}]}"""),
+        )
+        val row = measured.subagents!!.single()
+        assertEquals("worker-child", row.workerSessionId)
+        assertEquals("Read the source", row.label)
+        assertEquals("worker-parent", row.parentSessionId)
+        assertEquals("Read the source", row.sessionTitle)
+        assertEquals(1234L, row.updatedAtMs)
+        assertFalse(row.running!!)
+        assertTrue(row.workerSessionKnown!!)
+        val withoutSessionList = sessionSnapshotOf(
+            json("""{"values":{"subagentCatalog":[{"id":"worker-child","mode":"unknown"}]}}"""),
+            null, null, sessionId = "worker-parent",
+        )
+        assertNull(withoutSessionList.subagents!!.single().workerSessionKnown)
+        assertNull(withoutSessionList.subagents.single().running)
+    }
+
+    @Test fun `subagent session resolution requires a current verified worker and exact record lineage`() {
+        val entry = ChatSubagentEntry(
+            workerSessionId = "worker-child", label = "Child", mode = ChatSubagentEntry.MODE_CONTINUABLE,
+            running = false, workerSessionKnown = true,
+        )
+        assertEquals(
+            SubagentSessionTarget.AdoptKnownWorker("worker-child", null),
+            resolveSubagentSessionTarget(entry, emptyList()),
+        )
+        assertNull(resolveSubagentSessionTarget(entry.copy(workerSessionKnown = null), emptyList()))
+        assertNull(resolveSubagentSessionTarget(entry.copy(workerSessionKnown = false), emptyList()))
+        assertNull(resolveSubagentSessionTarget(entry.copy(running = true), emptyList()))
+        assertNull(resolveSubagentSessionTarget(entry.copy(mode = ChatSubagentEntry.MODE_EXTERNAL), emptyList()))
+
+        val cached = ChatRecord(
+            id = "chat-child", title = "Child", updatedAtMs = 10,
+            workerSessionIds = listOf("worker-child"), nodes = listOf(sessionNode("chat-child")),
+        )
+        assertEquals(SubagentSessionTarget.CachedRecord(cached), resolveSubagentSessionTarget(entry, listOf(cached)))
+        val staleLineage = cached.copy(workerSessionIds = listOf("worker-child", "worker-new"))
+        assertNull(resolveSubagentSessionTarget(entry, listOf(staleLineage)))
+        assertNull(resolveSubagentSessionTarget(entry, listOf(cached.copy(archived = true))))
+    }
+
+    @Test fun `subagent history uses the production event projector and refuses unknown user content`() {
+        val projected = projectSubagentHistory("worker-child", listOf(
+            json("""{"type":"user/message","seq":1,"data":{"turn":1,"content":[{"type":"text","text":"Do the task"}]}}""") as JsonObject,
+            json("""{"type":"assistant/message","seq":2,"data":{"turn":1,"message":{"content":[{"type":"text","text":"Done"}]}}}""") as JsonObject,
+        ))
+        assertNull(projected.unsupportedReason)
+        assertEquals(listOf("user", "assistant"), projected.nodes.map {
+            (it.props["role"] as? JsonString)?.value ?: "assistant"
+        })
+        assertEquals(listOf("Do the task", "Done"), projected.nodes.map { it.text })
+
+        val unsupported = projectSubagentHistory("worker-child", listOf(
+            json("""{"type":"user/message","seq":1,"data":{"turn":1,"content":[{"type":"image","url":"opaque"}]}}""") as JsonObject,
+        ))
+        assertNotNull(unsupported.unsupportedReason)
+        assertTrue(unsupported.nodes.isEmpty())
+    }
+
+    @Test fun `subagent catalog distinguishes unreported empty and session-list identity`() {
+        val unreported = sessionSnapshotOf(
+            json("""{"values":{"todos":[]}}"""), null, null,
+            sessionId = "worker-parent",
+        )
+        assertNull(unreported.subagents)
+
+        val empty = sessionSnapshotOf(
+            json("""{"values":{"subagentCatalog":[]}}"""), null, null,
+            sessionId = "worker-parent",
+            sessionList = json("""{"items":[]}"""),
+        )
+        assertEquals(emptyList<ChatSubagentEntry>(), empty.subagents)
+
+        val measured = sessionSnapshotOf(
+            json("""{"values":{"subagentCatalog":[
+              {"id":"worker-child","label":"Read the source","mode":"continuable","parentSessionId":"worker-parent"}
+            ]}}"""), null, null,
+            sessionId = "worker-parent",
+            sessionList = json("""{"items":[{"sessionId":"worker-child","running":false,
+              "updatedAt":1234,"projections":{"values":{"title":"Read the source"}}}]}"""),
+        )
+        val entry = measured.subagents!!.single()
+        assertEquals("worker-child", entry.workerSessionId)
+        assertEquals("Read the source", entry.label)
+        assertEquals("worker-parent", entry.parentSessionId)
+        assertEquals("Read the source", entry.sessionTitle)
+        assertEquals(1234L, entry.updatedAtMs)
+        assertEquals(false, entry.running)
+        assertEquals(true, entry.workerSessionKnown)
+    }
+
+    @Test fun `subagent open target never invents an unknown or external Worker`() {
+        val known = ChatSubagentEntry(
+            workerSessionId = "worker-child", label = "Child", mode = "continuable",
+            running = false, workerSessionKnown = true,
+        )
+        assertEquals(
+            SubagentSessionTarget.AdoptKnownWorker("worker-child", null),
+            resolveSubagentSessionTarget(known, emptyList()),
+        )
+        assertNull(resolveSubagentSessionTarget(known.copy(workerSessionKnown = null), emptyList()))
+        assertNull(resolveSubagentSessionTarget(known.copy(running = true), emptyList()))
+        assertNull(resolveSubagentSessionTarget(known.copy(mode = ChatSubagentEntry.MODE_EXTERNAL), emptyList()))
+
+        val cached = ChatRecord(
+            id = "chat-child", title = "Child", updatedAtMs = 20,
+            workerSessionIds = listOf("worker-child"), nodes = listOf(sessionNode("chat-child")),
+        )
+        assertEquals(SubagentSessionTarget.CachedRecord(cached), resolveSubagentSessionTarget(known, listOf(cached)))
+        val staleWorker = cached.copy(workerSessionIds = listOf("worker-child", "worker-new"))
+        assertNull(resolveSubagentSessionTarget(known, listOf(staleWorker)))
+    }
+
+    @Test fun `subagent history projection reuses production event mapping and fails on unsupported user content`() {
+        val projected = projectSubagentHistory("worker-child", listOf(
+            json("""{"type":"user/message","seq":1,"data":{"turn":1,"content":[{"type":"text","text":"Do the task"}]}}""") as JsonObject,
+            json("""{"type":"assistant/message","seq":2,"data":{"turn":1,"message":{"content":[{"type":"text","text":"Done"}]}}}""") as JsonObject,
+        ))
+        assertNull(projected.unsupportedReason)
+        assertEquals(listOf("user", "assistant"), projected.nodes.map { it.props["role"]?.let { role -> (role as? JsonString)?.value } ?: "assistant" })
+        assertEquals(listOf("Do the task", "Done"), projected.nodes.map { it.text })
+
+        val unsupported = projectSubagentHistory("worker-child", listOf(
+            json("""{"type":"user/message","seq":1,"data":{"turn":1,"content":[{"type":"image","url":"opaque"}]}}""") as JsonObject,
+        ))
+        assertNotNull(unsupported.unsupportedReason)
+        assertTrue(unsupported.nodes.isEmpty())
+    }
+
     @Test fun `rich live question reaches plan review carrier without losing metadata`() {
         val request = PendingRemoteRequest("ask-1", "client-1", json("""{
           "questions":[{"id":"plan","header":"Review","question":"Proceed?",
@@ -463,4 +639,37 @@ class ChatSessionSnapshotTest {
         assertEquals(1, state.todoItems.size)
         assertEquals(GoalBarState.Visible("active", "Report"), state.goal)
     }
+    @Test fun `subagent older pages must advance the cursor monotonically`() {
+        assertTrue(subagentHistoryCursorAdvanced(previousBeforeSeq = 40, nextBeforeSeq = 39))
+        assertFalse(subagentHistoryCursorAdvanced(previousBeforeSeq = 40, nextBeforeSeq = 40))
+        assertFalse(subagentHistoryCursorAdvanced(previousBeforeSeq = 40, nextBeforeSeq = null))
+    }
+
+    @Test fun `terminal paging stalls stop offering more while preserving rows error state`() {
+        val previous = SubagentTranscriptWindow(
+            workerSessionId = "worker-child",
+            throughSeq = 90,
+            beforeSeq = 40,
+            hasMore = true,
+            loadingEarlier = true,
+        )
+        val stalled = transcriptAfterSubagentPageFailure(
+            previous,
+            message = "cursor did not advance",
+            terminalPagination = true,
+        )
+        assertFalse(stalled.hasMore)
+        assertFalse(stalled.loadingEarlier)
+        assertEquals("cursor did not advance", stalled.error)
+        assertEquals(previous.beforeSeq, stalled.beforeSeq)
+        val transient = transcriptAfterSubagentPageFailure(
+            previous,
+            message = "temporary read error",
+            terminalPagination = false,
+        )
+        assertTrue(transient.hasMore)
+        assertFalse(transient.loadingEarlier)
+        assertEquals("temporary read error", transient.error)
+    }
+
 }

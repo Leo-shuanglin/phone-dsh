@@ -33,6 +33,7 @@ import com.phonedsh.agentcore.JsonString
 import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.hostevents.HostEvent
 import com.phonedsh.hostevents.HostEventKind
+import com.phonedsh.hostevents.HostEventProjection
 import com.phonedsh.ui.projection.UiStateKind
 import com.phonedsh.ui.projection.UiStateNode
 import com.phonedsh.ui.projection.UiStateSurface
@@ -46,6 +47,7 @@ import com.phonedsh.ui.state.ChatScreenState
 import com.phonedsh.ui.state.ComposerStatsMode
 import com.phonedsh.ui.state.RunStatus
 import com.phonedsh.ui.page.PerformanceUsage
+import com.phonedsh.ui.state.TranscriptState
 
 /**
  * The chat screen's host state.
@@ -117,9 +119,117 @@ internal data class ChatUiState(
     val pendingExpanded: Boolean = false,
     val expandedRowIds: Set<String> = emptySet(),
     val commandExecution: com.phonedsh.ui.page.ChatCommandExecution? = null,
+    /** Cursor facts for a Worker session opened from the subagent catalog. */
+    val subagentTranscript: SubagentTranscriptWindow? = null,
 ) {
     /** True when this state names a conversation the session list can show. */
     val hasConversation: Boolean get() = chatId.isNotEmpty()
+}
+
+/** A bounded `session/page` window; a null cursor means no earlier page exists. */
+internal data class SubagentTranscriptWindow(
+    val workerSessionId: String,
+    val throughSeq: Long?,
+    val beforeSeq: Long?,
+    val hasMore: Boolean,
+    val loadingEarlier: Boolean = false,
+    val error: String? = null,
+) {
+    fun screenState(): TranscriptState = TranscriptState(
+        hasMore = hasMore,
+        loadingEarlier = loadingEarlier,
+        error = error,
+    )
+}
+
+/** Result of projecting one verified Worker history page into the app transcript. */
+internal data class SubagentHistoryProjection(
+    val nodes: List<UiStateNode>,
+    val unsupportedReason: String? = null,
+)
+
+/** A page claiming more history must move the exclusive `beforeSeq` cursor backward. */
+internal fun subagentHistoryCursorAdvanced(
+    previousBeforeSeq: Long,
+    nextBeforeSeq: Long?,
+): Boolean = nextBeforeSeq != null && nextBeforeSeq < previousBeforeSeq
+
+/** Terminal cursor stalls preserve the error/rows but stop advertising another page. */
+internal fun transcriptAfterSubagentPageFailure(
+    window: SubagentTranscriptWindow,
+    message: String,
+    terminalPagination: Boolean,
+): SubagentTranscriptWindow = window.copy(
+    hasMore = window.hasMore && !terminalPagination,
+    loadingEarlier = false,
+    error = message,
+)
+
+/** Reuse the production event normalizer and timeline projector for session/page history. */
+internal fun projectSubagentHistory(
+    chatId: String,
+    rawEvents: List<JsonObject>,
+): SubagentHistoryProjection {
+    val nodes = ArrayList<UiStateNode>()
+    var ordinal = 0
+    for (raw in rawEvents.sortedBy { (it["seq"] as? com.phonedsh.agentcore.JsonNumber)?.asLongOrNull() ?: Long.MIN_VALUE }) {
+        for (event in HostEventProjection.projectAll(raw)) {
+            ordinal++
+            if (event.kind == HostEventKind.USER_MESSAGE) {
+                val content = event.data?.get("content")
+                    ?: return SubagentHistoryProjection(emptyList(), "用户消息历史内容无法读取；未打开子会话。")
+                val textParts = ArrayList<String>()
+                var unsupported = false
+                when (content) {
+                    is JsonString -> textParts += content.value
+                    is JsonArray -> content.values.forEach { blockValue ->
+                        val block = blockValue as? JsonObject
+                        if (block?.get("type") is JsonString && (block["type"] as JsonString).value == "text") {
+                            (block["text"] as? JsonString)?.value?.let(textParts::add)
+                                ?: run { unsupported = true }
+                        } else if (blockValue != com.phonedsh.agentcore.JsonNull) {
+                            unsupported = true
+                        }
+                    }
+                    else -> unsupported = true
+                }
+                if (unsupported) {
+                    return SubagentHistoryProjection(emptyList(), "子会话包含本机未支持的历史消息类型；未打开子会话。")
+                }
+                val text = textParts.joinToString("\n")
+                if (text.isNotBlank()) nodes += subagentHistoryUserNode(chatId, event, text, ordinal)
+            } else {
+                chatNodeOf(chatId, "", event, ordinal)?.let(nodes::add)
+            }
+        }
+    }
+    return SubagentHistoryProjection(nodes.distinctBy { it.nodeID })
+}
+
+private fun subagentHistoryUserNode(
+    chatId: String,
+    event: HostEvent,
+    text: String,
+    ordinal: Int,
+): UiStateNode {
+    val turnId = event.turnId ?: FALLBACK_TURN_ID
+    val seq = event.seq?.toInt() ?: ordinal
+    return UiStateNode(
+        kind = UiStateKind.BUBBLE,
+        nodeID = "session/$chatId/turn/$turnId/event/$seq/user-message",
+        parentID = "session/$chatId/turn/$turnId",
+        sessionID = chatId,
+        turnID = turnId,
+        seq = seq,
+        text = bounded(text),
+        props = JsonObject(
+            linkedMapOf(
+                "role" to JsonString("user"),
+                "source" to JsonString("user"),
+                "truncated" to JsonBool(text.length > TEXT_LIMIT),
+            ),
+        ),
+    )
 }
 
 /**
@@ -196,6 +306,7 @@ internal fun chatScreenState(
         contextBreakdown = ui.sessionSnapshot.contextBreakdown,
         contextPercent = ui.sessionSnapshot.contextPressure?.percent,
         composerStatsMode = if (performanceUsage == PerformanceUsage.COMPACT) ComposerStatsMode.COMPACT else ComposerStatsMode.DETAILED,
+        transcript = ui.subagentTranscript?.screenState() ?: TranscriptState(),
         todoItems = ui.sessionSnapshot.todos,
         accessModes = ui.sessionSnapshot.accessModes,
         currentAccessMode = ui.sessionSnapshot.currentAccessMode,

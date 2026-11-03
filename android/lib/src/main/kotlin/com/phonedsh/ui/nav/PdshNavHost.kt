@@ -41,6 +41,7 @@ import com.phonedsh.ui.page.AutomationLocalState
 import com.phonedsh.ui.page.AutomationScreenState
 import com.phonedsh.ui.page.AutomationUiEvent
 import com.phonedsh.ui.page.ChatPage
+import com.phonedsh.ui.page.ChatSubagentEntry
 import com.phonedsh.ui.surface.MarkdownImageSource
 import com.phonedsh.ui.page.ConfigurationLocalState
 import com.phonedsh.ui.page.ConfigurationScreenState
@@ -422,6 +423,10 @@ public fun PdshNavHost(
     filesImportReceipt: Pair<String, com.phonedsh.ui.page.FilesImportReceipt>? = null,
     /** Device-owned native TTS callback, unavailable when no engine is ready. */
     onSpeakText: ((String) -> Unit)? = null,
+    /** Opens one subagent only when its Worker identity and history were verified. */
+    onOpenSubagentSession: (suspend (ChatSubagentEntry) -> String?)? = null,
+    /** Loads an older page of the open subagent's durable Worker transcript. */
+    onLoadEarlierChatTranscript: (() -> Unit)? = null,
 ) {
     val route = nav.current
     if (route == PdshRoute.Home) {
@@ -443,6 +448,8 @@ public fun PdshNavHost(
                 state = chat,
                 title = chatTitle,
                 folderSubtitle = chatFolderSubtitle,
+                onOpenSubagentSession = onOpenSubagentSession,
+                onLoadEarlierTranscript = onLoadEarlierChatTranscript,
                 collapseTiming = facts.settings.preferences.collapseTiming,
                 onSetCollapseTiming = if (preferencesWritable == FactState.YES) { option ->
                     onPreferenceWrite(SettingsPreferenceChoice(SettingsScreenState.COLLAPSE_TIMING_ROW_ID, option.id))
@@ -605,6 +612,8 @@ private fun ChatRoute(
     state: ChatScreenState?,
     title: String?,
     folderSubtitle: String?,
+    onOpenSubagentSession: (suspend (ChatSubagentEntry) -> String?)?,
+    onLoadEarlierTranscript: (() -> Unit)?,
     collapseTiming: com.phonedsh.ui.page.CollapseTiming?,
     onSetCollapseTiming: ((com.phonedsh.ui.page.CollapseTiming) -> Unit)?,
     timelineRetryAvailability: PdshActionAvailability<() -> Unit>,
@@ -807,6 +816,9 @@ private fun ChatRoute(
         schedules = subpages.schedules,
         onOpenJobs = { onNavigate(PdshRoute.SessionJobs) },
         onOpenSchedules = { onNavigate(PdshRoute.SessionSchedules) },
+        subagents = subpages.subagents,
+        onOpenSubagentSession = onOpenSubagentSession,
+        onLoadEarlier = onLoadEarlierTranscript,
         // The page-head menu's 产物 row (`ChatPage.swift:256`), which opens the
         // artifacts page. The apps' artifact transport is still the demo one (the
         // real produced files are the workspace, reached by the 文件 route), so the

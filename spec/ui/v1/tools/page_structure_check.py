@@ -1143,6 +1143,61 @@ def verified_settings_index_model(text: str, masked: str, strings: dict,
     return titles, title_positions, actions, action_positions
 
 
+def verified_about_row_positions(text: str, masked: str, strings: dict,
+                                 consts: dict) -> list | None:
+    """Resolve AboutRowView labels when AboutPage renders the complete projection."""
+    functions = function_spans(masked)
+    page = next((fn for fn in functions if fn["name"] == "AboutPage"), None)
+    factory = next((fn for fn in functions if fn["name"] == "from" and
+                    re.search(r"AboutScreenState\s*\(\s*sections\s*=\s*sections",
+                              masked[fn["body_start"]:fn["body_end"]]) and
+                    re.search(r"\bAboutRowView\s*\(", masked[fn["body_start"]:fn["body_end"]])), None)
+    if page is None or factory is None:
+        return None
+    for model, field in (("AboutRowView", r"val\s+title\s*:\s*String"),
+                         ("AboutSectionView", r"val\s+rows\s*:\s*List\s*<\s*AboutRowView\s*>"),
+                         ("AboutScreenState", r"val\s+sections\s*:\s*List\s*<\s*AboutSectionView\s*>")):
+        declaration = re.search(rf"\bdata\s+class\s+{model}\s*\(", masked)
+        if declaration is None:
+            return None
+        declaration_close = match_paren(masked, declaration.end() - 1)
+        if declaration_close < 0 or re.search(field, masked[declaration.end():declaration_close]) is None:
+            return None
+    page_body = masked[page["body_start"]:page["body_end"]]
+    if (re.search(r"state\s*\.\s*sections\s*\.\s*map", page_body) is None
+            or re.search(r"section\s*\.\s*rows\s*\.\s*filter", page_body) is None
+            or re.search(r"SettingsGroupCard\s*(?:\(|\{)", page_body) is None
+            or re.search(r"SettingsFormRow\s*\(\s*title\s*=\s*row\.title", page_body) is None):
+        return None
+    factory_body = masked[factory["body_start"]:factory["body_end"]]
+    if re.search(r"AboutSectionView\s*\(\s*VERSION_SECTION_ID\s*,\s*[^,]+,\s*versionRows",
+                 factory_body, re.S) is None:
+        return None
+    version_rows = re.search(r"\bval\s+versionRows\s*=\s*listOf\s*\(", factory_body)
+    if version_rows is None:
+        return None
+    list_open = factory["body_start"] + version_rows.end() - 1
+    list_close = match_paren(masked, list_open)
+    if list_close < 0:
+        return None
+    out = []
+    for call in SECTION_CALL_RE.finditer(masked, list_open + 1, list_close):
+        if call.group(1) != "AboutRowView" or is_declaration(masked, call.start()):
+            continue
+        open_paren = call.end() - 1
+        close = match_paren(masked, open_paren)
+        if close < 0 or close > list_close:
+            continue
+        named, _ = named_args(masked, open_paren, close)
+        span = named.get("title")
+        if span is None:
+            continue
+        label, dynamic = resolve_kotlin_expr(text[span[0]:span[1]], strings, consts)
+        if not dynamic and label and label.strip():
+            out.append((label, call.start()))
+    return out
+
+
 def verified_font_size_role_model(text: str, masked: str, strings: dict,
                                   consts: dict) -> tuple | None:
     """Resolve FontSizeSettingsPage's role titles through its verified role renderer."""
@@ -1508,6 +1563,89 @@ def load_page_wrappers(root: Path) -> set:
     return out
 
 
+def verified_chat_artifact_route_binding(root: Path) -> bool:
+    """Verify the shipping PdshNavHost always supplies ChatPage's artifact route."""
+    path = root / ANDROID_UI_REL / "nav" / "PdshNavHost.kt"
+    if not path.is_file():
+        return False
+    text = read_text(path)
+    masked = mask_kotlin(text)
+    functions = function_spans(masked)
+    host = next((fn for fn in functions if fn["name"] == "PdshNavHost"), None)
+    route = next((fn for fn in functions if fn["name"] == "ChatRoute"), None)
+    if host is None or route is None:
+        return False
+    host_body = masked[host["body_start"]:host["body_end"]]
+    if re.search(r"PdshRoute\.Chat\s*->\s*ChatRoute\s*\(", host_body) is None:
+        return False
+    calls = []
+    for match in SECTION_CALL_RE.finditer(masked, route["body_start"], route["body_end"]):
+        if match.group(1) != "ChatPage" or is_declaration(masked, match.start()):
+            continue
+        open_paren = match.end() - 1
+        close = match_paren(masked, open_paren)
+        if close < 0 or close > route["body_end"]:
+            continue
+        named, _ = named_args(masked, open_paren, close)
+        span = named.get("onOpenArtifacts")
+        if span is None:
+            continue
+        expression = strip_kotlin_comments(collapse(text[span[0]:span[1]]))
+        # Accept only this concrete direct route body. Unknown control flow
+        # (including compact `if(...)`) must remain conditional/unresolved.
+        direct_route = (
+            r"\{\s*onNavigate\s*\(\s*PdshRoute\.SessionArtifacts\s*\(\s*"
+            r"state\s*\?\.\s*sessionID\s*\.\s*orEmpty\s*\(\s*\)"
+            r"\s*\)\s*\)\s*;?\s*\}"
+        )
+        if re.fullmatch(direct_route, expression):
+            calls.append(match.start())
+    return len(calls) == 1
+
+
+def verified_developer_tools_action_positions(text: str, masked: str,
+                                              strings: dict, consts: dict) -> list:
+    """Read ConversationSettingsPage's named toggle through its verified row helper.
+
+    `DeveloperToolsRow` is not a label-first button wrapper: it creates a SettingsRowFrame
+    switch, puts the localized title in SettingsRowLabel, and invokes the host callback.
+    Resolve the helper only when the page calls it for the stored preference.
+    """
+    functions = function_spans(masked)
+    page = next((fn for fn in functions if fn["name"] == "ConversationSettingsPage"), None)
+    helper = next((fn for fn in functions if fn["name"] == "DeveloperToolsRow"), None)
+    if page is None or helper is None:
+        return []
+    page_body = masked[page["body_start"]:page["body_end"]]
+    call = re.search(
+        r"DeveloperToolsRow\s*\(\s*preferences\.developerTools\s*,\s*onToggleDeveloperTools\s*,\s*languageId\s*\)",
+        page_body,
+    )
+    if call is None:
+        return []
+    helper_body = masked[helper["body_start"]:helper["body_end"]]
+    frame = re.search(r"SettingsRowFrame\s*\(", helper_body)
+    if frame is None:
+        return []
+    frame_open = helper["body_start"] + frame.end() - 1
+    frame_close = match_paren(masked, frame_open)
+    if frame_close < 0:
+        return []
+    frame_body = masked[frame_open + 1:frame_close]
+    if (re.search(r"\brole\s*=\s*Role\.Switch\b", frame_body) is None
+            or re.search(r"\bonClick\s*=\s*\{\s*onToggle\s*\?\.\s*invoke\s*\(", frame_body) is None
+            or re.search(r"SettingsRowLabel\s*\(\s*text\s*=\s*label", helper_body) is None
+            or re.search(r"SettingsSwitch\s*\(\s*checked\s*=\s*checked", helper_body) is None):
+        return []
+    label_expr = re.search(r"\bval\s+label\s*=\s*([^\n]+)", text[helper["body_start"]:helper["body_end"]])
+    if label_expr is None:
+        return []
+    label, dynamic = resolve_kotlin_expr(label_expr.group(1), strings, consts)
+    if dynamic or not label:
+        return []
+    return [(label, page["body_start"] + call.start())]
+
+
 def android_actions(text: str, masked: str, strings: dict, consts: dict,
                     stats: dict | None = None, wrappers: frozenset | None = None,
                     positions: list | None = None,
@@ -1808,6 +1946,11 @@ def android_actions(text: str, masked: str, strings: dict, consts: dict,
         if normalize(value) in fold_labels:
             labels.append(value)
             found.append((value, m.start()))
+    for label, pos in verified_developer_tools_action_positions(text, masked, strings, consts):
+        labels.append(label)
+        found.append((label, pos))
+        if positions is not None:
+            positions.append((label, pos))
     # `%d 项需要处理` is rendered data, not a fixed action label: templates never
     # participate in missing/extra comparison (section titles keep them — the
     # contract's `titleTemplate` is exactly this shape).
@@ -1970,6 +2113,9 @@ def android_row_positions(text: str, masked: str, strings: dict, consts: dict) -
         value, dynamic = resolve_kotlin_expr(text[span[0]:span[1]], strings, consts)
         if not dynamic and value and value.strip() and not is_chrome_label(value):
             out.append((value, m.start()))
+    about_rows = verified_about_row_positions(text, masked, strings, consts)
+    if about_rows is not None:
+        out.extend(about_rows)
     return out
 
 
@@ -2316,6 +2462,14 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
         else:
             conditional_guard.setdefault(key, guard)
     conditional_keys = set(conditional_guard) - unconditional_keys
+    if page_id == "chat" and verified_chat_artifact_route_binding(root):
+        # The reusable ChatPage prop defaults to null, but the actual PdshNavHost
+        # ChatRoute passes this literal route callback unconditionally. Keep the
+        # generic component guard while judging the shipped route as present.
+        artifact_key = normalize("产物")
+        if artifact_key in conditional_keys:
+            conditional_keys.discard(artifact_key)
+            unconditional_keys.add(artifact_key)
     # Section labels can be guarded the same way (`if (onShow != null) {
     # SessionSectionLabel(...) }`); the hole is about any labelled UI, not only
     # buttons. The contract records a section's `condition` from syntax extraction,

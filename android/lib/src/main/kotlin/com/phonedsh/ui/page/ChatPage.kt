@@ -235,6 +235,8 @@ import kotlinx.coroutines.launch
  * @param schedules the session's scheduled tasks, same contract (`:252`).
  * @param onOpenJobs opens the 后台任务 sheet (its route); `null` hides the row.
  * @param onOpenSchedules opens the 定时任务 sheet; `null` hides the row.
+ * @param subagents the current Worker's measured `subagentCatalog`; `null` means it was not reported.
+ * @param onOpenSubagentSession opens one verified Worker subagent session; `null` hides the catalog row.
  */
 @Composable
 public fun ChatPage(
@@ -320,6 +322,10 @@ public fun ChatPage(
     steerSubmissionAvailability: PdshActionAvailability<(String, StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
     /** Request-bound STOP action; unavailable stop controls are not clickable. */
     stopAvailability: PdshActionAvailability<(StateRequestId) -> Unit> = PdshActionAvailability.Unavailable(PdshUnavailableReason.NOT_IMPLEMENTED),
+    /** Current Worker subagent projection; null means it was not reported. */
+    subagents: List<ChatSubagentEntry>? = null,
+    /** Opens a subagent only after the host confirms its Worker identity/history. */
+    onOpenSubagentSession: (suspend (ChatSubagentEntry) -> String?)? = null,
 ) {
     val tokens = LocalUiTokens.current
     val boundTimelineRetry = (timelineRetryAvailability as? PdshActionAvailability.Available)?.callback
@@ -345,6 +351,7 @@ public fun ChatPage(
     // device a platform dialog would be fine. The content, the two verbs and the
     // trimming are the iOS alert's (`ChatPage.swift` `.alert("重命名会话")`).
     var renaming by remember { mutableStateOf(false) }
+    var subagentCatalogOpen by remember { mutableStateOf(false) }
     var queueEditItem by remember { mutableStateOf<ManagedQueueItemState?>(null) }
     var queueEditDraft by remember { mutableStateOf("") }
     // iOS `ChatPage.swift:145-154 sessionTitle`: a real session name wins; a
@@ -391,9 +398,23 @@ public fun ChatPage(
             schedules = schedules,
             onOpenJobs = onOpenJobs,
             onOpenSchedules = onOpenSchedules,
+            subagents = subagents,
+            onOpenSubagentCatalog = if (!subagents.isNullOrEmpty() && onOpenSubagentSession != null) {
+                { subagentCatalogOpen = true }
+            } else null,
             collapseTiming = collapseTiming,
             onSetCollapseTiming = onSetCollapseTiming,
         )
+        if (subagentCatalogOpen && !subagents.isNullOrEmpty()) {
+            onOpenSubagentSession?.let { openSession ->
+                SubagentCatalogDialog(
+                    entries = subagents,
+                    currentWorkerSessionId = state.workerSessionID,
+                    onDismiss = { subagentCatalogOpen = false },
+                    onOpen = openSession,
+                )
+            }
+        }
         // A failure that belongs to one row is rendered under it; every other
         // failure owns the top banner (iOS body: `failedItemID == nil` first).
         if (state.failedItemID == null && state.userFacingError != null) {
@@ -640,6 +661,8 @@ private fun ChatHeader(
     schedules: List<ChatScheduleRow>? = null,
     onOpenJobs: (() -> Unit)? = null,
     onOpenSchedules: (() -> Unit)? = null,
+    subagents: List<ChatSubagentEntry>? = null,
+    onOpenSubagentCatalog: (() -> Unit)? = null,
     collapseTiming: CollapseTiming?,
     onSetCollapseTiming: ((CollapseTiming) -> Unit)?,
 ) {
@@ -711,6 +734,13 @@ private fun ChatHeader(
                         .semantics { contentDescription = "更多" },
                 )
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    val subagentRows = subagents
+                    if (subagentRows != null && subagentRows.isNotEmpty() && onOpenSubagentCatalog != null) {
+                        DropdownMenuItem(
+                            text = { Text("子智能体（${subagentRows.size}）") },
+                            onClick = { menuOpen = false; onOpenSubagentCatalog() },
+                        )
+                    }
                     val jobRows = jobs
                     if (jobRows != null && jobRows.isNotEmpty() && onOpenJobs != null) {
                         DropdownMenuItem(text = { Text("${UiStrings.CHAT_JOBS_TITLE}（${jobRows.size}）") }, onClick = { menuOpen = false; onOpenJobs() })
@@ -3704,6 +3734,7 @@ internal object ChatPageTokens {
         UiTokenNames.COLORS_SECONDARY,
         UiTokenNames.COLORS_SELECTOR,
         UiTokenNames.COLORS_SURFACE,
+        UiTokenNames.COLORS_SYSTEM_SEPARATOR,
         UiTokenNames.COLORS_SUCCESS,
         UiTokenNames.COLORS_TERTIARY,
         UiTokenNames.COLORS_TEXT_PLACEHOLDER,
@@ -3873,11 +3904,13 @@ public data class ChatScheduleRow(
  * @param commandExecution the settlement the result page shows, if any ran.
  * @param jobs `management.jobs` (`ChatPage.swift:437`).
  * @param schedules `management.scheduleRecords` (`ChatPage.swift:445`).
+ * @param subagents the current session's raw subagent catalog projection; null means unread.
  */
 public data class ChatSubpageFacts(
     public val commandExecution: ChatCommandExecution? = null,
     public val jobs: List<ChatJobRow>? = null,
     public val schedules: List<ChatScheduleRow>? = null,
+    public val subagents: List<ChatSubagentEntry>? = null,
 )
 
 /** Which body a list sheet draws; [UNREAD] is the Android-only "the host did not read" case. */

@@ -164,12 +164,8 @@ private enum class DevTool(val label: String, val readOnly: String?) {
 }
 
 /**
- * 关于: version, platform and licenses, over the settings sheet.
- *
- * The version comes from the host's own settings read (`SettingsFacts.versionName`)
- * so the index row and the page can never disagree; the platform block stays
- * 未知, because `PdshNavFacts` carries no `Build` snapshot and the page must not
- * invent one.
+ * 关于: source branding and the host's actual package version/build facts.
+ * The raw version avoids carrying an index-only signing annotation into About.
  *
  * @param facts the host snapshot.
  * @param onBack return to the settings index.
@@ -188,14 +184,14 @@ internal fun AboutSurface(
     var local by remember { mutableStateOf(AboutLocalState()) }
     AboutPage(
         state = AboutScreenState.from(
-            facts = AboutFacts(version = facts.settings.versionName),
+            facts = AboutFacts(
+                version = facts.settings.rawVersionName ?: facts.settings.versionName,
+                buildNumber = facts.settings.buildNumber,
+            ),
             local = local,
         ),
         onToggleSection = { id -> local = local.apply(AboutUiEvent.ToggleSection(id)) },
         onBack = onBack,
-        // 开源许可 is the iOS-only list this app does not have, and the developer
-        // entry is hidden (the index below is the Android entry, not a DEBUG page);
-        // `null` renders both rows as unavailable instead of pretending they open.
         onOpenLicenses = null,
         onOpenDeveloper = null,
     )

@@ -46,6 +46,16 @@ import androidx.compose.ui.unit.dp
 public object ChatMetrics {
     /** No additional inset; iOS ChatPage.spacing uses zero for the first row. */
     public const val NO_GAP_PT: Int = 0
+
+    // ------------------------------------------------------ About identity row
+
+    /** About page brand logo. Source: `NativeShell.swift:844-847`. Confidence: exact. */
+    public const val ABOUT_BRANDING_LOGO_SIZE_PT: Int = 64
+    /** About page branding stack gap. Source: `NativeShell.swift:843`. Confidence: exact. */
+    public const val ABOUT_BRANDING_STACK_GAP_PT: Int = 8
+    /** About page branding row vertical padding. Source: `NativeShell.swift:856`. Confidence: exact. */
+    public const val ABOUT_BRANDING_ROW_PADDING_V_PT: Int = 12
+
     // ------------------------------------------------------------------ header
 
     /** PR22 floating nav row height. Source: `HomeSpec.navButton = 44`, `.nav { height: 44 }`. Confidence: exact. */
@@ -529,6 +539,62 @@ public object ChatMetrics {
 
     /** Subagent menu width. Source: `NativeParityTokens.swift:107`. Confidence: exact. */
     public const val SUBAGENT_MENU_WIDTH_PT: Int = 336
+    /** Subagent menu height cap. Source: `NativeSubagentCatalogSheet.swift:124`. Confidence: exact. */
+    public const val SUBAGENT_MENU_MAX_HEIGHT_PT: Int = 560
+    /** Subagent menu lower bound. Source: `NativeSubagentCatalogSheet.swift:125`. Confidence: exact. */
+    public const val SUBAGENT_MENU_MIN_HEIGHT_PT: Int = 120
+    /** The card's top offset in the phone sheet. Source: `ChatPage.swift:481`. Confidence: exact. */
+    public const val SUBAGENT_SHEET_TOP_INSET_PT: Int = 20
+    /** Catalog card's content inset. Source: `NativeSubagentCatalogSheet.swift:107`. Confidence: exact. */
+    public const val SUBAGENT_MENU_CARD_PADDING_PT: Int = 4
+    /** Zero gap in the title/secondary label stack. Source: `NativeSubagentCatalogSheet.swift:282`. Confidence: exact. */
+    public const val SUBAGENT_TITLE_STACK_GAP_PT: Int = 0
+    /** All-side inset retained by the Android inline notice, with no visual change. Confidence: existing implementation. */
+    public const val SUBAGENT_ERROR_MESSAGE_PADDING_PT: Int = 8
+    /** Subagent catalog rows. Source: `NativeSubagentCatalogSheet.swift:246`. Confidence: exact. */
+    public const val SUBAGENT_ROW_MIN_HEIGHT_PT: Int = 44
+    /** Catalog row vertical inset. Source: `NativeSubagentCatalogSheet.swift:245`. Confidence: exact. */
+    public const val SUBAGENT_ROW_INSET_V_PT: Int = 6
+    /** Subagent catalog row leading inset. Source: `NativeSubagentCatalogSheet.swift:243`. Confidence: exact. */
+    public const val SUBAGENT_ROW_INSET_LEADING_PT: Int = 9
+    /** Subagent catalog row trailing inset. Source: `NativeSubagentCatalogSheet.swift:244`. Confidence: exact. */
+    public const val SUBAGENT_ROW_INSET_TRAILING_PT: Int = 7
+    /** Gap between row's identity, title and action. Source: `NativeSubagentCatalogSheet.swift:236,280`. Confidence: exact. */
+    public const val SUBAGENT_ROW_GAP_PT: Int = 6
+    /** Running/idle indicator slot. Source: `NativeSubagentCatalogSheet.swift:325`. Confidence: exact. */
+    public const val SUBAGENT_ACTIVITY_SLOT_PT: Int = 14
+    /** Idle activity dot. Source: `NativeSubagentCatalogSheet.swift:313-316`. Confidence: exact. */
+    public const val SUBAGENT_ACTIVITY_DOT_PT: Int = 6
+    /** Catalog title reference size. Source: `NativeSubagentCatalogSheet.swift:284`. Confidence: exact. */
+    public const val SUBAGENT_TITLE_REF_PT: Int = 15
+    /** Catalog secondary-line reference size. Source: `NativeSubagentCatalogSheet.swift:324`. Confidence: exact. */
+    public const val SUBAGENT_SECONDARY_REF_PT: Int = 13
+    /** Secondary-line height. Source: `NativeSubagentCatalogSheet.swift:321-324`. Confidence: exact. */
+    public const val SUBAGENT_SECONDARY_HEIGHT_PT: Int = 15
+    /** Sheet height budget removed from the device viewport. Source: `NativeSubagentCatalogSheet.swift:125` with its ChatPage caller's screenH−120. Confidence: exact. */
+    public const val SUBAGENT_SHEET_HEIGHT_REDUCTION_PT: Int = 260
+    /** Empty-card/content floor. Source: `NativeSubagentCatalogSheet.swift:130`. Confidence: exact. */
+    public const val SUBAGENT_CARD_MIN_HEIGHT_PT: Int = 44
+    /** Card's base content padding in the row-count height estimate. Source: `NativeSubagentCatalogSheet.swift:130`. Confidence: exact. */
+    public const val SUBAGENT_CARD_BASE_PADDING_PT: Int = 8
+    /** Per-row content height estimate for the source card. Source: `NativeSubagentCatalogSheet.swift:130`. Confidence: exact. */
+    public const val SUBAGENT_ROW_CARD_HEIGHT_PT: Int = 44
+    /** Always-empty disclosure slot for the flat ChatPage caller. Source: `NativeSubagentCatalogSheet.swift:257-275`. Confidence: exact. */
+    public const val SUBAGENT_DISCLOSURE_SLOT_PT: Int = 14
+    /** Disclosure/activity slot height. Source: `NativeSubagentCatalogSheet.swift:266,320`. Confidence: exact. */
+    public const val SUBAGENT_DISCLOSURE_HEIGHT_PT: Int = 17
+    /** Title line box height. Source: `NativeSubagentCatalogSheet.swift:288`. Confidence: exact. */
+    public const val SUBAGENT_TITLE_LINE_HEIGHT_PT: Int = 22
+    /** Gap inside the secondary metadata line. Source: `NativeSubagentCatalogSheet.swift:324`. Confidence: exact. */
+    public const val SUBAGENT_SECONDARY_GAP_PT: Int = 4
+    /** Mode chip corner radius. Source: `NativeSubagentCatalogSheet.swift:335`. Confidence: exact. */
+    public const val SUBAGENT_MODE_CHIP_RADIUS_PT: Int = 4
+    /** Mode chip horizontal inset. Source: `NativeSubagentCatalogSheet.swift:332`. Confidence: exact. */
+    public const val SUBAGENT_MODE_CHIP_INSET_H_PT: Int = 4
+    /** Error notice measured height. Source: `NativeSubagentCatalogSheet.swift:218-220`. Confidence: exact. */
+    public const val SUBAGENT_ERROR_ROW_HEIGHT_PT: Int = 48
+    /** No notice adds no height. Source: `NativeSubagentCatalogSheet.swift` cardHeight. */
+    public const val SUBAGENT_NO_NOTICE_HEIGHT_PT: Int = 0
 
     // ---------------------------------------------------------------- native header controls
 

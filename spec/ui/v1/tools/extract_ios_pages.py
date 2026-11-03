@@ -145,6 +145,7 @@ SINGLE_REGION_PAGES = {
     "SettingsAboutPage": "flat List: one version row + one sentence; no group header",
     "NativeWorkbenchPage": "NavigationStack/VStack: a segmented mode switch over two embedded pages; no group header",
     "NativeDeviceSessionPage": "VStack: a read-only 36 pt header row, an optional error label, then one LazyVStack transcript; no Section anywhere",
+    "LicensesPage": "one flat List of direct LabeledContent license entries with no Section headers; Android renders its host-reported platform catalog in one grouped card. The catalogs are platform-specific and their rows are not compared here",
 }
 
 #: How a Button's surrounding syntax names its trigger.
@@ -824,7 +825,11 @@ class PageExtractor:
             self.sections = self._expand_titled_section_helpers(self.sections)
             self._scan_page_actions()
             if not self.sections:
-                if self.name in SINGLE_REGION_PAGES:
+                if self.name == "LicensesPage":
+                    # Preserve existing implicit-row extraction; the verified shape
+                    # only classifies this list, it does not invent a header.
+                    self._scan_regions()
+                elif self.name in SINGLE_REGION_PAGES:
                     self.sections = [self._single_region()]
                 else:
                     self._scan_regions()
@@ -837,7 +842,8 @@ class PageExtractor:
             "pageId": page_id(self.name),
             "structure": "swiftui-view" if self.has_body else "ui-representable",
             "sectionModel": self._section_model(),
-            "sectionNote": SINGLE_REGION_PAGES.get(self.name),
+            "sectionNote": (SINGLE_REGION_PAGES.get(self.name)
+                            if self.name != "LicensesPage" or self._is_flat_licenses_list() else None),
             "title": self._page_title(),
             "source": {
                 "file": self.source.path.name,
@@ -1838,6 +1844,51 @@ class PageExtractor:
 
     # -- non-Section groups -------------------------------------------------
 
+    def _is_flat_licenses_list(self) -> bool:
+        """Guard LicensesPage's one-region classification against layout drift."""
+        if self.name != "LicensesPage" or not self.has_body:
+            return False
+        masked = self.source.masked
+        lists = []
+        for match in re.finditer(r"\bList[ \t]*\{", masked[self.body_start:self.body_end]):
+            pos = self.body_start + match.start()
+            if not self._live(pos):
+                continue
+            open_brace = self.body_start + match.end() - 1
+            close_brace = match_delim(masked, open_brace)
+            if close_brace < 0:
+                return False
+            lists.append((open_brace, close_brace))
+        if len(lists) != 1:
+            return False
+        open_brace, close_brace = lists[0]
+
+        # The current list has exactly two direct child views, both labeled license rows.
+        # A new Section, wrapper, button, or extra child must stop this classification.
+        children = []
+        for match in re.finditer(r"\b([A-Z]\w*)[ \t]*[({]", masked[open_brace + 1:close_brace]):
+            pos = open_brace + 1 + match.start()
+            depth = (masked.count("{", open_brace + 1, pos)
+                     - masked.count("}", open_brace + 1, pos))
+            if depth != 0:
+                continue
+            if match.group(1) != "LabeledContent":
+                return False
+            children.append(pos)
+        if len(children) != 2:
+            return False
+        labels = []
+        for pos in children:
+            open_paren = masked.find("(", pos)
+            close_paren = match_delim(masked, open_paren, "(", ")")
+            if close_paren < 0 or close_paren > close_brace:
+                return False
+            label, _ = first_label(self.source, open_paren + 1, close_paren)
+            if label is None:
+                return False
+            labels.append(label)
+        return labels == ["SwiftTerm", "swift-nio"]
+
     def _section_model(self) -> str:
         if not self.has_body:
             return "representable"
@@ -1845,6 +1896,8 @@ class PageExtractor:
             return "section"
         if any(section.get("kind") == "region" for section in self.sections):
             return "regions"
+        if self.name == "LicensesPage":
+            return "single-region" if self._is_flat_licenses_list() else "unmodeled"
         if self.name in SINGLE_REGION_PAGES:
             return "single-region"
         return "unmodeled"

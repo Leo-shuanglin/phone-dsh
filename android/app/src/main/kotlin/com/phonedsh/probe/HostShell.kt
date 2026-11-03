@@ -977,6 +977,8 @@ internal fun HostShell(
                         onPhonePermissionRequest = onPhonePermissionRequest,
                         onPhonePermissionSettings = onPhonePermissionSettings,
                         onOpenDrawer = { drawerOpen = true },
+                        onOpenSubagentSession = engine::openSubagentSession,
+                        onLoadEarlierChatTranscript = engine::loadEarlierSubagentTranscript,
                         onFilesImportRequest = onPickWorkspaceFile,
                         filesImportReceipt = filesImportReceipt,
                         onSpeakText = onSpeakText?.let { speaker ->
@@ -1065,6 +1067,7 @@ internal fun HostShell(
                         },
                         chatSubpages = com.phonedsh.ui.page.ChatSubpageFacts(
                             commandExecution = chatUi.commandExecution,
+                            subagents = chatUi.sessionSnapshot.subagents,
                             schedules = automationFacts.snapshot?.schedules?.map { schedule ->
                                 com.phonedsh.ui.page.ChatScheduleRow(schedule.id, schedule.title,
                                     listOfNotNull(schedule.rule, schedule.nextRun).joinToString(" · "),
