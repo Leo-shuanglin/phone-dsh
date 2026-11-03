@@ -64,11 +64,11 @@ class NativeAgentPresetsPageStateTest {
         assertNull("an empty description prints no line", row.detail)
         assertTrue(row.isDefault)
         assertTrue(row.custom)
-        assertTrue(row.canBeDefault)
+        assertTrue(row.canUse)
     }
 
     @Test
-    fun `a broken preset cannot be made the default`() {
+    fun `a broken preset cannot be used`() {
         val row = state(
             NativeAgentPresetsFacts(
                 presets = listOf(
@@ -77,7 +77,7 @@ class NativeAgentPresetsPageStateTest {
             ),
         ).presets!!.single()
         assertEquals("manifest missing", row.broken)
-        assertFalse(row.canBeDefault)
+        assertFalse(row.canUse)
     }
 
     @Test

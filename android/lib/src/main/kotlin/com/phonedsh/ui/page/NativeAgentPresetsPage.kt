@@ -10,10 +10,10 @@
 //      like the baseline's first `Section { … }` (`NativeAgentPresetsPage.swift:106`);
 //   2. the roster — 正在读取预设… while the read is in flight, then one card per
 //      preset with its badges (默认 / 自定义), its wire id, its description, its
-//      broken reason and the 查看配置 / 设为默认 pair;
-//   3. the error line, only when the host reported one. It is the baseline's own
-//      untitled `Section { Text(error) }` (`:159`) and carries no retry the
-//      baseline does not have.
+//      broken reason and the 查看配置 / 使用预设 pair, plus the section's
+//      `默认已锁定` marker and its footer read-only reason;
+//   3. the error line and its 重新读取 verb, only when the host reported one
+//      (`:185` in the PR26 baseline).
 //
 // The page draws no section captions at all, because the baseline draws none: its
 // three groups are visually separated by the inset-grouped card gap, not by a
@@ -25,9 +25,9 @@
 //
 // Facts: the roster is `null` until the host reports it, and "not reported" is a
 // different statement from "the engine has no presets": the first renders the
-// unknown line, the second renders nothing, which is what the baseline does.
-// `设为默认` is never disabled on a guess — only when the host itself reported the
-// preset as broken (`:152`).
+// unknown line, the second renders 当前引擎没有预设。 — the PR26 baseline's own
+// empty statement. 使用预设 is never disabled on a guess — only when the host
+// itself reported the preset as broken (`:160`).
 package com.phonedsh.ui.page
 
 import androidx.compose.foundation.background
@@ -117,6 +117,39 @@ public data class AgentPresetDocument(
     public val yaml: String,
 )
 
+/**
+ * One `agentPresets/read` answer.
+ *
+ * The host wraps either the document or the failure, because the read is an IO
+ * call the composition only starts: the page must not decide "no document" from
+ * an exception it never saw.
+ *
+ * @param document the host's verbatim configuration, or `null` on failure.
+ * @param failure the host's `code: message`, or `null` on success.
+ */
+@Immutable
+public data class AgentPresetReadOutcome(
+    public val document: AgentPresetDocument? = null,
+    public val failure: String? = null,
+)
+
+/**
+ * The host half of the preset page's three reads/writes.
+ *
+ * @param refresh re-read `agentPresets/list` (the page calls it on entry and on
+ *   重新读取). It only starts the host read; the facts arrive through
+ *   [NativeAgentPresetsFacts].
+ * @param read `agentPresets/read` for one preset id.
+ * @param use create a new session with `request.agentPreset`: `null` means the
+ *   new session exists and the host moved to it, otherwise the message to show.
+ */
+@Immutable
+public data class AgentPresetActions(
+    public val refresh: () -> Unit = {},
+    public val read: (suspend (String) -> AgentPresetReadOutcome)? = null,
+    public val use: (suspend (String) -> String?)? = null,
+)
+
 // ---------------------------------------------------------------------------
 // Local state
 // ---------------------------------------------------------------------------
@@ -164,8 +197,12 @@ public data class AgentPresetRowView(
     /** The engine's broken reason, or `null` when the preset loads. */
     public val broken: String?,
 ) {
-    /** 设为默认 is disabled only when the host itself said the preset is broken. */
-    public val canBeDefault: Boolean get() = broken == null
+    /** 使用预设 is disabled only when the host itself said the preset is broken. */
+    public val canUse: Boolean get() = broken == null
+
+    /** Kept for the pre-PR26 call sites; the roster verb is 使用预设 now. */
+    @Deprecated("Use canUse: the row's verb is 使用预设, not 设为默认.", ReplaceWith("canUse"))
+    public val canBeDefault: Boolean get() = canUse
 }
 
 /** The complete agent-presets screen state. */
@@ -228,7 +265,12 @@ public data class NativeAgentPresetsScreenState(
  *   toolbar of its own — the baseline's only 完成 belongs to the document panel).
  * @param onCreate 让 Agent 创建预设: open creator mode without sending a prompt.
  * @param onViewConfiguration 查看配置 for one preset id.
- * @param onMakeDefault 设为默认 for one preset id.
+ * @param onUsePreset 使用预设 for one preset id: the host creates a new session
+ *   with that preset and closes the settings sheet on success.
+ * @param onReload 重新读取 in the error line: re-run `agentPresets/list`.
+ * @param creatorUnavailableReason why 让 Agent 创建预设 is disabled (cordis absent
+ *   or broken), or `null` when it is available.
+ * @param openingPresetId the preset whose 使用预设 call is in flight, or `null`.
  * @param onCloseDocument 完成 in the read-only panel.
  * @param embedded render as the settings sheet's 预设 tab: no page header.
  */
@@ -238,8 +280,11 @@ public fun NativeAgentPresetsPage(
     onBack: () -> Unit = {},
     onCreate: () -> Unit = {},
     onViewConfiguration: (String) -> Unit = {},
-    onMakeDefault: (String) -> Unit = {},
+    onUsePreset: (String) -> Unit = {},
+    onReload: () -> Unit = {},
     onCloseDocument: () -> Unit = {},
+    creatorUnavailableReason: String? = null,
+    openingPresetId: String? = null,
     modifier: Modifier = Modifier,
     embedded: Boolean = false,
 ) {
@@ -257,7 +302,10 @@ public fun NativeAgentPresetsPage(
                 state = state,
                 onCreate = onCreate,
                 onViewConfiguration = onViewConfiguration,
-                onMakeDefault = onMakeDefault,
+                onUsePreset = onUsePreset,
+                onReload = onReload,
+                creatorUnavailableReason = creatorUnavailableReason,
+                openingPresetId = openingPresetId,
             )
         }
     } else {
@@ -270,7 +318,10 @@ public fun NativeAgentPresetsPage(
                 state = state,
                 onCreate = onCreate,
                 onViewConfiguration = onViewConfiguration,
-                onMakeDefault = onMakeDefault,
+                onUsePreset = onUsePreset,
+                onReload = onReload,
+                creatorUnavailableReason = creatorUnavailableReason,
+                openingPresetId = openingPresetId,
             )
         }
     }
@@ -285,7 +336,10 @@ private fun AgentPresetsBody(
     state: NativeAgentPresetsScreenState,
     onCreate: () -> Unit,
     onViewConfiguration: (String) -> Unit,
-    onMakeDefault: (String) -> Unit,
+    onUsePreset: (String) -> Unit,
+    onReload: () -> Unit,
+    creatorUnavailableReason: String?,
+    openingPresetId: String?,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -301,6 +355,7 @@ private fun AgentPresetsBody(
         contentPadding = PaddingValues(vertical = tokens.geometry.cardOuterMarginV),
     ) {
         item(key = "creator") {
+            val creatorEnabled = creatorUnavailableReason == null && !state.loading
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -319,9 +374,11 @@ private fun AgentPresetsBody(
                 // file). Same ink and same tap target as every other page action.
                 BasicText(
                     text = UiStrings.AGENT_PRESETS_CREATE,
-                    style = type.body.copy(color = tokens.colors.accent),
+                    style = type.body.copy(
+                        color = if (creatorEnabled) tokens.colors.accent else tokens.colors.tertiary,
+                    ),
                     modifier = Modifier
-                        .clickable(role = Role.Button, onClick = onCreate)
+                        .clickable(enabled = creatorEnabled, role = Role.Button, onClick = onCreate)
                         .padding(
                             horizontal = tokens.spacing.badgeInsetH,
                             vertical = tokens.spacing.badgeInsetV,
@@ -331,6 +388,16 @@ private fun AgentPresetsBody(
                     text = UiStrings.AGENT_PRESETS_CREATE_NOTE,
                     style = type.caption.copy(color = tokens.colors.secondary),
                 )
+                BasicText(
+                    text = UiStrings.AGENT_PRESETS_CREATE_NOTE_BUILTIN,
+                    style = type.caption.copy(color = tokens.colors.secondary),
+                )
+                creatorUnavailableReason?.let { reason ->
+                    BasicText(
+                        text = UiStrings.AGENT_PRESETS_CREATOR_UNAVAILABLE_PREFIX + reason,
+                        style = type.caption.copy(color = tokens.colors.secondary),
+                    )
+                }
             }
         }
         item(key = "roster-loading") {
@@ -348,7 +415,7 @@ private fun AgentPresetsBody(
             }
         }
         // A host that has not reported the roster says so; an engine that
-        // reported an empty roster renders nothing, exactly like the baseline.
+        // reported an empty roster renders the baseline's 当前引擎没有预设 line.
         val presets = state.presets
         if (presets == null) {
             item(key = "roster-unread") {
@@ -361,24 +428,58 @@ private fun AgentPresetsBody(
                 )
             }
         } else {
+            if (presets.isEmpty() && !state.loading && state.error == null) {
+                item(key = "roster-empty") {
+                    BasicText(
+                        text = UiStrings.AGENT_PRESETS_EMPTY,
+                        style = type.caption.copy(color = tokens.colors.tertiary),
+                        modifier = Modifier.padding(horizontal = tokens.spacing.cardInset),
+                    )
+                }
+            }
             items(items = presets, key = { it.id }) { row ->
                 AgentPresetCard(
                     row = row,
+                    opening = openingPresetId != null,
                     onViewConfiguration = onViewConfiguration,
-                    onMakeDefault = onMakeDefault,
+                    onUsePreset = onUsePreset,
                 )
             }
         }
+        // The baseline's second section footer: like permission.defaultPreset the
+        // phone image pins the default in its home patch, so the roster stays
+        // readable but the default itself cannot be changed from here.
+        item(key = "default-locked-footer") {
+            BasicText(
+                text = UiStrings.AGENT_PRESETS_DEFAULT_READ_ONLY_REASON,
+                style = type.caption.copy(color = tokens.colors.tertiary),
+                modifier = Modifier.padding(horizontal = tokens.spacing.cardInset),
+            )
+        }
         state.error?.let { error ->
             item(key = "error") {
-                BasicText(
-                    text = error,
-                    style = type.caption.copy(color = tokens.colors.danger),
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag(UiPageTags.AGENT_PRESETS_ERROR)
                         .padding(horizontal = tokens.spacing.cardInset),
-                )
+                    verticalArrangement = Arrangement.spacedBy(tokens.spacing.badgeInsetV),
+                ) {
+                    BasicText(
+                        text = error,
+                        style = type.caption.copy(color = tokens.colors.danger),
+                        modifier = Modifier.testTag(UiPageTags.AGENT_PRESETS_ERROR),
+                    )
+                    // The error group's criterion row (the contract's
+                    // `first-clickable-row`), exactly like the creator row above.
+                    BasicText(
+                        text = UiStrings.AGENT_PRESETS_RELOAD,
+                        style = type.secondary.copy(color = tokens.colors.accent),
+                        modifier = Modifier
+                            .defaultMinSize(minHeight = tokens.geometry.pageRowMinHeight)
+                            .clickable(role = Role.Button, onClick = onReload)
+                            .padding(tokens.spacing.iconText),
+                    )
+                }
             }
         }
     }
@@ -388,8 +489,9 @@ private fun AgentPresetsBody(
 @Composable
 private fun AgentPresetCard(
     row: AgentPresetRowView,
+    opening: Boolean,
     onViewConfiguration: (String) -> Unit,
-    onMakeDefault: (String) -> Unit,
+    onUsePreset: (String) -> Unit,
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
@@ -442,6 +544,7 @@ private fun AgentPresetCard(
             )
         }
         Row(
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(tokens.spacing.iconText),
         ) {
             // The roster's criterion row, for the same reason as the creator row.
@@ -454,10 +557,14 @@ private fun AgentPresetCard(
                     .padding(tokens.spacing.iconText),
             )
             SessionTextAction(
-                label = UiStrings.AGENT_PRESETS_MAKE_DEFAULT,
-                onClick = { onMakeDefault(row.id) },
+                label = UiStrings.AGENT_PRESETS_USE_PRESET,
+                onClick = { onUsePreset(row.id) },
                 tone = SessionActionTone.SECONDARY,
-                enabled = row.canBeDefault,
+                enabled = row.canUse && !opening,
+            )
+            BasicText(
+                text = UiStrings.AGENT_PRESETS_DEFAULT_LOCKED,
+                style = type.caption.copy(color = tokens.colors.tertiary),
             )
         }
     }

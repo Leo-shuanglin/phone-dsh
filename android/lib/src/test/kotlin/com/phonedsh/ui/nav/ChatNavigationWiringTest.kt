@@ -21,6 +21,9 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
+import com.phonedsh.ui.page.AgentPresetActions
+import com.phonedsh.ui.page.NativeAgentPreset
+import com.phonedsh.ui.page.NativeAgentPresetsFacts
 import com.phonedsh.ui.page.PhoneCapability
 import com.phonedsh.ui.page.PhoneCapabilityStatus
 import com.phonedsh.ui.page.PhoneGrantRoute
@@ -67,6 +70,8 @@ class ChatNavigationWiringTest {
         chat: ChatScreenState? = null,
         onPhonePermissionRequest: (PhoneCapability) -> Unit = {},
         onPhonePermissionSettings: (PhoneCapability) -> Unit = {},
+        agentPresets: NativeAgentPresetsFacts = NativeAgentPresetsFacts(),
+        agentPresetActions: AgentPresetActions = AgentPresetActions(),
     ) {
         compose.setContent {
             PdshTheme(darkTheme = false) {
@@ -82,11 +87,17 @@ class ChatNavigationWiringTest {
                     chat = chat,
                     onPhonePermissionRequest = onPhonePermissionRequest,
                     onPhonePermissionSettings = onPhonePermissionSettings,
+                    agentPresets = agentPresets,
+                    agentPresetActions = agentPresetActions,
                 )
             }
         }
         compose.waitForIdle()
     }
+
+    private fun healthyPresets(): NativeAgentPresetsFacts = NativeAgentPresetsFacts(
+        presets = listOf(NativeAgentPreset(id = "cordis", title = "Cordis")),
+    )
 
     @Test
     fun `the chat menu exports through the host action`() {
@@ -218,7 +229,7 @@ class ChatNavigationWiringTest {
                 ),
             ),
         )
-        mount(PdshRoute.AgentPresets, facts)
+        mount(PdshRoute.AgentPresets, facts, agentPresets = healthyPresets())
 
         compose.onNodeWithText(UiStrings.AGENT_PRESETS_CREATE).performSemanticsAction(SemanticsActions.OnClick)
 
@@ -227,10 +238,37 @@ class ChatNavigationWiringTest {
 
     @Test
     fun `an unavailable new-session action leaves a visible reason`() {
-        mount(PdshRoute.AgentPresets)
+        mount(PdshRoute.AgentPresets, agentPresets = healthyPresets())
 
         compose.onNodeWithText(UiStrings.AGENT_PRESETS_CREATE).performSemanticsAction(SemanticsActions.OnClick)
 
         compose.onNodeWithText(UiStrings.AGENT_PRESETS_CREATE_UNAVAILABLE).assertIsDisplayed()
+    }
+
+    @Test
+    fun `the creator row is disabled with a reason when cordis is absent`() {
+        var dispatched = 0
+        val facts = PdshNavFacts(
+            actionAvailability = PdshActionAvailabilities(
+                mapOf(
+                    PdshActionKey.NEW_SESSION to PdshActionAvailability.Available { dispatched++ },
+                ),
+            ),
+        )
+        mount(
+            PdshRoute.AgentPresets,
+            facts,
+            agentPresets = NativeAgentPresetsFacts(
+                presets = listOf(NativeAgentPreset(id = "standard", title = "Standard")),
+            ),
+        )
+
+        compose.onNodeWithText(
+            UiStrings.AGENT_PRESETS_CREATOR_UNAVAILABLE_PREFIX + UiStrings.AGENT_PRESETS_CREATOR_MISSING,
+        ).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.AGENT_PRESETS_CREATE)
+            .performSemanticsAction(SemanticsActions.OnClick)
+
+        assertEquals("a disabled creator must not dispatch NEW_SESSION", 0, dispatched)
     }
 }

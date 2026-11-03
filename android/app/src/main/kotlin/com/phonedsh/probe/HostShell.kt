@@ -98,6 +98,7 @@ import com.phonedsh.ui.nav.PdshNavState
 import com.phonedsh.ui.nav.PdshRoute
 import com.phonedsh.ui.nav.confirms
 import com.phonedsh.ui.page.FactState
+import com.phonedsh.ui.page.AgentPresetActions
 import com.phonedsh.ui.page.PhoneCapability
 import com.phonedsh.ui.page.ProviderDraft
 import com.phonedsh.ui.page.ProviderKeyStatus
@@ -214,6 +215,7 @@ internal fun HostShell(
     val preferences by engine.preferenceState.collectAsState()
     val permissionDefaults by engine.permissionDefaults.collectAsState()
     val configurationFacts by engine.configuration.collectAsState()
+    val agentPresetFacts by engine.agentPresets.collectAsState()
     val context = LocalContext.current
     val systemDark = isSystemInDarkTheme()
     // L69: the chat page's one state. Collected here so a Worker event rebuilds the
@@ -1151,6 +1153,30 @@ internal fun HostShell(
                                 }
                             }
                         },
+
+                        // Agent 预设: the host owns all three reads/writes. The list
+                        // is collected above; 使用预设 creates the Worker session with
+                        // `request.agentPreset` and only then closes the settings sheet
+                        // onto the new conversation. A failure returns its `code:
+                        // message` and the route keeps the page open.
+                        agentPresets = agentPresetFacts,
+                        agentPresetActions = AgentPresetActions(
+                            refresh = {
+                                providerProbeScope.launch { engine.refreshAgentPresets() }
+                            },
+                            read = { presetId -> engine.readAgentPresetDocument(presetId) },
+                            use = { presetId ->
+                                val failure = engine.useAgentPreset(
+                                    presetId,
+                                    StateRequestId("ui.presets.use.${UUID.randomUUID()}"),
+                                )
+                                if (failure == null) {
+                                    notice = null
+                                    nav = PdshNavState(listOf(PdshRoute.Chat))
+                                }
+                                failure
+                            },
+                        ),
 
                         // L62: the home face is the product home — the session list
                         // (option (a): the list is rendered *in* the home slot, so

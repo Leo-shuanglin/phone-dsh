@@ -72,6 +72,7 @@ import com.phonedsh.ui.page.ModelProviderLocalState
 import com.phonedsh.ui.page.ModelProviderScreenState
 import com.phonedsh.ui.page.ModelProviderSettingsPage
 import com.phonedsh.ui.page.ModelProviderUiEvent
+import com.phonedsh.ui.page.AgentPresetActions
 import com.phonedsh.ui.page.NativeAgentPresetsFacts
 import com.phonedsh.ui.page.NativeAgentPresetsLocalState
 import com.phonedsh.ui.page.NativeAgentPresetsPage
@@ -432,6 +433,10 @@ public fun PdshNavHost(
     onLoadEarlierChatTranscript: (() -> Unit)? = null,
     /** Confirmed DSH configuration read/write path; absent hosts keep actions unavailable. */
     onConfigurationWrite: (suspend (ConfigurationWriteRequest) -> ConfigurationWriteReceipt)? = null,
+    /** The host's `agentPresets/list` reading; the default reports no roster. */
+    agentPresets: NativeAgentPresetsFacts = NativeAgentPresetsFacts(),
+    /** The host's preset read/use handoffs; the default leaves them unavailable. */
+    agentPresetActions: AgentPresetActions = AgentPresetActions(),
 ) {
     val route = nav.current
     if (route == PdshRoute.Home) {
@@ -493,6 +498,8 @@ public fun PdshNavHost(
                 backLevel = backLevel,
                 onPhonePermissionRequest = onPhonePermissionRequest,
                 onPhonePermissionSettings = onPhonePermissionSettings,
+                agentPresets = agentPresets,
+                agentPresetActions = agentPresetActions,
             )
             PdshRoute.ModelProvider -> ModelProviderRoute(facts, onBack, onHostAction, backLevel = backLevel)
             PdshRoute.WebSearch -> WebSearchRoute(facts, onBack, onHostAction)
@@ -513,7 +520,12 @@ public fun PdshNavHost(
             )
             is PdshRoute.SessionArtifacts ->
                 SessionArtifactsRoute(route.sessionId, artifacts, workspaceRoot, onBack, backLevel)
-            PdshRoute.AgentPresets -> AgentPresetsRoute(onBack, facts.actionAvailability)
+            PdshRoute.AgentPresets -> AgentPresetsRoute(
+                onBack = onBack,
+                facts = agentPresets,
+                actions = agentPresetActions,
+                actionAvailability = facts.actionAvailability,
+            )
             PdshRoute.PluginInventory -> PluginInventoryRoute(
                 facts = facts,
                 onBack = onBack,
@@ -1387,6 +1399,8 @@ private fun SettingsRoute(
     // nothing would be the same fake control the pushed page no longer has.
     onPhonePermissionRequest: (PhoneCapability) -> Unit = {},
     onPhonePermissionSettings: (PhoneCapability) -> Unit = {},
+    agentPresets: NativeAgentPresetsFacts = NativeAgentPresetsFacts(),
+    agentPresetActions: AgentPresetActions = AgentPresetActions(),
 ) {
     // 新会话默认权限 is the settings sheet's own child page in the baseline, so it
     // is a local page swap here, not a route the stack owns.
@@ -1531,6 +1545,8 @@ private fun SettingsRoute(
                         )
                     SettingsTab.PRESETS -> AgentPresetsRoute(
                         onBack = onBack,
+                        facts = agentPresets,
+                        actions = agentPresetActions,
                         actionAvailability = facts.actionAvailability,
                         embedded = true,
                     )
@@ -2069,31 +2085,58 @@ private fun SessionsRoute(facts: PdshNavFacts, onBack: () -> Unit) {
 // pages' `embedded` form and leaves the slot wiring to whoever owns the shell.
 
 /**
- * Agent 预设: the preset roster and its read-only document panel.
+ * Agent 预设: the preset roster, its read-only document panel and the two host
+ * handoffs (create a session with one preset, read one preset's YAML).
  *
- * The host has no preset read and no creator-mode command yet, so the roster is
- * `null` — the page's 未知 line, never an invented empty engine — and the two row
- * verbs reproduce the baseline's own failure wording when the engine answers
- * nothing (`NativeAgentPresetsPage.swift:82,95`). The one local value is the
- * document panel, exactly the baseline's `showYAML` / `yaml` pair.
+ * The roster is `null` until `agentPresets/list` answers — the page's 未知 line,
+ * never an invented empty engine. The route starts that one read when it enters
+ * and again on 重新读取; the read itself is the host's (IO, in `:app`), so a
+ * composition never touches the channel.
+ *
+ * 使用预设 creates a new session through `session/create` with
+ * `request.agentPreset`; the host closes the settings sheet on success, so this
+ * route only leaves the failure text behind on the page. 查看配置 replaces the
+ * old static failure: the host's `agentPresets/read` content opens the panel and
+ * its `code: message` stays in the error line on failure.
+ *
+ * 让 Agent 创建预设 keeps the existing NEW_SESSION dispatch (the in-flight
+ * creator fix owns the creator semantics); this route only disables it and states
+ * the reason when the roster says the `cordis` preset is absent or broken.
  *
  * @param onBack close the sheet, or the 完成 of the document panel.
+ * @param facts the host's `agentPresets/list` reading.
+ * @param actions the host's refresh/read/use handoffs.
  * @param embedded render as the settings sheet's 预设 tab body.
  */
 @Composable
 private fun AgentPresetsRoute(
     onBack: () -> Unit,
+    facts: NativeAgentPresetsFacts = NativeAgentPresetsFacts(),
+    actions: AgentPresetActions = AgentPresetActions(),
     actionAvailability: PdshActionAvailabilities = PdshActionAvailabilities(),
     embedded: Boolean = false,
 ) {
     var local by remember { mutableStateOf(NativeAgentPresetsLocalState()) }
-    // The baseline keeps one `error` for both the roster read and a row verb
-    // (`NativeAgentPresetsPage.swift:20`), so one local override is enough.
-    var error by remember { mutableStateOf<String?>(null) }
+    // The page keeps one error line for both the roster read and a row verb
+    // (`NativeAgentPresetsPage.swift:20`). This local value is the verb's answer;
+    // the list's own failure lives in [facts].
+    var verbError by remember { mutableStateOf<String?>(null) }
+    var openingPresetId by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { actions.refresh() }
     val createAvailability = actionAvailability.forAction(PdshActionKey.NEW_SESSION)
+    val creator = facts.presets?.firstOrNull { it.id == "cordis" }
+    val creatorUnavailableReason = when {
+        // While the first read is in flight the creator is disabled by `loading`,
+        // not by an invented "no preset" judgement.
+        facts.isLoading && facts.presets == null -> null
+        creator == null -> UiStrings.AGENT_PRESETS_CREATOR_MISSING
+        creator.broken != null -> creator.broken
+        else -> null
+    }
     NativeAgentPresetsPage(
         state = NativeAgentPresetsScreenState.from(
-            facts = NativeAgentPresetsFacts(error = error),
+            facts = facts.copy(error = verbError ?: facts.error),
             local = local,
         ),
         onBack = onBack,
@@ -2102,22 +2145,62 @@ private fun AgentPresetsRoute(
         // drawer uses; the host creates the conversation and lands on the chat
         // page with the existing draft untouched.
         onCreate = {
-            when (createAvailability) {
-                is PdshActionAvailability.Unavailable ->
-                    error = UiStrings.AGENT_PRESETS_CREATE_UNAVAILABLE
-                is PdshActionAvailability.Available -> {
-                    error = null
-                    val dispatched = actionAvailability.dispatch(
-                        PdshActionKey.NEW_SESSION,
-                        PdshUiHostCommand.NewSession(StateRequestId("ui.presets.create.${UUID.randomUUID()}")),
-                    )
-                    if (!dispatched) error = UiStrings.AGENT_PRESETS_CREATE_UNAVAILABLE
+            if (creatorUnavailableReason == null) {
+                when (createAvailability) {
+                    is PdshActionAvailability.Unavailable ->
+                        verbError = UiStrings.AGENT_PRESETS_CREATE_UNAVAILABLE
+                    is PdshActionAvailability.Available -> {
+                        verbError = null
+                        val dispatched = actionAvailability.dispatch(
+                            PdshActionKey.NEW_SESSION,
+                            PdshUiHostCommand.NewSession(StateRequestId("ui.presets.create.${UUID.randomUUID()}")),
+                        )
+                        if (!dispatched) verbError = UiStrings.AGENT_PRESETS_CREATE_UNAVAILABLE
+                    }
                 }
             }
         },
-        onViewConfiguration = { error = NativeAgentPresetsScreenState.NO_DOCUMENT_FAILURE },
-        onMakeDefault = { error = NativeAgentPresetsScreenState.NO_WRITABLE_DEFAULT_FAILURE },
+        onViewConfiguration = { id ->
+            val read = actions.read
+            if (read == null) {
+                verbError = NativeAgentPresetsScreenState.NO_DOCUMENT_FAILURE
+            } else {
+                scope.launch {
+                    val outcome = read(id)
+                    val document = outcome.document
+                    if (document == null) {
+                        verbError = outcome.failure
+                            ?: NativeAgentPresetsScreenState.NO_DOCUMENT_FAILURE
+                    } else {
+                        verbError = null
+                        local = local.apply(NativeAgentPresetsUiEvent.OpenDocument(document))
+                    }
+                }
+            }
+        },
+        onUsePreset = { id ->
+            val use = actions.use
+            if (use == null) {
+                verbError = NativeAgentPresetsScreenState.NO_WRITABLE_DEFAULT_FAILURE
+            } else if (openingPresetId == null) {
+                openingPresetId = id
+                scope.launch {
+                    val failure = try {
+                        use(id)
+                    } finally {
+                        openingPresetId = null
+                    }
+                    verbError = failure
+                }
+            }
+        },
+        onReload = {
+            verbError = null
+            actions.refresh()
+        },
         onCloseDocument = { local = local.apply(NativeAgentPresetsUiEvent.CloseDocument) },
+        creatorUnavailableReason = creatorUnavailableReason,
+        openingPresetId = openingPresetId,
         embedded = embedded,
     )
 }
