@@ -517,6 +517,7 @@ internal fun HostShell(
                 if (receipt?.requestId == request.requestId && receipt.sessionId == request.sessionId &&
                     receipt.outcome == com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED
                 ) {
+                    engine.reloadChatMetadata()
                     engine.refreshSessions()
                     settingsRevision++
                 }
@@ -528,6 +529,7 @@ internal fun HostShell(
                 if (receipt?.requestId == request.requestId && receipt.sessionId == request.sessionId &&
                     receipt.outcome == com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED
                 ) {
+                    engine.reloadChatMetadata()
                     engine.refreshSessions()
                     settingsRevision++
                 }
@@ -539,6 +541,7 @@ internal fun HostShell(
                 if (receipt?.requestId == request.requestId && receipt.sessionId == request.sessionId &&
                     receipt.outcome == com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED
                 ) {
+                    engine.reloadChatMetadata()
                     engine.refreshSessions()
                     settingsRevision++
                 } else notice = "恢复会话未确认，会话仍保留在归档列表中。"
@@ -1339,6 +1342,9 @@ internal fun HostShell(
                         }
                         val expectedSessionId = (command as? com.phonedsh.ui.nav.PdshUiHostCommand.SessionRename)?.sessionId
                         if (expectedRequestId != null && receipt?.confirms(expectedRequestId, expectedSessionId, null) == true) {
+                            if (command is com.phonedsh.ui.nav.PdshUiHostCommand.SessionRename) {
+                                engine.reloadChatMetadata()
+                            }
                             settingsRevision++
                             drawerSnapshotFailure = null
                         }
@@ -1364,6 +1370,7 @@ internal fun HostShell(
                         val result = if (receipt?.requestId?.value == request.requestId &&
                             receipt.sessionId == request.sessionId && receipt.outcome == com.phonedsh.ui.nav.PdshActionOutcome.SUCCEEDED
                         ) {
+                            engine.reloadChatMetadata()
                             engine.refreshSessions()
                             settingsRevision++
                             HomeDrawerArchiveResult.Archived(request.requestId, request.sessionId)

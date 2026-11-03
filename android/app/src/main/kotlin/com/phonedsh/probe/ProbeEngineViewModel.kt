@@ -1752,17 +1752,25 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun applyChatRecords(records: List<ChatRecord>) {
-        fun ChatRecord.listing() = HostSessionRecord(id, updatedAtMs, title, workspaceID, pinned)
-        val ids = records.map { it.id }.toSet()
-        val claims = records.flatMap { it.workerSessionIds }.toSet()
-        val active = records.filterNot { it.archived }
-        mutableSessions.update { snapshot -> snapshot.copy(
-            waiting = false,
-            sessions = mergeSessions(snapshot.sessions.filterNot { it.id in ids || it.id in claims }, active.map { it.listing() }),
-            archivedSessions = records.filter { it.archived }.map { it.listing() },
-            pinnedSessionIDs = active.filter { it.pinned }.map { it.id }.toSet(),
-            currentSessionID = snapshot.currentSessionID?.takeUnless { id -> records.any { it.id == id && it.archived } },
-        ) }
+        applyChatRecordsTo(records, mutableSessions, mutableChat, syncCurrentTitle = false)
+    }
+
+    /**
+     * Re-reads chat metadata after a HostShell session command wrote [chatStore].
+     *
+     * The HostShell rename/archive/restore paths write the store directly, so the
+     * in-memory session rows and the open conversation keep the values they had
+     * before that write. Applying the store's own readback makes the archived
+     * list, the settings count and the drawer agree at once; mirroring the open
+     * conversation's title here is what stops the next [persistChat] from writing
+     * the old name back over a rename.
+     */
+    internal suspend fun reloadChatMetadata() {
+        runCatching {
+            reloadChatMetadataInto(chatStore, mutableSessions, mutableChat)
+        }.onFailure {
+            mutableSessions.update { snapshot -> snapshot.copy(failure = "会话列表刷新失败，请重试。") }
+        }
     }
 
     private data class ChatResponder(
@@ -3621,48 +3629,6 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
-     * Merges two session reads without losing the newer timestamp of either.
-     *
-     * The store scan and the turn observation can name the same session; the
-     * merged row carries the max of the two readings and the list stays ordered
-     * by that reading (newest first). Host order is the sessions page's input
-     * order, so this is the order the rows appear in.
-     *
-     * Ordering caveat: newest-first by the host's one measured time. The iOS
-     * baseline orders by its management model, not by a per-session timestamp,
-     * and the UI contract does not specify a session order, so the two platforms
-     * can list the same sessions in different orders. This is a known difference,
-     * not a hidden choice; a contract-level order would replace this rule.
-     */
-    private fun mergeSessions(
-        fromStore: List<HostSessionRecord>,
-        observed: List<HostSessionRecord>,
-    ): List<HostSessionRecord> {
-        val merged = LinkedHashMap<String, HostSessionRecord>()
-        for (record in fromStore + observed) {
-            val previous = merged[record.id]
-            merged[record.id] = if (previous == null) {
-                record
-            } else {
-                HostSessionRecord(
-                    id = record.id,
-                    lastActivityMs = newer(previous.lastActivityMs, record.lastActivityMs),
-                    // An empty title is "this source has no name", never "the name is
-                    // empty": the chat record's name must survive a journal merge.
-                    title = previous.title.ifEmpty { record.title },
-                )
-            }
-        }
-        return merged.values.sortedByDescending { it.lastActivityMs ?: Long.MIN_VALUE }
-    }
-
-    private fun newer(previous: Long?, next: Long?): Long? = when {
-        previous == null -> next
-        next == null -> previous
-        else -> maxOf(previous, next)
-    }
-
-    /**
      * The page's failure line, with a stable store code and no path.
      *
      * The journal's own codes name why the read failed; anything else is a class
@@ -3736,6 +3702,97 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         const val SUBAGENT_HISTORY_TIMEOUT_MILLIS = 10_000L
 
     }
+}
+
+/**
+ * Re-reads the durable chat store and applies it to [sessions] and the open [chat].
+ *
+ * This is the load half of [ProbeEngineViewModel.reloadChatMetadata], kept at file
+ * scope so the JVM suite can drive the same read over a real [ChatSessionStore]
+ * without constructing an Android `Application`.
+ */
+internal suspend fun reloadChatMetadataInto(
+    store: ChatSessionStore,
+    sessions: MutableStateFlow<HostSessionSnapshot>,
+    chat: MutableStateFlow<ChatUiState>,
+) {
+    val records = withContext(Dispatchers.IO) { store.loadAll() }
+    applyChatRecordsTo(records, sessions, chat, syncCurrentTitle = true)
+}
+
+/**
+ * Projects one chat-store read into the host's session rows and the open chat.
+ *
+ * [syncCurrentTitle] is off for the existing background refresh paths and on for
+ * [reloadChatMetadataInto]: only a HostShell metadata command needs the open
+ * conversation's title mirror, and doing it on every background read would make
+ * an in-flight rename race with unrelated refreshes.
+ */
+internal fun applyChatRecordsTo(
+    records: List<ChatRecord>,
+    sessions: MutableStateFlow<HostSessionSnapshot>,
+    chat: MutableStateFlow<ChatUiState>,
+    syncCurrentTitle: Boolean,
+) {
+    fun ChatRecord.listing() = HostSessionRecord(id, updatedAtMs, title, workspaceID, pinned)
+    val ids = records.map { it.id }.toSet()
+    val claims = records.flatMap { it.workerSessionIds }.toSet()
+    val active = records.filterNot { it.archived }
+    sessions.update { snapshot -> snapshot.copy(
+        waiting = false,
+        sessions = mergeSessions(snapshot.sessions.filterNot { it.id in ids || it.id in claims }, active.map { it.listing() }),
+        archivedSessions = records.filter { it.archived }.map { it.listing() },
+        pinnedSessionIDs = active.filter { it.pinned }.map { it.id }.toSet(),
+        currentSessionID = snapshot.currentSessionID?.takeUnless { id -> records.any { it.id == id && it.archived } },
+    ) }
+    if (!syncCurrentTitle) return
+    val live = chat.value
+    val stored = records.firstOrNull { it.id == live.chatId } ?: return
+    if (stored.title != live.title) {
+        chat.update { current -> if (current.chatId == live.chatId) current.copy(title = stored.title) else current }
+    }
+}
+
+/**
+ * Merges two session reads without losing the newer timestamp of either.
+ *
+ * The store scan and the turn observation can name the same session; the
+ * merged row carries the max of the two readings and the list stays ordered
+ * by that reading (newest first). Host order is the sessions page's input
+ * order, so this is the order the rows appear in.
+ *
+ * Ordering caveat: newest-first by the host's one measured time. The iOS
+ * baseline orders by its management model, not by a per-session timestamp,
+ * and the UI contract does not specify a session order, so the two platforms
+ * can list the same sessions in different orders. This is a known difference,
+ * not a hidden choice; a contract-level order would replace this rule.
+ */
+internal fun mergeSessions(
+    fromStore: List<HostSessionRecord>,
+    observed: List<HostSessionRecord>,
+): List<HostSessionRecord> {
+    val merged = LinkedHashMap<String, HostSessionRecord>()
+    for (record in fromStore + observed) {
+        val previous = merged[record.id]
+        merged[record.id] = if (previous == null) {
+            record
+        } else {
+            HostSessionRecord(
+                id = record.id,
+                lastActivityMs = newer(previous.lastActivityMs, record.lastActivityMs),
+                // An empty title is "this source has no name", never "the name is
+                // empty": the chat record's name must survive a journal merge.
+                title = previous.title.ifEmpty { record.title },
+            )
+        }
+    }
+    return merged.values.sortedByDescending { it.lastActivityMs ?: Long.MIN_VALUE }
+}
+
+private fun newer(previous: Long?, next: Long?): Long? = when {
+    previous == null -> next
+    next == null -> previous
+    else -> maxOf(previous, next)
 }
 
 /**
