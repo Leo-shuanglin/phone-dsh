@@ -28,3 +28,10 @@ Logs: `/tmp/pr22-owner-core-final-pass.log`, `/tmp/pr22-owner-core-final-spec-pa
 - **NOT_RUN:** live provider/model endpoints, physical phones, iOS live interaction and complete paired pixel acceptance, 16KB runtime.
 - **Unavailable:** running-child live-stream attachment; unsupported user-history block types fail closed rather than losing content; physical DSH workspace create/switch/delete. Drawer folders remain logical groups sharing the materialized workspace. HTML/3D preview retains the documented process/cookie-isolation limit.
 - iOS fixes remain in separate PR23; Android retains current-main iOS source. PR14 stays Draft.
+
+
+## PR23 main synchronization
+
+PR23 was merged to main as `419e9701a61f952997eb61ce1f34896fb61cd16d`. The Android PR now includes that main commit. Conflict resolution retained the tested 13-record Android ratchet and its helper/variant rules, added main's required segmented-picker option comparison, regenerated contracts from the merged Swift source, and translated 22 unchanged token provenance lines by exact source-line mapping. No token value or Android business code changed during this synchronization. The obsolete standalone editor contract remains represented by the parent's real editor subpage.
+
+Fresh synchronization checks: 182 UI spec tests passed; extractor freshness and token/source checks passed; 17 Android source/token discipline unit tests passed; diff checks passed. The page-structure ratchet remains explicitly FAIL17 outside the same13 records. Prior 2369-module and10-device-case results retain their original product-source binding; the Android product code is unchanged by this main merge.

@@ -2647,6 +2647,14 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
     # neither appears the finding names the primary wording and lists the rest.
     expected_labels = []
     for action in labelled:
+        if action.get("kind") == "picker" and action.get("style") == "segmented":
+            items = list(action.get("items") or [])
+            if items and normalize(items[0]) == normalize(action["label"]):
+                items = items[1:]
+            for item in items:
+                segment = dict(action, label=item, _segmentedOption=True)
+                expected_labels.append((segment, [item], [normalize(item)]))
+            continue
         wordings = action_wording(action)
         if wordings:
             expected_labels.append((action, wordings,
@@ -2696,7 +2704,8 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
                  and key not in dead_action_keys and key not in picker_option_keys}
     paired = {}
     for _action, wordings, keys in expected_labels:
-        if all(key in picker_label_keys or key in picker_option_keys for key in keys):
+        if (not _action.get("_segmentedOption") and
+                all(key in picker_label_keys or key in picker_option_keys for key in keys)):
             continue
         if any(key in actual_labels for key in keys):
             continue
@@ -2707,7 +2716,8 @@ def compare(root: Path, contract: dict, report: Report, strings: dict, shared_co
                 paired[key] = wordings[0]
                 break
     for action, wordings, keys in expected_labels:
-        if all(key in picker_label_keys or key in picker_option_keys for key in keys):
+        if (not action.get("_segmentedOption") and
+                all(key in picker_label_keys or key in picker_option_keys for key in keys)):
             continue
         if any(key in actual_labels for key in keys):
             # Present, but is it present unconditionally? A label the page only draws

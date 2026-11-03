@@ -721,6 +721,44 @@ class PageStructureCheckTests(unittest.TestCase):
         rc, out = run_check(self.fx.root)
         self.assertEqual(rc, 0, out)
 
+    def test_segmented_picker_options_count_as_action_labels(self) -> None:
+        data = contract()
+        data["actions"].append({
+            "id": "mode-picker", "label": "工作区", "labelExpr": None,
+            "kind": "picker", "trigger": "tap", "semantic": "binding:section",
+            "writes": True, "destination": None, "condition": None,
+            "provenance": "FakePage.swift:2", "anchor": "struct FakePage: View { var body: some View {",
+            "extraction": "syntax", "items": ["工作区", "文件", "命令"], "style": "segmented",
+        })
+        self.fx.write_contract(data)
+        text = self.fx.android().replace(
+            "    SessionTextAction(label = UiStrings.GO, onClick = {})\n",
+            "    SessionTextAction(label = UiStrings.GO, onClick = {})\n"
+            '    SegmentedButton(selected = true, onClick = {}) { Text("文件") }\n'
+            '    SegmentedButton(selected = false, onClick = {}) { Text("命令") }\n')
+        self.fx.write_android(text)
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 0, out)
+
+    def test_segment_named_like_its_picker_title_is_still_required(self) -> None:
+        data = contract()
+        data["actions"].append({
+            "id": "mode-picker", "label": "模式", "labelExpr": None,
+            "kind": "picker", "trigger": "tap", "semantic": "binding:section",
+            "writes": True, "destination": None, "condition": None,
+            "provenance": "FakePage.swift:2", "anchor": "struct FakePage: View { var body: some View {",
+            "extraction": "syntax", "items": ["模式", "模式", "文件"], "style": "segmented",
+        })
+        self.fx.write_contract(data)
+        self.fx.write_android(self.fx.android().replace(
+            "    SessionTextAction(label = UiStrings.GO, onClick = {})\n",
+            "    SessionTextAction(label = UiStrings.GO, onClick = {})\n"
+            '    SegmentedButton(selected = true, onClick = {}) { Text("文件") }\n'))
+        rc, out = run_check(self.fx.root)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("missing-action", out)
+        self.assertIn("模式", out)
+
     def test_material_button_without_label_is_missing(self) -> None:
         self._actions("运行")
         self._compose_page("    Button(onClick = {}) {\n    }")
