@@ -1730,14 +1730,37 @@ class DefaultPhoneDshHost(
      * in flight on a live Worker; the alternative, closing and entering
      * `Failed`, leaves the user with an unrecoverable host. The reason and the
      * held path/mseq are logged, so the deferral is observable rather than
-     * silent. A real failure of the close itself still reports through
+     * silent. A tick skipped because the host is not `Running` (or the drain
+     * owns the close) is logged at debug level for the same reason: a lane that
+     * quietly did nothing for nine minutes looks exactly like a lane that was
+     * never started. A real failure of the close itself still reports through
      * [VfsSink] and moves D14 to `Failed`.
      */
     private suspend fun periodicEpochClose(generation: Long) {
+        logger.debug(
+            "periodic epoch close: lane started (every $epochCloseIntervalMillis ms, " +
+                "generation=$generation)",
+        )
         while (current(generation)) {
             delay(epochCloseIntervalMillis)
-            if (!current(generation)) return
-            if (controller.state != HostState.RUNNING || drain.isDraining) continue
+            if (!current(generation)) {
+                logger.debug(
+                    "periodic epoch close: lane stopped (generation $generation is no longer current)",
+                )
+                return
+            }
+            // Read the published StateFlow, not the machine's field: this lane
+            // runs outside the signal lock, and the StateFlow write is the
+            // visibility edge every dispatch publishes.
+            val hostState = state.value
+            if (hostState != HostState.RUNNING || drain.isDraining) {
+                logger.debug(
+                    "periodic epoch close skipped: host state=${hostState.wireName}" +
+                        (if (drain.isDraining) ", drain in flight" else "") +
+                        " (wal.md §5.2 closes only while Running and never while the drain owns the close)",
+                )
+                continue
+            }
             val pending = wal?.pendingResync()
             if (pending != null) {
                 logger.warn(
@@ -1751,7 +1774,13 @@ class DefaultPhoneDshHost(
                 val durable = epochCloseGate.withLock {
                     // Re-check under the close gate: a drain or a new mismatch
                     // may have arrived while this coroutine waited.
-                    if (controller.state != HostState.RUNNING || drain.isDraining) {
+                    val underGate = state.value
+                    if (underGate != HostState.RUNNING || drain.isDraining) {
+                        logger.debug(
+                            "periodic epoch close skipped: host state=${underGate.wireName}" +
+                                (if (drain.isDraining) ", drain in flight" else "") +
+                                " arrived while waiting for the close gate",
+                        )
                         null
                     } else {
                         wal?.pendingResync()?.let { held ->
@@ -1766,6 +1795,11 @@ class DefaultPhoneDshHost(
                 }
                 if (durable != null) {
                     logger.info("periodic epoch close: durable_upto=$durable (wal.md §5.2)")
+                } else {
+                    logger.debug(
+                        "periodic epoch close skipped: the VFS sink is not open in this boot, " +
+                            "so there is no epoch to close",
+                    )
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled

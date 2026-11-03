@@ -887,8 +887,17 @@ internal class DefaultPermissionGateway(
  * `session/create`, `session/follow` and `session/prompt` over the channel the
  * Worker opened. The model behind the Worker is scripted by the acceptance
  * runner; this class makes no claim about inference.
+ *
+ * One view model per process, constructed only through [sharedHost]. The class
+ * owns the App's one `WorkspaceLog` writer (P02), so a second instance is not a
+ * second screen — it is a second writer over the same WAL directory. Android
+ * can create a second `MainActivity` while this one still has a live view model,
+ * so this lifetime is process-scoped rather than Activity-scoped: every Activity
+ * gets the same host, engine and stores. The 2026-11-03 emulator evidence shows
+ * what Activity-scoped ownership produced: two `DefaultPhoneDshHost` instances,
+ * two `boot_id`s and two live WebViews in one process.
  */
-class ProbeEngineViewModel(application: Application) : AndroidViewModel(application) {
+class ProbeEngineViewModel private constructor(application: Application) : AndroidViewModel(application) {
     private val logger: EngineLogger = AndroidEngineLogger()
 
     /** The launch values read before this view model was constructed. */
@@ -4217,6 +4226,12 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         turnScope.cancel()
         chatIo.cancel()
         host.stop()
+        // The App's process scope normally makes this unreachable (the view
+        // model is not registered in any Activity's ViewModelStore). If a test
+        // or a future owner does clear it, release the process singleton only
+        // after the host stopped, so a later construction cannot overlap two
+        // writers.
+        processHost.clear(this)
         super.onCleared()
     }
 
@@ -4449,7 +4464,45 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    private companion object {
+    internal companion object {
+        /**
+         * The one process-wide owner of the host composition.
+         *
+         * The view model owns the only `WorkspaceLog` writer (P02). Android can
+         * put a second `MainActivity` on screen while the first view model is
+         * still alive, and before this holder existed that second Activity
+         * constructed a second host, engine and WAL writer over the same
+         * `files/xl` directory. The factory below is the only constructor
+         * (the primary constructor is private), so a second writer cannot be
+         * created even by accident.
+         */
+        private val processHost = ProcessSingleton<ProbeEngineViewModel>()
+
+        /**
+         * The process's one view model, created on first use.
+         *
+         * Every Activity asks for this rather than `by viewModels()`: an
+         * Activity-scoped store is exactly what produced two hosts when a
+         * launcher start created a second Activity instead of reusing the first.
+         * The process is the release point; [onCleared] is the defensive path.
+         */
+        internal fun sharedHost(application: Application): ProbeEngineViewModel {
+            processHost.peek()?.let { existing ->
+                LogcatHostLog.info(
+                    "host owner: reusing the process-wide host composition; " +
+                        "no second host/WAL writer is constructed",
+                )
+                return existing
+            }
+            return processHost.obtain {
+                LogcatHostLog.info(
+                    "host owner: constructing the process-wide host composition " +
+                        "(the only WorkspaceLog writer in this process)",
+                )
+                ProbeEngineViewModel(application)
+            }
+        }
+
         /** Subdirectory of filesDir that owns the WAL (wal.md §1's `xl`). */
         const val WORKSPACE_DIRECTORY = "xl"
 

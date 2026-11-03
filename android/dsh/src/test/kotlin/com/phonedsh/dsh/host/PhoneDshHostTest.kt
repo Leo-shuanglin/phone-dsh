@@ -17,8 +17,11 @@ package com.phonedsh.dsh.host
 import com.phonedsh.controller.BootDisposition
 import com.phonedsh.controller.Admission
 import com.phonedsh.controller.ControllerBudgets
+import com.phonedsh.controller.ControllerFailure
+import com.phonedsh.controller.ControllerSignal
 import com.phonedsh.controller.ControllerStateMachine
 import com.phonedsh.controller.HostState
+import com.phonedsh.controller.SignalOutcome
 import com.phonedsh.loopback.LoopbackConnection
 import com.phonedsh.platform.EngineHostState
 import com.phonedsh.platform.ScenePhase
@@ -372,6 +375,115 @@ class PhoneDshHostTest {
         }
     }
 
+    /**
+     * The product boot path, not the test shortcut: a persisted `Running`
+     * record is read back through [HostStateStore], the controller takes the
+     * `budgets.md` §3 crash-recovery mapping, and only the lease result that
+     * follows the engine's own start moves it to `Running`. The periodic lane
+     * must then close an epoch without anything calling
+     * [ControllerStateMachine.handle] with a hand-made Running transition.
+     */
+    @Test
+    fun periodicEpochCloseRunsAfterThePersistedRunningBootVerifiesTheLease() {
+        FakePlatform().use { platform ->
+            val stateStore = HostStateStore(
+                file = platform.tempDir.resolve("host-state.json"),
+                durability = platform,
+                clock = platform,
+                logger = HostLog.None,
+            )
+            val seed = ControllerStateMachine.boot(persistedState = null)
+            val seeded = seed.handle(ControllerSignal.LeaseCheckResult(verified = true), 1L)
+            assertTrue(
+                "the seed machine could not reach Running: $seeded",
+                seeded is SignalOutcome.Transitioned,
+            )
+            assertTrue("the seed host-state record was not written", stateStore.save(seed))
+            val persisted = stateStore.load()
+            assertEquals(HostState.RUNNING, persisted?.state)
+
+            val controller = ControllerStateMachine.boot(
+                persistedState = persisted?.state,
+                persistedFailure = ControllerFailure.fromCode(persisted?.reason),
+            )
+            assertEquals(BootDisposition.CRASH_RECOVERY, controller.bootDisposition)
+            assertEquals(HostState.RECOVERING, controller.state)
+
+            val wal = FakeHostWal(
+                recovery = WalRecovery.Recovered(nextMseq = 42, ackedMseq = 41, durableMseq = 40),
+            )
+            val host = newHost(
+                platform,
+                controller = controller,
+                wal = wal,
+                stateStore = stateStore,
+                epochCloseIntervalMillis = 10L,
+            )
+            try {
+                host.start()
+                runBlocking { withTimeout(5_000) { host.ready.first { it } } }
+                // The fake engine is this module's engine seam; the product path
+                // under test is host.start() -> lease verification -> Running.
+                platform.engine.setState(RUNNING)
+                runBlocking { withTimeout(5_000) { host.state.first { it == HostState.RUNNING } } }
+
+                assertEquals(
+                    "the host did not reach Running through the lease check",
+                    "leaseCheckResult(verified=true)",
+                    controller.transitions.last().signal,
+                )
+                assertEquals(HostState.RUNNING, host.state.value)
+                runBlocking {
+                    withTimeout(5_000) {
+                        while (wal.closeCalls == 0) delay(5)
+                    }
+                }
+                assertTrue(
+                    "the periodic lane never closed an epoch after the product-path lease check",
+                    wal.closeCalls >= 1,
+                )
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    /**
+     * Requirement of the periodic lane: a tick that skips because the host is
+     * not Running must say so. Before this assertion the loop silently
+     * `continue`d, so a nine-minute Running window with no close looked exactly
+     * like a lane that had never started.
+     */
+    @Test
+    fun periodicEpochCloseLogsTheReasonWhenItSkipsOutsideRunning() {
+        FakePlatform().use { platform ->
+            val wal = FakeHostWal(
+                recovery = WalRecovery.Recovered(nextMseq = 42, ackedMseq = 41, durableMseq = 40),
+            )
+            val log = RecordingHostLog()
+            val host = newHost(platform, wal = wal, log = log, epochCloseIntervalMillis = 10L)
+            try {
+                host.start()
+                runBlocking { withTimeout(5_000) { host.ready.first { it } } }
+                // The fake engine stays Stopped, so D14 stays Recovering while
+                // the periodic lane ticks.
+                assertEquals(HostState.RECOVERING, host.state.value)
+                runBlocking { delay(100) }
+
+                assertEquals("a non-Running host must not close an epoch", 0, wal.closeCalls)
+                assertTrue(
+                    "the periodic lane skipped silently; messages=${log.messages}",
+                    log.messages.any {
+                        it.contains("periodic epoch close skipped") &&
+                            it.contains("host state=Recovering")
+                    },
+                )
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private fun newHost(
@@ -379,6 +491,7 @@ class PhoneDshHostTest {
         controller: ControllerStateMachine = ControllerStateMachine.boot(persistedState = null),
         wal: HostWal? = null,
         log: HostLog = HostLog.None,
+        stateStore: HostStateStore? = null,
         epochCloseIntervalMillis: Long = DefaultPhoneDshHost.EPOCH_CLOSE_INTERVAL_MILLIS,
     ): DefaultPhoneDshHost = DefaultPhoneDshHost(
         engine = platform.engine,
@@ -389,6 +502,7 @@ class PhoneDshHostTest {
         wal = wal,
         scope = CoroutineScope(Dispatchers.Unconfined),
         logger = log,
+        stateStore = stateStore,
         epochCloseIntervalMillis = epochCloseIntervalMillis,
     )
 

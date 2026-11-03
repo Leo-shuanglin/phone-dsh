@@ -11,7 +11,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
@@ -39,7 +38,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class MainActivity : ComponentActivity() {
-    private val engine: ProbeEngineViewModel by viewModels()
+    /**
+     * The process's one view model, not an Activity-scoped one.
+     *
+     * `by viewModels()` would give a second Activity a second view model, which
+     * means a second `DefaultPhoneDshHost`, a second `WorkspaceLog` and two
+     * writers over one WAL directory (P02). The first Activity is not always
+     * cleared before Android creates the next one, so the ownership has to be
+     * the process's (see [ProbeEngineViewModel.sharedHost]).
+     */
+    private val engine: ProbeEngineViewModel by lazy {
+        ProbeEngineViewModel.sharedHost(application)
+    }
 
     /**
      * The one confirmation the `ubuntu` approval gate is waiting on, if any.
