@@ -7,10 +7,11 @@
 // `TURN` node stayed open. The composer therefore kept saying 排入下一轮 and the
 // record persisted that open node, which is why a cold start did not recover.
 //
-// These tests drive the same projection helpers the ViewModel uses
-// (`applyChatEvent` / `markStopped`) and the real `ChatSessionStore`, so the
-// assertions cover the screen state and the stored record rather than a mock's
-// internal flag.
+// These tests drive the production seams the ViewModel calls on stop and on
+// restore/open (`stopChatTurnState`, `persistStoppedChat`,
+// `repairStoredChatsForRestore`, `repairStoredChatForOpen`) plus the real
+// `ChatSessionStore`, so persistence, the in-flight send gate and the screen
+// projection are all exercised rather than a mock's internal flag.
 package com.phonedsh.probe
 
 import com.phonedsh.agentcore.JsonObject
@@ -29,6 +30,7 @@ import com.phonedsh.ui.state.ChatPhase
 import com.phonedsh.ui.state.ChatRow
 import com.phonedsh.ui.state.ChatTurnState
 import com.phonedsh.ui.surface.ComposerMode
+import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -78,8 +80,25 @@ class ChatTurnStopTest {
         assertEquals("a started turn must make the dock RUNNING", ChatPhase.RUNNING, before.phase)
         assertEquals(ComposerMode.STOP, before.composer.mode)
 
-        val stopped = ui.markStopped(1_790_000_000_000L)
+        val store = store()
+        store.save(
+            ChatRecord(
+                id = chatId,
+                title = "被停止的会话",
+                updatedAtMs = 10L,
+                workerSessionIds = listOf("worker-1"),
+                nodes = ui.nodes,
+            ),
+        )
+        val turnRunning = AtomicBoolean(true)
+        val stopped = stopChatTurnState(ui, 1_790_000_000_000L, turnRunning)
+        persistStoppedChat(store, stopped)
         val after = screen(stopped.copy(draft = "继续"))
+
+        assertFalse("停止 must clear the in-flight gate for the next send", turnRunning.get())
+        assertEquals("the Worker session is kept for model context", "worker-1", stopped.workerSessionId)
+        val persisted = requireNotNull(store.load(chatId))
+        assertEquals("the stop's closed transcript must reach the store", stopped.nodes, persisted.nodes)
 
         assertEquals("stop must leave the conversation idle", ChatPhase.IDLE, after.phase)
         assertFalse(after.composer.running)
@@ -105,9 +124,12 @@ class ChatTurnStopTest {
 
     @Test
     fun `stopping before TURN_STARTED is not RUNNING either`() {
-        val stopped = runningState().markStopped(1_790_000_000_001L)
+        val turnRunning = AtomicBoolean(true)
+        val stopped = stopChatTurnState(runningState(), 1_790_000_000_001L, turnRunning)
         val after = screen(stopped.copy(draft = "继续"))
 
+        assertFalse(turnRunning.get())
+        assertEquals("worker-1", stopped.workerSessionId)
         assertNotEquals(ChatPhase.RUNNING, after.phase)
         assertEquals(ChatPhase.IDLE, after.phase)
         assertTrue(after.composer.canSubmit)
@@ -164,7 +186,13 @@ class ChatTurnStopTest {
         val loaded = requireNotNull(store.load(chatId))
         assertEquals(ChatPhase.RUNNING, screen(loaded.toUiState().copy(running = true)).phase)
 
-        val repaired = store.repairStaleChatTurns(loaded, liveTurn = false)
+        val restored = repairStoredChatsForRestore(
+            store = store,
+            records = listOf(loaded),
+            liveChatId = "",
+            turnRunning = false,
+        )
+        val repaired = restored.single()
         val persisted = requireNotNull(store.load(chatId))
 
         assertNotEquals("the repair must be written back", loaded.nodes, persisted.nodes)
@@ -197,11 +225,90 @@ class ChatTurnStopTest {
         )
         val loaded = requireNotNull(store.load(chatId))
 
-        val untouched = store.repairStaleChatTurns(loaded, liveTurn = true)
+        val untouched = repairStoredChatsForRestore(
+            store = store,
+            records = listOf(loaded),
+            liveChatId = chatId,
+            turnRunning = true,
+        ).single()
 
         assertEquals(loaded.nodes, untouched.nodes)
         assertEquals(loaded.nodes, requireNotNull(store.load(chatId)).nodes)
         assertEquals(ChatPhase.RUNNING, screen(untouched.toUiState().copy(running = true)).phase)
+    }
+
+    @Test
+    fun `a late TURN_STARTED after stop cannot reopen the turn`() {
+        var ui = runningState()
+        ui = ui.applyChatEvent(
+            chatId,
+            event("""{"type":"turn/start","seq":1,"data":{"turn":1}}"""),
+            0,
+        )
+        val stopped = stopChatTurnState(ui, 1_790_000_000_002L, AtomicBoolean(true))
+        val lateStart = event("""{"type":"turn/start","seq":2,"data":{"turn":2}}""")
+
+        // The state transition itself rejects it; no stopChat re-entry is needed.
+        val late = stopped.applyChatEvent(chatId, lateStart, 2)
+        assertEquals(stopped.nodes, late.nodes)
+        assertEquals(null, late.activeTurnNodeId)
+        assertEquals(ChatPhase.IDLE, screen(late).phase)
+
+        // The callback gate also rejects a frame whose generation stop invalidated.
+        val gated = applyChatEventIfCurrent(
+            current = stopped,
+            chatId = chatId,
+            event = lateStart,
+            ordinal = 2,
+            eventGeneration = 1,
+            currentGeneration = 2,
+        )
+        assertEquals(stopped, gated)
+    }
+
+    @Test
+    fun `restore repairs an inactive record and leaves the live one open`() {
+        val store = store()
+        val damagedId = "chat-damaged"
+        val liveId = "chat-live"
+        store.save(
+            ChatRecord(
+                id = damagedId,
+                title = "损坏",
+                updatedAtMs = 11L,
+                workerSessionIds = listOf("worker-damaged"),
+                nodes = listOf(turnNode(damagedId, realTurnId)),
+            ),
+        )
+        store.save(
+            ChatRecord(
+                id = liveId,
+                title = "运行中",
+                updatedAtMs = 12L,
+                workerSessionIds = listOf("worker-live"),
+                nodes = listOf(turnNode(liveId, realTurnId)),
+            ),
+        )
+        val records = listOf(
+            requireNotNull(store.load(damagedId)),
+            requireNotNull(store.load(liveId)),
+        )
+
+        val restored = repairStoredChatsForRestore(
+            store = store,
+            records = records,
+            liveChatId = liveId,
+            turnRunning = true,
+        )
+        val repaired = restored.first { it.id == damagedId }
+        val untouched = restored.first { it.id == liveId }
+
+        assertTrue(repaired.nodes.any { it.kind == UiStateKind.STATUS && it.props.string("reason") == "cancelled" })
+        assertEquals(ChatPhase.IDLE, screen(repaired.toUiState()).phase)
+        assertEquals(records.first { it.id == liveId }.nodes, untouched.nodes)
+        assertEquals(ChatPhase.RUNNING, screen(untouched.toUiState().copy(running = true)).phase)
+        assertEquals(repaired.nodes, requireNotNull(store.load(damagedId)).nodes)
+        assertEquals(untouched.nodes, requireNotNull(store.load(liveId)).nodes)
     }
 
     @Test
@@ -232,7 +339,12 @@ class ChatTurnStopTest {
             ),
         )
         val loaded = requireNotNull(store.load(chatId))
-        val repaired = store.repairStaleChatTurns(loaded, liveTurn = false)
+        val repaired = repairStoredChatForOpen(
+            store = store,
+            record = loaded,
+            liveChatId = "",
+            turnRunning = false,
+        )
 
         assertEquals(loaded.nodes, repaired.nodes)
         assertEquals(loaded.nodes, requireNotNull(store.load(chatId)).nodes)

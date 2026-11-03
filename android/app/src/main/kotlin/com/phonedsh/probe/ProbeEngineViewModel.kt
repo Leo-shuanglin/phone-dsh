@@ -112,6 +112,7 @@ import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
@@ -148,6 +149,44 @@ private fun mergeSubagentHistory(
 ): List<UiStateNode> = (existing + refreshed)
     .distinctBy(UiStateNode::nodeID)
     .sortedWith(compareBy<UiStateNode> { it.seq }.thenBy { it.nodeID })
+
+/**
+ * The state half of 停止, used by `stopChat` and by the JVM stop test.
+ *
+ * Resetting `turnRunning` here is what lets the very next send pass
+ * `submitChat`'s in-flight check instead of being refused by the stopped job.
+ * The worker session id stays untouched.
+ */
+internal fun stopChatTurnState(
+    current: ChatUiState,
+    atMs: Long,
+    turnRunning: AtomicBoolean,
+): ChatUiState {
+    turnRunning.set(false)
+    return if (current.running) current.markStopped(atMs) else current
+}
+
+/**
+ * Persists the stopped transcript through the same store update the normal
+ * `persistChat` uses, without touching `persistChat`'s body (another lane owns
+ * it). `stopChat` calls this on its serialised IO scope; the JVM test calls it
+ * directly with a real [ChatSessionStore].
+ */
+internal fun persistStoppedChat(store: ChatSessionStore, ui: ChatUiState) {
+    if (ui.chatId.isEmpty()) return
+    val existing = store.load(ui.chatId) ?: return
+    val receipt = store.updateContent(
+        id = ui.chatId,
+        title = ui.title,
+        updatedAtMs = ui.updatedAtMs,
+        workerSessionIds = existing.workerSessionIds + listOfNotNull(ui.workerSessionId),
+        nodes = ui.nodes,
+        requestId = com.phonedsh.ui.state.StateRequestId("chat-stop:${UUID.randomUUID()}"),
+        expectedRevision = com.phonedsh.ui.state.StateRevision(existing.revision),
+    )
+    check(receipt.outcome is ChatWriteOutcome.Persisted) { "stopped chat write not confirmed" }
+    check(store.load(ui.chatId)?.nodes == ui.nodes) { "stopped chat nodes readback mismatch" }
+}
 
 /** Permission preset catalog and write capability measured from the DSH host. */
 internal data class PermissionDefaultsHostState(
@@ -1259,7 +1298,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
      * so that job's `finally` cannot clear the new turn's live state when the
      * next send starts immediately.
      */
-    private var chatTurnGeneration: Long = 0L
+    private val chatTurnGeneration = AtomicLong(0L)
 
     private val turnScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -2217,9 +2256,11 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                         // open TURN. This conversation is not running here, so close
                         // it and persist before the screen paints it.
                         runCatching {
-                            chatStore.repairStaleChatTurns(
-                                opened,
-                                liveTurn = mutableChat.value.running && mutableChat.value.chatId == opened.id,
+                            repairStoredChatForOpen(
+                                store = chatStore,
+                                record = opened,
+                                liveChatId = mutableChat.value.chatId,
+                                turnRunning = mutableChat.value.running,
                             )
                         }.onFailure {
                             LogcatHostLog.warn("chat: stale turn repair failed session=$chatId (${reasonOf(it as? Exception ?: Exception(it))})")
@@ -3047,7 +3088,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
             "APP_CHAT_SEND session=$chatId chars=${prompt.length} " +
                 "attachments=${attachments.size} worker=${sending.workerSessionId ?: "-"}",
         )
-        val turnGeneration = ++chatTurnGeneration
+        val turnGeneration = chatTurnGeneration.incrementAndGet()
         chatTurnJob = turnScope.launch(Dispatchers.IO) {
             var outcome: ChatTurnOutcome? = null
             // The 本 session 产物 fact's baseline: every workspace file the person
@@ -3072,44 +3113,46 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     prompt = prompt,
                     promptRequestId = promptRequestId,
                     onSession = { workerSessionId ->
-                        if (turnGeneration == chatTurnGeneration) claimWorkerSession(chatId, workerSessionId)
+                        if (turnGeneration == chatTurnGeneration.get()) claimWorkerSession(chatId, workerSessionId)
                     },
                     onEvent = { event ->
-                        if (turnGeneration == chatTurnGeneration) onChatEvent(chatId, event)
+                        onChatEvent(chatId, event, turnGeneration)
                     },
                     onDelta = { text ->
-                        if (turnGeneration == chatTurnGeneration) mutableChat.update { live ->
-                            if (live.chatId == chatId) live.copy(streaming = live.streaming + text) else live
+                        mutableChat.update { live ->
+                            if (turnGeneration != chatTurnGeneration.get() || live.chatId != chatId) live
+                            else live.copy(streaming = live.streaming + text)
                         }
                     },
                     onContextLost = { message ->
-                        if (turnGeneration == chatTurnGeneration) recordContextLost(chatId, message)
+                        if (turnGeneration == chatTurnGeneration.get()) recordContextLost(chatId, message)
                     },
                     onInteractiveRequest = { request, responder ->
-                        if (turnGeneration == chatTurnGeneration) receiveChatRequest(chatId, request, responder)
+                        if (turnGeneration == chatTurnGeneration.get()) receiveChatRequest(chatId, request, responder)
                     },
                     onInteractiveCancel = { id ->
-                        if (turnGeneration == chatTurnGeneration) removeChatRequest(id)
+                        if (turnGeneration == chatTurnGeneration.get()) removeChatRequest(id)
                     },
                     onReasoningDelta = { text ->
-                        if (turnGeneration == chatTurnGeneration) mutableChat.update { live ->
-                            if (live.chatId != chatId) live else live.copy(reasoningStreaming = live.reasoningStreaming + text)
+                        mutableChat.update { live ->
+                            if (turnGeneration != chatTurnGeneration.get() || live.chatId != chatId) live
+                            else live.copy(reasoningStreaming = live.reasoningStreaming + text)
                         }
                     },
                 )
-                if (turnGeneration == chatTurnGeneration) finishChatTurn(chatId, outcome)
+                if (turnGeneration == chatTurnGeneration.get()) finishChatTurn(chatId, outcome)
             } catch (timeout: TimeoutCancellationException) {
-                if (turnGeneration == chatTurnGeneration) failChatTurn(chatId, "timeout")
+                if (turnGeneration == chatTurnGeneration.get()) failChatTurn(chatId, "timeout")
             } catch (cancelled: CancellationException) {
                 // 停止: the job was cancelled from the main thread. 停止 itself
                 // already closed the turn synchronously; this branch remains for a
                 // scope cancellation that did not go through `stopChat`.
-                if (turnGeneration == chatTurnGeneration) markChatTurnStopped(chatId)
+                if (turnGeneration == chatTurnGeneration.get()) markChatTurnStopped(chatId)
                 throw cancelled
             } catch (failure: Exception) {
-                if (turnGeneration == chatTurnGeneration) failChatTurn(chatId, reasonOf(failure))
+                if (turnGeneration == chatTurnGeneration.get()) failChatTurn(chatId, reasonOf(failure))
             } finally {
-                if (turnGeneration == chatTurnGeneration) {
+                if (turnGeneration == chatTurnGeneration.get()) {
                     chatRunner = null
                     if (activeRetryRequestId == retryRequestId) activeRetryRequestId = null
                     chatSnapshotJob?.cancel()
@@ -3145,7 +3188,7 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         LogcatHostLog.info("APP_CHAT_STOP session=${current.chatId}")
         // The cancelled job must not clean up a turn this stop did not own: a new
         // send may start before its cancellation reaches the IO dispatcher.
-        chatTurnGeneration++
+        chatTurnGeneration.incrementAndGet()
         chatTurnJob?.cancel()
         chatTurnJob = null
         chatRunner = null
@@ -3161,30 +3204,54 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
         chatSnapshotJob?.cancel()
         chatResponders.clear()
         answeringRequests.clear()
-        // The turn is over from this app's side now, so the immediate next send
-        // must not be refused by the previous job's `turnRunning` flag.
-        turnRunning.set(false)
         sessionArtifacts.endTurn()
         // Close the *real* open turn(s), not a synthetic `stopped` id: the open
         // TURN node is what keeps the composer in RUNNING across restarts. The
         // fallback row is used only when TURN_STARTED never reached us.
         val at = clock.nowMillis()
-        mutableChat.update { if (it.chatId != current.chatId) it else it.markStopped(at) }
+        // This seam also clears `turnRunning`; without it the very next send
+        // would still be refused by `submitChat`'s in-flight check. Run it on the
+        // latest state so a draft typed while stopping is not rolled back.
+        mutableChat.update { live ->
+            if (live.chatId != current.chatId) live else stopChatTurnState(live, at, turnRunning)
+        }
+        val stopped = mutableChat.value
         refreshChatSession()
-        persistChat(current.chatId)
+        chatIo.launch {
+            runCatching { persistStoppedChat(chatStore, stopped) }
+                .onFailure { LogcatHostLog.warn("chat: stopped state not saved session=${current.chatId} (${reasonOf(it as? Exception ?: Exception(it))})") }
+        }
         LogcatHostLog.info("APP_CHAT_TURN_STOPPED session=${current.chatId}")
     }
 
     /** Appends the node(s) one Worker event produces. */
-    private fun onChatEvent(chatId: String, event: HostEvent) {
+    private fun onChatEvent(chatId: String, event: HostEvent, generation: Long) {
         // The 本 session 产物 fact's corroborating signal (a named write tool's path).
         // The bytes are the evidence; this only catches a same-size rewrite.
         sessionArtifacts.observe(event)
         if (event.kind == HostEventKind.TURN_STARTED) {
-            mutableChat.update { it.applyChatEvent(chatId, event, chatOrdinal) }
+            mutableChat.update { current ->
+                applyChatEventIfCurrent(
+                    current = current,
+                    chatId = chatId,
+                    event = event,
+                    ordinal = chatOrdinal,
+                    eventGeneration = generation,
+                    currentGeneration = chatTurnGeneration.get(),
+                )
+            }
         } else {
             val ordinal = ++chatOrdinal
-            mutableChat.update { it.applyChatEvent(chatId, event, ordinal) }
+            mutableChat.update { current ->
+                applyChatEventIfCurrent(
+                    current = current,
+                    chatId = chatId,
+                    event = event,
+                    ordinal = ordinal,
+                    eventGeneration = generation,
+                    currentGeneration = chatTurnGeneration.get(),
+                )
+            }
         }
     }
 
@@ -3397,9 +3464,11 @@ class ProbeEngineViewModel(application: Application) : AndroidViewModel(applicat
                     // a cold start would otherwise reopen it as RUNNING forever.
                     val loaded = chatStore.loadAll().map { record ->
                         runCatching {
-                            chatStore.repairStaleChatTurns(
-                                record,
-                                liveTurn = live && liveChatId == record.id,
+                            repairStoredChatForOpen(
+                                store = chatStore,
+                                record = record,
+                                liveChatId = liveChatId,
+                                turnRunning = live,
                             )
                         }.onFailure {
                             LogcatHostLog.warn("chat: stale turn repair failed session=${record.id} (${reasonOf(it as? Exception ?: Exception(it))})")

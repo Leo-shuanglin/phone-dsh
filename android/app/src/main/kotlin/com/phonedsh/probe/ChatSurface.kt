@@ -401,6 +401,10 @@ internal fun turnNode(chatId: String, turnId: String): UiStateNode = UiStateNode
 internal fun ChatUiState.applyChatEvent(chatId: String, event: HostEvent, ordinal: Int): ChatUiState {
     if (this.chatId != chatId) return this
     if (event.kind == HostEventKind.TURN_STARTED) {
+        // A turn start is only meaningful while this send is still live. Without
+        // this guard a late frame can re-add the TURN node after 停止 closed it,
+        // which projects RUNNING again and cannot be stopped (running == false).
+        if (!running) return this
         val id = turnIdOf(event.turnId)
         val turn = turnNode(chatId, id).copy(props = JsonObject(mapOf(
             "startedAtMs" to (event.raw["time"] ?: com.phonedsh.agentcore.JsonNull),
@@ -414,6 +418,27 @@ internal fun ChatUiState.applyChatEvent(chatId: String, event: HostEvent, ordina
         nodes = nodes + node,
         reasoningStreaming = if (event.kind == HostEventKind.ASSISTANT_MESSAGE) "" else reasoningStreaming,
     )
+}
+
+/**
+ * Applies one event only if the callback still belongs to the live turn.
+ *
+ * The generation read and the state mutation happen in the caller's
+ * `MutableStateFlow.update` block, so 停止 cannot interleave between the check
+ * and the append. A late TURN_STARTED is also rejected by
+ * [applyChatEvent]'s `running` guard.
+ */
+internal fun applyChatEventIfCurrent(
+    current: ChatUiState,
+    chatId: String,
+    event: HostEvent,
+    ordinal: Int,
+    eventGeneration: Long,
+    currentGeneration: Long,
+): ChatUiState {
+    if (current.chatId != chatId) return current
+    if (eventGeneration != currentGeneration) return current
+    return current.applyChatEvent(chatId, event, ordinal)
 }
 
 /**
@@ -466,13 +491,12 @@ internal fun closeOpenTurns(
         // next to the still-open real turn. Now that the real turn gets its own
         // end, drop that orphan so the person sees one 回合已取消, not two.
         val token = turnId.substringBeforeLast("-turn-", missingDelimiterValue = "")
-        if (token.isNotEmpty()) {
-            val orphan = "session/$chatId/turn/$token-stopped/"
-            result.removeAll { node ->
-                node.kind == UiStateKind.STATUS &&
-                    (node.props["reason"] as? JsonString)?.value == STOPPED_REASON &&
-                    node.nodeID.startsWith(orphan)
-            }
+        val syntheticTurn = if (token.isNotEmpty()) "$token-stopped" else "stopped"
+        val orphan = "session/$chatId/turn/$syntheticTurn/"
+        result.removeAll { node ->
+            node.kind == UiStateKind.STATUS &&
+                (node.props["reason"] as? JsonString)?.value == STOPPED_REASON &&
+                node.nodeID.startsWith(orphan)
         }
         var seq = ((result.filter { it.nodeID == turnNodeID || it.nodeID.startsWith("$turnNodeID/") }
             .maxOfOrNull { it.seq } ?: -1) + 1).coerceAtLeast(0)
@@ -538,6 +562,33 @@ internal fun ChatSessionStore.repairStaleChatTurns(record: ChatRecord, liveTurn:
     val repaired = record.closeStaleTurns()
     if (repaired.nodes != record.nodes) save(repaired)
     return repaired
+}
+
+/**
+ * The open-session half of the stale-turn repair.
+ *
+ * The caller supplies the live conversation's id and whether a real turn is
+ * running; only that exact record is left alone. This is the same decision
+ * `openChatSession` and `restoreChatSessions` use.
+ */
+internal fun repairStoredChatForOpen(
+    store: ChatSessionStore,
+    record: ChatRecord,
+    liveChatId: String,
+    turnRunning: Boolean,
+): ChatRecord = store.repairStaleChatTurns(
+    record,
+    liveTurn = turnRunning && liveChatId == record.id,
+)
+
+/** The restore half: repair every stored record except the one really running. */
+internal fun repairStoredChatsForRestore(
+    store: ChatSessionStore,
+    records: List<ChatRecord>,
+    liveChatId: String,
+    turnRunning: Boolean,
+): List<ChatRecord> = records.map { record ->
+    repairStoredChatForOpen(store, record, liveChatId, turnRunning)
 }
 
 /** The transient fail-loud banner of a send failure; never persisted. */
