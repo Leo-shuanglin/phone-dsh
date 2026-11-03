@@ -1,0 +1,93 @@
+name: Bug report / 问题反馈
+description: 报告 Phone DSH 的崩溃、会话、工具、连接或构建问题。
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢帮助改进 Phone DSH。可以用中文或 English 填写；不清楚的信息写「未知」即可。
+
+        提交前搜索已有 Issue。Phone DSH 是非官方 DeepSeek Harness 手机宿主；如果无法判断问题来自宿主还是上游，可以先在这里提供复现信息。
+
+        **不要公开 API key、Authorization/Cookie、连接器密钥、私人地址或含个人数据的会话与文件。截图和日志需先脱敏。** 安全漏洞请按 [SECURITY.md](https://github.com/launsion-boop/phone-dsh/blob/main/SECURITY.md) 私下报告。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题描述 / Summary
+      description: 描述你正在完成什么任务，以及哪里出了问题。
+      placeholder: 例如，iPhone 上调用 MCP 工具后提示事件流中断，任务仍显示「运行中」。
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 发生问题的平台 / Platform
+      multiple: true
+      options:
+        - iOS 真机
+        - iOS 模拟器
+        - Android 真机
+        - Android 模拟器
+        - macOS / Swift SDK
+        - 共享 Worker / TypeScript 插件 / xz-shell
+        - 其他 / 无法确定
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 版本和环境 / Version and environment
+      description: App 版本可从「设置 → 关于」查找。源码构建请附 commit；无需为了填写此项重新安装或升级。
+      placeholder: |
+        App 版本 / 构建号（或 commit）：
+        安装来源和时间：
+        设备型号 / 系统版本：
+        Android System WebView 版本（如适用）：
+        本地构建的 Xcode / Swift 或 JDK / Android SDK 版本（如适用）：
+        DSH pin、Worker Bundle 来源 / 生成时间（本地构建且已知时）：
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: 提供最少的操作步骤。涉及提示词、工具输入或文件时，使用不含隐私的示例。偶发问题也可以提交。
+      placeholder: |
+        1. 打开或新建一个会话。
+        2. 输入……
+        3. 调用……后出现……
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果 / Expected behavior
+      description: 正常情况下应出现什么结果？
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果 / Actual behavior
+      description: 粘贴完整错误文字，并说明是否卡住、闪退、丢失消息或文件，以及是否能继续操作。
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: 触发条件与影响 / Context and impact
+      description: 只填写与你的问题相关的内容；未知项可省略。
+      placeholder: |
+        发生频率 / 最近一次正常的版本：
+        模型服务商、模型名称、推理档位（不含密钥）：
+        工具 / MCP 服务及版本，或 BLE / 局域网外设型号：
+        是否切后台、锁屏、断网、切换网络或恢复会话：
+        停止任务、重开会话或重启 App 后的结果：
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志、截图或最小示例 / Evidence
+      description: |
+        可附脱敏截图、录屏、错误附近的日志或最小示例。注明发生时间及所在时区，便于对齐记录。
+        iOS 可提供 chat-status.log 中相关片段；Android 可提供相关 logcat；构建问题附失败命令和错误输出。
+        不要直接上传整个会话、工作区、设备容器或包含凭据的配置。没有日志也可以提交。
