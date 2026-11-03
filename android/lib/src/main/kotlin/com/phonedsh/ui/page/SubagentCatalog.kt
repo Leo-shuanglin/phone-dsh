@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import com.phonedsh.ui.ChatMetrics
 import com.phonedsh.ui.HomeMetrics
 import com.phonedsh.ui.theme.LocalUiTokens
+import com.phonedsh.ui.theme.materialSheetColors
 import com.phonedsh.ui.theme.LocalUiType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -130,11 +131,13 @@ internal fun SubagentCatalogDialog(
         cardMaxHeight,
     )
 
+    val palette = materialSheetColors(tokens)
     LaunchedEffect(sheetState) { sheetState.show() }
     ModalBottomSheet(
         onDismissRequest = close,
         sheetState = sheetState,
-        containerColor = tokens.colors.page,
+        containerColor = palette.container,
+        contentColor = palette.content,
         modifier = Modifier.testTag(SUBAGENT_CATALOG_SHEET_TAG).semantics { paneTitle = "子智能体会话" },
     ) {
         Column(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {

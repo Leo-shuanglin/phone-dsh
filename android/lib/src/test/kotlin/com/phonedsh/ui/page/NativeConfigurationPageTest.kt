@@ -492,6 +492,36 @@ class NativeConfigurationPageTest {
     }
 
     @Test
+    fun `a startup-locked default permission shows the reason and arms no selector`() {
+        val facts = fullFacts()
+        val snapshot = requireNotNull(facts.snapshot).copy(
+            defaultPermissionWritable = false,
+            defaultPermissionReadOnlyReason = UiStrings.DEFAULT_PERMISSION_STARTUP_LOCKED_REASON,
+        )
+        var picked = 0
+        val state = ConfigurationScreenState.from(facts.copy(snapshot = snapshot))
+        assertFalse(state.permission.writable)
+        show(
+            state,
+            onPickDefaultPermission = { picked += 1 },
+            onConfigurationWrite = { request ->
+                ConfigurationWriteReceipt(request.requestId, success = true)
+            },
+        )
+
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_LIST)
+            .performScrollToNode(hasTestTag(UiPageTags.CONFIGURATION_PERMISSION))
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_PERMISSION_ROW).assertHasNoClickAction()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_PERMISSION_READ_ONLY).assertIsDisplayed()
+        compose.onNodeWithText(UiStrings.DEFAULT_PERMISSION_STARTUP_LOCKED_REASON, substring = true)
+            .assertIsDisplayed()
+        compose.onNodeWithTag("pdsh.configuration.permission-option.full").assertDoesNotExist()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_PERMISSION_SAVE).assertDoesNotExist()
+        compose.onNodeWithTag(UiPageTags.CONFIGURATION_PERMISSION_DISCARD).assertDoesNotExist()
+        compose.runOnIdle { assertEquals(0, picked) }
+    }
+
+    @Test
     fun `an overridden field reset uses the confirmed writer instead of a legacy callback`() {
         val facts = fullFacts()
         val snapshot = requireNotNull(facts.snapshot)

@@ -83,6 +83,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
+import com.phonedsh.ui.theme.materialSheetColors
 import com.phonedsh.ui.theme.LocalUiType
 
 // ---------------------------------------------------------------------------
@@ -902,11 +903,14 @@ private fun AddSourceDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Un
     var url by remember { mutableStateOf("") }
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
+    val palette = materialSheetColors(tokens)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         modifier = Modifier.testTag(UiPageTags.BRIEF_SOURCE_EDITOR),
+        containerColor = palette.container,
+        contentColor = palette.content,
     ) {
         Column(
             modifier = Modifier

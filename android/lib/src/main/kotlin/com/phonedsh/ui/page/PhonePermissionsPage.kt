@@ -110,6 +110,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
+import com.phonedsh.ui.theme.materialDialogColors
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.UiTokens
 import com.phonedsh.ui.theme.generated.UiTokenNames
@@ -1130,6 +1131,7 @@ private fun ConfirmationDialog(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
+    val palette = materialDialogColors(tokens)
     AlertDialog(
         onDismissRequest = onCancel,
         title = {
@@ -1158,6 +1160,8 @@ private fun ConfirmationDialog(
                 tag = UiPageTags.PHONE_PERMISSIONS_CONFIRM_CANCEL,
             )
         },
+        containerColor = palette.container,
+        textContentColor = palette.content,
     )
 }
 
@@ -1171,6 +1175,7 @@ private fun DisableNoticeDialog(
 ) {
     val tokens = LocalUiTokens.current
     val type = LocalUiType.current
+    val palette = materialDialogColors(tokens)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1199,6 +1204,8 @@ private fun DisableNoticeDialog(
                 tag = UiPageTags.PHONE_PERMISSIONS_DISABLE_SETTINGS,
             )
         },
+        containerColor = palette.container,
+        textContentColor = palette.content,
     )
 }
 

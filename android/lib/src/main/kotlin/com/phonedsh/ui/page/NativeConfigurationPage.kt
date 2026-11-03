@@ -75,6 +75,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.theme.LocalUiTokens
+import com.phonedsh.ui.theme.materialSheetColors
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.surface.GlobeGlyph
 import com.phonedsh.ui.surface.InfoCircleGlyph
@@ -189,6 +190,10 @@ public data class ConfigurationExperimentalPlugin(
  * @param modes the presets; `null` means the catalog was not read.
  * @param selected the preset the host says is the current default, if any.
  * @param failure the catalog read's own failure message, if it failed.
+ * @param writable whether this one field can be written; the provider-wide
+ *   `settingsWritable` is not enough for a value pinned by the phone image's
+ *   startup home patch.
+ * @param readOnlyReason why the picker is disabled, when the host measured a lock.
  */
 @Immutable
 public data class ConfigurationPermissionView(
@@ -196,6 +201,8 @@ public data class ConfigurationPermissionView(
     public val selected: ConfigurationPermissionMode? = null,
     public val failure: String? = null,
     public val revision: Int? = null,
+    public val writable: Boolean = false,
+    public val readOnlyReason: String? = null,
 ) {
     /** True when the host did not report the catalog: the page says 未知. */
     public val isUnknown: Boolean get() = modes == null
@@ -240,6 +247,14 @@ public data class ConfigurationSnapshot(
     public val modelCatalogFailure: String? = null,
     /** Revision of the `permission` namespace, used by the default-preset CAS. */
     public val permissionRevision: Int? = null,
+    /**
+     * Per-field write capability for the new-session default. `null` keeps the
+     * historical fallback to [settingsWritable]; the host sets it from the
+     * measured startup-lock facts for the phone image.
+     */
+    public val defaultPermissionWritable: Boolean? = null,
+    /** Why the new-session default is read-only, when the host measured a lock. */
+    public val defaultPermissionReadOnlyReason: String? = null,
 ) {
     /** True when the snapshot carries at least one thing the page can show. */
     internal val hasContent: Boolean
@@ -494,6 +509,8 @@ public data class ConfigurationScreenState(
             val settingsWritable = measured.settingsWritable
             val builtInExpanded = true
             val aboutExpanded = false
+            val permissionWritable = measured.defaultPermissionWritable
+                ?: (settingsWritable == FactState.YES)
             val permission = ConfigurationPermissionView(
                 modes = measured.permissionModes,
                 selected = measured.defaultPermissionModeId?.let { id ->
@@ -501,6 +518,13 @@ public data class ConfigurationScreenState(
                 },
                 failure = measured.permissionFailure,
                 revision = measured.permissionRevision,
+                writable = permissionWritable,
+                readOnlyReason = when {
+                    permissionWritable -> null
+                    !measured.defaultPermissionReadOnlyReason.isNullOrBlank() ->
+                        measured.defaultPermissionReadOnlyReason
+                    else -> UiStrings.DEFAULT_PERMISSION_READ_ONLY_FALLBACK_REASON
+                },
             )
             val groupsByNamespace = measured.groups.orEmpty().associateBy { it.namespace }
             val sections = buildList {
@@ -1157,12 +1181,14 @@ internal fun ConfigurationPluginInformationSheet(
     onDone: () -> Unit,
 ) {
     val tokens = LocalUiTokens.current
+    val palette = materialSheetColors(tokens)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     LaunchedEffect(sheetState) { sheetState.show() }
     ModalBottomSheet(
         onDismissRequest = onDone,
         sheetState = sheetState,
-        containerColor = tokens.colors.page,
+        containerColor = palette.container,
+        contentColor = palette.content,
         modifier = Modifier.testTag(CONFIGURATION_PLUGIN_INFO_SHEET_TAG),
     ) {
         SettingsSubPageFrame(
@@ -1496,7 +1522,6 @@ private fun ConfigurationContent(
         item(key = "config.permission") {
             ConfigurationPermissionBlock(
                 permission = state.permission,
-                writable = writable,
                 busy = PERMISSION_WRITE_ERROR in pendingNamespaces,
                 writeFailure = writeFailures[PERMISSION_WRITE_ERROR],
                 onPick = onPickDefaultPermission,
@@ -1687,13 +1712,13 @@ private fun ConfigurationFieldEditor(
  * Three cases stay apart, as everywhere else on this page: an unread catalog is
  * 未知 (with its own failure line when the read failed), a measured-empty catalog
  * says 没有可选的权限预设, and a measured catalog shows the current 默认权限. The
- * picker row and the 保存默认 / 撤销 pair are the baseline's controls; the host's
- * measured writability (and a `null` callback) disables them.
+ * picker row and the 保存默认 / 撤销 pair are the baseline's controls; this one
+ * field's measured writability (and a `null` callback) disables them. A locked
+ * startup overlay explains itself instead of painting a dead control.
  */
 @Composable
 private fun ConfigurationPermissionBlock(
     permission: ConfigurationPermissionView,
-    writable: Boolean,
     busy: Boolean,
     writeFailure: String?,
     onPick: (() -> Unit)?,
@@ -1705,6 +1730,8 @@ private fun ConfigurationPermissionBlock(
 ) {
     val tokens = LocalUiTokens.current
     val modes = permission.modes
+    val writable = permission.writable
+    val controlsEnabled = writable && !busy
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1734,16 +1761,24 @@ private fun ConfigurationPermissionBlock(
                     subtitle = permission.selected?.detail
                         ?: UiStrings.CONFIGURATION_DEFAULT_PERMISSION_HINT,
                     tone = if (permission.selected == null) PageTone.UNKNOWN else PageTone.NORMAL,
-                    onClick = if (writable) onPick else null,
+                    onClick = if (controlsEnabled) onPick else null,
                     modifier = Modifier.testTag(UiPageTags.CONFIGURATION_PERMISSION_ROW),
                 )
+                if (!permission.writable) {
+                    permission.readOnlyReason?.let { reason ->
+                        ConfigurationNoteRow(
+                            text = reason,
+                            tag = UiPageTags.CONFIGURATION_PERMISSION_READ_ONLY,
+                        )
+                    }
+                }
                 if (writable) {
                     modes.forEach { mode ->
                         InfoRow(
                             title = mode.name,
                             value = if (chosen == mode.id) "已选择" else null,
                             subtitle = mode.detail,
-                            onClick = onStage?.let { stage -> { stage(mode.id) } },
+                            onClick = if (controlsEnabled) onStage?.let { stage -> { stage(mode.id) } } else null,
                         modifier = Modifier.testTag(CONFIGURATION_PERMISSION_OPTION_PREFIX + mode.id),
                         )
                     }
@@ -1767,14 +1802,14 @@ private fun ConfigurationPermissionBlock(
                                 if (onApply != null) onApply.invoke(draft) else onSave?.invoke()
                             },
                             tone = SessionActionTone.ACCENT,
-                            enabled = writable && !busy && (onApply != null || onSave != null),
+                            enabled = controlsEnabled && (onApply != null || onSave != null),
                             modifier = Modifier.testTag(UiPageTags.CONFIGURATION_PERMISSION_SAVE),
                         )
                         SessionTextAction(
                             label = UiStrings.CONFIGURATION_DISCARD,
                             onClick = { onDiscard?.invoke() },
                             tone = SessionActionTone.SECONDARY,
-                            enabled = writable && !busy && onDiscard != null,
+                            enabled = controlsEnabled && onDiscard != null,
                             modifier = Modifier.testTag(UiPageTags.CONFIGURATION_PERMISSION_DISCARD),
                         )
                     }

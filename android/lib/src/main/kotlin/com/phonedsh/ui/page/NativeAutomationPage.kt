@@ -148,6 +148,7 @@ import com.phonedsh.ui.surface.SettingsSectionLabelIndent
 import com.phonedsh.ui.surface.SettingsSubPageFootnote
 import com.phonedsh.ui.surface.settingsLabelStyle
 import com.phonedsh.ui.theme.LocalUiTokens
+import com.phonedsh.ui.theme.materialSheetColors
 import com.phonedsh.ui.theme.LocalUiType
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -1169,6 +1170,8 @@ private fun AutomationEditorSheet(
     onDraftChange: ((AutomationScheduleDraft) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
+    val tokens = LocalUiTokens.current
+    val palette = materialSheetColors(tokens)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     LaunchedEffect(sheetState) { sheetState.show() }
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -1177,6 +1180,8 @@ private fun AutomationEditorSheet(
             onDismissRequest = onCancel,
             sheetState = sheetState,
             modifier = Modifier.fillMaxWidth(),
+            containerColor = palette.container,
+            contentColor = palette.content,
         ) {
             Box(Modifier.fillMaxWidth().height(editorSheetHeight)) {
                 ScheduleEditorPage(

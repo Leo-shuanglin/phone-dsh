@@ -33,7 +33,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.draw.clip
@@ -54,6 +53,7 @@ import com.phonedsh.ui.icon.PdshIconView
 import com.phonedsh.ui.theme.LocalUiDarkTheme
 import com.phonedsh.ui.theme.LocalUiTokens
 import com.phonedsh.ui.theme.LocalUiType
+import com.phonedsh.ui.theme.UiTokens
 import com.phonedsh.ui.theme.applySystemBarAppearance
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
@@ -75,6 +75,16 @@ public class HomeDrawerUiState internal constructor(
         if (onCollapsedFoldersChanged(copy)) collapsedFolderIds = copy
     }
 }
+
+/**
+ * The drawer's token table is the app's own.
+ *
+ * This tiny projection is the regression seam for device issue "dark drawer":
+ * the previous code resolved `UiTokens.resolve(false, width)` whenever the app
+ * theme was dark, so the panel stayed light. Keeping the decision in one pure
+ * function makes that inversion testable without a rendered drawer.
+ */
+internal fun homeDrawerTokens(inherited: UiTokens): UiTokens = inherited
 
 @Composable
 public fun rememberHomeDrawerUiState(
@@ -108,13 +118,14 @@ public fun HomeDrawer(
     modifier: Modifier = Modifier,
     state: HomeDrawerUiState = rememberHomeDrawerUiState(),
 ) {
-    // NativeShell.swift explicitly forces the drawer panel to light appearance.
+    // The drawer follows the app's theme. It used to resolve a light token
+    // table for dark mode (the iOS shell's fixed light panel); that painted a
+    // light drawer under the app's dark setting and diverged from every other
+    // surface. The dialog's status-bar glyphs follow the app theme separately
+    // through [LocalUiDarkTheme] below.
     val inheritedTokens = LocalUiTokens.current
-    // The dialog's status-bar strip is the scrim over the page, not the panel
-    // below it: its glyphs follow the app theme, never a fixed light chrome.
     val darkTheme = LocalUiDarkTheme.current
-    val width = LocalConfiguration.current.screenWidthDp.dp
-    val tokens = if (!inheritedTokens.dark) inheritedTokens else com.phonedsh.ui.theme.UiTokens.resolve(false, width)
+    val tokens = homeDrawerTokens(inheritedTokens)
     val type = LocalUiType.current
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
     var draft by rememberSaveable { mutableStateOf("") }

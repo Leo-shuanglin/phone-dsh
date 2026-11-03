@@ -1459,8 +1459,17 @@ private fun SettingsRoute(
                 writable = settings.defaultPermissionWritable,
                 busy = settings.defaultPermissionBusy,
                 failure = settings.defaultPermissionFailure,
+                readOnlyReason = settings.defaultPermissionReadOnlyReason,
+                startupLocked = settings.defaultPermissionStartupLocked,
             ),
-            onSelect = { tier -> onSettingsWrite(SettingsWrite.DefaultPermissionTier(tier)) },
+            // A locked row must not reach the host write seam at all: the
+            // disabled semantics are the first guard, this null callback the
+            // second, and the view model refuses a stale call as the third.
+            onSelect = if (settings.defaultPermissionWritable) {
+                { tier -> onSettingsWrite(SettingsWrite.DefaultPermissionTier(tier)) }
+            } else {
+                null
+            },
             onBack = { permissionDefaults = false },
         )
     } else {

@@ -255,6 +255,19 @@ public object UiStrings {
     public const val PERMISSION_TIER_VIEW_ONLY: String = "仅可查看"
     public const val PERMISSION_TIER_WORKSPACE_WRITE: String = "工作区内修改"
     public const val PERMISSION_TIER_FULL_ACCESS: String = "完全权限"
+    // The phone image's home patch pins permission.defaultPreset from
+    // PDSH_SANDBOX_MODE. The provider's global writable flag does not grant a
+    // write through that startup overlay, so the selector is read-only and says
+    // exactly which layer owns the value, what makes it writable, and that the
+    // running conversation keeps its permission.
+    public const val DEFAULT_PERMISSION_STARTUP_LOCKED_REASON: String =
+        "只读：新会话默认权限由启动配置（home patch / PDSH_SANDBOX_MODE）锁定，优先于可编辑设置。请修改启动配置并重启本地引擎；现有会话的权限不受影响。"
+    public const val DEFAULT_PERMISSION_STARTUP_LOCKED_REASON_EN: String =
+        "Read only: the startup configuration (home patch / PDSH_SANDBOX_MODE) locks the default permission for new sessions above editable settings. Change the startup configuration and restart the local engine; existing sessions keep their permission."
+    public const val DEFAULT_PERMISSION_READ_ONLY_FALLBACK_REASON: String =
+        "只读：引擎没有报告这一项可写。请在启动配置中修改并重启本地引擎；现有会话的权限不受影响。"
+    public const val DEFAULT_PERMISSION_READ_ONLY_FALLBACK_REASON_EN: String =
+        "Read only: the engine does not report this setting as writable. Change the startup configuration and restart the local engine; existing sessions keep their permission."
 
     // Tools (`PDSHShellPage`: the read-only accelerators advertised in the caps)
     public const val TOOLS: String = "命令"

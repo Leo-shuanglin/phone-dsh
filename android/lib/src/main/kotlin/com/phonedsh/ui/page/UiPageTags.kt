@@ -798,6 +798,8 @@ public object UiPageTags {
     /** The permission block that replaced the old 新会话默认权限 section. */
     public const val CONFIGURATION_PERMISSION: String = "pdsh.configuration.permission"
     public const val CONFIGURATION_PERMISSION_ROW: String = "pdsh.configuration.permission.row"
+    /** The startup-lock explanation shown when the per-field write is disabled. */
+    public const val CONFIGURATION_PERMISSION_READ_ONLY: String = "pdsh.configuration.permission.read-only"
     public const val CONFIGURATION_PERMISSION_SAVE: String = "pdsh.configuration.permission.save"
     public const val CONFIGURATION_PERMISSION_DISCARD: String = "pdsh.configuration.permission.discard"
     public const val CONFIGURATION_GROUP_SAVE_PREFIX: String = "pdsh.configuration.group.save."

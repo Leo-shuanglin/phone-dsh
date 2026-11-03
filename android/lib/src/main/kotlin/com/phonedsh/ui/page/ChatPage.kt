@@ -168,6 +168,7 @@ import com.phonedsh.ui.surface.composer.ComposerAvailability
 import com.phonedsh.ui.surface.FoldedPendingRow
 import com.phonedsh.ui.surface.MarkdownBody
 import com.phonedsh.ui.theme.LocalUiTokens
+import com.phonedsh.ui.theme.materialDialogColors
 import com.phonedsh.ui.theme.LocalUiType
 import com.phonedsh.ui.theme.generated.UiTokenNames
 import kotlinx.coroutines.flow.first
@@ -3527,6 +3528,7 @@ private fun AccessModeMenuButton(
     }
     val pending = confirmation
     if (pending != null) {
+        val palette = materialDialogColors(tokens)
         AlertDialog(
             onDismissRequest = { confirmation = null },
             confirmButton = {
@@ -3550,6 +3552,8 @@ private fun AccessModeMenuButton(
             },
             title = { Text(UiStrings.ACCESS_MODE_CONFIRM_OPEN.format(pending.title)) },
             text = { Text(UiStrings.ACCESS_MODE_CONFIRM_MESSAGE) },
+            containerColor = palette.container,
+            textContentColor = palette.content,
         )
     }
 }
