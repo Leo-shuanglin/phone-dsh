@@ -20,6 +20,7 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -78,6 +79,17 @@ class BuildSealTest {
         log = { events.add(it) },
         selfEvents = selfEvents,
     )
+
+    /** A mode primitive that refuses the restore chmod of `sessions` while [failing]. */
+    private fun failingSessionsRestore(failing: () -> Boolean): ModeControl =
+        object : ModeControl by PosixModeControl {
+            override fun write(path: Path, mode: Int) {
+                if (failing() && mode != BuildSeal.SEALED_MODE && path == sessions) {
+                    throw IOException("synthetic restore failure")
+                }
+                PosixModeControl.write(path, mode)
+            }
+        }
 
     /** Root is not a useful environment for a permission test: skip there. */
     private fun requirePermissionEnforcement() {
@@ -319,6 +331,133 @@ class BuildSealTest {
         }
         assertEquals(SealFailure.ALREADY_SEALED, failure?.failure)
         assertEquals("job-1", seal.active()?.job)
+    }
+
+    @Test
+    fun aFailedRestoreBlocksTheNextSealUntilRecovery() = runBlocking {
+        var failRestore = true
+        val seal = sealer(modes = failingSessionsRestore { failRestore })
+        val handle = seal.seal("job-a")
+
+        val restoreFailure = try {
+            seal.restore(handle)
+            null
+        } catch (failure: SealException) {
+            failure
+        }
+        assertEquals(SealFailure.RESTORE_FAILED, restoreFailure?.failure)
+        assertFalse("a failed restore must stay retryable", handle.isRestored)
+        assertTrue("a failed restore keeps the marker", Files.exists(marker))
+        assertEquals("sessions failed to restore and stays 000", 0, PosixModeControl.read(sessions))
+        assertTrue("a failed restore keeps the handle active", seal.active() === handle)
+
+        val alreadySealed = try {
+            seal.seal("job-b")
+            null
+        } catch (failure: SealException) {
+            failure
+        }
+        assertEquals(SealFailure.ALREADY_SEALED, alreadySealed?.failure)
+        assertEquals("job-a", seal.active()?.job)
+
+        // A new process has no active handle, but the roots are still 000: its
+        // seal must be refused instead of recording 000 as an "original" mode.
+        val markerBefore = Files.readAllBytes(marker)
+        val nextBoot = sealer()
+        val refused = try {
+            nextBoot.seal("job-b")
+            null
+        } catch (failure: SealException) {
+            failure
+        }
+        assertEquals(SealFailure.VERIFY_FAILED, refused?.failure)
+        assertTrue(
+            "the refusal must name the boot repair: ${refused?.detail}",
+            refused?.detail?.contains("boot repair") == true,
+        )
+        assertNull("a refused seal must not become active", nextBoot.active())
+        assertArrayEquals(
+            "a refused seal must leave the original marker untouched",
+            markerBefore,
+            Files.readAllBytes(marker),
+        )
+
+        failRestore = false
+        val recovery = seal.recoverIfNeeded()
+        assertTrue("the boot repair must succeed, got $recovery", recovery is SealRecovery.Repaired)
+        assertEquals(0b111_000_000, PosixModeControl.read(sessions))
+        assertEquals(0b111_000_000, PosixModeControl.read(storages))
+        assertFalse("recovery consumes the marker", Files.exists(marker))
+
+        val recoveredHandle = seal.seal("job-b")
+        assertEquals(listOf("sessions", "storages"), recoveredHandle.protectedLabels)
+        seal.restore(recoveredHandle)
+        assertEquals(0b111_000_000, PosixModeControl.read(sessions))
+    }
+
+    @Test
+    fun aZeroModeRootIsNeverRecordedAsItsOriginalMode() = runBlocking {
+        PosixModeControl.write(sessions, 0b111_111_111)
+        PosixModeControl.write(storages, 0b111_111_111)
+        var failRestore = true
+        val seal = sealer(modes = failingSessionsRestore { failRestore })
+        val handle = seal.seal("job-a")
+        val markerBefore = String(Files.readAllBytes(marker), Charsets.UTF_8)
+        assertTrue(markerBefore.contains("root 511 sessions"))
+        assertTrue(markerBefore.contains("root 511 storages"))
+
+        val failure = try {
+            seal.restore(handle)
+            null
+        } catch (failure: SealException) {
+            failure
+        }
+        assertEquals(SealFailure.RESTORE_FAILED, failure?.failure)
+
+        val refused = try {
+            sealer().seal("job-b")
+            null
+        } catch (failure: SealException) {
+            failure
+        }
+        assertEquals(SealFailure.VERIFY_FAILED, refused?.failure)
+        val markerAfter = String(Files.readAllBytes(marker), Charsets.UTF_8)
+        assertEquals("a refused seal must not rewrite the marker", markerBefore, markerAfter)
+        assertTrue("the previous original mode must not be lost", markerAfter.contains("root 511 sessions"))
+        assertTrue("the previous original mode must not be lost", markerAfter.contains("root 511 storages"))
+    }
+
+    @Test
+    fun recoveryUnblocksSealingWithoutZeroes() = runBlocking {
+        PosixModeControl.write(sessions, 0b111_111_111)
+        PosixModeControl.write(storages, 0b111_111_111)
+        var failRestore = true
+        val seal = sealer(modes = failingSessionsRestore { failRestore })
+        val handle = seal.seal("job-a")
+        val failure = try {
+            seal.restore(handle)
+            null
+        } catch (failure: SealException) {
+            failure
+        }
+        assertEquals(SealFailure.RESTORE_FAILED, failure?.failure)
+        assertEquals(0, PosixModeControl.read(sessions))
+
+        failRestore = false
+        assertTrue("the boot repair must succeed", seal.recoverIfNeeded() is SealRecovery.Repaired)
+        assertEquals(0b111_111_111, PosixModeControl.read(sessions))
+        assertEquals(0b111_111_111, PosixModeControl.read(storages))
+        assertFalse(Files.exists(marker))
+
+        // Recovery clears the failed handle, so this seal must be accepted and
+        // must record the real 511 origins, never the 000 the repair has undone.
+        val recoveredHandle = seal.seal("job-b")
+        val markerText = String(Files.readAllBytes(marker), Charsets.UTF_8)
+        assertTrue(markerText.contains("root 511 sessions"))
+        assertTrue(markerText.contains("root 511 storages"))
+        seal.restore(recoveredHandle)
+        assertEquals(0b111_111_111, PosixModeControl.read(sessions))
+        assertEquals(0b111_111_111, PosixModeControl.read(storages))
     }
 
     @Test
