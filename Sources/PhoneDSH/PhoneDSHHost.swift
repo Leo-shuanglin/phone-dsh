@@ -201,11 +201,13 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     private var recoveringTermination = false
     /// The process-lifecycle observer this host installed itself (P1).
     ///
-    /// The host observes the platform instead of trusting the App to forward
-    /// `scenePhase`: the build that lost that forwarding call (the App's only
-    /// `scenePhaseChanged` hook had no caller) froze the Worker without ever
-    /// draining, so no `pendingRecovery` gate could have helped. Observing here
-    /// makes "the App forgot" structurally unable to disable the gate.
+    /// The host observes the platform so `setForeground(_:)` does not depend on
+    /// the App forwarding `scenePhase`. The probe app forwards scene phase to
+    /// `ChatModel` for keep-alive, park and resume. A build that dropped that
+    /// call froze the Worker with no drain, and this gate would not have run
+    /// either. Observing here keeps the gate on when an App forgets to forward.
+    /// This observer only updates the foreground flag and consumes
+    /// `pendingRecovery`. The silent audio session stays in the probe app.
     private var processLifecycle: PhoneDSHProcessLifecycle?
 
     /// Extra replacement-Worker boot attempts after a `.boot`-class failure.

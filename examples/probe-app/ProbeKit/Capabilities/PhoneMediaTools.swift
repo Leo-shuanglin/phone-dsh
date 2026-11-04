@@ -49,7 +49,10 @@ public struct PhoneMediaTools {
             .appendingPathComponent("phone-dsh-audio-\(UUID().uuidString).m4a")
         defer {
             try? FileManager.default.removeItem(at: url)
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            // `.playAndRecord` replaced the silent keep-alive's category for
+            // this recording. Reclaim playback when that session is held;
+            // otherwise deactivate as before.
+            PhoneAudioSessionLease.releaseMicrophoneUser()
         }
         let recorder = try AVAudioRecorder(url: url, settings: [
             AVFormatIDKey: kAudioFormatMPEG4AAC,

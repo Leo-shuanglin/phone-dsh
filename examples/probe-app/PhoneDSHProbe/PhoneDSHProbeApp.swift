@@ -10,6 +10,7 @@
 // Every device-only number starts empty: nothing here claims iPhone behaviour
 // until a run on a device records it.
 
+import ProbeKit
 import SwiftUI
 import PhoneDSH
 
@@ -33,8 +34,20 @@ struct PhoneDSHProbeApp: App {
                 // turns the page background black under a light layout.
                 .preferredColorScheme(preferences.appearance.colorScheme)
                 .environment(model)
+                // Single scene-phase observer. Chat keep-alive / park / resume
+                // and the background-matrix runner each receive the phase once.
+                // RootView and ChatPage do not observe scene phase.
                 .onChange(of: scenePhase) { _, newPhase in
-                    Task { await model.scenePhaseChanged(newPhase) }
+                    Task { @MainActor in
+                        await ProbeScenePhaseForwarding.deliver(
+                            newPhase,
+                            chat: { phase in
+                                await ChatModel.shared.scenePhaseChanged(phase)
+                            },
+                            backgroundMatrix: { phase in
+                                await model.scenePhaseChanged(phase)
+                            })
+                    }
                 }
                 .task {
                     model.refreshLockdown()

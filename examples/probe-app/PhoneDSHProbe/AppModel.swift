@@ -138,7 +138,9 @@ final class AppModel {
         lockdown = store.lockdown
     }
 
-    /// Forwards a scene-phase change to the background matrix.
+    /// Forwards a scene-phase change to the background-matrix runner.
+    /// Chat keep-alive, park and resume are delivered from PhoneDSHProbeApp
+    /// on the same phase change.
     func scenePhaseChanged(_ phase: ScenePhase) async {
         if phase == .active { refreshLockdown() }
         await background.scenePhaseChanged(phase)
