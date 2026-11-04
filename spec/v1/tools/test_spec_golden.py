@@ -217,8 +217,80 @@ class GoldenCheckerTests(unittest.TestCase):
         completed = run_checker(SPEC_DIR, full=True)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn("0 error(s)", completed.stdout)
-        for line in ("ok wal.md", "ok exec.md", "ok golden/wal/segment-1.json"):
+        for line in (
+            "ok wal.md",
+            "ok exec.md",
+            "ok golden/wal/segment-1.json",
+            "ok golden/wal/replay/append-full-write-settles.json",
+        ):
             self.assertIn(line, completed.stdout)
+
+    def test_wal_replay_watermark_mutation_fails(self) -> None:
+        path = self.copy / "golden" / "wal" / "replay" / "append-full-write-settles.json"
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc["expected"]["materialized_upto_mseq"] = 1
+        self.write_json("golden/wal/replay/append-full-write-settles.json", doc)
+        completed = run_checker(self.copy)
+        self.assert_fails(completed, "materialized_upto_mseq: declared")
+
+    def test_wal_replay_verdict_mutation_fails(self) -> None:
+        path = self.copy / "golden" / "wal" / "replay" / "append-full-write-settles.json"
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc["expected"]["records"][0] = {"mseq": 1, "verdict": "applied"}
+        self.write_json("golden/wal/replay/append-full-write-settles.json", doc)
+        completed = run_checker(self.copy)
+        self.assert_fails(completed, "replay computes")
+
+    def test_wal_replay_tree_mutation_fails(self) -> None:
+        path = self.copy / "golden" / "wal" / "replay" / "append-full-write-settles.json"
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc["expected"]["tree"]["/dsh/workspace/notes.txt"]["content_utf8"] = "tampered"
+        self.write_json("golden/wal/replay/append-full-write-settles.json", doc)
+        completed = run_checker(self.copy)
+        self.assert_fails(completed, "expected.tree")
+
+    def test_wal_replay_cover_kind_mutation_fails(self) -> None:
+        path = self.copy / "golden" / "wal" / "replay" / "append-remove-settles.json"
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc["expected"]["records"][0]["cover"] = "complete-write"
+        self.write_json("golden/wal/replay/append-remove-settles.json", doc)
+        completed = run_checker(self.copy)
+        self.assert_fails(completed, "cover")
+
+    def test_wal_replay_settled_watermark_before_cover_fails(self) -> None:
+        path = (
+            self.copy
+            / "golden"
+            / "wal"
+            / "replay"
+            / "settled-watermark-waits-for-cover.json"
+        )
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc["expected"]["watermark_steps"][1]["materialized_upto_mseq"] = 1
+        self.write_json("golden/wal/replay/settled-watermark-waits-for-cover.json", doc)
+        completed = run_checker(self.copy)
+        self.assert_fails(completed, "covering record")
+
+    def test_wal_replay_watermark_steps_required(self) -> None:
+        path = (
+            self.copy
+            / "golden"
+            / "wal"
+            / "replay"
+            / "settled-watermark-waits-for-cover.json"
+        )
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        del doc["expected"]["watermark_steps"]
+        self.write_json("golden/wal/replay/settled-watermark-waits-for-cover.json", doc)
+        completed = run_checker(self.copy)
+        self.assert_fails(completed, "no vector declares watermark_steps")
+
+    def test_wal_replay_missing_vector_fails(self) -> None:
+        (
+            self.copy / "golden" / "wal" / "replay" / "append-truncate-settles.json"
+        ).unlink()
+        completed = run_checker(self.copy)
+        self.assert_fails(completed, "required WAL replay vectors are missing")
 
     def test_wal_flipped_crc_fails(self) -> None:
         path = self.copy / "golden" / "wal" / "segment-1.json"
@@ -332,6 +404,12 @@ class GoldenCheckerTests(unittest.TestCase):
         self._remove_wal_phrase(
             "No resync state is persisted in the manifest",
             "Resync state is persisted in the manifest",
+        )
+
+    def test_wal_settled_watermark_rule_required(self) -> None:
+        self._remove_wal_phrase(
+            "has been applied at or below the recorded watermark",
+            "is retained",
         )
 
     def test_wal_next_mseq_formula_required(self) -> None:

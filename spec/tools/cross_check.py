@@ -95,6 +95,7 @@ GOLDEN_READERS = (
     ("spec/ui/v1/golden", "surface-projection.golden.json", "spec/ui/v1/tools/ui_check.py", False),
     ("spec/v1/golden/frames", "*.json", "spec/v1/tools/spec_golden.py", False),
     ("spec/v1/golden/wal", "*.json", "spec/v1/tools/spec_golden.py", False),
+    ("spec/v1/golden/wal/replay", "*.json", "spec/v1/tools/spec_golden.py", False),
     ("spec/v1/golden/bridge", "*.json", "spec/v1/tools/bridge_check.py", False),
     ("spec/v1/golden/gateway", "*.json", "spec/v1/tools/gateway_check.py", False),
     ("spec/v1/golden/perturbations", "*.json", "spec/v1/tools/fixture_check.py", False),

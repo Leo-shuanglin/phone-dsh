@@ -1,0 +1,52 @@
+{
+  "id": "cover-before-append-stays-held",
+  "title": "A complete write before the appended record is not a later cover and the append stays held",
+  "materialized_upto_mseq": 0,
+  "copy": {
+    "/dsh/workspace/notes.txt": {
+      "content_utf8": "HELLO"
+    }
+  },
+  "records": [
+    {
+      "mseq": 1,
+      "op": 1,
+      "path": "/dsh/workspace/notes.txt",
+      "appended": false,
+      "append_from": 0,
+      "data": {
+        "content_utf8": "reset"
+      }
+    },
+    {
+      "mseq": 2,
+      "op": 1,
+      "path": "/dsh/workspace/notes.txt",
+      "appended": true,
+      "append_from": 6,
+      "data": {
+        "content_utf8": " world"
+      }
+    }
+  ],
+  "expected": {
+    "records": [
+      {
+        "mseq": 1,
+        "verdict": "applied"
+      },
+      {
+        "mseq": 2,
+        "verdict": "mismatch-held"
+      }
+    ],
+    "materialized_upto_mseq": 1,
+    "tree": {
+      "/dsh/workspace/notes.txt": {
+        "content_utf8": "reset"
+      }
+    },
+    "failed": true,
+    "rebuilt_from_wal": false
+  }
+}

@@ -108,12 +108,15 @@ closed; it is not a protocol error.
 ### 5.1 Base mismatch and repair (D8)
 
 With `mflags` bit 1 (appended), the data is a suffix of the current file. When the base does not
-match §6.2, and it is not the D9 skip case, the materialized copy and the WAL have diverged:
+match §6.2, and it is not the D9 skip or superseded case, the materialized copy and the WAL have
+diverged:
 
 - send `0x13 VFS_RESYNC` for the path **at once**; at most one resync is outstanding per path.
 - stop materialization of that path. Later mutations of other paths may still be applied, but
   `materialized_upto_mseq` is a **strictly contiguous watermark**: it does not advance past the
-  first unapplied record, so it stays below the mismatching mseq until the repair is applied.
+  first record that is neither applied nor settled, so it stays below the mismatching mseq until the
+  repair is applied. A superseded record holds the watermark exactly like a mismatch until its
+  covering record has been applied inside the prefix, but it is not a failure and needs no resync.
 - keep the mismatching record and every later append of the path in the WAL. An accepted record is
   **never discarded** and never rewritten.
 - the worker replies with a complete `op = 1` write (`mflags` bit 1 clear) of the current file at
@@ -121,19 +124,28 @@ match §6.2, and it is not the D9 skip case, the materialized copy and the WAL h
   applies that write as the new base, then re-applies the path's pending appended records in mseq
   order under §6.2 (skipping the bytes the complete write already contains) and settles them; only
   then does the watermark advance across every record it had held back.
+- a complete write or remove of the path (or of an ancestor) that arrives after the mismatch and
+  before the repair also settles every held append it covers under §6.2; no repair is needed for
+  those records. Only the bytes a later record covers are let go: an uncovered mismatch stays held
+  and still fails at the next epoch close, and a `VFS_CONFLICT` for a superseded path is not
+  terminal (channel.md §10).
 
 No resync state is persisted in the manifest: `manifest.json` carries no per-path marker or
-deferred list. After a boot, replay reaches the same unmaterializable record and requests the repair
-again; after a live reconnect in the same process the host re-requests the path (channel.md §9). If
-the repair has not arrived by the next epoch close (the Worker is dead or unresponsive), admission
-closes and the state becomes `Failed`; a starting host then performs the full-tree reconcile of
-§7.2. A path that is no longer a regular file is answered with `VFS_CONFLICT` (channel.md §10).
+deferred list. After a boot that leaves a resync, replay first performs the §7.2 materialized-copy
+invariant: when the retained mutations start at mseq 1 and have no hole, a divergence rebuilds the
+whole copy from the WAL; otherwise the host requests the repair after HELLO (channel.md §9, §10
+step 4). After a live reconnect in the same process the host re-requests the path (channel.md §9).
+If the repair has not arrived by the next epoch close (the Worker is dead or unresponsive),
+admission closes and the state becomes `Failed`; a starting host then performs the full-tree
+reconcile of §7.2. A path that is no longer a regular file is answered with `VFS_CONFLICT`
+(channel.md §10), which is ignored only for a record superseded as above.
 
 ### 5.2 Epoch close (D18)
 
 An epoch closes every 30–60 s, when the App enters the background, before a handoff and before a
-planned WebContent restart. An unrepaired base mismatch at the close is a failure: admission closes
-and the state becomes `Failed` (D8). Otherwise the close runs in this order:
+planned WebContent restart. An unrepaired base mismatch at the close is a failure: admission closes,
+the state becomes `Failed` (D8), and the recorded failure detail names the mismatch path and mseq.
+Otherwise the close runs in this order:
 
 1. **fsync the changed materialized copy**: every file materialized in the epoch (temp file fsynced
    before rename, or an fsync of the final file) and every changed directory (create, rename,
@@ -171,8 +183,19 @@ records; it is never the input to a WAL write and never edited by the worker.
 
 ### 6.2 D9 idempotent appended replay
 
-For an appended record with `append_from = A` and data length `L`, let `S` be the current size of the
-materialized file:
+Before the base check, an appended record is **superseded** when a later retained record with a
+greater mseq is a complete write of the same path (`op = 1`, `appended` clear; a shorter write
+truncates the file), a remove of that path, or a remove of one of its ancestors, and no appended
+record of the path between the two depends on this record's base unless it is also covered by that
+same later record (a complete write or remove covers every earlier record of the path). A superseded
+record is not applied and the later record establishes the final state. It is settled only once that
+covering record has been applied to the materialized copy; until then it holds the contiguous
+watermark below it exactly like a held append but triggers neither `Failed` nor a resync, and only
+once the cover is applied and the contiguous prefix reaches the cover's mseq may the watermark pass
+it. A repair write of §5.1 is such a complete write.
+
+For an appended record that is not superseded, with `append_from = A` and data length `L`, let `S`
+be the current size of the materialized file:
 
 - `S == A` → append the data (the record was not applied yet);
 - `S >= A + L` and the bytes at `[A, A + L)` equal the record data → skip (already applied);
@@ -181,6 +204,10 @@ materialized file:
 The skip case makes consecutive appends replay-safe: base 6 bytes, append `A=6` of 6, then `A=12` of
 6 — a 6-byte file appends both, an 18-byte file skips both, a 12-byte file skips the first and
 appends the second. A later complete write replaces the file; §5.1 then settles its pending appends.
+A later complete write or remove also supersedes an earlier append under the first paragraph; only
+the bytes it covers are let go, and an append it does not cover remains a base mismatch. Because
+replay and materialization are in ascending mseq order, the cover's own mseq is the earliest point at
+which the watermark may pass a superseded append.
 
 ## 7. manifest.json (D11, D17)
 
@@ -190,10 +217,15 @@ JSON, UTF-8, validated by [schema/manifest.schema.json](schema/manifest.schema.j
 |---|---|---|
 | `format` | integer | 1 |
 | `boot_id` | 32 lowercase hex | boot that wrote this manifest |
-| `materialized_upto_mseq` | integer | highest mutation mseq such that every mutation ≤ it is applied to the materialized copy; a strictly contiguous watermark, 0 when none |
+| `materialized_upto_mseq` | integer | highest mutation mseq such that every mutation ≤ it is applied to the materialized copy, skipped idempotently, or settled-superseded by a later retained record whose cover is applied at or below this watermark; a strictly contiguous watermark, 0 when none |
 | `last_mseq` | integer | highest mseq ever allocated and accepted at level 1 (D17); it never decreases, truncation does not lower it; 0 when none |
 | `last_durable_epoch` | integer | epoch number of the most recently closed (level-2 durable) epoch; 0 when no epoch has closed |
 | `segments` | array | retained segments at the time of the write, in `<epoch,segment>` order |
+
+A settled record is counted only when its covering record has been applied to the copy. Every
+manifest write therefore satisfies: if the watermark is at least a settled record's `mseq`, the
+cover's `mseq` is at most the watermark. The field never crosses a settled record whose cover is
+still above it.
 
 `segments[]` entries are `{file, epoch, first_mseq, last_mseq}`: `file` is the relative segment name,
 `first_mseq` equals the header's `first_mseq`, `last_mseq` is the highest mutation mseq in the segment
@@ -212,7 +244,9 @@ Write `manifest.json.tmp`, `fsync` it, `rename()` it over `manifest.json`, then 
 directory: a reader sees the old or the new file, never a mix. Rewrites happen at every epoch close,
 during reconcile and before a segment is deleted, and only after §5.2 step 1 has made every applied
 mutation durable. A manifest write records only the strictly contiguous watermark: it never names an
-applied position that the materialized copy has not reached.
+applied position that the materialized copy has not reached, and it names a settled position only
+when the covering record is retained **and has been applied at or below the recorded watermark**. A
+settled record whose cover is still above the watermark is not yet named.
 
 ### 7.2 Ordering discipline and truncation
 
@@ -261,7 +295,8 @@ applied position that the materialized copy has not reached.
   trigger — that is the ordinary crash-before-manifest case, repaired by replaying the tail onto
   the materialized copy and verifying it. Reading this rule as "any disagreement" turns every
   unclean shutdown into a full staging copy for a case the tail replay already handles.
-  Its inputs are the **materialized copy plus the WAL tail — never the WAL alone**.
+  Its inputs are the **materialized copy plus the WAL tail — never the WAL alone**; the mseq-1
+  rebuild of the next bullet is the invariant check, not staged reconcile, and may use the WAL alone.
   Steps: write `reconcile.inprogress` (with boot id, target tail and materialized position; fsync) →
   copy the materialized tree to `materialized.staging/` → replay the tail → fsync staging → exchange
   `materialized/` and `materialized.staging/` by rename → write the manifest with the effective tail
@@ -275,8 +310,10 @@ applied position that the materialized copy has not reached.
   admission opens. With no manifest or WAL, the workspace is new (manifest at 0).
 - **Materialized-copy invariant and scoped local repair.** Before a segment is unlinked, recovery
   compares every path whose last base mutation is retained against `materialized/` (bytes and POSIX
-  mode). When the retained mutations start at `mseq` 1, a divergence rebuilds the whole copy from
-  the WAL. When they start above 1, the copy is never rebuilt from an incomplete root. The only
+  mode). When the retained mutations start at `mseq` 1 and are contiguous with no hole, a divergence
+  rebuilds the whole copy from the WAL; this is the rebuild a boot performs when replay leaves a
+  resync, before it would otherwise request a repair after HELLO. When they start above 1, the copy
+  is never rebuilt from an incomplete root. The only
   exception is a divergence confined to `/dsh/home/AGENTS.md` and
   `/dsh/home/capabilities.json` when every existing one of those two paths still has its complete
   full-write base and every global mutation mseq from that base through
@@ -363,7 +400,9 @@ worker has the bytes.
    Acknowledged level-1 records are never truncated.
 3. Replay mutations with `mseq > materialized_upto_mseq` in ascending order using §6. A base
    mismatch joins §5.1: send `VFS_RESYNC` and hold the watermark below it; the repair write settles
-   the deferred appends. Epoch-close records never advance the watermark.
+   the deferred appends. A superseded append likewise holds the watermark below it until its cover
+   is replayed and applied, but that is not a failure. Epoch-close records never advance the
+   watermark.
 4. If the manifest `boot_id` differs from the current process boot — every process start is a cold
    recovery — nothing in memory is trusted: the worker is seeded from the freshly packed overlay (§8)
    and any path still waiting for a resync is re-requested after HELLO. `durable_mseq` for HELLO is

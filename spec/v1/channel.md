@@ -302,18 +302,19 @@ conforming.
   level 1, and only then applied to the materialized copy. The WAL records every mutation the VFS
   committed; a result never suppresses the record. Level 1 survives a kill, not power loss (D18).
 - **Base mismatch and repair (D8).** If an `appended` mutation's base does not match the materialized
-  file (current size is neither `append_from`, a D9 replay, nor a torn prefix of the record), the host sends VFS_RESYNC at
-  once and defers that path. The accepted record keeps its mseq; the worker replies with a complete
+  file (current size is neither `append_from`, a D9 replay, nor a torn prefix of the record), the host sends VFS_RESYNC at once and defers that path; the accepted record keeps its mseq, and the worker replies with a complete
   `op = 1` write plus, for a larger file, the appended suffix chain at the next normal mseqs.
   `materialized_upto_mseq` is a strictly contiguous watermark: it waits below the mismatching mseq
-  until the full write is applied and the path's pending appends settle. No resync state is persisted in the manifest; an unrepaired mismatch at
-  the next epoch close enters Failed, and a boot re-encounters it during replay. Not a protocol
-  error; a materialization I/O failure enters Failed and closes admission.
-- **Idempotent append replay (D9).** During materialization the host appends when current size is
-  `append_from`; it skips when size is at least `append_from + data_len` and the target byte range
-  already equals `data`; it completes a torn write when the size is between `append_from` and
-  `append_from + data_len` and the present prefix equals `data`'s prefix, appending only the missing
-  suffix. Every other case is the base-mismatch path above. Consecutive append replays use this rule.
+  until the full write is applied and the path's pending appends settle. A later complete write or
+  remove of the path (or an ancestor) settles the held appends instead, and a VFS_CONFLICT for such
+  a superseded path is ignored (wal.md §6.2, §10). A settled-superseded append counts only once
+  its covering record is applied inside the prefix; until then it holds the watermark below it,
+  without Failed or resync. No resync state is persisted in the manifest; an unrepaired mismatch at the next epoch
+  close enters Failed, and a boot re-encounters it during replay. Not a protocol error; a materialization I/O failure enters Failed and closes admission.
+- **Idempotent append replay (D9).** Before the byte checks, a later complete write or remove of the
+  path (or an ancestor) supersedes the record (wal.md §6.2); only the bytes it covers are settled,
+  and the watermark may pass it only once that cover is applied. Otherwise the host appends when current size is `append_from`; it skips when size is at least `append_from + data_len` and the target byte range already equals `data`; it completes a torn write when the size is between `append_from` and `append_from + data_len` and the present prefix equals `data`'s prefix, appending only the missing suffix.
+  Every other case is the base-mismatch path above. Consecutive append replays use this rule.
 - **Flow control.** The worker buffers unacknowledged VFS_MUT payloads up to 32 MiB. At the limit it
   sends no further VFS_MUT and keeps reading; 32 MiB is a sliding window, not a per-file cap, so a
   64 MiB file is published across several level-1 acks. The 30 s fail-loud timer is an inactivity
@@ -345,10 +346,10 @@ A reconnect is a new WebSocket connection with fresh seq counters; nothing is re
    API_ABORT `{"reason":"connection_closed"}` on the local side.
 5. Exec requests are re-issued with the same `idem_key`; the host replays the recorded event stream
    for that key and does not execute again (D10).
-6. A path still waiting for a resync is re-requested with VFS_RESYNC after HELLO (in-memory state; after a boot replay re-encounters the mismatch). Flow control resumes from the new `acked_mseq`.
+6. A path still waiting for a resync is re-requested with VFS_RESYNC after HELLO (in-memory state; after a boot replay re-encounters the mismatch), unless the wal.md §7.2 mseq-1 rebuild already cleared it. Flow control resumes from the new `acked_mseq`.
 ## 10. Error codes
 
-Every ERROR is flushed; every code except `VFS_REFUSED` then closes the connection. `ref_seq` names the offending frame.
+Every ERROR is flushed. Every code except `VFS_REFUSED` closes the connection; a `VFS_CONFLICT` closes it only when the held record is not superseded (wal.md §6.2), and the host does not enter Failed for a superseded conflict. `ref_seq` names the offending frame.
 
 | Code | Sent by and when | Closes |
 |---|---|---|
@@ -358,7 +359,7 @@ Every ERROR is flushed; every code except `VFS_REFUSED` then closes the connecti
 | `BAD_PATH` | Host: VFS_MUT or VFS_RESYNC path violates §6. | yes |
 | `BAD_PAYLOAD` | Either side: malformed payload, unknown type byte, non-zero flags, `len` outside 1..16 MiB, bad JSON, identifier, capability set, level or length field. | yes |
 | `FENCE_STALE` | Host: HELLO fence generation is below the current generation or owner differs; or a side-effect frame arrives after the generation advanced. | yes |
-| `VFS_CONFLICT` | Worker: a VFS_RESYNC cannot be answered because the path is no longer a regular file (removed or replaced by a directory). Terminal fail-loud. | yes |
+| `VFS_CONFLICT` | Worker: a VFS_RESYNC cannot be answered because the path is no longer a regular file (removed or replaced by a directory). The Worker sends it only after every mutation it already made on that path has been sent, so the host sees the covering record first. Terminal fail-loud unless the held record is superseded (wal.md §6.2); the host then ignores it and does not enter Failed (the Worker still closes after its ERROR). | no when superseded, otherwise yes |
 | `VFS_REFUSED` | Either side: a mutation is refused for a resource limit — the Worker sink guard (`EFBIG`, `ENOSPC`, quota) or the host `single_file_limit` budget; carries `path`/`limit`/`reason` (a host reply also carries the refused `mseq` and `accepted_bytes`), consumes no mseq, and is a diagnostic. | no |
 | `RING_TIMEOUT` | Worker: 32 MiB unacked and no ack progress for 30 s. Admission closes and the host enters Failed. | yes |
 | `PROTO_MISMATCH` | Either side: HELLO `proto` is not 1, first frame is not HELLO, a second HELLO arrives, a known type is sent in the wrong direction, or a required capability is missing. | yes |

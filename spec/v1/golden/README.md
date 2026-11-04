@@ -87,6 +87,13 @@ event, not a separate binary prefix.
 mseq`; the epoch-close record is `op 0xFF` with `mseq = durable_upto`. The checker validates these
 files when they exist; `--full` makes them mandatory.
 
+`golden/wal/replay/*.json` are the D9 replay-semantics vectors: materialized copy, manifest
+watermark, retained mutations and the expected per-record verdict, final watermark, optional
+per-step watermarks, final tree and Failed flag. They cover the fourth D9 verdict (`superseded`),
+the conservative settlement rule (a settled record holds the contiguous watermark until its covering
+record is applied inside the same prefix), the §7.2 mseq-1 rebuild and the invalid cases that must
+stay Failed; see [wal/replay/README.md](wal/replay/README.md).
+
 ## 6. Canonical JSON
 
 JSON payload vectors are stored in canonical form (channel.md §5): UTF-8, no insignificant

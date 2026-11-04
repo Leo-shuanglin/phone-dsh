@@ -1,0 +1,81 @@
+{
+  "id": "drain-outstanding-resync-answered",
+  "verb": "drain_timeout",
+  "title": "Background drain waits for the outstanding VFS_RESYNC and parks",
+  "preconditions": {
+    "host_state": "Running",
+    "admission": "open",
+    "epoch_open": true,
+    "acked_mseq": 2,
+    "open_steps": 0,
+    "journaled_steps": 1,
+    "exec_in_flight": false,
+    "persisted_state": "Running",
+    "worker_channel": "open",
+    "notes": "An appended write at mseq 2 has an outstanding VFS_RESYNC; the Worker is still connected and answers with a complete write before the 20 s deadline."
+  },
+  "timeline": [
+    {
+      "at": 0,
+      "event": "foreground",
+      "expect_state": "Running",
+      "source": "Tests/PhoneDSHControllerTests/HostStateMachineTests.swift:166-178"
+    },
+    {
+      "at": 5,
+      "event": "scenePhase background",
+      "detail": "admission closes and the 20 s timer starts; the drain waits for the outstanding VFS_RESYNC at /dsh/workspace/notes.txt mseq 2",
+      "expect_state": "Draining",
+      "source": "Tests/PhoneDSHControllerTests/HostStateMachineTests.swift:166-178"
+    },
+    {
+      "at": 100,
+      "event": "the Worker answers VFS_RESYNC with a complete write at the next mseq",
+      "detail": "the repair write settles the held append and the watermark advances; no VFS_CONFLICT is needed",
+      "expect_state": "Draining",
+      "source": "spec/v1/wal.md:108"
+    },
+    {
+      "at": 200,
+      "event": "epoch close",
+      "detail": "materialized copy fsynced, epoch-close record appended, segments and manifest made durable, then VFS_ACK level 2 (wal.md section 5.2)",
+      "expect_state": "Parked",
+      "source": "Tests/PhoneDSHControllerTests/HostStateMachineTests.swift:179-210"
+    }
+  ],
+  "expected": {
+    "state": "Parked",
+    "state_path": [
+      "Running",
+      "Draining",
+      "Parked"
+    ],
+    "durability_level": "level_2",
+    "wal_tail": "closed_epoch",
+    "journal_gap": "none",
+    "surfaced_to_user": "unmeasured",
+    "admission": "closed",
+    "acked_prefix_preserved": true,
+    "steps_open": 0,
+    "steps_abandoned": 0,
+    "field_evidence": {
+      "state": "spec-only",
+      "state_path": "spec-only",
+      "durability_level": "spec-only",
+      "wal_tail": "spec-only",
+      "journal_gap": "spec-only",
+      "admission": "spec-only",
+      "acked_prefix_preserved": "spec-only",
+      "steps_open": "spec-only",
+      "steps_abandoned": "spec-only"
+    }
+  },
+  "evidence_level": "spec-only",
+  "source": "spec/v1/budgets.md:16",
+  "related_sources": [
+    "spec/v1/wal.md:108-140",
+    "spec/v1/channel.md:304-316",
+    "Tests/PhoneDSHControllerTests/HostStateMachineTests.swift:166-210"
+  ],
+  "notes": "The new assertion is the wait itself: the drain may not close the epoch while the connected Worker is answering an already-issued VFS_RESYNC. The terminal Parked/closed_epoch shape is the existing D14 row; the repair is settled under wal.md section 5.1/6.2. A runner that closes immediately would observe Failed and fail this fixture."
+}

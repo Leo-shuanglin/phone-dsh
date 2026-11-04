@@ -249,7 +249,7 @@
           "glob": "spec/v1/wal.md"
         },
         {
-          "glob": "spec/v1/schema/manifest.schema.json"
+          "glob": "spec/v1/schema/{manifest,wal-replay}.schema.json"
         },
         {
           "glob": "spec/v1/golden/wal/**"
@@ -293,7 +293,7 @@
         "authority": "[v1/wal.md](v1/wal.md)、[manifest schema](v1/schema/manifest.schema.json)、[golden/wal](v1/golden/wal)",
         "ends": "Swift [PhoneDSHLog](../Sources/PhoneDSHLog/)、[WAL.swift](../Sources/PhoneDSHWire/WAL.swift)；Rust [pdsh-wal](../shell/crates/pdsh-wal/)；Kotlin [core/log](../android/core/src/main/kotlin/com/phonedsh/log/)、`dsh/host/{HostWal,WalUplink}.kt`；TS `plugins/channel/src/wal.ts` 只是**對拍 codec**，無生產消費者",
         "evidence": "Swift `WALTests`、`PhoneDSHLogTests`；Kotlin `NativeWalGoldenTest`；Rust [golden_wal.rs](../shell/crates/pdsh-wal/tests/golden_wal.rs)（`phone-rust-tests`）",
-        "triggers": "`spec/v1/wal.md`、`spec/v1/schema/manifest.schema.json`、`spec/v1/golden/wal/**`、`Sources/PhoneDSHWire/WAL.swift`、`Sources/PhoneDSHLog/**`、`plugins/channel/src/{wal,vfs-mutation}.ts`、`shell/crates/pdsh-wal/**`、`shell/crates/pdsh-jni/src/wal.rs`、`android/core/src/main/kotlin/com/phonedsh/log/**`、`android/core/src/main/kotlin/com/phonedsh/wire/{NativeWal,WalException}.kt`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostWal,WalUplink,HostLog}.kt`、`android/engine/src/main/kotlin/com/phonedsh/engine/BootOverlay*.kt`"
+        "triggers": "`spec/v1/wal.md`、`spec/v1/schema/{manifest,wal-replay}.schema.json`、`spec/v1/golden/wal/**`、`Sources/PhoneDSHWire/WAL.swift`、`Sources/PhoneDSHLog/**`、`plugins/channel/src/{wal,vfs-mutation}.ts`、`shell/crates/pdsh-wal/**`、`shell/crates/pdsh-jni/src/wal.rs`、`android/core/src/main/kotlin/com/phonedsh/log/**`、`android/core/src/main/kotlin/com/phonedsh/wire/{NativeWal,WalException}.kt`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostWal,WalUplink,HostLog}.kt`、`android/engine/src/main/kotlin/com/phonedsh/engine/BootOverlay*.kt`"
       }
     },
     {

@@ -84,7 +84,7 @@ class FixtureCheckerTests(unittest.TestCase):
     def test_clean_tree_passes_with_full_verb_coverage(self) -> None:
         result = self.result()
         self.assertEqual(result.errors, [], "the checked-in fixtures must validate")
-        self.assertEqual(result.count, 23, "16 perturbation and 7 upstream fixtures are expected")
+        self.assertEqual(result.count, 25, "18 perturbation and 7 upstream fixtures are expected")
         for verb in CHECKER.REQUIRED_VERBS:
             self.assertEqual(result.verbs[verb] > 0, True, "verb {} is not covered".format(verb))
 
@@ -98,13 +98,13 @@ class FixtureCheckerTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         lines = completed.stdout.splitlines()
         fixture_lines = [line for line in lines if line.startswith("ok spec/v1/golden/")]
-        self.assertEqual(len(fixture_lines), 23)
+        self.assertEqual(len(fixture_lines), 25)
         self.assertIn("coverage matrix: perturbation verb x fixture count", lines)
         self.assertTrue(
             any("all 10 required verb(s) covered" in line for line in lines),
             "the coverage matrix must report full verb coverage",
         )
-        self.assertTrue(any("23 fixture(s) checked, 0 error(s)" in line for line in lines))
+        self.assertTrue(any("25 fixture(s) checked, 0 error(s)" in line for line in lines))
 
     def test_cli_fails_with_exit_code_one_on_a_bad_fixture(self) -> None:
         self.mutate("perturbations", "kill-9-after-write.json", lambda doc: doc.update(verb="nope"))
@@ -256,6 +256,27 @@ class FixtureCheckerTests(unittest.TestCase):
 
         self.mutate("perturbations", "kill-9-after-write.json", contradict)
         self.assert_rejected("contradicts budgets.md section 1")
+
+    def test_failure_detail_path_must_be_a_vfs_path(self) -> None:
+        def bad_path(doc):
+            doc["expected"]["failure_detail"]["path"] = "/tmp/notes.txt"
+
+        self.mutate(
+            "perturbations", "drain-outstanding-resync-deadline-failed.json", bad_path
+        )
+        self.assert_rejected("does not match")
+
+    def test_failure_detail_requires_failed_state(self) -> None:
+        def contradiction(doc):
+            doc["expected"]["state"] = "Parked"
+            doc["expected"]["state_path"] = ["Running", "Draining", "Parked"]
+
+        self.mutate(
+            "perturbations",
+            "drain-outstanding-resync-deadline-failed.json",
+            contradiction,
+        )
+        self.assert_rejected("requires expected.state Failed")
 
     def test_missing_required_verb_is_rejected(self) -> None:
         self.fixture_path("perturbations", "sigterm-runner-guard.json").unlink()
