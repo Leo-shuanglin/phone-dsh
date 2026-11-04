@@ -219,8 +219,12 @@ class VfsBudgetRefusalTest {
         runBlocking { sink.open(WalRecovery.Recovered(nextMseq = 1L, ackedMseq = 0L, durableMseq = 0L)) }
         sink.attach(
             object : VfsSender {
-                override suspend fun send(frame: VfsFrame) {
+                private var seq = 0L
+
+                override suspend fun send(frame: VfsFrame): Long {
                     frames += frame
+                    seq += 1L
+                    return seq
                 }
             },
         )

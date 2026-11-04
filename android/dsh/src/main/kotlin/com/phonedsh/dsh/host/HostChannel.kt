@@ -989,19 +989,25 @@ class HostChannel(
     /**
      * Encodes and sends one VFS frame at this connection's next seq.
      *
+     * @return the `seq` the frame was encoded with once [LoopbackConnection.sendBinary]
+     *   returned, or `null` when there was no seq space / encoding or sending
+     *   failed. The sink records this number for a `VFS_RESYNC` so a later
+     *   `VFS_CONFLICT.ref_seq` can be resolved to the path it names
+     *   (`channel.md` §10).
+     *
      * A closing ERROR is followed by `close(1002)`; the frame is flushed by
      * [LoopbackConnection.sendBinary] before the close request.
      */
-    private suspend fun sendVfs(connection: LoopbackConnection, frame: VfsFrame) {
-        sendMutex.withLock {
-            val seq = nextSeq(connection) ?: return
+    private suspend fun sendVfs(connection: LoopbackConnection, frame: VfsFrame): Long? {
+        val sentSeq = sendMutex.withLock {
+            val seq = nextSeq(connection) ?: return@withLock null
             val bytes = try {
                 frame.encode(seq)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 logger.error("VFS frame not encoded (${failure.javaClass.simpleName})")
-                return
+                return@withLock null
             }
             try {
                 connection.sendBinary(bytes)
@@ -1009,8 +1015,9 @@ class HostChannel(
                 throw cancelled
             } catch (failure: Exception) {
                 logger.error("VFS frame not sent on ${connection.id} (${failure.javaClass.simpleName})")
-                return
+                return@withLock null
             }
+            seq
         }
         if (frame is VfsFrame.Error && frame.closeConnection) {
             try {
@@ -1021,6 +1028,7 @@ class HostChannel(
                 logger.warn("VFS ERROR close failed on ${connection.id} (${failure.javaClass.simpleName})")
             }
         }
+        return sentSeq
     }
 
     /** Takes and advances the connection's outbound seq. */

@@ -19,8 +19,9 @@
 //   fsynced the materialized tree, every segment and the manifest (D18). The
 //   barrier itself returns immediately, so it cannot reorder or block other
 //   frames.
-// * No reconnect/seq state. The channel owns seq numbers; this sink only sees
-//   the decoded frame and the inbound `ref_seq` for an ERROR.
+// * No seq allocation. The channel owns the seq space; this sink only records
+//   the seq its own `VFS_RESYNC` frames were sent with, so a later
+//   `VFS_CONFLICT`'s `ref_seq` can be resolved to the path it names (§10).
 //
 // ---- duplicate mseq (D9) and the one allocator ------------------------------
 // The worker re-sends mutations above `acked_mseq` after a reconnect, so a
@@ -120,7 +121,9 @@
 
 package com.phonedsh.dsh.host
 
+import com.phonedsh.agentcore.JsonNumber
 import com.phonedsh.agentcore.JsonObject
+import com.phonedsh.agentcore.JsonString
 import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.controller.ControllerBudgets
 import com.phonedsh.controller.ControllerFailure
@@ -135,8 +138,15 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /** The outbound side of one VFS connection; implemented by the channel. */
 fun interface VfsSender {
-    /** Sends one typed frame to the worker. */
-    suspend fun send(frame: VfsFrame)
+    /**
+     * Sends one typed frame to the worker and returns the connection `seq` the
+     * channel assigned it, or `null` when the frame was not put on the wire.
+     *
+     * A `VFS_RESYNC`'s seq is the key a later `VFS_CONFLICT` uses in its
+     * `ref_seq` (`channel.md` §10 "`ref_seq` names the offending frame"), so the
+     * channel must report the number it actually encoded.
+     */
+    suspend fun send(frame: VfsFrame): Long?
 }
 
 /**
@@ -199,6 +209,23 @@ class VfsSink(
     private val requestedResyncs = HashSet<String>()
 
     /**
+     * This connection's outbound `VFS_RESYNC` seq → path.
+     *
+     * `channel.md` §10 says the Worker's `VFS_CONFLICT` carries the offending
+     * host frame in `ref_seq`. That number alone decides which path the
+     * conflict is about; looking at the pending set as a whole is wrong when a
+     * replay left several paths held, because a conflict for an already
+     * superseded path would then be judged by an unrelated still-held one.
+     *
+     * Connection-scoped: [attach]/[detach]/[open] clear it, exactly like the
+     * seq space itself (`channel.md` §9 "a reconnect is a new WebSocket
+     * connection with fresh seq counters"). Guarded by [senderLock]; the
+     * lookup in [onWorkerError] is under [mutex], and the send that populates
+     * it is also under [mutex], so a conflict cannot race its own request.
+     */
+    private val resyncPathsBySentSeq = LinkedHashMap<Long, String>()
+
+    /**
      * The drain's observation of the repair set: connected plus outstanding
      * count. It changes on attach/detach, recovery seeding and every append
      * (a cover can settle a path without the watermark moving past another
@@ -256,6 +283,7 @@ class VfsSink(
                 outstandingResyncs.putIfAbsent(request.path, request.mseq)
             }
             requestedResyncs.clear()
+            resyncPathsBySentSeq.clear()
             publishResyncStateLocked()
         }
         opened = true
@@ -269,6 +297,7 @@ class VfsSink(
             // A new connection has not received the outstanding requests yet;
             // `onHelloAnswered` re-sends one per path after the host HELLO.
             requestedResyncs.clear()
+            resyncPathsBySentSeq.clear()
             publishResyncStateLocked()
         }
     }
@@ -281,7 +310,12 @@ class VfsSink(
      */
     fun detach(sender: VfsSender?) {
         synchronized(senderLock) {
-            if (sender == null || this.sender === sender) this.sender = null
+            if (sender == null || this.sender === sender) {
+                this.sender = null
+                // A conflict after this point would name a frame of a dead
+                // connection; the seq space is gone, so the map is too.
+                resyncPathsBySentSeq.clear()
+            }
             publishResyncStateLocked()
         }
     }
@@ -303,7 +337,7 @@ class VfsSink(
             outstandingResyncs.keys.filter { it !in requestedResyncs }
         }
         for (path in toRequest) {
-            if (emit(VfsFrame.Resync(path))) {
+            if (emitResync(path)) {
                 synchronized(senderLock) { requestedResyncs.add(path) }
             }
         }
@@ -612,7 +646,7 @@ class VfsSink(
             path !in requestedResyncs
         }
         if (!shouldSend) return
-        if (emit(VfsFrame.Resync(path))) {
+        if (emitResync(path)) {
             synchronized(senderLock) {
                 requestedResyncs.add(path)
                 publishResyncStateLocked()
@@ -685,36 +719,65 @@ class VfsSink(
     /**
      * One inbound worker `ERROR` (`channel.md` §4.8/§10).
      *
-     * `VFS_CONFLICT` is the one case this host must interpret: the Worker could
-     * not answer a reserved path because it is no longer a regular file. With
-     * no live repair left (the later complete write/remove settled it) the
-     * conflict belongs to a superseded record and is ignored; otherwise it is
-     * the terminal §5.2 condition and is reported with the held path and mseq.
+     * `VFS_CONFLICT` is the one case this host must interpret. Its `ref_seq`
+     * names the offending `VFS_RESYNC`; [resyncPathsBySentSeq] turns that into
+     * the path the conflict is actually about:
+     *
+     *  * known path, no longer in the live pending set — a later complete
+     *    write/remove superseded the held record (`wal.md` §6.2), so the
+     *    conflict is ignored and the host does not enter `Failed` (§10);
+     *  * known path, still held — the terminal §5.2 condition, reported with
+     *    that path and its live held mseq;
+     *  * unknown `ref_seq` (a frame of a previous connection, or a Worker that
+     *    omitted it) — fall back to the pre-r2 rule: an empty pending set is
+     *    ignored, anything else is terminal with the first held record.
+     *
      * Other closing codes are the transport's business and are logged only.
      *
+     * @param frameSeq the inbound ERROR frame's own connection `seq`; logging
+     *   only — the path comes from the `ref_seq` member above.
      * @return `true` when the channel should close the connection.
      */
-    internal suspend fun onWorkerError(frame: ByteArray, refSeq: Long): Boolean = mutex.withLock {
-        val code = try {
-            val fields = JsonValue.parse(WireCodec.decode(frame))
-            (fields as? JsonObject)?.get("code")?.let { member ->
-                (member as? com.phonedsh.agentcore.JsonString)?.value
-            }
+    internal suspend fun onWorkerError(frame: ByteArray, frameSeq: Long): Boolean = mutex.withLock {
+        var code: String? = null
+        var conflictRefSeq: Long? = null
+        try {
+            val fields = JsonValue.parse(WireCodec.decode(frame)) as? JsonObject
+            code = (fields?.get("code") as? JsonString)?.value
+            conflictRefSeq = (fields?.get("ref_seq") as? JsonNumber)?.asLongOrNull()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            logger.warn("worker ERROR on ref_seq $refSeq is not decodable (${failure.javaClass.simpleName})")
-            null
+            logger.warn("worker ERROR on seq $frameSeq is not decodable (${failure.javaClass.simpleName})")
         }
         if (code != "VFS_CONFLICT") {
-            logger.warn("worker ERROR $code on ref_seq $refSeq; no host state change")
+            logger.warn("worker ERROR $code on seq $frameSeq; no host state change")
             return@withLock code != "VFS_REFUSED"
         }
         val held = wal.pendingResyncs()
+        val namedPath = conflictRefSeq?.let { seq ->
+            synchronized(senderLock) { resyncPathsBySentSeq[seq] }
+        }
+        if (namedPath != null) {
+            val request = held.firstOrNull { it.path == namedPath }
+            if (request == null) {
+                logger.info(
+                    "VFS_CONFLICT on ref_seq $conflictRefSeq (ERROR seq $frameSeq) for $namedPath " +
+                        "ignored: no unrepaired append remains for that path, so the held record " +
+                        "was settled-superseded (wal.md §6.2/§10)",
+                )
+                return@withLock false
+            }
+            val detail = "VFS_CONFLICT on ref_seq $conflictRefSeq names $namedPath, whose held " +
+                "record is mseq ${request.mseq} (channel.md §10, wal.md §5.2)"
+            logger.error(detail)
+            failures.reportQuietly(ControllerFailure.UNREPAIRED_BASE_MISMATCH, detail, logger)
+            return@withLock true
+        }
         if (held.isEmpty()) {
             logger.info(
-                "VFS_CONFLICT on ref_seq $refSeq ignored: no unrepaired append remains " +
-                    "(the path was settled-superseded, wal.md §6.2/§10)",
+                "VFS_CONFLICT on unknown ref_seq $conflictRefSeq (ERROR seq $frameSeq) ignored: " +
+                    "no unrepaired append remains (the path was settled-superseded, wal.md §6.2/§10)",
             )
             return@withLock false
         }
@@ -827,6 +890,34 @@ class VfsSink(
             return false
         }
         target.send(frame)
+        return true
+    }
+
+    /**
+     * Sends one `VFS_RESYNC` and records the connection seq it was assigned.
+     *
+     * That seq is what a later `VFS_CONFLICT` puts in `ref_seq` (§10), so the
+     * record written here is the only way to tell which path the conflict is
+     * about when a replay left several paths held. The caller holds [mutex] and
+     * [onWorkerError] takes it too, so a conflict cannot be handled between the
+     * send and the mapping below.
+     *
+     * @return `false` when there was no connection or the channel did not put
+     *   the frame on the wire; the caller then leaves the path un-requested so
+     *   a retry can still send it.
+     */
+    private suspend fun emitResync(path: String): Boolean {
+        val target = synchronized(senderLock) { sender }
+        if (target == null) {
+            logger.warn("no VFS connection attached; dropping Resync")
+            return false
+        }
+        val seq = target.send(VfsFrame.Resync(path)) ?: return false
+        synchronized(senderLock) {
+            // A detach/attach during the send cleared the map; only a frame that
+            // still belongs to the attached connection may be resolvable later.
+            if (this.sender === target) resyncPathsBySentSeq[seq] = path
+        }
         return true
     }
 }

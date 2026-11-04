@@ -170,7 +170,7 @@ class DrainResyncFixtureTest {
             val sink = VfsSink(wal = hostWal, failures = failures, logger = RecordingHostLog())
             runBlocking {
                 sink.open(recovered)
-                sink.attach(VfsSender { })
+                sink.attach(VfsSender { 0L })
                 sink.onHelloAnswered()
             }
             // The controller is the real D14 machine. Start it at Running (the
