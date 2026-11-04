@@ -950,13 +950,15 @@ public actor ChannelServer: ChannelOutbound {
 
         case .error:
             let payload: ErrorPayload = try decodeJSON(frame.payload, refSeq: frame.seq)
-            try await handler.handleError(payload)
             // channel.md §10: a VFS_CONFLICT is terminal only when the held
             // record it names is not superseded. The Worker sends it after
             // every same-path mutation it already made, so a covering mutation
             // has settled the record and removed the path from the pending set.
-            // Such a conflict is ignored: no Failed, no host-side close (the
-            // Worker closes after its ERROR).
+            // Such a conflict is ignored: no handler call (the facade handler
+            // publishes `PhoneDSHEvent.error` there, so calling it would still
+            // show an ignored conflict to the App), no Failed, no host-side
+            // close (the Worker closes after its ERROR). Decide this *before*
+            // `handler.handleError`.
             if payload.code == .vfsConflict,
                let status = workspaceLog as? any LoopbackResyncStatusProviding {
                 let path = payload.refSeq.flatMap { resyncPathBySentSeq[$0] }
@@ -964,9 +966,13 @@ public actor ChannelServer: ChannelOutbound {
                 let superseded = path.map { !pending.contains($0) } ?? pending.isEmpty
                 if superseded {
                     metricsValue.vfsConflictsIgnored += 1
+                    let refSeq = payload.refSeq.map { String($0) } ?? "none"
+                    NSLog("phone-dsh: ignored superseded VFS_CONFLICT ref_seq=%@ path=%@",
+                          refSeq, path ?? "unknown")
                     return
                 }
             }
+            try await handler.handleError(payload)
             // channel.md §4.8/§10: a resource refusal is a diagnostic. It is
             // recorded and the connection stays open; every other ERROR closes
             // after the frame is flushed (§7). Never echo either one.
