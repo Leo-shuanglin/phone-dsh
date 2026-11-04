@@ -116,6 +116,16 @@ public struct ChannelVFSRefusal: Equatable, Sendable {
     }
 }
 
+/// Optional capability of the workspace-log seam: the paths whose repair is
+/// still outstanding (wal.md §5.1, channel.md §9 step 6). The ordered channel
+/// re-requests them after HELLO (GAP-13) and uses the same set to ignore a
+/// `VFS_CONFLICT` whose held record was superseded. A log without this
+/// capability keeps the historical behaviour.
+public protocol LoopbackResyncStatusProviding: Sendable {
+    /// Paths still waiting for a VFS_RESYNC answer, in stable order.
+    func pendingResyncPaths() async -> [String]
+}
+
 /// One host → worker durability acknowledgement with the timestamps of its
 /// hops (G2-FIX-83). The step records carry the tool-call boundary `at_ms`
 /// values; these samples make the host side of the same chain reconcilable:
@@ -179,6 +189,10 @@ public struct ChannelMetrics: Equatable, Sendable {
     public var vfsRefusalsSent = 0
     /// Most recent resource refusal observed on this connection, if any.
     public var lastVFSRefusal: ChannelVFSRefusal?
+    /// `ERROR VFS_CONFLICT` frames ignored because the held record was already
+    /// superseded (channel.md §10, wal.md §6.2). Ignoring never closes the
+    /// channel and never enters `Failed`.
+    public var vfsConflictsIgnored = 0
 
     public init() {}
 
@@ -418,6 +432,10 @@ public actor ChannelServer: ChannelOutbound {
     private var logAckTask: Task<Void, Never>?
     private var logResyncTask: Task<Void, Never>?
     private var tornDown = false
+    /// Outbound VFS_RESYNC seq → path. A `VFS_CONFLICT` names the offending
+    /// host frame in `ref_seq`; the mapping proves whether that held record is
+    /// still pending (terminal) or was superseded by a later mutation (ignored).
+    private var resyncPathBySentSeq: [UInt64: String] = [:]
 
     private var nextAPIReqID: UInt32 = 1
     private var pendingAPIs: [UInt32: PendingAPI] = [:]
@@ -746,7 +764,12 @@ public actor ChannelServer: ChannelOutbound {
 
     public func notifyVFSResync(path: String) async {
         guard !finished, let payload = try? VfsResyncBody(path: path).encoded() else { return }
-        try? await sendFrameInternal(.vfsResync, payload: payload)
+        do {
+            let seq = try await sendFrameInternal(.vfsResync, payload: payload)
+            resyncPathBySentSeq[seq] = path
+        } catch {
+            // The channel is closing; the reconnect path re-requests it.
+        }
     }
 
     // MARK: - Host → worker API requests
@@ -816,6 +839,16 @@ public actor ChannelServer: ChannelOutbound {
             }
             receivedHello = true
             try await handler.handleHello(hello)
+            // wal.md §5.1 / channel.md §9 step 6: a boot replay that left a
+            // resync re-requests the still-held paths after HELLO. The same
+            // applies to a live reconnect: at most one request is outstanding
+            // per path, and the Materializer does not re-emit a path that is
+            // already pending.
+            if let status = workspaceLog as? any LoopbackResyncStatusProviding {
+                for path in await status.pendingResyncPaths() {
+                    await notifyVFSResync(path: path)
+                }
+            }
 
         case .vfsMutation:
             let decoded = try VfsMutationPayload.decode(frame.payload)
@@ -917,6 +950,28 @@ public actor ChannelServer: ChannelOutbound {
 
         case .error:
             let payload: ErrorPayload = try decodeJSON(frame.payload, refSeq: frame.seq)
+            // channel.md §10: a VFS_CONFLICT is terminal only when the held
+            // record it names is not superseded. The Worker sends it after
+            // every same-path mutation it already made, so a covering mutation
+            // has settled the record and removed the path from the pending set.
+            // Such a conflict is ignored: no handler call (the facade handler
+            // publishes `PhoneDSHEvent.error` there, so calling it would still
+            // show an ignored conflict to the App), no Failed, no host-side
+            // close (the Worker closes after its ERROR). Decide this *before*
+            // `handler.handleError`.
+            if payload.code == .vfsConflict,
+               let status = workspaceLog as? any LoopbackResyncStatusProviding {
+                let path = payload.refSeq.flatMap { resyncPathBySentSeq[$0] }
+                let pending = await status.pendingResyncPaths()
+                let superseded = path.map { !pending.contains($0) } ?? pending.isEmpty
+                if superseded {
+                    metricsValue.vfsConflictsIgnored += 1
+                    let refSeq = payload.refSeq.map { String($0) } ?? "none"
+                    NSLog("phone-dsh: ignored superseded VFS_CONFLICT ref_seq=%@ path=%@",
+                          refSeq, path ?? "unknown")
+                    return
+                }
+            }
             try await handler.handleError(payload)
             // channel.md §4.8/§10: a resource refusal is a diagnostic. It is
             // recorded and the connection stays open; every other ERROR closes
@@ -1002,7 +1057,8 @@ public actor ChannelServer: ChannelOutbound {
         metricsValue.vfsRefusalsSent += 1
     }
 
-    private func sendFrameInternal(_ type: FrameType, payload: Data) async throws {
+    @discardableResult
+    private func sendFrameInternal(_ type: FrameType, payload: Data) async throws -> UInt64 {
         // One frame at a time: the actor may re-enter at the socket await, and
         // two senders must never pick the same connection seq (a duplicate seq
         // would reach the Worker as BAD_SEQ).
@@ -1017,6 +1073,7 @@ public actor ChannelServer: ChannelOutbound {
         outboundSeq = seq
         metricsValue.framesOut += 1
         metricsValue.bytesOut += encoded.count
+        return seq
     }
 
     private func acquireSendSlot() async {
@@ -1071,6 +1128,7 @@ public actor ChannelServer: ChannelOutbound {
         }
         pendingAPIs.removeAll()
         barriers.removeAll()
+        resyncPathBySentSeq.removeAll()
         await socket.closeChannel(code: closeCode)
     }
 

@@ -163,17 +163,29 @@ final class MaterializerTests: XCTestCase {
         XCTAssertEqual(materializer.deferredRecordCount, 0)
     }
 
-    func testRepairBaseThenDeferredAppendActuallyAppends() throws {
+    func testRepairWriteSettlesTheHeldAppendAndALaterAppendApplies() throws {
         let (materializer, root) = try makeMaterializer(self)
+        let decisions = LockedValues<MaterializeDecision>()
+        materializer.decisionObserver = { decisions.append($0) }
         _ = try materializer.apply(try WALRecord(mseq: 1, mutation: LogTestSupport.write(
             "/dsh/workspace/log.txt", data: "hello")))
         _ = try materializer.apply(try WALRecord(mseq: 2, mutation: LogTestSupport.append(
             "/dsh/workspace/log.txt", from: 6, data: "world")))
-        // Repair base is exactly the six bytes the appended record expects.
-        _ = try materializer.apply(try WALRecord(mseq: 3, mutation: LogTestSupport.write(
-            "/dsh/workspace/log.txt", data: "hello ")))
-        XCTAssertEqual(try contents(root, "/dsh/workspace/log.txt"), "hello world")
+        // wal.md §6.2: the later complete write supersedes the held append; the
+        // complete write establishes the state and the held bytes are not
+        // re-appended. A later append (mseq > the cover) applies normally.
+        XCTAssertEqual(try materializer.apply(try WALRecord(mseq: 3, mutation: LogTestSupport.write(
+            "/dsh/workspace/log.txt", data: "hello "))), .applied)
+        XCTAssertEqual(try contents(root, "/dsh/workspace/log.txt"), "hello ")
         XCTAssertEqual(materializer.materializedUptoMseq, 3)
+        XCTAssertTrue(materializer.needsResyncPaths.isEmpty)
+        XCTAssertEqual(decisions.values.last(where: { $0.mseq == 2 })?.verdict,
+                       .settledSuperseded(supersededByMseq: 3, cover: .repairWrite))
+
+        XCTAssertEqual(try materializer.apply(try WALRecord(mseq: 4, mutation: LogTestSupport.append(
+            "/dsh/workspace/log.txt", from: 6, data: "world"))), .applied)
+        XCTAssertEqual(try contents(root, "/dsh/workspace/log.txt"), "hello world")
+        XCTAssertEqual(materializer.materializedUptoMseq, 4)
     }
 
     func testEpochCloseRecordNeverAdvancesWatermark() throws {
@@ -194,5 +206,129 @@ final class MaterializerTests: XCTestCase {
         XCTAssertEqual(try materializer.apply(appended), .baseMismatch("/dsh/workspace/a.txt"))
         XCTAssertEqual(try contents(root, "/dsh/workspace/a.txt"), "abcdef")
         XCTAssertEqual(materializer.materializedUptoMseq, 1)
+    }
+}
+
+extension MaterializerTests {
+    private func decisions(_ materializer: Materializer) -> LockedValues<MaterializeDecision> {
+        let box = LockedValues<MaterializeDecision>()
+        materializer.decisionObserver = { box.append($0) }
+        return box
+    }
+
+    func testLiveRemoveSettlesTheHeldAppendWithoutResync() throws {
+        let (materializer, root) = try makeMaterializer(self)
+        let seen = decisions(materializer)
+        _ = try materializer.apply(try WALRecord(mseq: 1, mutation: LogTestSupport.write(
+            "/dsh/workspace/gone.txt", data: "HELLO")))
+        XCTAssertEqual(try materializer.apply(try WALRecord(mseq: 2, mutation: LogTestSupport.append(
+            "/dsh/workspace/gone.txt", from: 6, data: " world"))),
+                       .baseMismatch("/dsh/workspace/gone.txt"))
+        XCTAssertEqual(materializer.needsResyncPaths, ["/dsh/workspace/gone.txt"])
+        XCTAssertEqual(materializer.materializedUptoMseq, 1)
+
+        // wal.md §6.2: the later remove covers the held append; no repair.
+        XCTAssertEqual(try materializer.apply(try WALRecord(mseq: 3, mutation: LogTestSupport.remove(
+            "/dsh/workspace/gone.txt"))), .applied)
+        XCTAssertTrue(materializer.needsResyncPaths.isEmpty)
+        XCTAssertEqual(materializer.deferredRecordCount, 0)
+        XCTAssertEqual(materializer.materializedUptoMseq, 3)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fileURL(root, "/dsh/workspace/gone.txt").path))
+        XCTAssertEqual(seen.values.last(where: { $0.mseq == 2 })?.verdict,
+                       .settledSuperseded(supersededByMseq: 3, cover: .remove))
+    }
+
+    func testLiveAncestorRemoveSettlesTheHeldDescendantAppend() throws {
+        let (materializer, root) = try makeMaterializer(self)
+        let seen = decisions(materializer)
+        _ = try materializer.apply(try WALRecord(mseq: 1, mutation: LogTestSupport.write(
+            "/dsh/workspace/dir/a.txt", data: "HELLO")))
+        XCTAssertEqual(try materializer.apply(try WALRecord(mseq: 2, mutation: LogTestSupport.append(
+            "/dsh/workspace/dir/a.txt", from: 6, data: " world"))),
+                       .baseMismatch("/dsh/workspace/dir/a.txt"))
+        XCTAssertEqual(try materializer.apply(try WALRecord(mseq: 3, mutation: LogTestSupport.remove(
+            "/dsh/workspace/dir"))), .applied)
+        XCTAssertTrue(materializer.needsResyncPaths.isEmpty)
+        XCTAssertEqual(materializer.materializedUptoMseq, 3)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fileURL(root, "/dsh/workspace/dir").path))
+        XCTAssertEqual(seen.values.last(where: { $0.mseq == 2 })?.verdict,
+                       .settledSuperseded(supersededByMseq: 3, cover: .ancestorRemove))
+    }
+
+    func testSupersessionIsCheckedBeforeTheBaseCheckInABatch() throws {
+        let (materializer, root) = try makeMaterializer(self)
+        let seen = decisions(materializer)
+        // The copy already holds the appended bytes: the D9 base check alone
+        // would skip record 1. The retained lookahead still decides superseded
+        // first (wal.md §6.2).
+        try FileManager.default.createDirectory(
+            at: fileURL(root, "/dsh/workspace").deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: fileURL(root, "/dsh/workspace"), withIntermediateDirectories: true)
+        try Data("hello world".utf8).write(to: fileURL(root, "/dsh/workspace/notes.txt"))
+        let records = [
+            try WALRecord(mseq: 1, mutation: LogTestSupport.append(
+                "/dsh/workspace/notes.txt", from: 5, data: " world")),
+            try WALRecord(mseq: 2, mutation: LogTestSupport.write(
+                "/dsh/workspace/notes.txt", data: "fixed")),
+        ]
+        let report = try materializer.apply(records: records)
+        XCTAssertEqual(report.settled, 1)
+        XCTAssertEqual(report.applied, 1)
+        XCTAssertEqual(materializer.materializedUptoMseq, 2)
+        XCTAssertEqual(try String(contentsOf: fileURL(root, "/dsh/workspace/notes.txt"),
+                                  encoding: .utf8), "fixed")
+        XCTAssertEqual(seen.values.first(where: { $0.mseq == 1 })?.verdict,
+                       .settledSuperseded(supersededByMseq: 2, cover: .completeWrite))
+    }
+
+    func testSupersededRecordHoldsTheWatermarkUntilTheCoverIsApplied() throws {
+        let (materializer, root) = try makeMaterializer(self)
+        let seen = decisions(materializer)
+        try FileManager.default.createDirectory(
+            at: fileURL(root, "/dsh/workspace"), withIntermediateDirectories: true)
+        try Data("HELLO".utf8).write(to: fileURL(root, "/dsh/workspace/a.txt"))
+        try Data("B".utf8).write(to: fileURL(root, "/dsh/workspace/b.txt"))
+        let records = [
+            try WALRecord(mseq: 1, mutation: LogTestSupport.append(
+                "/dsh/workspace/a.txt", from: 6, data: " world")),
+            try WALRecord(mseq: 2, mutation: LogTestSupport.append(
+                "/dsh/workspace/b.txt", from: 1, data: "!")),
+            try WALRecord(mseq: 3, mutation: LogTestSupport.write(
+                "/dsh/workspace/a.txt", data: "fixed")),
+        ]
+        _ = try materializer.apply(records: records)
+        XCTAssertEqual(materializer.materializedUptoMseq, 3)
+        let byMseq = Dictionary(uniqueKeysWithValues: seen.values.map { ($0.mseq, $0) })
+        // Conservative settlement: records 1 and 2 are decided, but record 1's
+        // cover (mseq 3) is not applied yet, so the watermark stays at 0.
+        XCTAssertEqual(byMseq[1]?.verdict,
+                       .settledSuperseded(supersededByMseq: 3, cover: .completeWrite))
+        XCTAssertEqual(byMseq[1]?.materializedUptoMseq, 0)
+        XCTAssertEqual(byMseq[2]?.verdict, .applied)
+        XCTAssertEqual(byMseq[2]?.materializedUptoMseq, 0)
+        XCTAssertEqual(byMseq[3]?.materializedUptoMseq, 3)
+    }
+
+    func testCoveredAppendIsSettledEvenWhenItsBaseWouldMatch() throws {
+        let (materializer, root) = try makeMaterializer(self)
+        let seen = decisions(materializer)
+        try FileManager.default.createDirectory(
+            at: fileURL(root, "/dsh/workspace"), withIntermediateDirectories: true)
+        try Data("hello".utf8).write(to: fileURL(root, "/dsh/workspace/notes.txt"))
+        let records = [
+            try WALRecord(mseq: 1, mutation: LogTestSupport.append(
+                "/dsh/workspace/notes.txt", from: 5, data: " world")),
+            try WALRecord(mseq: 2, mutation: LogTestSupport.write(
+                "/dsh/workspace/notes.txt", data: "hello world")),
+        ]
+        _ = try materializer.apply(records: records)
+        XCTAssertEqual(seen.values.first(where: { $0.mseq == 1 })?.verdict,
+                       .settledSuperseded(supersededByMseq: 2, cover: .completeWrite))
+        XCTAssertEqual(try String(contentsOf: fileURL(root, "/dsh/workspace/notes.txt"),
+                                  encoding: .utf8), "hello world")
     }
 }

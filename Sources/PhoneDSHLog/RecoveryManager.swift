@@ -63,11 +63,16 @@ public struct RecoveryManager: Sendable {
     public let configuration: WorkspaceLogConfiguration
     public let bootID: Data
     public let paths: WorkspacePaths
+    /// Test seam for the replay fixture runner: every Materializer this
+    /// recovery creates reports its per-record decision here.
+    let decisionObserver: (@Sendable (MaterializeDecision) -> Void)?
 
-    public init(configuration: WorkspaceLogConfiguration, bootID: Data) {
+    public init(configuration: WorkspaceLogConfiguration, bootID: Data,
+                decisionObserver: (@Sendable (MaterializeDecision) -> Void)? = nil) {
         self.configuration = configuration
         self.bootID = bootID
         self.paths = WorkspacePaths(root: configuration.root)
+        self.decisionObserver = decisionObserver
     }
 
     private var bootIDHex: String {
@@ -207,6 +212,8 @@ public struct RecoveryManager: Sendable {
 
         // Replay the tail (or redo the staged reconcile) into the copy.
         var resyncPaths: Set<String> = []
+        var resyncHolds: [MaterializationHold] = []
+        var rebuiltFromWal = false
         var replayedRecords = 0
         var reconciled = false
         var localRepairs: [MaterializedInvariantLocalRepair] = []
@@ -218,15 +225,18 @@ public struct RecoveryManager: Sendable {
             let report = try stagedReconcile(watermark: watermark, records: tail)
             currentWatermark = report.materializedUptoMseq
             resyncPaths.formUnion(report.baseMismatchPaths)
+            resyncHolds = report.baseMismatchRecords
             replayedRecords = report.applied + report.skipped
             reconciled = true
         } else {
             let materializer = try Materializer(root: configuration.root,
                                                 materializedUptoMseq: watermark)
+            materializer.decisionObserver = decisionObserver
             let report = try materializer.apply(records: tail)
             try materializer.fsyncEpoch()
             currentWatermark = report.materializedUptoMseq
             resyncPaths.formUnion(materializer.needsResyncPaths)
+            resyncHolds = materializer.heldMismatches
             replayedRecords = report.applied + report.skipped
         }
         if currentWatermark < lastMseq && resyncPaths.isEmpty {
@@ -252,19 +262,48 @@ public struct RecoveryManager: Sendable {
         let fullyMaterialized = currentWatermark >= lastMseq
         let checkpointProven = fullyMaterialized && !hasUnclosedHistory
             && resyncPaths.isEmpty
-        if (needsVerification || hasUnclosedHistory || !resyncPaths.isEmpty)
+        // wal.md §5.1/§7.2: a boot replay that leaves a resync first runs the
+        // materialized-copy invariant. With a retained mseq-1/no-hole history
+        // the whole copy is rebuilt from the WAL — the WAL alone is a legal
+        // input for this rebuild, unlike staged reconcile.
+        let fullHistory = MaterializedInvariant.hasFullHistory(
+            retainedRecords.filter { !$0.isEpochClose }.sorted { $0.mseq < $1.mseq })
+        if !resyncPaths.isEmpty, fullHistory {
+            let tail = retainedRecords.filter { !$0.isEpochClose }
+                .map(\.mseq).max() ?? currentWatermark
+            let rebuilt = try MaterializedInvariant.rebuildFromWAL(
+                paths: paths,
+                mutations: retainedRecords,
+                bootIDHex: bootIDHex,
+                decisionObserver: decisionObserver,
+                requireComplete: false)
+            if rebuilt >= tail {
+                currentWatermark = rebuilt
+                resyncPaths.removeAll()
+                resyncHolds.removeAll()
+                rebuiltFromWal = true
+            } else {
+                // The retained history does not contain the appended base, so
+                // a WAL-only rebuild cannot repair it: keep the copy's replay
+                // watermark and resync, and request the Worker repair after
+                // HELLO (wal.md §5.1). The scratch tree was discarded.
+            }
+        } else if (needsVerification || hasUnclosedHistory || !resyncPaths.isEmpty)
             && !checkpointProven {
             let report = try MaterializedInvariant.checkAndRepair(
                 paths: paths,
                 records: retainedRecords,
                 materializedUptoMseq: currentWatermark,
                 allowRepair: true,
-                bootIDHex: bootIDHex)
+                bootIDHex: bootIDHex,
+                decisionObserver: decisionObserver)
             if report.repaired {
                 currentWatermark = report.materializedUptoMseq
                 // The rebuild replayed every retained record, so the old
                 // deferred repairs are settled.
                 resyncPaths.removeAll()
+                resyncHolds.removeAll()
+                rebuiltFromWal = true
             }
             localRepairs = report.localRepairs
         }
@@ -328,6 +367,8 @@ public struct RecoveryManager: Sendable {
             replayedRecords: replayedRecords,
             droppedSegments: droppedNames,
             needsResync: resyncPaths.sorted(),
+            resyncHolds: resyncHolds,
+            rebuiltFromWal: rebuiltFromWal,
             coldRecovery: manifest.bootID != bootIDHex,
             reconciled: reconciled,
             localRepairs: localRepairs)
@@ -430,6 +471,7 @@ public struct RecoveryManager: Sendable {
             replayedRecords: replay.applied + replay.skipped,
             droppedSegments: [],
             needsResync: Array(materializer.needsResyncPaths).sorted(),
+            resyncHolds: materializer.heldMismatches,
             coldRecovery: true,
             reconciled: false)
     }
@@ -462,12 +504,14 @@ public struct RecoveryManager: Sendable {
             let base = try Materializer(root: configuration.root,
                                         materializedUptoMseq: 0,
                                         materializedDirectoryURL: staging)
+            base.decisionObserver = decisionObserver
             _ = try base.apply(records: scan.allRecords.filter { $0.mseq <= watermark })
             try base.fsyncEpoch()
         }
         let stagingMaterializer = try Materializer(root: configuration.root,
                                                    materializedUptoMseq: watermark,
                                                    materializedDirectoryURL: staging)
+        stagingMaterializer.decisionObserver = decisionObserver
         let report = try stagingMaterializer.apply(records: records)
         try stagingMaterializer.fsyncEpoch()
 

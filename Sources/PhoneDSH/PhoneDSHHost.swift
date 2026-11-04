@@ -151,7 +151,18 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     private var remoteHandoff: RemoteHandoffContext?
     private var machineObserver: Task<Void, Never>?
     private var engineObserver: Task<Void, Never>?
+    /// D7 periodic epoch close. Runs only in `Running`; a held/outstanding
+    /// resync skips the tick with a recorded reason (GAP-12).
+    private var periodicEpochCloseTask: Task<Void, Never>?
+    private var periodicEpochCloseToken = UUID()
+    private var periodicEpochCloseIntervalOverride: TimeInterval?
+    private var periodicEpochCloseObserver: (@Sendable (PeriodicEpochCloseOutcome) -> Void)?
     private var lastError: String?
+    /// The most specific wal.md §5.2 drain-close mismatch detail (path + mseq).
+    /// The controller wraps an epoch-close failure as "epoch close failed before
+    /// parked", so the host keeps this detail and reports it instead of losing
+    /// it in the wrapper.
+    private var lastMismatchDetail: String?
     private var lastSnapshot: PhoneDSHDiagnostics?
     private var terminations: UInt64 = 0
     private var lastBudgetDecision: BudgetDecision?
@@ -1364,6 +1375,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
                 "the remote owns the workspace; call reclaim() instead of resetting locally")
         }
         lastError = nil
+        lastMismatchDetail = nil
         if let runtime {
             do {
                 // A failed host with live services must not bypass the
@@ -1453,10 +1465,31 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     /// the loopback is torn down (``closeRuntimeForPark(_:)``).
     private func drainInFlightWork(_ runtime: RuntimeServices) async throws {
         let controllerDeadline = await runtime.machine.drainDeadline
-        let timeout = max(0, controllerDeadline?.timeIntervalSinceNow
-                             ?? configuration.drainDeadline)
+        let now = Date()
+        let deadline = controllerDeadline
+            ?? now.addingTimeInterval(max(0, configuration.drainDeadline))
+        let timeout = max(0, deadline.timeIntervalSince(now))
         let idle = await runtime.coordinator.waitForDrainQuiescence(timeout: timeout)
-        guard await runtime.machine.currentState() == .draining else { return }
+        // The controller's own timer may have ended the drain while in-flight
+        // work was finishing. If the close failed on a base mismatch, surface
+        // its path/mseq instead of the wrapped "epoch close failed" reason.
+        if await runtime.machine.currentState() != .draining {
+            let holds = await runtime.log.pendingResyncHolds()
+            if !holds.isEmpty {
+                throw unrepairedMismatchError(holds, context: "drain epoch close")
+            }
+            return
+        }
+
+        // budgets.md §1/§2: while the Worker is connected, Draining includes
+        // the answers to already-issued VFS_RESYNCs. A disconnected Worker is
+        // not waited for; an unrepaired mismatch at the deadline is Failed
+        // with its path and mseq (wal.md §5.2).
+        let outstanding = await waitForOutstandingResyncAnswers(
+            runtime, deadline: deadline)
+        if !outstanding.isEmpty {
+            throw unrepairedMismatchError(outstanding, context: "drain deadline")
+        }
         if idle {
             try await completeDrain(runtime, signal: .backgroundDrainCompleted)
             return
@@ -1466,8 +1499,60 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         // at the deadline; wait for that transition (or the grace timer)
         // instead of polling the state every few milliseconds.
         await waitForDrainDeadline(runtime, deadline: controllerDeadline)
-        guard await runtime.machine.currentState() == .draining else { return }
+        if await runtime.machine.currentState() != .draining {
+            let holds = await runtime.log.pendingResyncHolds()
+            if !holds.isEmpty {
+                throw unrepairedMismatchError(holds, context: "drain deadline")
+            }
+            return
+        }
         try await completeDrain(runtime, signal: .drainDeadlineElapsed)
+    }
+
+    /// Waits inside the drain deadline for issued VFS_RESYNC answers while the
+    /// Worker is connected. Returns the still-held path/mseq pairs (empty when
+    /// the repair arrived or there was nothing outstanding).
+    private func waitForOutstandingResyncAnswers(
+        _ runtime: RuntimeServices,
+        deadline: Date
+    ) async -> [MaterializationHold] {
+        var pending = await runtime.log.pendingResyncHolds()
+        guard !pending.isEmpty else { return [] }
+        // budgets.md §1/§2: a disconnected Worker is not waited for.
+        guard await workerChannelIsConnected(runtime) else {
+            return pending
+        }
+        while Date() < deadline {
+            let remaining = deadline.timeIntervalSince(Date())
+            if remaining <= 0 { break }
+            try? await Task.sleep(
+                nanoseconds: UInt64(min(0.02, max(0.001, remaining)) * 1_000_000_000))
+            pending = await runtime.log.pendingResyncHolds()
+            if pending.isEmpty { return [] }
+            if !(await workerChannelIsConnected(runtime)) { break }
+        }
+        return await runtime.log.pendingResyncHolds()
+    }
+
+    /// Whether the current Worker channel can still answer a VFS_RESYNC. A
+    /// connection row outlives its socket; the receive-loop bit is the proof.
+    private func workerChannelIsConnected(_ runtime: RuntimeServices) async -> Bool {
+        guard let connection = await runtime.coordinator.currentConnection() else {
+            return false
+        }
+        if await connection.server.hasFinishedReceiveLoop() { return false }
+        return true
+    }
+
+    /// The wal.md §5.2 failure detail names every unrepaired path and mseq.
+    private func unrepairedMismatchError(
+        _ holds: [MaterializationHold],
+        context: String
+    ) -> LogError {
+        let detail = holds
+            .map { "\($0.path) mseq \($0.mseq)" }
+            .joined(separator: ", ")
+        return LogError.corrupt("\(context): unrepaired base mismatch at \(detail)")
     }
 
     // MARK: - Abort-path terminal journal (G2-FIX-9)
@@ -2688,7 +2773,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             materializedUptoMseq: materialized,
             lastDurableEpoch: positions.lastDurableEpoch,
             webContentTerminations: reportedTerminations,
-            lastError: machineError ?? lastError,
+            lastError: lastMismatchDetail ?? machineError ?? lastError,
             hostState: hostState,
             bootDisposition: bootDisposition,
             bootReason: bootReason,
@@ -3595,6 +3680,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     private func fail(_ fault: HostFault) async {
         let message = fault.description
         lastError = message
+        lastMismatchDetail = message.contains("unrepaired base mismatch") ? message : nil
         eventBus.send(.error(message))
         if let runtime {
             // Failed/Backoff is not a recovery window: never serve a replay
@@ -3603,6 +3689,12 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             if await runtime.machine.currentState() != .failed {
                 _ = try? await runtime.machine.handle(
                     .failure(reason: message, class: fault.failureClass))
+            } else {
+                // A controller transition (for example the drain deadline's
+                // epoch close) may already have failed with a wrapped reason.
+                // The host's message carries the wal.md §5.2 path/mseq detail;
+                // record it as the controller's failure detail too.
+                await runtime.machine.escalateFailureToTerminal(reason: message)
             }
             engineObserver?.cancel()
             engineObserver = nil
@@ -3624,6 +3716,9 @@ public actor PhoneDSHHost: PhoneDSHHosting {
                 let sealMessage = "the WAL stop seal failed: \(error)"
                 let combined = (lastError.map { "\($0); " } ?? "") + sealMessage
                 lastError = combined
+                if combined.contains("unrepaired base mismatch") {
+                    lastMismatchDetail = combined
+                }
                 eventBus.send(.error(sealMessage))
                 if await runtime.machine.currentState() != .failed {
                     await runtime.machine.escalateFailureToTerminal(reason: combined)
@@ -3737,12 +3832,14 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         runtime?.gateway.setReplayWindow(open: record.to == .recovering)
         eventBus.send(.hostTransition(record))
         if record.to == .failed, let runtime {
-            lastError = await runtime.machine.lastError
+            let machineError = await runtime.machine.lastError
+            lastError = lastMismatchDetail ?? machineError
         }
         // `Running` is the healthy state; a host that recovered on its own must
         // not keep reporting the reason it failed earlier.
         if record.to == .running {
             lastError = nil
+            lastMismatchDetail = nil
         }
         setState(Self.facadeState(for: record.to))
     }
@@ -4168,7 +4265,106 @@ public actor PhoneDSHHost: PhoneDSHHosting {
         guard newState != state else { return }
         let previous = state
         state = newState
+        if newState == .running {
+            startPeriodicEpochClose()
+        } else {
+            stopPeriodicEpochClose()
+        }
         eventBus.send(.stateChanged(from: previous, to: newState))
+    }
+
+    // MARK: - Periodic epoch close (D7, GAP-12)
+
+    /// The interval is the frozen 30-60 s D7 range in production; the test
+    /// seam may set a short value to exercise the tick deterministically.
+    private var periodicEpochCloseInterval: TimeInterval {
+        if let override = periodicEpochCloseIntervalOverride { return max(0, override) }
+        let configured = configuration.log.epochIntervalSeconds
+        return min(WorkspaceLogConfiguration.maximumEpochIntervalSeconds,
+                   max(WorkspaceLogConfiguration.minimumEpochIntervalSeconds, configured))
+    }
+
+    private func startPeriodicEpochClose() {
+        guard periodicEpochCloseTask == nil else { return }
+        let token = UUID()
+        periodicEpochCloseToken = token
+        periodicEpochCloseTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let host = self else { return }
+                let interval = await host.periodicEpochCloseInterval
+                do {
+                    try await Task.sleep(
+                        nanoseconds: UInt64(max(0, interval) * 1_000_000_000))
+                } catch {
+                    break
+                }
+                switch await host.attemptPeriodicEpochClose() {
+                case .notRunning:
+                    await host.finishPeriodicEpochClose(token: token)
+                    return
+                case .closed, .skipped, .failed:
+                    continue
+                }
+            }
+            await self?.finishPeriodicEpochClose(token: token)
+        }
+    }
+
+    private func finishPeriodicEpochClose(token: UUID) {
+        guard periodicEpochCloseToken == token else { return }
+        periodicEpochCloseTask = nil
+    }
+
+    private func stopPeriodicEpochClose() {
+        periodicEpochCloseTask?.cancel()
+        periodicEpochCloseTask = nil
+        periodicEpochCloseToken = UUID()
+    }
+
+    /// One periodic D7 close. It runs only while the controller and facade are
+    /// `Running`, so it never races the drain/restart edge. A held resync is
+    /// skipped loudly instead of failing the host: the drain owns the repair
+    /// deadline (wal.md §5.2, budgets.md §1).
+    @discardableResult
+    private func attemptPeriodicEpochClose() async -> PeriodicEpochCloseOutcome {
+        guard state == .running, let runtime else { return .notRunning }
+        guard await runtime.machine.currentState() == .running else {
+            return .notRunning
+        }
+        let holds = await runtime.log.pendingResyncHolds()
+        if !holds.isEmpty {
+            let detail = holds.map { "\($0.path) mseq \($0.mseq)" }
+                .joined(separator: ", ")
+            let reason = "periodic epoch close skipped: outstanding VFS_RESYNC at \(detail)"
+            NSLog("phone-dsh: %@", reason)
+            periodicEpochCloseObserver?(.skipped(reason: reason))
+            return .skipped(reason: reason)
+        }
+        do {
+            let ack = try await runtime.log.closeEpochCoveringTail()
+            periodicEpochCloseObserver?(.closed(uptoMseq: ack.uptoMseq))
+            return .closed(uptoMseq: ack.uptoMseq)
+        } catch {
+            periodicEpochCloseObserver?(.failed(reason: String(describing: error)))
+            await failClassifying(error, context: "periodic epoch close")
+            return .failed(reason: String(describing: error))
+        }
+    }
+
+    /// Test seams for the D7 periodic close. Production leaves them unset.
+    internal func setPeriodicEpochCloseIntervalForTesting(_ interval: TimeInterval?) {
+        periodicEpochCloseIntervalOverride = interval
+    }
+
+    internal func setPeriodicEpochCloseObserverForTesting(
+        _ observer: (@Sendable (PeriodicEpochCloseOutcome) -> Void)?) {
+        periodicEpochCloseObserver = observer
+    }
+
+    /// Runs one tick synchronously so a test does not depend on a wall clock.
+    @discardableResult
+    internal func performPeriodicEpochCloseForTesting() async -> PeriodicEpochCloseOutcome {
+        await attemptPeriodicEpochClose()
     }
 
     // MARK: - Budgets
@@ -4263,4 +4459,18 @@ private actor PhoneDSHUnavailableChannelHandler: ChannelHandling {
     func handleAPIAbort(_ frame: ApiAbortFrame) async throws { try unavailable() }
     func handleConsole(_ payload: ConsolePayload) async throws { try unavailable() }
     func handleError(_ payload: ErrorPayload) async throws { try unavailable() }
+}
+
+/// Outcome of one D7 periodic epoch-close tick (GAP-12).
+internal enum PeriodicEpochCloseOutcome: Equatable, Sendable {
+    case closed(uptoMseq: UInt64)
+    case skipped(reason: String)
+    case notRunning
+    case failed(reason: String)
+}
+
+extension PhoneDSHWorkspaceLogBridge: LoopbackResyncStatusProviding {
+    func pendingResyncPaths() async -> [String] {
+        await log.pendingResyncPaths()
+    }
 }
