@@ -46,6 +46,12 @@ public actor WorkspaceLog: WorkspaceLogging {
     private var closing = false
     private var closeWaiters: [CheckedContinuation<Void, Never>] = []
     private var emittedResyncPaths: Set<String> = []
+    /// Resync paths left by cold recovery. The fresh Materializer starts at the
+    /// recovered watermark and has not re-encountered the deferred records yet,
+    /// so the paths and their first held mseq are kept until the repair settles
+    /// them. Without this the first repair append would report a watermark gap
+    /// with no pending resync and fail loud (wal.md §5.1, §10).
+    private var recoveryResyncHolds: [String: UInt64] = [:]
 
     private nonisolated let ackHub = AckBroadcaster<WorkspaceLogAck>(replayLimit: 64)
     private nonisolated let journalAckHub = AckBroadcaster<JournalAck>(replayLimit: 64)
@@ -69,6 +75,16 @@ public actor WorkspaceLog: WorkspaceLogging {
         let manager = RecoveryManager(configuration: configuration, bootID: bootID)
         let report = try manager.recover()
         self.recoveryReport = report
+        for hold in report.resyncHolds {
+            self.recoveryResyncHolds[hold.path] = hold.mseq
+        }
+        for path in report.needsResync where self.recoveryResyncHolds[path] == nil {
+            // A legacy/staged report names the path without the held mseq. The
+            // first unapplied record starts just above the recovered watermark;
+            // the entry clears once that position is materialized.
+            self.recoveryResyncHolds[path] = report.materializedUptoMseq &+ 1
+        }
+        self.emittedResyncPaths = Set(report.needsResync)
 
         let materializer = try Materializer(root: configuration.root,
                                             materializedUptoMseq: report.materializedUptoMseq,
@@ -215,9 +231,15 @@ public actor WorkspaceLog: WorkspaceLogging {
         // the level-2 position a lie; fail loud instead.
         let acceptedTail = await writer.lastMseq
         guard materializer.materializedUptoMseq == acceptedTail else {
+            let holds = pendingResyncHolds()
+            let detail = holds.isEmpty
+                ? ""
+                : "; unrepaired base mismatch at "
+                    + holds.map { "\($0.path) mseq \($0.mseq)" }.joined(separator: ", ")
             throw LogError.corrupt(
                 "epoch close with an unrepaired base mismatch: materialized_upto "
-                    + "\(materializer.materializedUptoMseq) is below the WAL tail \(acceptedTail)")
+                    + "\(materializer.materializedUptoMseq) is below the WAL tail \(acceptedTail)"
+                    + detail)
         }
         try materializer.fsyncEpoch()
         await writer.setMaterializedUpto(materializer.materializedUptoMseq)
@@ -299,9 +321,15 @@ public actor WorkspaceLog: WorkspaceLogging {
         try await drainMaterialization()
         let acceptedTail = await writer.lastMseq
         guard materializer.materializedUptoMseq == acceptedTail else {
+            let holds = pendingResyncHolds()
+            let detail = holds.isEmpty
+                ? ""
+                : " at "
+                    + holds.map { "\($0.path) mseq \($0.mseq)" }.joined(separator: ", ")
             throw LogError.corrupt(
                 "stop invariant: materialized_upto \(materializer.materializedUptoMseq) "
-                    + "is below the WAL tail \(acceptedTail); an unrepaired base mismatch remains")
+                    + "is below the WAL tail \(acceptedTail); an unrepaired base mismatch remains"
+                    + detail)
         }
         let scan = try WALReader.scan(directory: paths.walDirectory)
         let bootIDHex = bootID.map { String(format: "%02x", $0) }.joined()
@@ -444,18 +472,28 @@ public actor WorkspaceLog: WorkspaceLogging {
         report.lastDurableEpoch = await writer.lastDurableEpoch
         let writerTruncated = await writer.truncatedTornTail
         report.truncatedTornTail = recoveryReport.truncatedTornTail || writerTruncated
-        report.needsResync = Set(recoveryReport.needsResync)
-            .union(materializer.needsResyncPaths)
-            .sorted()
+        report.needsResync = pendingResyncPaths()
+        report.resyncHolds = pendingResyncHolds()
         return report
     }
 
     /// Paths that still await a VFS_RESYNC repair. The loopback service
-    /// re-requests these after HELLO (channel.md §9.6).
+    /// re-requests these after HELLO (channel.md §9.6, GAP-13).
     public func pendingResyncPaths() -> [String] {
-        Set(recoveryReport.needsResync)
+        Set(recoveryResyncHolds.keys)
             .union(materializer.needsResyncPaths)
             .sorted()
+    }
+
+    /// The path and first held mseq of every pending repair (wal.md §5.2).
+    public func pendingResyncHolds() -> [MaterializationHold] {
+        var holds: [String: UInt64] = recoveryResyncHolds
+        for hold in materializer.heldMismatches where holds[hold.path] == nil {
+            holds[hold.path] = hold.mseq
+        }
+        return holds
+            .map { MaterializationHold(path: $0.key, mseq: $0.value) }
+            .sorted { $0.path < $1.path }
     }
 
     /// HELLO `next_mseq`, `acked_mseq` and `durable_mseq` (channel.md §4.1).
@@ -571,6 +609,14 @@ public actor WorkspaceLog: WorkspaceLogging {
     /// defect produced (G2-FIX-83 P1 review note).
     private func materializeAppended(_ result: WALAppendResult) async throws {
         guard result.mseq > materializer.appliedThroughMseq else { return }
+        // Recovery left a held replay the fresh Materializer has not seen. The
+        // repair append is applied against the on-disk retained sequence (the
+        // cover settles the held record), never one record in isolation.
+        if !recoveryResyncHolds.isEmpty {
+            try await drainMaterialization()
+            emitResyncRequests()
+            return
+        }
         guard result.mseq == materializer.appliedThroughMseq + 1 else {
             try await drainMaterialization()
             return
@@ -667,6 +713,7 @@ public actor WorkspaceLog: WorkspaceLogging {
                 await writer.setMaterializedUpto(report.materializedUptoMseq)
             }
             recoveryReport.materializedUptoMseq = report.materializedUptoMseq
+            syncRecoveryResyncHolds()
             emitResyncRequests()
             if report.materializedUptoMseq == before {
                 // A deferred base mismatch holds the contiguous watermark;
@@ -689,6 +736,22 @@ public actor WorkspaceLog: WorkspaceLogging {
             resyncHub.yield(path)
         }
         emittedResyncPaths = current
+    }
+
+    /// Drops recovery-held paths once the retained sequence has materialized
+    /// past them and the Materializer owns the (now empty) deferred set. A
+    /// still-held record stays listed for the drain detail.
+    private func syncRecoveryResyncHolds() {
+        guard !recoveryResyncHolds.isEmpty else { return }
+        for path in recoveryResyncHolds.keys {
+            guard let held = recoveryResyncHolds[path] else { continue }
+            if !materializer.needsResyncPaths.contains(path),
+               materializer.materializedUptoMseq >= held {
+                recoveryResyncHolds.removeValue(forKey: path)
+            }
+        }
+        recoveryReport.needsResync = pendingResyncPaths()
+        recoveryReport.resyncHolds = pendingResyncHolds()
     }
 
     private func directorySize(_ url: URL) throws -> Int {

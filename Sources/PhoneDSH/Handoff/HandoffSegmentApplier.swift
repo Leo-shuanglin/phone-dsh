@@ -137,30 +137,40 @@ public struct WorkspaceLogSegmentApplier: HandoffSegmentApplying {
             }
         }
 
-        var applied = 0
         var skipped = 0
+        var replayable: [WALRecord] = []
         for record in mutations {
             if record.mseq <= materializer.materializedUptoMseq {
                 skipped += 1
                 continue
             }
-            guard record.mseq == materializer.materializedUptoMseq + 1 else {
+            let expected = materializer.materializedUptoMseq
+                + UInt64(replayable.count) + 1
+            guard record.mseq == expected else {
                 throw HandoffError.segmentContinuity(
                     "local materialized watermark \(materializer.materializedUptoMseq) "
                         + "does not continue at \(record.mseq)")
             }
-            let outcome: MaterializeOutcome
+            replayable.append(record)
+        }
+        // wal.md §6.2: replay the reclaimed sequence as one batch so a later
+        // complete write/remove covers an earlier appended record instead of
+        // turning the recoverable mismatch into a failed reclaim. The batch
+        // still reports a genuinely uncovered mismatch, which needs a repair.
+        var applied = 0
+        if !replayable.isEmpty {
+            let report: MaterializeBatchReport
             do {
-                outcome = try materializer.apply(record)
+                report = try materializer.apply(records: replayable)
             } catch {
                 throw HandoffError.applyFailed(
                     "a reclaimed mutation could not be materialized")
             }
-            if case .baseMismatch = outcome {
+            guard report.baseMismatchPaths.isEmpty else {
                 throw HandoffError.applyFailed(
                     "a reclaimed appended write needs a VFS_RESYNC")
             }
-            applied += 1
+            applied = replayable.count
         }
         do {
             try materializer.fsyncEpoch()

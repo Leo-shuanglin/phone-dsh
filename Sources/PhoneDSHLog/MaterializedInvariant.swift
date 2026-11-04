@@ -212,7 +212,8 @@ public enum MaterializedInvariant {
         records: [WALRecord],
         materializedUptoMseq: UInt64,
         allowRepair: Bool = true,
-        bootIDHex: String = ""
+        bootIDHex: String = "",
+        decisionObserver: (@Sendable (MaterializeDecision) -> Void)? = nil
     ) throws -> MaterializedInvariantReport {
         let mutations = records.filter { !$0.isEpochClose }.sorted { $0.mseq < $1.mseq }
         let fullHistory = hasFullHistory(mutations)
@@ -242,7 +243,8 @@ public enum MaterializedInvariant {
         }
         if fullHistory {
             let watermark = try rebuildFromWAL(paths: paths, mutations: mutations,
-                                               bootIDHex: bootIDHex)
+                                               bootIDHex: bootIDHex,
+                                               decisionObserver: decisionObserver)
             return MaterializedInvariantReport(violations: violations,
                                                checkedPaths: plans.count,
                                                hasFullHistory: true,
@@ -688,10 +690,20 @@ public enum MaterializedInvariant {
     /// retained mutations start at mseq 1 and are contiguous.
     ///
     /// - Returns: the strictly contiguous watermark of the rebuilt tree.
-    public static func rebuildFromWAL(paths: WorkspacePaths,
-                                      mutations: [WALRecord],
-                                      bootIDHex: String = "") throws -> UInt64 {
-        let ordered = mutations.sorted { $0.mseq < $1.mseq }
+    /// - Parameter requireComplete: when `false` an incomplete WAL replay is
+    ///   reported by returning the partial watermark **without** swapping the
+    ///   scratch tree. Recovery uses that to decide whether the §7.2 mseq-1
+    ///   rebuild can repair a boot resync at all; an append whose base is not
+    ///   in the retained history cannot be rebuilt from the WAL alone, so the
+    ///   answer is the Worker repair instead (wal.md §5.1, §7.2).
+    public static func rebuildFromWAL(
+        paths: WorkspacePaths,
+        mutations: [WALRecord],
+        bootIDHex: String = "",
+        decisionObserver: (@Sendable (MaterializeDecision) -> Void)? = nil,
+        requireComplete: Bool = true
+    ) throws -> UInt64 {
+        let ordered = mutations.filter { !$0.isEpochClose }.sorted { $0.mseq < $1.mseq }
         guard let first = ordered.first else { return 0 }
         guard first.mseq == 1 else {
             throw LogError.corrupt(
@@ -710,10 +722,15 @@ public enum MaterializedInvariant {
         let materializer = try Materializer(root: paths.root,
                                             materializedUptoMseq: 0,
                                             materializedDirectoryURL: scratch)
+        materializer.decisionObserver = decisionObserver
         _ = try materializer.apply(records: ordered)
         try materializer.fsyncEpoch()
         let watermark = materializer.materializedUptoMseq
         guard watermark == previous else {
+            if !requireComplete {
+                try? LogFile.removeTree(scratch)
+                return watermark
+            }
             throw LogError.corrupt(
                 "materialized rebuild stopped at mseq \(watermark), the WAL tail is \(previous)")
         }
@@ -833,7 +850,7 @@ public enum MaterializedInvariant {
     /// exactly `1...max` (wal.md §7.2). A first record at mseq 1 is not enough:
     /// a manifest can name the first segment while middle segments were already
     /// truncated, and rebuilding from such a gap would drop their files.
-    private static func hasFullHistory(_ mutations: [WALRecord]) -> Bool {
+    static func hasFullHistory(_ mutations: [WALRecord]) -> Bool {
         guard let first = mutations.first else { return true }
         guard first.mseq == 1 else { return false }
         var expected: UInt64 = 1

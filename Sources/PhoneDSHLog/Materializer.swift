@@ -25,6 +25,59 @@ public enum MaterializeOutcome: Equatable, Sendable {
     /// Appended base mismatch: the path is deferred until the worker sends a
     /// complete write (D8/D9).
     case baseMismatch(String)
+    /// The fourth D9 verdict (wal.md §6.2): a later retained complete write or
+    /// remove covers this appended record. It is not applied; the cover
+    /// establishes the final state. The record blocks the contiguous watermark
+    /// until the cover's mseq also reaches it.
+    case settledSuperseded(supersededByMseq: UInt64)
+}
+
+/// Kind of the later retained record that covers a settled appended record
+/// (wal.md §6.2, `spec/v1/golden/wal/replay/README.md` §2).
+public enum SupersededCover: String, Equatable, Sendable {
+    case completeWrite = "complete-write"
+    case truncate
+    case remove
+    case ancestorRemove = "ancestor-remove"
+    case repairWrite = "repair-write"
+}
+
+/// One path and the first retained mseq that is held by a base mismatch. The
+/// host names both in the wal.md §5.2 failure detail.
+public struct MaterializationHold: Equatable, Sendable {
+    public var path: String
+    public var mseq: UInt64
+
+    public init(path: String, mseq: UInt64) {
+        self.path = path
+        self.mseq = mseq
+    }
+}
+
+/// Per-record decision exposed for the replay fixture runner (wal.md §6.2 and
+/// `spec/v1/golden/wal/replay/README.md`). Production does not consume it.
+public enum MaterializeVerdict: Equatable, Sendable {
+    case applied
+    case skippedIdempotent
+    case settledSuperseded(supersededByMseq: UInt64, cover: SupersededCover)
+    case mismatchHeld
+    case alreadyMaterialized
+}
+
+/// One decided retained record with the watermark observed after the decision.
+public struct MaterializeDecision: Equatable, Sendable {
+    public var mseq: UInt64
+    public var verdict: MaterializeVerdict
+    /// `materialized_upto_mseq` after this record's decision. A settled record
+    /// keeps it below the record until its cover is also inside the prefix.
+    public var materializedUptoMseq: UInt64
+
+    public init(mseq: UInt64, verdict: MaterializeVerdict,
+                materializedUptoMseq: UInt64) {
+        self.mseq = mseq
+        self.verdict = verdict
+        self.materializedUptoMseq = materializedUptoMseq
+    }
 }
 
 /// Summary of one materialization batch.
@@ -32,22 +85,29 @@ public struct MaterializeBatchReport: Equatable, Sendable {
     public var applied: Int
     public var skipped: Int
     public var ignored: Int
+    public var settled: Int
     public var baseMismatchPaths: [String]
     public var deferredRecords: Int
     public var materializedUptoMseq: UInt64
+    /// Paths and first held mseq after the batch (the wal.md §5.2 detail).
+    public var baseMismatchRecords: [MaterializationHold]
 
     public init(applied: Int = 0,
                 skipped: Int = 0,
                 ignored: Int = 0,
+                settled: Int = 0,
                 baseMismatchPaths: [String] = [],
                 deferredRecords: Int = 0,
-                materializedUptoMseq: UInt64 = 0) {
+                materializedUptoMseq: UInt64 = 0,
+                baseMismatchRecords: [MaterializationHold] = []) {
         self.applied = applied
         self.skipped = skipped
         self.ignored = ignored
+        self.settled = settled
         self.baseMismatchPaths = baseMismatchPaths
         self.deferredRecords = deferredRecords
         self.materializedUptoMseq = materializedUptoMseq
+        self.baseMismatchRecords = baseMismatchRecords
     }
 }
 
@@ -77,11 +137,18 @@ public final class Materializer {
     var onFsyncCompleted: (@Sendable () -> Void)?
 
     private var appliedMseqs: Set<UInt64> = []
+    /// Settled-superseded records: mseq → the covering record's mseq. They are
+    /// decided but not applied, so they stop the contiguous watermark until the
+    /// cover is applied too (wal.md §6.2, §7.1).
+    private var settledMseqs: [UInt64: UInt64] = [:]
     private var deferred: [UInt64: WALRecord] = [:]
     private var deferredByPath: [String: [UInt64]] = [:]
     private var dirtyFiles: Set<String> = []
     private var dirtyDirectories: Set<String> = []
     private var temporaryCounter: UInt64 = 0
+    /// Test seam used by the replay fixture runner and the host/drain failure
+    /// detail. Production leaves it `nil`.
+    internal var decisionObserver: (@Sendable (MaterializeDecision) -> Void)?
 
     /// Initializes a materializer whose contiguous watermark is also the
     /// highest record it has taken in.
@@ -132,9 +199,61 @@ public final class Materializer {
     /// Number of accepted records currently held back by base mismatches.
     public var deferredRecordCount: Int { deferred.count }
 
+    /// Paths and the first held mseq in stable order. This is the observable
+    /// form of a pending VFS_RESYNC (wal.md §5.1, §5.2).
+    public var heldMismatches: [MaterializationHold] {
+        deferredByPath.compactMap { path, mseqs in
+            guard let first = mseqs.first else { return nil }
+            return MaterializationHold(path: path, mseq: first)
+        }.sorted { $0.path < $1.path }
+    }
+
+    /// Rewrites the contiguous watermark after a record was decided. A settled
+    /// record may pass only once its covering record is itself applied and the
+    /// whole block between the two is decided with every nested cover inside
+    /// the same prefix (wal.md §6.2, §7.1).
+    private func advanceWatermark() {
+        while true {
+            let next = materializedUptoMseq + 1
+            if appliedMseqs.contains(next) {
+                materializedUptoMseq = next
+                continue
+            }
+            guard let cover = settledMseqs[next] else { return }
+            guard closeableBlock(from: next, through: cover) else { return }
+            materializedUptoMseq = cover
+        }
+    }
+
+    /// True when every mseq in `from...through` is decided and every settled
+    /// record inside has its own cover at or below `through`, so setting the
+    /// watermark to `through` names no unapplied position.
+    private func closeableBlock(from: UInt64, through: UInt64) -> Bool {
+        var current = from
+        while current <= through {
+            if appliedMseqs.contains(current) {
+                current += 1
+                continue
+            }
+            guard let nestedCover = settledMseqs[current], nestedCover <= through else {
+                return false
+            }
+            current += 1
+        }
+        return true
+    }
+
     /// Applies one record. Mutations with `mseq <= materialized_upto_mseq` are
     /// replayed idempotently and do not move the watermark again.
     public func apply(_ record: WALRecord) throws -> MaterializeOutcome {
+        try apply(record, coveredBy: nil)
+    }
+
+    /// Applies one record, optionally knowing from a retained-sequence
+    /// lookahead that a later record already covers it. The supersession check
+    /// runs before the base check (wal.md §6.2).
+    private func apply(_ record: WALRecord,
+                       coveredBy cover: SupersessionCover?) throws -> MaterializeOutcome {
         if record.isEpochClose {
             _ = try record.epochClose()
             return .skipped
@@ -143,15 +262,37 @@ public final class Materializer {
         let body = try record.mutationBody()
         guard let target = try resolve(body.path) else {
             markApplied(record.mseq)
+            reportDecision(record.mseq, .applied)
             return .ignored
         }
         let path = body.path
 
-        // While a path is deferred everything for it is held back in mseq order,
-        // except the complete write that repairs the base (D8).
-        if let pending = deferredByPath[path], !pending.isEmpty,
-           !(body.op == .write && !body.mflags.contains(.appended)) {
+        // wal.md §6.2: the fourth verdict is decided before the D9 base check.
+        // The record is not applied and no resync is requested; the later cover
+        // establishes the final state and the watermark waits for it. A record
+        // already at or below the watermark is a plain idempotent replay, not a
+        // new settlement.
+        if let cover, record.mseq > materializedUptoMseq {
+            settleSuperseded(record.mseq, cover: cover)
+            return .settledSuperseded(supersededByMseq: cover.mseq)
+        }
+
+        // A complete write or a remove (of the path or an ancestor) that
+        // arrives after a mismatch settles every held append it covers. This
+        // is the live form of §6.2 (the retained-sequence form is above).
+        if body.op == .write, !body.mflags.contains(.appended) {
+            settleDeferredCovered(byCompleteWriteAt: record.mseq, path: path)
+        } else if body.op == .remove {
+            settleDeferredRemoved(byRemoveAt: record.mseq, path: path)
+        }
+
+        // While a path is deferred, only its own appended records are held
+        // back; the complete write/remove paths above already settled them.
+        // Other ops (chmod, mkdir) stay independent of the file's bytes.
+        if body.op == .write, body.mflags.contains(.appended),
+           let pending = deferredByPath[path], !pending.isEmpty {
             try deferRecord(record, path: path)
+            reportDecision(record.mseq, .mismatchHeld)
             return .baseMismatch(path)
         }
 
@@ -161,43 +302,51 @@ public final class Materializer {
                 switch try append(body, to: target) {
                 case .applied:
                     markApplied(record.mseq)
+                    reportDecision(record.mseq, .applied)
                     return .applied
                 case .skipped:
                     markApplied(record.mseq)
+                    reportDecision(record.mseq, .skippedIdempotent)
                     return .skipped
                 case .baseMismatch:
                     try deferRecord(record, path: path)
+                    reportDecision(record.mseq, .mismatchHeld)
                     return .baseMismatch(path)
                 }
             } else {
                 try fullWrite(body, to: target)
                 markApplied(record.mseq)
-                // D8: the complete write is the new base; settle the path's
-                // pending appended records in mseq order.
-                _ = try settleDeferred(path: path)
+                reportDecision(record.mseq, .applied)
                 return .applied
             }
         case .mkdir:
             try makeDirectory(body, at: target)
             markApplied(record.mseq)
+            reportDecision(record.mseq, .applied)
             return .applied
         case .remove:
             try remove(body, at: target)
             markApplied(record.mseq)
+            reportDecision(record.mseq, .applied)
             return .applied
         case .chmod:
             try changeMode(body, at: target)
             markApplied(record.mseq)
+            reportDecision(record.mseq, .applied)
             return .applied
         }
     }
 
     /// Applies records in their given mseq order and reports the new watermark.
+    ///
+    /// The whole retained sequence is scanned first so the fourth verdict can
+    /// see a later cover; a single-record ``apply(_:)`` keeps the live
+    /// semantics (a mismatch defers the path until a covering record arrives).
     public func apply(records: [WALRecord]) throws -> MaterializeBatchReport {
         var report = MaterializeBatchReport()
-        var mismatchPaths: [String] = []
+        let covers = Self.supersessionCovers(for: records)
         for record in records {
-            let outcome = try apply(record)
+            let outcome = try apply(record, coveredBy: covers[record.mseq])
             switch outcome {
             case .applied:
                 report.applied += 1
@@ -205,16 +354,139 @@ public final class Materializer {
                 report.skipped += 1
             case .ignored:
                 report.ignored += 1
-            case .baseMismatch(let path):
-                if !mismatchPaths.contains(path) {
-                    mismatchPaths.append(path)
-                }
+            case .settledSuperseded:
+                report.settled += 1
+            case .baseMismatch:
+                break
             }
         }
-        report.baseMismatchPaths = mismatchPaths
+        let holds = heldMismatches
+        report.baseMismatchRecords = holds
+        report.baseMismatchPaths = holds.map(\.path)
         report.deferredRecords = deferred.count
         report.materializedUptoMseq = materializedUptoMseq
         return report
+    }
+
+    // MARK: - Retained-sequence supersession (wal.md §6.2)
+
+    private struct SupersessionCover: Equatable {
+        var mseq: UInt64
+        var kind: SupersededCover
+    }
+
+    /// The earliest later retained complete write/remove covering each appended
+    /// record. A complete write or remove covers every earlier record of the
+    /// path, so the earliest such record is the cover; an appended record after
+    /// the cover is outside it and is handled by its own entry.
+    private static func supersessionCovers(
+        for records: [WALRecord]
+    ) -> [UInt64: SupersessionCover] {
+        var bodies: [(mseq: UInt64, body: VfsMutationBody)] = []
+        bodies.reserveCapacity(records.count)
+        for record in records where !record.isEpochClose {
+            guard let body = try? record.mutationBody() else { continue }
+            bodies.append((record.mseq, body))
+        }
+        var covers: [UInt64: SupersessionCover] = [:]
+        for (index, entry) in bodies.enumerated() where entry.body.op == .write
+            && entry.body.mflags.contains(.appended) {
+            var found: SupersessionCover?
+            for later in bodies[(index + 1)...] where later.mseq > entry.mseq {
+                let kind: SupersededCover
+                switch later.body.op {
+                case .write where !later.body.mflags.contains(.appended):
+                    guard later.body.path == entry.body.path else { continue }
+                    kind = .completeWrite
+                case .remove:
+                    if later.body.path == entry.body.path {
+                        kind = .remove
+                    } else if Self.isAncestor(later.body.path, of: entry.body.path) {
+                        kind = .ancestorRemove
+                    } else {
+                        continue
+                    }
+                default:
+                    continue
+                }
+                found = SupersessionCover(mseq: later.mseq, kind: kind)
+                break
+            }
+            if let found {
+                covers[entry.mseq] = found
+            }
+        }
+        return covers
+    }
+
+    private static func isAncestor(_ ancestor: String, of path: String) -> Bool {
+        guard ancestor != path else { return false }
+        return path.hasPrefix(ancestor + "/")
+    }
+
+    private func settleSuperseded(_ mseq: UInt64, cover: SupersessionCover) {
+        guard mseq > materializedUptoMseq else { return }
+        settledMseqs[mseq] = cover.mseq
+        if deferred.removeValue(forKey: mseq) != nil {
+            for (path, mseqs) in Array(deferredByPath) {
+                let remaining = mseqs.filter { $0 != mseq }
+                if remaining.isEmpty {
+                    deferredByPath.removeValue(forKey: path)
+                    needsResyncPaths.remove(path)
+                } else if remaining != mseqs {
+                    deferredByPath[path] = remaining
+                }
+            }
+        }
+        advanceWatermark()
+        reportDecision(mseq, .settledSuperseded(supersededByMseq: cover.mseq,
+                                                cover: cover.kind))
+    }
+
+    /// Settles every deferred append of one path when a later complete write of
+    /// that path arrives. The complete write contains the authoritative bytes,
+    /// so the held appends are covered, not re-applied (wal.md §6.2).
+    private func settleDeferredCovered(byCompleteWriteAt mseq: UInt64, path: String) {
+        settleDeferred(paths: [path]) { _ in SupersessionCover(mseq: mseq,
+                                                               kind: .repairWrite) }
+    }
+
+    /// Settles deferred appends of the removed path and of its whole subtree
+    /// when a later remove arrives (wal.md §6.2).
+    private func settleDeferredRemoved(byRemoveAt mseq: UInt64, path: String) {
+        let covered = deferredByPath.keys.filter {
+            $0 == path || Self.isAncestor(path, of: $0)
+        }
+        settleDeferred(paths: covered) { candidate in
+            SupersessionCover(mseq: mseq,
+                              kind: candidate == path ? .remove : .ancestorRemove)
+        }
+    }
+
+    private func settleDeferred(
+        paths: [String],
+        cover: (String) -> SupersessionCover
+    ) {
+        var decided: [(mseq: UInt64, cover: SupersessionCover)] = []
+        for path in paths.sorted() {
+            guard let mseqs = deferredByPath[path], !mseqs.isEmpty else { continue }
+            let recordCover = cover(path)
+            for mseq in mseqs {
+                guard deferred.removeValue(forKey: mseq) != nil else { continue }
+                guard mseq > materializedUptoMseq else { continue }
+                settledMseqs[mseq] = recordCover.mseq
+                decided.append((mseq, recordCover))
+            }
+            deferredByPath.removeValue(forKey: path)
+            needsResyncPaths.remove(path)
+        }
+        advanceWatermark()
+        // Report after the settlement so the watermark reflects the same step.
+        for entry in decided.sorted(by: { $0.mseq < $1.mseq }) {
+            reportDecision(entry.mseq,
+                           .settledSuperseded(supersededByMseq: entry.cover.mseq,
+                                              cover: entry.cover.kind))
+        }
     }
 
     /// D18 step 1: fsync every materialized file and directory changed since the
@@ -458,67 +730,6 @@ public final class Materializer {
         return .baseMismatch(path)
     }
 
-    /// Re-applies the deferred records of one path after its repair write.
-    /// Returns `true` when every deferred record settled.
-    @discardableResult
-    private func settleDeferred(path: String) throws -> Bool {
-        guard let mseqs = deferredByPath[path], !mseqs.isEmpty else {
-            needsResyncPaths.remove(path)
-            return true
-        }
-        var remaining: [UInt64] = []
-        var settled = true
-        for (index, mseq) in mseqs.enumerated() {
-            guard let record = deferred[mseq] else { continue }
-            let repaired = try applyDeferred(record)
-            if repaired {
-                deferred.removeValue(forKey: mseq)
-                markApplied(mseq)
-            } else {
-                remaining = Array(mseqs[index...])
-                settled = false
-                break
-            }
-        }
-        if settled {
-            deferredByPath.removeValue(forKey: path)
-            needsResyncPaths.remove(path)
-        } else {
-            deferredByPath[path] = remaining
-            needsResyncPaths.insert(path)
-        }
-        return settled
-    }
-
-    /// Applies one deferred record; `false` means it still has a base mismatch.
-    private func applyDeferred(_ record: WALRecord) throws -> Bool {
-        if record.isEpochClose { return true }
-        let body = try record.mutationBody()
-        guard let target = try resolve(body.path) else { return true }
-        switch body.op {
-        case .write:
-            if body.mflags.contains(.appended) {
-                switch try append(body, to: target) {
-                case .applied, .skipped:
-                    return true
-                case .baseMismatch:
-                    return false
-                }
-            }
-            try fullWrite(body, to: target)
-            return true
-        case .mkdir:
-            try makeDirectory(body, at: target)
-            return true
-        case .remove:
-            try remove(body, at: target)
-            return true
-        case .chmod:
-            try changeMode(body, at: target)
-            return true
-        }
-    }
-
     // MARK: - Helpers
 
     /// Records that a mutation mseq was taken in, independent of whether the
@@ -529,10 +740,15 @@ public final class Materializer {
 
     private func markApplied(_ mseq: UInt64) {
         guard mseq > materializedUptoMseq else { return }
+        settledMseqs.removeValue(forKey: mseq)
         appliedMseqs.insert(mseq)
-        while appliedMseqs.remove(materializedUptoMseq + 1) != nil {
-            materializedUptoMseq += 1
-        }
+        advanceWatermark()
+    }
+
+    private func reportDecision(_ mseq: UInt64, _ verdict: MaterializeVerdict) {
+        decisionObserver?(MaterializeDecision(mseq: mseq,
+                                              verdict: verdict,
+                                              materializedUptoMseq: materializedUptoMseq))
     }
 
     private func readRange(_ url: URL, offset: Int, length: Int) throws -> Data {
