@@ -208,8 +208,8 @@
       "collection": null,
       "rows": [
         {
-          "id": "navigation-111",
-          "label": null,
+          "id": "网页搜索与抓取",
+          "label": "网页搜索与抓取",
           "labelExpr": null,
           "kind": "navigation",
           "value": null,
@@ -218,9 +218,9 @@
           "destination": "WebSearchSettingsPage",
           "writes": false,
           "condition": null,
-          "provenance": "NativeConfigurationPage.swift:111",
-          "anchor": "NavigationLink {",
-          "extraction": "manual"
+          "provenance": "NativeConfigurationPage.swift:114",
+          "anchor": "SettingsRowLabel(title: NativeText(\"网页搜索与抓取\", \"Web Search and Fetch\"), icon: \"gl",
+          "extraction": "syntax"
         }
       ],
       "provenance": "NativeConfigurationPage.swift:117",
@@ -233,8 +233,8 @@
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
-      "titleExpression": null,
-      "titleSource": "absent",
+      "titleExpression": "nativeSettingsGroupTitle(group)",
+      "titleSource": "expression",
       "condition": null,
       "collection": null,
       "rows": [
@@ -282,11 +282,9 @@
           ]
         }
       ],
-      "provenance": "NativeConfigurationPage.swift:127",
-      "anchor": "Section {",
+      "provenance": "NativeConfigurationPage.swift:137",
+      "anchor": "Text(nativeSettingsGroupTitle(group))",
       "extraction": "syntax",
-      "suppressed": true,
-      "suppressReason": "the header renders a runtime value (no literal title); a dynamic menu/list header is not a group the implementation can be judged on, and forcing it into a disabled menu item would be the gate dictating the UI",
       "criterion": {
         "kind": "first-row-expression",
         "labelExpr": "settingField(field, namespace: group.namespace, writable: group.writable)",
@@ -305,8 +303,8 @@
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
-      "titleExpression": null,
-      "titleSource": "absent",
+      "titleExpression": "nativeSettingsGroupTitle(group)",
+      "titleSource": "expression",
       "condition": null,
       "collection": null,
       "rows": [
@@ -378,11 +376,9 @@
           ]
         }
       ],
-      "provenance": "NativeConfigurationPage.swift:144",
-      "anchor": "Section {",
+      "provenance": "NativeConfigurationPage.swift:176",
+      "anchor": "Text(nativeSettingsGroupTitle(group))",
       "extraction": "syntax",
-      "suppressed": true,
-      "suppressReason": "the header renders a runtime value (no literal title); a dynamic menu/list header is not a group the implementation can be judged on, and forcing it into a disabled menu item would be the gate dictating the UI",
       "criterion": {
         "kind": "first-row",
         "label": "暂时读不到模型列表。",
@@ -581,8 +577,8 @@
           "extraction": "syntax"
         },
         {
-          "id": "navigation-333",
-          "label": null,
+          "id": "已加载插件",
+          "label": "已加载插件",
           "labelExpr": null,
           "kind": "navigation",
           "value": null,
@@ -591,18 +587,18 @@
           "destination": "NativePluginInventoryPage",
           "writes": false,
           "condition": "!(model.inventoryError != nil)",
-          "provenance": "NativeConfigurationPage.swift:333",
-          "anchor": "NavigationLink {",
-          "extraction": "manual"
+          "provenance": "NativeConfigurationPage.swift:336",
+          "anchor": "SettingsRowLabel(title: NativeText(\"已加载插件\", \"Loaded Plugins\"), icon: \"puzzlepiec",
+          "extraction": "syntax"
         }
       ],
       "provenance": "NativeConfigurationPage.swift:328",
       "anchor": "Section {",
       "extraction": "syntax",
       "criterion": {
-        "kind": "first-row",
-        "label": "暂时读不到插件状态。",
-        "provenance": "NativeConfigurationPage.swift:330"
+        "kind": "first-clickable-row",
+        "label": "已加载插件",
+        "provenance": "NativeConfigurationPage.swift:336"
       },
       "footer": {
         "text": "显示的是引擎里真实加载的插件,手机上不会另外记一份。",
@@ -616,8 +612,8 @@
       "title": null,
       "titleTemplate": null,
       "dynamicTitle": false,
-      "titleExpression": null,
-      "titleSource": "absent",
+      "titleExpression": "title",
+      "titleSource": "expression",
       "condition": null,
       "collection": null,
       "rows": [
@@ -637,11 +633,9 @@
           "extraction": "syntax"
         }
       ],
-      "provenance": "NativeConfigurationPage.swift:346",
-      "anchor": "Section {",
+      "provenance": "NativeConfigurationPage.swift:350",
+      "anchor": "Text(title)",
       "extraction": "syntax",
-      "suppressed": true,
-      "suppressReason": "the header renders a runtime value (no literal title); a dynamic menu/list header is not a group the implementation can be judged on, and forcing it into a disabled menu item would be the gate dictating the UI",
       "criterion": {
         "kind": "first-row",
         "label": "暂不可用",
@@ -658,8 +652,8 @@
   ],
   "actions": [
     {
-      "id": "navigation-111",
-      "label": null,
+      "id": "网页搜索与抓取",
+      "label": "网页搜索与抓取",
       "labelExpr": null,
       "kind": "navigation",
       "trigger": "tap",
@@ -667,9 +661,9 @@
       "writes": false,
       "destination": "WebSearchSettingsPage",
       "condition": null,
-      "provenance": "NativeConfigurationPage.swift:111",
-      "anchor": "NavigationLink {",
-      "extraction": "manual"
+      "provenance": "NativeConfigurationPage.swift:114",
+      "anchor": "SettingsRowLabel(title: NativeText(\"网页搜索与抓取\", \"Web Search and Fetch\"), icon: \"gl",
+      "extraction": "syntax"
     },
     {
       "id": "toggle-156",
@@ -691,7 +685,7 @@
       "labelExpr": null,
       "kind": "picker",
       "trigger": "tap",
-      "semantic": null,
+      "semantic": "binding:Binding( get: { model.stagedDefaultPermissionMode }, set: { model.stageDefaultPermissionMode($0) } )",
       "writes": true,
       "destination": null,
       "condition": null,
@@ -705,8 +699,8 @@
       "style": "default"
     },
     {
-      "id": "navigation-333",
-      "label": null,
+      "id": "已加载插件",
+      "label": "已加载插件",
       "labelExpr": null,
       "kind": "navigation",
       "trigger": "tap",
@@ -714,9 +708,9 @@
       "writes": false,
       "destination": "NativePluginInventoryPage",
       "condition": null,
-      "provenance": "NativeConfigurationPage.swift:333",
-      "anchor": "NavigationLink {",
-      "extraction": "manual"
+      "provenance": "NativeConfigurationPage.swift:336",
+      "anchor": "SettingsRowLabel(title: NativeText(\"已加载插件\", \"Loaded Plugins\"), icon: \"puzzlepiec",
+      "extraction": "syntax"
     },
     {
       "id": "button-40",
@@ -842,7 +836,7 @@
       ],
       "data": [
         {
-          "renders": "untitled section at 16 | untitled section at 25 | 本机管理范围 | iPhone Worker 限制 | 工具 | untitled section at 127 | untitled section at 144 | 新会话默认权限 | 实验插件 | untitled section at 328 | untitled section at 346",
+          "renders": "untitled section at 16 | untitled section at 25 | 本机管理范围 | iPhone Worker 限制 | 工具 | untitled section at 137 | untitled section at 176 | 新会话默认权限 | 实验插件 | untitled section at 328 | untitled section at 350",
           "when": null,
           "provenance": "NativeConfigurationPage.swift:6",
           "anchor": "struct NativeConfigurationPage: View {",

@@ -1210,6 +1210,90 @@
       "presentedBy": "sheet-493"
     },
     {
+      "id": "允许一次",
+      "label": "允许一次",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "onAllow forwards to ChatPage.respond",
+      "writes": true,
+      "destination": null,
+      "condition": "pending permission card",
+      "provenance": "ChatPage.swift:4598",
+      "anchor": "Text(\"允许一次\")",
+      "extraction": "manual"
+    },
+    {
+      "id": "拒绝",
+      "label": "拒绝",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "onDeny forwards to ChatPage.respond",
+      "writes": true,
+      "destination": null,
+      "condition": "pending permission card",
+      "provenance": "ChatPage.swift:4611",
+      "anchor": "Text(\"拒绝\")",
+      "extraction": "manual"
+    },
+    {
+      "id": "要求修改",
+      "label": "要求修改",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "onRequestChanges is forwarded by ChatPage.questionTakeover",
+      "writes": true,
+      "destination": null,
+      "condition": "plan-review question",
+      "provenance": "NativePlanReviewCard.swift:49",
+      "anchor": "public static let requestChangesText = \"要求修改\"",
+      "extraction": "manual"
+    },
+    {
+      "id": "同意执行",
+      "label": "同意执行",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "onApprove is forwarded by ChatPage.questionTakeover",
+      "writes": true,
+      "destination": null,
+      "condition": "plan-review question",
+      "provenance": "NativePlanReviewCard.swift:50",
+      "anchor": "public static let approveText = \"同意执行\"",
+      "extraction": "manual"
+    },
+    {
+      "id": "跳过",
+      "label": "跳过",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "skipCurrent marks this question skipped and advances/submits",
+      "writes": true,
+      "destination": null,
+      "condition": "non-plan question composer",
+      "provenance": "NativeQuestionComposer.swift:137",
+      "anchor": "static let skip = \"跳过\"",
+      "extraction": "manual"
+    },
+    {
+      "id": "任务",
+      "label": "任务",
+      "labelExpr": null,
+      "kind": "button",
+      "trigger": "tap",
+      "semantic": "collapsed.toggle()",
+      "writes": false,
+      "destination": null,
+      "condition": "todo list is non-empty",
+      "provenance": "NativeTodoDock.swift:57",
+      "anchor": "public static let title = \"任务\"",
+      "extraction": "manual"
+    },
+    {
       "id": "提交回答",
       "label": "提交回答",
       "labelExpr": null,
@@ -1225,7 +1309,7 @@
       "specRequired": false,
       "specRef": null,
       "baselineReachable": true,
-      "note": "`QuestionCard` is a sibling view struct outside the page struct the extractor walks; the card is rendered in ChatPage's pending-answer slot and Android implements the submit button."
+      "note": "`QuestionCard` is a sibling view struct (ChatPage.swift:3573), outside the page struct the extractor walks; the card is rendered in ChatPage's pending-answer slot and Android implements the submit button."
     },
     {
       "id": "打开会话列表",
@@ -1775,6 +1859,7 @@
       "name": "RuntimeDetailsPage",
       "line": 4314,
       "private": false,
+      "embedded": false,
       "sections": [
         {
           "title": "本次运行",
@@ -1791,6 +1876,7 @@
       "name": "CommandExecutionResultPage",
       "line": 4398,
       "private": true,
+      "embedded": true,
       "sections": [],
       "provenance": "ChatPage.swift:4398"
     }

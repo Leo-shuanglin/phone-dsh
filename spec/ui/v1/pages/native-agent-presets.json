@@ -22,8 +22,8 @@
   },
   "android": {
     "screen": "NativeAgentPresetsPage",
-    "file": null,
-    "match": "missing"
+    "file": "android/lib/src/main/kotlin/com/phonedsh/ui/page/NativeAgentPresetsPage.kt",
+    "match": "composable"
   },
   "sections": [
     {

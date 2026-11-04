@@ -180,27 +180,6 @@
       "extraction": "manual"
     },
     {
-      "id": "切换",
-      "label": "切换",
-      "labelExpr": null,
-      "kind": "action",
-      "trigger": "tap",
-      "semantic": null,
-      "writes": false,
-      "destination": null,
-      "condition": null,
-      "extraction": "manual",
-      "androidOnly": {
-        "reason": {
-          "baselineLacks": "the baseline makes the current folder implicit: creating a session inside a folder is the only switch",
-          "androidNeeds": "README §1 makes switching this page's duty, and Android's session creation lives on another page, so the switch has to be explicit here",
-          "withoutIt": "switching folders requires detouring through the sessions page and creating a throwaway session"
-        },
-        "owner": "android-ui",
-        "reviewBy": "2027-01-31"
-      }
-    },
-    {
       "id": "删除",
       "label": "删除",
       "labelExpr": null,
@@ -234,9 +213,9 @@
       "extraction": "manual",
       "androidOnly": {
         "reason": {
-          "baselineLacks": "the iOS list reads local state and cannot fail, so it has no retry affordance",
-          "androidNeeds": "the Android workspace list comes from a host snapshot and can fail, and this page is the only place to recover",
-          "withoutIt": "a failed list read is a dead page: no folders, no way to retry"
+          "baselineLacks": "WorkspaceFoldersPage (NativeShell.swift:319) draws `management.workspaces` from the in-process `DSHManagementModel.shared` (`:320`, `:326`); its body has no failure state, so it has no retry to offer",
+          "androidNeeds": "the Android rows are host facts carried by a snapshot read across the process boundary: `WorkspaceFoldersScreenState.from` maps `snapshot.failure` to `FAILED` and deliberately keeps no rows, so the page must be able to re-read in place",
+          "withoutIt": "a failed read leaves only the failure line on an otherwise empty page; dismissing it does not restore the rows, so the user has to leave and re-enter the page to get a list back"
         },
         "owner": "android-ui",
         "reviewBy": "2027-01-31"
@@ -304,6 +283,7 @@
       "name": "EgressAllowListPage",
       "line": 386,
       "private": false,
+      "embedded": false,
       "sections": [
         {
           "title": "地址",
@@ -316,6 +296,7 @@
       "name": "SettingsAboutPage",
       "line": 837,
       "private": false,
+      "embedded": false,
       "sections": [],
       "provenance": "NativeShell.swift:837"
     }

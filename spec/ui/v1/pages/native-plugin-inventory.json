@@ -22,8 +22,8 @@
   },
   "android": {
     "screen": "NativePluginInventoryPage",
-    "file": null,
-    "match": "missing"
+    "file": "android/lib/src/main/kotlin/com/phonedsh/ui/page/NativePluginInventoryPage.kt",
+    "match": "composable"
   },
   "sections": [
     {

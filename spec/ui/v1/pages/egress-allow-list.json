@@ -174,7 +174,7 @@
       "labelExpr": null,
       "kind": "toggle",
       "trigger": "tap",
-      "semantic": null,
+      "semantic": "binding:allowAllBinding",
       "writes": true,
       "destination": null,
       "condition": null,
@@ -267,48 +267,6 @@
       "provenance": "NativeShell.swift:606",
       "anchor": "Button(\"添加\") { submitDraft() }",
       "extraction": "syntax"
-    },
-    {
-      "id": "重试",
-      "label": "重试",
-      "labelExpr": null,
-      "kind": "action",
-      "trigger": "tap",
-      "semantic": null,
-      "writes": false,
-      "destination": null,
-      "condition": null,
-      "extraction": "manual",
-      "androidOnly": {
-        "reason": {
-          "baselineLacks": "iOS reads its egress rules synchronously from local UserDefaults, so the read cannot fail and needs no retry",
-          "androidNeeds": "Android reads a host snapshot across a process boundary, so the read can fail and the page must offer recovery without leaving and re-entering",
-          "withoutIt": "a failed read leaves the allow list blank with no way back except killing the app, and a blank list silently means deny-all"
-        },
-        "owner": "android-ui",
-        "reviewBy": "2027-01-31"
-      }
-    },
-    {
-      "id": "关闭",
-      "label": "关闭",
-      "labelExpr": null,
-      "kind": "action",
-      "trigger": "tap",
-      "semantic": null,
-      "writes": false,
-      "destination": null,
-      "condition": null,
-      "extraction": "manual",
-      "androidOnly": {
-        "reason": {
-          "baselineLacks": "the iOS page has no failure line at all, so it has nothing to dismiss",
-          "androidNeeds": "the Android failure line is dismissible so the user can clear a stale error and keep reading the rules",
-          "withoutIt": "the error occupies the page after it stops being true, and the user cannot tell it apart from a current failure"
-        },
-        "owner": "android-ui",
-        "reviewBy": "2027-01-31"
-      }
     }
   ],
   "presentations": [],
@@ -355,6 +313,7 @@
       "name": "WorkspaceFoldersPage",
       "line": 262,
       "private": false,
+      "embedded": false,
       "sections": [],
       "provenance": "NativeShell.swift:262"
     },
@@ -362,6 +321,7 @@
       "name": "SettingsAboutPage",
       "line": 837,
       "private": false,
+      "embedded": false,
       "sections": [],
       "provenance": "NativeShell.swift:837"
     }
