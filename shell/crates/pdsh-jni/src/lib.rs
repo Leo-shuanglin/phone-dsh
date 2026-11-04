@@ -43,6 +43,7 @@
 //! | `recordsNative(ByteArray): String` | `NativeWal.recordsNative` | one segment's verified records, decoded to a JSON array |
 //! | `decodeRecordNative(ByteArray): String` | `NativeWal.decodeRecordNative` | exactly one record's decoded body as a JSON object |
 //! | `appendedReplayNative(Long, Long, ByteArray, ByteArray?): String` | `NativeWal.appendedReplayNative` | D9 verdict: `applied` / `skip` / `resync` |
+//! | `retainedSupersessionNative(String): String` | `NativeWal.retainedSupersessionNative` | D9 retained-sequence verdict: `settled-superseded` + cover mseq, or `not-superseded` |
 //! | `panicForTestNative(String): String` | `NativeWal.panicForTestNative` | test-only panic hook; proves the boundary |
 //!
 //! The exact JSON shapes and error codes are in [`wal`]; every entry point is
@@ -623,6 +624,32 @@ pub extern "system" fn Java_com_phonedsh_wire_NativeWal_appendedReplayNative<'fr
                     wal::appended_replay(current_size, append_from, &data, existing.as_deref());
                 let text = env.new_string(json)?;
                 Ok(text.as_raw() as jstring)
+            })
+        })
+        .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+/// `NativeWal.retainedSupersessionNative(String): String` — **experimental**.
+///
+/// The D9 retained-sequence supersession predicate of `wal.md` §6.2; see
+/// [`wal::retained_supersession`]. The argument is the retained record array as
+/// JSON, and the output carries the fourth verdict together with the covering
+/// record's mseq. The verdict alone must not advance a watermark: the caller
+/// counts a settled record only once its cover is inside the same contiguous
+/// prefix.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_phonedsh_wire_NativeWal_retainedSupersessionNative<'frame>(
+    mut unowned_env: EnvUnowned<'frame>,
+    _this: JObject<'frame>,
+    records: JString<'frame>,
+) -> jstring {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<jstring> {
+            run_entry(env, "retainedSupersession", |env| {
+                let text = read_string(env, &records)?;
+                let json = wal::retained_supersession(&text)?;
+                let out = env.new_string(json)?;
+                Ok(out.as_raw() as jstring)
             })
         })
         .resolve::<jni::errors::ThrowRuntimeExAndDefault>()

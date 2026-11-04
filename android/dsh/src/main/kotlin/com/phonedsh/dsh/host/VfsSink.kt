@@ -120,11 +120,18 @@
 
 package com.phonedsh.dsh.host
 
+import com.phonedsh.agentcore.JsonObject
+import com.phonedsh.agentcore.JsonValue
 import com.phonedsh.controller.ControllerBudgets
+import com.phonedsh.controller.ControllerFailure
 import com.phonedsh.log.MutationBody
+import com.phonedsh.wire.WireCodec
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** The outbound side of one VFS connection; implemented by the channel. */
 fun interface VfsSender {
@@ -192,6 +199,16 @@ class VfsSink(
     private val requestedResyncs = HashSet<String>()
 
     /**
+     * The drain's observation of the repair set: connected plus outstanding
+     * count. It changes on attach/detach, recovery seeding and every append
+     * (a cover can settle a path without the watermark moving past another
+     * path's held record, which the old watermark-only test missed).
+     */
+    private val resyncState = MutableStateFlow(ResyncState(connected = false, outstanding = 0))
+
+    private data class ResyncState(val connected: Boolean, val outstanding: Int)
+
+    /**
      * The highest mseq **this sink** appended for the Worker.
      *
      * It is the only counter the sink owns, and it is not the allocator: the
@@ -239,6 +256,7 @@ class VfsSink(
                 outstandingResyncs.putIfAbsent(request.path, request.mseq)
             }
             requestedResyncs.clear()
+            publishResyncStateLocked()
         }
         opened = true
         Wired.issuedBySink()
@@ -251,6 +269,7 @@ class VfsSink(
             // A new connection has not received the outstanding requests yet;
             // `onHelloAnswered` re-sends one per path after the host HELLO.
             requestedResyncs.clear()
+            publishResyncStateLocked()
         }
     }
 
@@ -263,6 +282,7 @@ class VfsSink(
     fun detach(sender: VfsSender?) {
         synchronized(senderLock) {
             if (sender == null || this.sender === sender) this.sender = null
+            publishResyncStateLocked()
         }
     }
 
@@ -278,6 +298,7 @@ class VfsSink(
      */
     internal suspend fun onHelloAnswered() = mutex.withLock {
         if (!opened) return@withLock
+        syncResyncs()
         val toRequest = synchronized(senderLock) {
             outstandingResyncs.keys.filter { it !in requestedResyncs }
         }
@@ -521,8 +542,7 @@ class VfsSink(
                 // append path reports the *current* held request on every
                 // mutation while the repair is pending; only the first one on
                 // this connection becomes a frame.
-                appended.resyncPath?.let { path -> requestResyncOnce(path, appended.mseq) }
-                clearSettledResyncs(appended.materializedUptoMseq)
+                syncResyncs()
                 satisfyLevel1Barriers()
             }
 
@@ -593,22 +613,117 @@ class VfsSink(
         }
         if (!shouldSend) return
         if (emit(VfsFrame.Resync(path))) {
-            synchronized(senderLock) { requestedResyncs.add(path) }
+            synchronized(senderLock) {
+                requestedResyncs.add(path)
+                publishResyncStateLocked()
+            }
         }
     }
 
-    /** Drops paths whose held mseq the contiguous materialized watermark passed. */
-    private fun clearSettledResyncs(materializedUptoMseq: Long) {
+    /**
+     * Reconciles this connection's repair set with the WAL's live one.
+     *
+     * The WAL (the ledger) is the authority: a path disappears here as soon as
+     * a later complete write/remove settles its held append, even when the
+     * watermark is still blocked below another path. That is what lets a
+     * `VFS_CONFLICT` for the settled path be ignored without waiting for an
+     * unrelated record. A path that becomes held again is a new request on the
+     * same connection because its old entry was already removed.
+     */
+    private suspend fun syncResyncs() {
+        val pending = wal.pendingResyncs()
+        val toRequest = ArrayList<WalResync>(pending.size)
         synchronized(senderLock) {
+            val incoming = pending.associateBy { it.path }
             val iterator = outstandingResyncs.entries.iterator()
             while (iterator.hasNext()) {
                 val entry = iterator.next()
-                if (entry.value <= materializedUptoMseq) {
+                if (entry.key !in incoming) {
                     iterator.remove()
                     requestedResyncs.remove(entry.key)
                 }
             }
+            for (request in pending) {
+                if (outstandingResyncs.put(request.path, request.mseq) == null) {
+                    toRequest.add(request)
+                }
+            }
+            publishResyncStateLocked()
         }
+        for (request in toRequest) {
+            requestResyncOnce(request.path, request.mseq)
+        }
+    }
+
+    /**
+     * Waits until no repair is outstanding or the Worker is no longer
+     * connected, bounded by [timeoutMillis].
+     *
+     * The drain uses this before the epoch close: a connected Worker's answer
+     * is in-flight work (`budgets.md` §1/§2), a disconnected one is not waited
+     * for, and the deadline ends the wait without cancelling a close.
+     *
+     * @return `true` when no wait is needed any more, `false` on the deadline.
+     */
+    internal suspend fun awaitResyncsSettled(timeoutMillis: Long): Boolean {
+        val current = resyncState.value
+        if (!current.connected || current.outstanding == 0) return true
+        if (timeoutMillis <= 0L) return false
+        return withTimeoutOrNull(timeoutMillis) {
+            resyncState.first { !it.connected || it.outstanding == 0 }
+        } != null
+    }
+
+    /** Publishes [resyncState]; the caller holds [senderLock]. */
+    private fun publishResyncStateLocked() {
+        resyncState.value = ResyncState(
+            connected = sender != null,
+            outstanding = outstandingResyncs.size,
+        )
+    }
+
+    /**
+     * One inbound worker `ERROR` (`channel.md` §4.8/§10).
+     *
+     * `VFS_CONFLICT` is the one case this host must interpret: the Worker could
+     * not answer a reserved path because it is no longer a regular file. With
+     * no live repair left (the later complete write/remove settled it) the
+     * conflict belongs to a superseded record and is ignored; otherwise it is
+     * the terminal §5.2 condition and is reported with the held path and mseq.
+     * Other closing codes are the transport's business and are logged only.
+     *
+     * @return `true` when the channel should close the connection.
+     */
+    internal suspend fun onWorkerError(frame: ByteArray, refSeq: Long): Boolean = mutex.withLock {
+        val code = try {
+            val fields = JsonValue.parse(WireCodec.decode(frame))
+            (fields as? JsonObject)?.get("code")?.let { member ->
+                (member as? com.phonedsh.agentcore.JsonString)?.value
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger.warn("worker ERROR on ref_seq $refSeq is not decodable (${failure.javaClass.simpleName})")
+            null
+        }
+        if (code != "VFS_CONFLICT") {
+            logger.warn("worker ERROR $code on ref_seq $refSeq; no host state change")
+            return@withLock code != "VFS_REFUSED"
+        }
+        val held = wal.pendingResyncs()
+        if (held.isEmpty()) {
+            logger.info(
+                "VFS_CONFLICT on ref_seq $refSeq ignored: no unrepaired append remains " +
+                    "(the path was settled-superseded, wal.md §6.2/§10)",
+            )
+            return@withLock false
+        }
+        val request = held.first()
+        val detail = "VFS_CONFLICT names no path; the unresolved §5.1 repair is " +
+            "${request.path} at mseq ${request.mseq} (channel.md §10, wal.md §5.2)"
+        logger.error(detail)
+        failures.reportQuietly(ControllerFailure.UNREPAIRED_BASE_MISMATCH, detail, logger)
+        true
     }
 
     private suspend fun satisfyLevel1Barriers() {

@@ -73,6 +73,16 @@ interface HostWal {
     fun pendingResync(): WalResync? = null
 
     /**
+     * Every outstanding §5.1 repair, in `mseq` order.
+     *
+     * A replay can leave more than one path held, and the VFS sink must clear a
+     * path as soon as its cover settles it even when the watermark is blocked
+     * below another path. The default is the singular member so a test double
+     * that only models one mismatch stays source-compatible.
+     */
+    fun pendingResyncs(): List<WalResync> = listOfNotNull(pendingResync())
+
+    /**
      * The durability this WAL can actually honour.
      *
      * A passthrough of the platform SPI: never promoted here. On the
@@ -275,6 +285,10 @@ private class WorkspaceLogHostWal(
     override suspend fun resetForRecovery() = log.resetForRecovery()
 
     override fun pendingResync(): WalResync? = log.outstandingResync()?.let { request ->
+        WalResync(request.path, request.mseq)
+    }
+
+    override fun pendingResyncs(): List<WalResync> = log.outstandingResyncs().map { request ->
         WalResync(request.path, request.mseq)
     }
 

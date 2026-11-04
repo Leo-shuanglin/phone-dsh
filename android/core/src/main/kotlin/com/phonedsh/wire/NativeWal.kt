@@ -173,6 +173,27 @@ object NativeWal {
     }
 
     /**
+     * The D9 retained-sequence supersession predicate (`wal.md` §6.2).
+     *
+     * **Experimental**: the WAL ABI is not frozen before the R1 conclusion.
+     * [recordsJson] is a JSON array of retained records in ascending `mseq`
+     * order; each object carries `mseq`, `op`, `appended` and `path`. The output
+     * is one object per input record: `{"mseq":N,"verdict":"settled-superseded",
+     * "cover":"complete-write|remove|ancestor-remove","superseded_by_mseq":M}`
+     * or `{"mseq":N,"verdict":"not-superseded"}`.
+     *
+     * The verdict alone must not advance a watermark: a caller counts the
+     * settled record only once [superseded_by_mseq] is inside the same
+     * contiguous prefix. [appendedReplay] remains the three-way base check.
+     *
+     * @throws WalException `WAL_INPUT_INVALID` for a bad JSON shape or a
+     *   non-ascending sequence.
+     * @throws WireUnavailable the native library is not available.
+     */
+    fun retainedSupersession(recordsJson: String): String =
+        translate("retainedSupersession") { binding.retainedSupersession(recordsJson) }
+
+    /**
      * Test-only panic hook: always panics inside the Rust entry point.
      *
      * **Experimental**: the WAL ABI is not frozen before the R1 conclusion.
@@ -206,6 +227,8 @@ object NativeWal {
         data: ByteArray,
         existingAtOffset: ByteArray?,
     ): String
+
+    private external fun retainedSupersessionNative(recordsJson: String): String
 
     private inline fun <T> translate(operation: String, block: () -> T): T =
         try {
@@ -247,6 +270,9 @@ object NativeWal {
             data: ByteArray,
             existingAtOffset: ByteArray?,
         ): String = NativeWal.appendedReplayNative(currentSize, appendFrom, data, existingAtOffset)
+
+        override fun retainedSupersession(recordsJson: String): String =
+            NativeWal.retainedSupersessionNative(recordsJson)
     }
 }
 
@@ -279,6 +305,13 @@ internal interface NativeWalCalls {
         data: ByteArray,
         existingAtOffset: ByteArray?,
     ): String
+
+    /**
+     * The default keeps a test seam that only exercises the load-failure branch
+     * source-compatible; production [NativeWal.JniCalls] overrides it.
+     */
+    fun retainedSupersession(recordsJson: String): String =
+        throw UnsupportedOperationException("retainedSupersession is not implemented by this fake")
 }
 
 /**
@@ -335,6 +368,9 @@ internal class NativeWalBinding(
     ): String = guarded {
         calls.appendedReplay(currentSize, appendFrom, data, existingAtOffset)
     }
+
+    fun retainedSupersession(recordsJson: String): String =
+        guarded { calls.retainedSupersession(recordsJson) }
 
     private inline fun <T> guarded(block: () -> T): T {
         if (!available) {

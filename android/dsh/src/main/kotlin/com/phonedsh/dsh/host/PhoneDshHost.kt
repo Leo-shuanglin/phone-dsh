@@ -519,6 +519,9 @@ class DefaultPhoneDshHost(
         scope = scope,
         clock = clock,
         closeEpoch = { closeEpoch() },
+        waitForResyncs = { remainingMillis ->
+            vfsSink?.awaitResyncsSettled(remainingMillis) ?: true
+        },
         stopWorker = { stopWorkerForDrain() },
         awaitWorkerStopped = { awaitWorkerStopped() },
         onDeadlineElapsed = { handle(ControllerSignal.DrainDeadlineElapsed) },

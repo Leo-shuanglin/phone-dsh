@@ -261,6 +261,21 @@ class HostChannel(
             HostFrame.API_ABORT,
             -> dispatchApi(connection, payload)
             HostFrame.CONSOLE -> dispatchConsole(payload)
+            HostFrame.ERROR -> dispatchVfs(connection, HostFrame.seqOf(payload)) { refSeq ->
+                val close = vfs?.onWorkerError(payload, refSeq) ?: true
+                if (close) {
+                    try {
+                        connection.close(CLOSE_PROTOCOL_ERROR, "worker error")
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        logger.warn(
+                            "closing after a worker ERROR failed on ${connection.id} " +
+                                "(${failure.javaClass.simpleName})",
+                        )
+                    }
+                }
+            }
             else -> Unit
         }
     }
@@ -1065,6 +1080,8 @@ internal object HostFrame {
 
     /** channel.md §2: VFS_MUT. */
     const val VFS_MUT: Int = 0x10
+    /** channel.md §2: ERROR. */
+    const val ERROR: Int = 0x7F
 
     /** channel.md §2: VFS_ACK. */
     const val VFS_ACK: Int = 0x11

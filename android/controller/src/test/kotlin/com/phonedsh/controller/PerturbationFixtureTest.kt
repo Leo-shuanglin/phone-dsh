@@ -13,7 +13,7 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 /**
- * Drives the pure D14 state machine with the 16 normative fixtures under
+ * Drives the pure D14 state machine with the 18 normative fixtures under
  * `spec/v1/golden/perturbations/`.
  *
  * The fixture README's runner contract has five steps. This lane owns steps 1
@@ -30,7 +30,7 @@ import org.junit.Test
 class PerturbationFixtureTest {
 
     @Test
-    fun `all sixteen fixtures are present and all eleven verbs are covered`() {
+    fun `all eighteen fixtures are present and all eleven verbs are covered`() {
         val fixtures = Fixtures.loadAll()
         assertEquals(Fixtures.EXPECTED_COUNT, fixtures.size)
         assertEquals("fixture ids are unique", fixtures.size, fixtures.map { it.id }.toSet().size)
@@ -58,13 +58,20 @@ class PerturbationFixtureTest {
         )
     }
 
-    // ---- the 16 fixtures, one test each ------------------------------------------
+    // ---- the 18 fixtures, one test each ------------------------------------------
 
     @Test
     fun `cold-start-after-reboot`() = runFixture("cold-start-after-reboot")
 
     @Test
     fun `drain-background-task-expiry`() = runFixture("drain-background-task-expiry")
+
+    @Test
+    fun `drain-outstanding-resync-answered`() = runFixture("drain-outstanding-resync-answered")
+
+    @Test
+    fun `drain-outstanding-resync-deadline-failed`() =
+        runFixture("drain-outstanding-resync-deadline-failed")
 
     @Test
     fun `drain-deadline-20s`() = runFixture("drain-deadline-20s")
@@ -116,6 +123,7 @@ class PerturbationFixtureTest {
         data object ProcessDeath : Action
         data object ProcessStart : Action
         data class Apply(val signal: ControllerSignal) : Action
+        data class ApplyAll(val signals: List<ControllerSignal>) : Action
     }
 
     private fun runFixture(id: String) {
@@ -167,6 +175,35 @@ class PerturbationFixtureTest {
                         machine.admission,
                     )
                     if (machine.state == HostState.FAILED && failedAt == null) failedAt = at
+                }
+
+                is Action.ApplyAll -> {
+                    for (signal in action.signals) {
+                        val wasFailed = failedAt != null
+                        val outcome = machine.handle(signal, at.toLong())
+                        when (outcome) {
+                            is SignalOutcome.Transitioned -> {
+                                observed += outcome.record.to
+                                if (outcome.record.to == HostState.DRAINING) sawDraining = true
+                                if (wasFailed &&
+                                    (outcome.record.effects.contains(SEND_FENCE) ||
+                                        outcome.record.effects.contains(SEND_LIFECYCLE_OPEN))
+                                ) {
+                                    openFramesAfterFailure++
+                                }
+                                if (outcome.record.to == HostState.FAILED && failedAt == null) {
+                                    failedAt = at
+                                }
+                            }
+
+                            is SignalOutcome.Observed -> Unit
+
+                            is SignalOutcome.Rejected -> fail(
+                                "$id at $at (${event.str("event")}): " +
+                                    "${outcome.signal} was rejected: ${outcome.detail}",
+                            )
+                        }
+                    }
                 }
 
                 is Action.Apply -> {
@@ -271,7 +308,7 @@ class PerturbationFixtureTest {
     private fun preconditionMachine(state: HostState): ControllerStateMachine = when (state) {
         HostState.RUNNING -> TestMachines.running()
         HostState.PARKED -> ControllerStateMachine.boot(HostState.PARKED)
-        else -> error("the 16 fixtures only use Running and Parked preconditions, got $state")
+        else -> error("the 18 fixtures only use Running and Parked preconditions, got $state")
     }
 
     private fun actionsFor(fixture: Fixture): Map<Int, Action> = when (fixture.id) {
@@ -293,6 +330,37 @@ class PerturbationFixtureTest {
             1_200 to Action.Apply(ControllerSignal.BackgroundTaskExpired),
             1_210 to Action.Apply(ControllerSignal.DrainCompleted),
             1_220 to Action.Noop,
+        )
+
+        "drain-outstanding-resync-answered" -> mapOf(
+            0 to Action.Noop,
+            5 to Action.Apply(
+                ControllerSignal.ScenePhaseChanged(ScenePhase.BACKGROUND),
+            ),
+            // The connected Worker answers; the real host test asserts the
+            // settle, while the pure machine only needs the drain completion.
+            100 to Action.Noop,
+            200 to Action.Apply(ControllerSignal.DrainCompleted),
+        )
+
+        "drain-outstanding-resync-deadline-failed" -> mapOf(
+            0 to Action.Noop,
+            5 to Action.Apply(
+                ControllerSignal.ScenePhaseChanged(ScenePhase.BACKGROUND),
+            ),
+            // The deadline ends the wait and the failing close raises the
+            // existing §5.2 failure; the host-level fixture test asserts that
+            // detail names /dsh/workspace/notes.txt mseq 2.
+            20_005 to Action.ApplyAll(
+                listOf(
+                    ControllerSignal.DrainDeadlineElapsed,
+                    ControllerSignal.FailureRaised(
+                        ControllerFailure.UNREPAIRED_BASE_MISMATCH,
+                        "the base mismatch at /dsh/workspace/notes.txt (mseq 2) is unrepaired",
+                    ),
+                ),
+            ),
+            20_010 to Action.Noop,
         )
 
         "drain-deadline-20s" -> mapOf(

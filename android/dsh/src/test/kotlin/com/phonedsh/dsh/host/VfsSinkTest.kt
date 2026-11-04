@@ -20,6 +20,7 @@
 package com.phonedsh.dsh.host
 
 import com.phonedsh.controller.Admission
+import com.phonedsh.controller.ControllerFailure
 import com.phonedsh.controller.ControllerStateMachine
 import com.phonedsh.controller.HostState
 import com.phonedsh.log.BootId as LogBootId
@@ -40,6 +41,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -558,6 +560,112 @@ class VfsSinkTest {
         }
     }
 
+    // ---- 9. live supersession and VFS_CONFLICT --------------------------------
+
+    /**
+     * CCR-1 on the live path: a later complete write of the held path settles
+     * the appended mismatch before any repair arrives. No second resync is
+     * needed and the epoch can close.
+     */
+    @Test
+    fun aLaterCompleteWriteSettlesTheHeldAppendBeforeTheRepair() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val connection = connect(host)
+                send(host, connection, mutFrame(mseq = 1, path = HELD, text = "abc", seq = 2))
+                send(host, connection, appendedFrame(mseq = 2, path = HELD, appendFrom = 10, text = "xyz", seq = 3))
+                assertEquals(
+                    "the mismatch is held and one resync is outstanding",
+                    1,
+                    fieldsOf(connection, HostFrame.VFS_RESYNC).size,
+                )
+                assertEquals(1L, log.materializedUptoMseq)
+
+                // The Worker's complete write is not the byte-identical repair;
+                // it is a later retained complete write and covers mseq 2.
+                send(host, connection, mutFrame(mseq = 3, path = HELD, text = "worker-fix", seq = 4))
+                assertEquals(3L, log.materializedUptoMseq)
+                runBlocking { assertEquals(3L, host.closeEpoch()) }
+                assertEquals(
+                    "the cover settles the path; no second VFS_RESYNC",
+                    1,
+                    fieldsOf(connection, HostFrame.VFS_RESYNC).size,
+                )
+                assertEquals(HostState.RUNNING, host.controller.state)
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    /**
+     * channel.md §10: a `VFS_CONFLICT` for an already superseded path is not
+     * terminal. The covering write arrived first (the Worker ordering rule), so
+     * the log has no live repair left and the conflict only closes the
+     * Worker's own connection.
+     */
+    @Test
+    fun aConflictForASettledPathIsIgnored() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val connection = connect(host)
+                send(host, connection, mutFrame(mseq = 1, path = HELD, text = "abc", seq = 2))
+                send(host, connection, appendedFrame(mseq = 2, path = HELD, appendFrom = 10, text = "xyz", seq = 3))
+                // The cover is sent before the conflict, as channel.md §10 requires.
+                send(host, connection, mutFrame(mseq = 3, path = HELD, text = "fixed", seq = 4))
+                assertEquals(3L, log.materializedUptoMseq)
+
+                send(host, connection, workerErrorFrame("VFS_CONFLICT", seq = 5))
+                assertEquals(
+                    "a conflict for a settled path must not enter Failed",
+                    HostState.RUNNING,
+                    host.controller.state,
+                )
+                assertTrue(host.controller.lastFailure == null)
+                assertNull(log.outstandingResync())
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    /** The negative half: a conflict with no cover is the terminal §5.2 case. */
+    @Test
+    fun aConflictForAnUnrepairedPathIsTerminalAndNamesPathAndMseq() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val connection = connect(host)
+                send(host, connection, mutFrame(mseq = 1, path = HELD, text = "abc", seq = 2))
+                send(host, connection, appendedFrame(mseq = 2, path = HELD, appendFrom = 10, text = "xyz", seq = 3))
+                assertEquals(2L, log.outstandingResync()?.mseq)
+
+                send(host, connection, workerErrorFrame("VFS_CONFLICT", seq = 4))
+                runBlocking { withTimeout(5_000) { host.state.first { it == HostState.FAILED } } }
+                assertEquals(HostState.FAILED, host.controller.state)
+                assertEquals(ControllerFailure.UNREPAIRED_BASE_MISMATCH, host.controller.lastFailure)
+                assertTrue(
+                    "the failure names the held path: ${host.controller.lastFailureDetail}",
+                    host.controller.lastFailureDetail?.contains(HELD) == true,
+                )
+                assertTrue(
+                    "the failure names the held mseq: ${host.controller.lastFailureDetail}",
+                    host.controller.lastFailureDetail?.contains("mseq 2") == true,
+                )
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private fun newLog(platform: FakePlatform): WorkspaceLog = WorkspaceLog(
@@ -642,6 +750,11 @@ class VfsSinkTest {
             """"mflags":2,"mode":420,"mseq":$mseq,"op":1,"path":"$path"}}"""
         return WireCodec.encode(fields, seq = seq)
     }
+
+    private fun workerErrorFrame(code: String, seq: Long): ByteArray = WireCodec.encode(
+        """{"type":"ERROR","fields":{"code":"$code","message":"the path is no longer a regular file"}}""",
+        seq = seq,
+    )
 
     private fun barrierFrame(wantLevel: Int, uptoMseq: Long): ByteArray = WireCodec.encode(
         """{"type":"VFS_BARRIER","fields":{"upto_mseq":$uptoMseq,"want_level":$wantLevel}}""",
