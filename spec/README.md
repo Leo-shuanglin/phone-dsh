@@ -172,7 +172,7 @@ base 分支單邊前進不算本分支改動。一個檔案可同時屬於多個
 修正時附 contract delta 與 regression；**不得為了消除差異把規範改成寬鬆的實作現狀**。
 
 **本次凍結（2026-11-04）。** CCR-1（wal.md §6.2／§5.1 的 `superseded` 第四判定）與 CCR-2（drain 等待 outstanding VFS_RESYNC、啟動 mseq-1 重建、Failed→Recovering 順序）已由變更單
-[PC-20261104-wal-superseded-drain](../docs/protocol-changes/PC-20261104-wal-superseded-drain.md) 以 `status: frozen` 凍結；`contract_revision` 由主會話在提交後填 `<freeze-sha>`。
+[PC-20261104-wal-superseded-drain](../docs/protocol-changes/PC-20261104-wal-superseded-drain.md) 以 `status: frozen` 凍結；`contract_revision` = `5b573cb2`。
 第 2 輪審查把 settlement 收緊為保守語義：superseded 記錄只有在 cover 已套用、且 cover 的 mseq ≤ manifest 水位時才計入連續水位；replay vectors 以可選 `watermark_steps` 斷言這條不變式。
 GAP-12／GAP-13 是同一批實作要修的 iOS 缺口，不是合約變更。
 

@@ -1,8 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # PC-20261104-wal-superseded-drain — CCR-1 / CCR-2 contract freeze
 
-Status: **frozen**. Contract revision: `<freeze-sha>` (the main session fills the commit SHA after
-review and commit). This record is the §3.1 contract freeze for the P02/P03/P01/P22 delta; no
+Status: **frozen**. Contract revision: `5b573cb2bf934a9e5e63df2d69033743884839d5` (the frozen spec commit). This record is the §3.1 contract freeze for the P02/P03/P01/P22 delta; no
 implementation in this worktree is part of it.
 
 ## 0. Summary
@@ -14,7 +13,7 @@ status: frozen
 breaking: false
 version_decision: no proto/version bump; no wire field, frame, required member, manifest field or on-disk format changes; conservative settlement and the drain order are host-side rules, and the VFS_CONFLICT condition is the existing code with a host-side ignored case. Round 2's only schema addition is the optional replay-vector `expected.watermark_steps`, a spec fixture member, not a runtime format
 base: 451429ac
-contract_revision: <freeze-sha>
+contract_revision: 5b573cb2bf934a9e5e63df2d69033743884839d5
 ```
 
 ## 1. Identity, trigger and roles
