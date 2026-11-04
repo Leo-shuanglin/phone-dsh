@@ -306,13 +306,23 @@ class WorkspaceLog(
     private var fatal: LogException? = null
 
     /**
-     * `true` while the only records not yet materialized are records recovery
-     * left in the WAL. A settlement then has to stream those records back from
-     * the retained segments instead of reading [pending], which recovery never
-     * filled (holding a 100k-record tail on the heap is what `budgets.md` §4
-     * forbids).
+     * The test-only replay observation hook. Production leaves it as
+     * [WalReplayTrace.NONE]; the shared vector runner installs a recorder so it
+     * can assert the real replay's per-record verdicts and per-step watermark.
      */
-    private var recoveryHeldResync: Boolean = false
+    internal var replayTrace: WalReplayTrace = WalReplayTrace.NONE
+
+    /**
+     * The one live settlement ledger. It is created on the first post-recovery
+     * materialization and starts at the recovery watermark; the retained records
+     * recovery left unmaterialized are streamed into it in `mseq` order before
+     * the first new record, so a repair and a later cover see every deferred
+     * append (`wal.md` §5.1, §6.2).
+     */
+    private var ledger: MaterializationLedger? = null
+
+    /** The highest mseq fed to [ledger]; the retained tail is streamed from here. */
+    private var liveCursor: Long = 0L
 
     /** The next mutation number, `max(last_mseq, WAL tail) + 1` (D17). */
     var nextMseq: Long = 0L
@@ -342,7 +352,15 @@ class WorkspaceLog(
     private val materializer = Materializer(paths, paths.materializedDirectory, changes)
     @Volatile
     private var resync: ResyncRequest? = null
-    private val pending = ArrayList<WalRecord.Mutation>()
+
+    /**
+     * Every repair a boot replay left, in `mseq` order.
+     *
+     * [resync] keeps the first for the single-request diagnostics; the VFS
+     * sink's one-per-path set and the drain need the whole list before the
+     * first post-recovery append has rebuilt the live ledger.
+     */
+    private var recoveryResyncs: List<ResyncRequest> = emptyList()
 
     /**
      * The durability this log can actually honour: exactly
@@ -453,8 +471,9 @@ class WorkspaceLog(
         ready = false
         fatal = null
         resync = null
-        recoveryHeldResync = false
-        pending.clear()
+        recoveryResyncs = emptyList()
+        ledger = null
+        liveCursor = 0L
         changes.clear()
         summaries.clear()
         segmentsWritten.clear()
@@ -475,7 +494,21 @@ class WorkspaceLog(
      * periodic lane defers the close and records the path and mseq instead of
      * turning a transient repair into `Failed`.
      */
-    fun outstandingResync(): ResyncRequest? = resync
+    fun outstandingResync(): ResyncRequest? =
+        ledger?.firstResync() ?: recoveryResyncs.firstOrNull() ?: resync
+
+    /**
+     * Every outstanding §5.1 repair, in `mseq` order.
+     *
+     * A boot replay can leave more than one path held; the drain fixture and
+     * the VFS sink seed their one-per-path set from this list. Before the first
+     * post-recovery append the ledger does not exist yet, so the recovery
+     * request(s) are reported directly.
+     */
+    fun outstandingResyncs(): List<ResyncRequest> =
+        ledger?.resyncRequests?.takeIf { it.isNotEmpty() }
+            ?: recoveryResyncs.takeIf { it.isNotEmpty() }
+            ?: listOfNotNull(resync)
 
     /**
      * Appends one mutation and materializes it (`wal.md` §5, D8).
@@ -757,7 +790,18 @@ class WorkspaceLog(
                         retention = null,
                         staleNames = staleNames,
                         staleTouched = staleTouched,
+                        abortWhenUnsettled = true,
                     )
+                    if (resyncPaths.isNotEmpty()) {
+                        val held = resyncPaths.first()
+                        return RecoveryOutcome.Failed(
+                            "WAL_CORRUPT",
+                            "the materialized copy diverges from the retained WAL and the " +
+                                "from-empty rebuild still holds $held at mseq " +
+                                "${resyncMseqs[held]}; the WAL alone cannot derive the copy, " +
+                                "so the original materialized tree is kept",
+                        )
+                    }
                     watermark = rebuilt.watermark
                     replayed = rebuilt.segments
                     fullReconcileRan = true
@@ -809,6 +853,19 @@ class WorkspaceLog(
                         "stays Failed",
                 )
             }
+            // Keep the request the copy replay found. A from-empty rebuild that
+            // meets the same genuine base mismatch is not a successful rebuild:
+            // §7.2's staged exchange must not replace a real copy with a partial
+            // derivation, and the host still has to request the Worker's repair.
+            val heldPaths = resyncPaths.toList()
+            val heldMseqs = resyncMseqs.toMap()
+            val heldWatermark = watermark
+            val heldSegments = replayed
+            // The abort path below keeps the original copy. Make the mutations
+            // the copy replay already applied durable before the checkpoint can
+            // name that watermark (wal.md §7.1); the staging attempt only
+            // replays them elsewhere.
+            fsyncChanges(changes)
             changes.clear()
             resyncPaths.clear()
             resyncMseqs.clear()
@@ -823,18 +880,29 @@ class WorkspaceLog(
                 retention = null,
                 staleNames = staleNames,
                 staleTouched = staleTouched,
+                abortWhenUnsettled = true,
             )
-            watermark = rebuilt.watermark
-            replayed = rebuilt.segments
-            fullReconcileRan = true
-            verifyStale(plan, replayNames, facts, staleTouched, staleReports)
-            if (staleReports.values.any { it.divergences.isNotEmpty() }) {
-                val first = staleReports.values.first { it.divergences.isNotEmpty() }
-                return RecoveryOutcome.Failed(
-                    "WAL_CORRUPT",
-                    "the materialized copy still diverges after a rebuild from the retained " +
-                        "WAL: ${first.divergences.first()}",
-                )
+            if (resyncPaths.isNotEmpty()) {
+                resyncPaths.clear()
+                resyncPaths.addAll(heldPaths)
+                resyncMseqs.clear()
+                resyncMseqs.putAll(heldMseqs)
+                watermark = heldWatermark
+                replayed = heldSegments
+                fullReconcileRan = false
+            } else {
+                watermark = rebuilt.watermark
+                replayed = rebuilt.segments
+                fullReconcileRan = true
+                verifyStale(plan, replayNames, facts, staleTouched, staleReports)
+                if (staleReports.values.any { it.divergences.isNotEmpty() }) {
+                    val first = staleReports.values.first { it.divergences.isNotEmpty() }
+                    return RecoveryOutcome.Failed(
+                        "WAL_CORRUPT",
+                        "the materialized copy still diverges after a rebuild from the retained " +
+                            "WAL: ${first.divergences.first()}",
+                    )
+                }
             }
         }
 
@@ -899,8 +967,10 @@ class WorkspaceLog(
         val resyncRequests = resyncPaths.map { path ->
             ResyncRequest(path, resyncMseqs[path] ?: lastMseq)
         }
+        recoveryResyncs = resyncRequests
         resync = resyncRequests.firstOrNull()
-        recoveryHeldResync = resyncRequests.isNotEmpty()
+        ledger = null
+        liveCursor = watermark
         changes.clear()
 
         return RecoveryOutcome.Recovered(
@@ -1200,21 +1270,23 @@ class WorkspaceLog(
     )
 
     /**
-     * Replays [names] one record at a time into [materializer].
+     * Replays [names] one record at a time through the settlement ledger.
      *
      * The stream is in `<epoch,segment>` + file order; the planner has already
      * proven that the retained ranges are disjoint and that the tail above the
-     * watermark is strictly contiguous, so file order is mseq order for every
-     * record the pass applies. A record at or below [startWatermark] is skipped
-     * (it is already in the copy), and the first record that is not
-     * `watermark + 1` stops the replay — the same rule the pre-P19 sorted-list
-     * pass used, except the body of each record is dropped as soon as it is
-     * applied.
+     * watermark is strictly contiguous. A record at or below [startWatermark]
+     * is already in the copy. Every later mutation goes through
+     * [MaterializationLedger]: supersession is decided before the D9 base
+     * check, a cover settles the earlier appends, and the conservative
+     * watermark never passes a settled record before its cover is inside the
+     * same prefix. The body of each record is dropped as soon as it is
+     * decided, so a deferred tail is never held on the heap.
      *
      * @param retention where diagnostic bodies are collected, or `null` for a
      *   pass whose outcome is discarded (the §7.2 rebuild after a divergence).
      * @param staleNames segments the plan calls stale; their touched paths are
      *   collected for [verifyStale].
+     * @param pass whether this is the copy replay or the §7.2 rebuild.
      */
     private fun replayInto(
         materializer: Materializer,
@@ -1225,9 +1297,14 @@ class WorkspaceLog(
         retention: RetainedRecords?,
         staleNames: Set<WalSegmentName>,
         staleTouched: MutableMap<WalSegmentName, MutableSet<String>>,
+        pass: ReplayPass = ReplayPass.COPY,
     ): ReplayRun {
-        var watermark = startWatermark
-        var applying = true
+        val ledger = MaterializationLedger(
+            materializer = materializer,
+            trace = replayTrace,
+            startWatermark = startWatermark,
+        )
+        replayTrace.passStarted(pass, startWatermark)
         val segments = ArrayList<RecoveredSegment>(names.size)
         for (name in names) {
             var recordCount = 0
@@ -1247,26 +1324,7 @@ class WorkspaceLog(
                             if (name in staleNames) {
                                 staleTouched.getOrPut(name) { LinkedHashSet() }.add(record.body.path)
                             }
-                            if (applying && record.mseq > watermark) {
-                                if (record.mseq == watermark + 1) {
-                                    when (val result = materializer.apply(record.body)) {
-                                        is MaterializeOutcome.Applied,
-                                        is MaterializeOutcome.Skipped,
-                                        -> watermark = record.mseq
-
-                                        is MaterializeOutcome.Resync -> {
-                                            resyncPaths.add(result.path)
-                                            resyncMseqs[result.path] = record.mseq
-                                            sink.onEvent(
-                                                WalLogEvent.ResyncRequired(result.path, record.mseq),
-                                            )
-                                            applying = false
-                                        }
-                                    }
-                                } else {
-                                    applying = false
-                                }
-                            }
+                            ledger.feed(record)
                             retention?.add(record)
                         }
                     }
@@ -1284,6 +1342,20 @@ class WorkspaceLog(
                 )
             }
         }
+        val watermark = ledger.finish()
+        resyncPaths.clear()
+        resyncMseqs.clear()
+        for (request in ledger.resyncRequests) {
+            resyncPaths.add(request.path)
+            resyncMseqs[request.path] = request.mseq
+            // Only a repair still outstanding at the end of the pass is a
+            // §5.1 request. A path that a later cover settled was held only
+            // transiently during the streaming replay and is not one.
+            if (retention != null) {
+                sink.onEvent(WalLogEvent.ResyncRequired(request.path, request.mseq))
+            }
+        }
+        replayTrace.passFinished(pass, watermark, ledger.resyncRequests)
         return ReplayRun(segments, watermark)
     }
 
@@ -1370,6 +1442,7 @@ class WorkspaceLog(
         retention: RetainedRecords?,
         staleNames: Set<WalSegmentName>,
         staleTouched: MutableMap<WalSegmentName, MutableSet<String>>,
+        abortWhenUnsettled: Boolean = false,
     ): ReplayRun {
         // §7.2 step 1: write the marker with the boot id, target tail and
         // materialized position, and fsync it before touching the tree.
@@ -1392,7 +1465,19 @@ class WorkspaceLog(
             retention = retention,
             staleNames = staleNames,
             staleTouched = staleTouched,
+            pass = ReplayPass.REBUILD,
         )
+        if (abortWhenUnsettled && resyncPaths.isNotEmpty()) {
+            // The WAL cannot settle every retained append even from empty. This
+            // is the genuine torn-base case (§5.1), not a rebuild: keep the
+            // original materialized copy, leave the repair outstanding and drop
+            // only the staging attempt and its marker. Exchanging here would
+            // replace a real copy with a partial derivation and lose the bytes
+            // the host must keep until the Worker's repair arrives.
+            deleteRecursively(paths.stagingDirectory, required = false)
+            deleteMarker()
+            return run
+        }
         // §7.2 step 3: fsync the staging tree before the exchange.
         fsyncChanges(stagingChanges)
         // §7.2 step 4: exchange materialized/ and materialized.staging/.
@@ -1665,113 +1750,42 @@ class WorkspaceLog(
         }
     }
 
-    private fun materialize(record: WalRecord.Mutation): ResyncRequest? {
-        val held = resync
-        if (held != null) {
-            pending.add(record)
-            return settle(held)
-        }
-        return when (val result = materializer.apply(record.body)) {
-            is MaterializeOutcome.Applied, is MaterializeOutcome.Skipped -> {
-                if (record.mseq == materializedUptoMseq + 1) {
-                    materializedUptoMseq = record.mseq
-                }
-                null
-            }
-            is MaterializeOutcome.Resync -> {
-                val request = ResyncRequest(result.path, record.mseq)
-                resync = request
-                pending.add(record)
-                recoveryHeldResync = false
-                sink.onEvent(WalLogEvent.ResyncRequired(result.path, record.mseq))
-                request
-            }
-        }
-    }
-
     /**
-     * §5.1 settlement: a complete write for the held path becomes the new base,
-     * the path's pending appended records are re-applied under D9 (usually
-     * skipped because the repair already contains the bytes), and the watermark
-     * then advances across every record it had held back.
+     * Materializes one just-appended record through the live settlement ledger.
      *
-     * A resync left by recovery has no entries in [pending] for the records
-     * that were already in the WAL: keeping them there would put the whole
-     * deferred tail on the heap. While [recoveryHeldResync] is set, the records
-     * between the watermark and the repair write are streamed back from the
-     * retained segments, one body at a time, and applied in mseq order.
+     * Recovery leaves records above its watermark in the WAL instead of holding
+     * their bodies on the heap. Before the first new record the retained tail is
+     * streamed through the same ledger in `mseq` order, so a repair or a cover
+     * sees the deferred appends it must settle. The ledger decides supersession
+     * before the D9 base check and keeps the conservative contiguous watermark;
+     * this method only projects its state onto the log's live fields.
      */
-    private fun settle(held: ResyncRequest): ResyncRequest? {
-        val repair = pending.lastOrNull {
-            it.body.op == VfsOp.WRITE && !it.body.appended && it.body.path == held.path
-        } ?: return held
-        when (val outcome = materializer.apply(repair.body)) {
-            is MaterializeOutcome.Resync -> {
-                val request = ResyncRequest(outcome.path, repair.mseq)
-                resync = request
-                return request
-            }
-            else -> Unit
+    private fun materialize(record: WalRecord.Mutation): ResyncRequest? {
+        val active = ledger ?: MaterializationLedger(
+            materializer = materializer,
+            startWatermark = materializedUptoMseq,
+        ).also {
+            ledger = it
+            liveCursor = materializedUptoMseq
+            // The live ledger reconstructs the held set from the retained tail
+            // as soon as it streams it; the boot snapshot must not outlive it.
+            recoveryResyncs = emptyList()
         }
-        if (recoveryHeldResync) {
-            // Apply the repair once as the new base so the deferred appended
-            // records can skip their already-present bytes, then replay the
-            // deferred range in mseq order (the repair is re-applied at its own
-            // position, which is idempotent for a complete write and keeps a
-            // later complete write for the same path from being clobbered by
-            // an older one).
-            streamRetainedMutations(
-                afterMseq = materializedUptoMseq,
-                beforeMseq = repair.mseq + 1,
-            ) { record ->
-                if (record.mseq != materializedUptoMseq + 1) {
-                    // The retained ranges were proven contiguous by recovery;
-                    // a hole here is a host defect, not a reason to skip a
-                    // record. Keep the resync outstanding and fail the close.
-                    return@streamRetainedMutations false
-                }
-                when (val outcome = materializer.apply(record.body)) {
-                    is MaterializeOutcome.Resync -> {
-                        resync = ResyncRequest(outcome.path, record.mseq)
-                        return@streamRetainedMutations false
-                    }
-                    else -> materializedUptoMseq = record.mseq
-                }
+        if (record.mseq > liveCursor + 1) {
+            streamRetainedMutations(afterMseq = liveCursor, beforeMseq = record.mseq) { streamed ->
+                active.feed(streamed)
+                liveCursor = streamed.mseq
                 true
             }
-            if (materializedUptoMseq >= repair.mseq) {
-                pending.removeAll { it.mseq == repair.mseq }
-            }
-            // A new mismatch deeper in the deferred tail must keep the
-            // watermark where it is; do not apply later pending records over it.
-            if (resync?.path != held.path || resync?.mseq != held.mseq) {
-                return resync
-            }
         }
-        val ordered = pending.sortedBy { it.mseq }
-        for (record in ordered) {
-            if (record.mseq <= materializedUptoMseq) {
-                pending.removeAll { it.mseq == record.mseq }
-                continue
-            }
-            if (record.mseq != materializedUptoMseq + 1) break
-            when (val outcome = materializer.apply(record.body)) {
-                is MaterializeOutcome.Resync -> {
-                    val request = ResyncRequest(outcome.path, record.mseq)
-                    resync = request
-                    return request
-                }
-                else -> {
-                    materializedUptoMseq = record.mseq
-                    pending.removeAll { it.mseq == record.mseq }
-                }
-            }
+        if (record.mseq > liveCursor) {
+            active.feed(record)
+            liveCursor = record.mseq
         }
-        if (pending.isEmpty() && resync?.path == held.path) {
-            resync = null
-            recoveryHeldResync = false
-            return null
-        }
+        materializedUptoMseq = active.finish()
+        // `resync` is the first held path after this record; the ledger keeps
+        // the whole one-per-path set for the sink and the drain.
+        resync = active.firstResync()
         return resync
     }
 

@@ -5,9 +5,9 @@
 The tool shares no code with the Swift or TypeScript codecs. It re-encodes every golden frame
 from its semantic ``fields`` (canonical JSON for JSON payloads), recomputes CRC32C, validates the
 JSON payload schemas with a small built-in validator, checks the documentation coverage rules of
-D16, and validates the WAL vectors, the manifest schema and the handoff endpoint schemas. ``--full``
-makes the WAL, exec, handoff and budgets documents, the manifest schema and the WAL vectors
-mandatory.
+D16, and validates the WAL vectors, the WAL replay-semantics vectors, the manifest schema and the
+handoff endpoint schemas. ``--full`` makes the WAL, exec, handoff and budgets documents, the manifest
+schema, the WAL vectors and the replay vectors mandatory.
 
 Usage:
     python3 spec/v1/tools/spec_golden.py [--spec-dir DIR] [--full]
@@ -52,6 +52,37 @@ WAL_HEADER_CONSTANT_HEX = (
 WAL_HEADER_CONSTANT_CRC32C = 0x0B0F9536
 WAL_SEGMENT_RE = re.compile(r"^wal/[0-9]{8}\.[0-9]{6}\.xlwal$")
 WAL_VECTOR_FILES = ("segment-1.json", "segment-epoch-only.json")
+WAL_REPLAY_SCHEMA_NAME = "wal-replay.schema.json"
+WAL_REPLAY_VECTOR_FILES = (
+    "append-full-write-settles.json",
+    "append-truncate-settles.json",
+    "append-remove-settles.json",
+    "append-ancestor-remove-settles.json",
+    "live-repair-write-settles.json",
+    "recovery-rebuilds-from-wal.json",
+    "append-already-applied-skips.json",
+    "intervening-append-covered-settles.json",
+    "settled-watermark-waits-for-cover.json",
+    "append-only-stays-held.json",
+    "cover-before-append-stays-held.json",
+    "cover-other-path-stays-held.json",
+    "dependent-append-not-covered-stays-held.json",
+    "retained-not-from-one-stays-failed.json",
+)
+WAL_REPLAY_VERDICTS = (
+    "applied",
+    "skipped-idempotent",
+    "settled-superseded",
+    "mismatch-held",
+    "already-materialized",
+)
+WAL_REPLAY_COVERS = (
+    "complete-write",
+    "truncate",
+    "remove",
+    "ancestor-remove",
+    "repair-write",
+)
 MANIFEST_SCHEMA_NAME = "manifest.schema.json"
 MANIFEST_FIELDS = (
     "format",
@@ -139,7 +170,18 @@ LINE_CAPS = {
     # which segment is "the newest close", what proves an epoch durable, the fsync for a
     # removed path, whether the close record is charged, how much to drop, and whether
     # the 512 MiB is per workspace) are contract text now.
-    "wal.md": 374,
+    # D16 amendment (2026-11-04): CCR-1 freezes the fourth D9 verdict,
+    # `superseded`: a later complete write or remove of the path (or an
+    # ancestor) settles an appended record before the base check. The rule
+    # needs its priority, its "only covered bytes" limit and the live-repair
+    # settlement; CCR-2 also writes the boot resync order into §5.1/§7.2. Round
+    # 2 of the review made settlement conservative: a settled record is passed
+    # by the contiguous watermark only once its cover is applied and inside the
+    # same prefix, so §5.1, §6.2, §7, §7.1 and §10 all need that rule. This is
+    # new normative text, not prose, and deleting another rule to make room is
+    # not an option. The cap moves 374 -> 412 (the 398 freeze plus the
+    # conservative-settlement sentences and their manifest invariant).
+    "wal.md": 412,
     # D16 amendment: `unsupported` was defined as "only an unadvertised argv[0]", but the
     # host also refuses request shapes it cannot honour (no stdin channel, protocol-level
     # refusal). The implementation and the spec disagreed; the spec was the narrower one.
@@ -1364,6 +1406,729 @@ def check_wal_vectors(spec_dir, rep, full):
 
 
 # ---------------------------------------------------------------------------
+# WAL replay semantics vectors (§5.1, §6.2, §7.2, §10).
+# ---------------------------------------------------------------------------
+
+
+def _wal_replay_content(value, where):
+    """Decode one fixture content object into bytes."""
+
+    if not isinstance(value, dict):
+        raise SpecError(where + ": content must be an object")
+    if set(value) == {"content_utf8"}:
+        return _string(value["content_utf8"], where + ".content_utf8").encode("utf-8")
+    if set(value) == {"content_hex"}:
+        return _hex_bytes(value["content_hex"], where + ".content_hex")
+    raise SpecError(where + ": content must be exactly content_utf8 or content_hex")
+
+
+def _wal_replay_tree(value, where):
+    """Decode a path -> contents object into bytes and reject file/directory conflicts."""
+
+    if not isinstance(value, dict):
+        raise SpecError(where + ": expected an object")
+    tree = {}
+    for path, content in value.items():
+        checked = check_path(path, where + ".path")
+        if checked in tree:
+            raise SpecError(where + ": duplicate path " + checked)
+        tree[checked] = _wal_replay_content(content, where + "." + checked)
+    for left in tree:
+        for right in tree:
+            if left != right and _is_ancestor_path(left, right):
+                raise SpecError(
+                    where + ": " + left + " is a file and an ancestor of " + right
+                )
+    return tree
+
+
+def _is_ancestor_path(ancestor, path):
+    return path.startswith(ancestor + "/")
+
+
+def _record_covers(record, path):
+    """True when the record establishes the final state of *path*."""
+
+    if record["op"] == 1 and not record["appended"] and record["path"] == path:
+        return True
+    return record["op"] == 3 and (
+        record["path"] == path or _is_ancestor_path(record["path"], path)
+    )
+
+
+def _find_cover(records, index):
+    """Index of the earliest later record that covers *records[index]*, or None."""
+
+    path = records[index]["path"]
+    for later in range(index + 1, len(records)):
+        if _record_covers(records[later], path):
+            return later
+    return None
+
+
+def _cover_label_matches(label, records, index, cover_index):
+    cover = records[cover_index]
+    path = records[index]["path"]
+    if label in ("complete-write", "truncate", "repair-write"):
+        return cover["op"] == 1 and not cover["appended"] and cover["path"] == path
+    if label == "remove":
+        return cover["op"] == 3 and cover["path"] == path
+    if label == "ancestor-remove":
+        return cover["op"] == 3 and _is_ancestor_path(cover["path"], path)
+    return False
+
+
+def _wal_replay_watermark(statuses, candidates):
+    """Highest legal watermark after a replay prefix.
+
+    A watermark is legal only when every record at or below it is applied,
+    skipped, already materialized, or settled by a cover whose own mseq is at
+    or below the watermark. The last condition is the conservative settlement
+    rule: the cover must be inside the claimed prefix, not merely applied to
+    the copy. Every manifest write obeys this rule (wal.md section 6.2 and 7.1).
+    """
+
+    def legal(watermark):
+        for status in statuses:
+            if status["mseq"] > watermark:
+                continue
+            verdict = status["verdict"]
+            if verdict in ("applied", "skipped-idempotent", "already-materialized"):
+                continue
+            if (
+                verdict == "settled-superseded"
+                and status["superseded_by_mseq"] <= watermark
+            ):
+                continue
+            return False
+        return True
+
+    legal_candidates = [candidate for candidate in candidates if legal(candidate)]
+    return max(legal_candidates) if legal_candidates else 0
+
+
+def _wal_replay(records, copy, watermark):
+    """Reference replay used only to validate the fixture's expected result.
+
+    It is deliberately independent of the Swift/Kotlin state machines. The
+    superseded rule is applied before the D9 base check, so a covered append is
+    settled even when its base happens to match; the later cover establishes the
+    final state. A held path is not materialized further until a repair, while
+    records of other paths may still be applied (wal.md §5.1).
+
+    It also returns the highest legal watermark after each record. A settled
+    record cannot be passed before its cover's mseq is inside the same prefix,
+    even when the cover was applied and an intervening record of another path
+    is still unresolved. That is the per-step oracle for fixture
+    ``watermark_steps`` and for the manifest invariant.
+    """
+
+    tree = dict(copy)
+    statuses = []
+    steps = []
+    held = set()
+    failed = False
+    for index, record in enumerate(records):
+        mseq = record["mseq"]
+        if mseq <= watermark:
+            statuses.append({"mseq": mseq, "verdict": "already-materialized"})
+        else:
+            path = record["path"]
+            if record["op"] == 1 and record["appended"]:
+                cover_index = _find_cover(records, index)
+                if cover_index is not None:
+                    statuses.append(
+                        {
+                            "mseq": mseq,
+                            "verdict": "settled-superseded",
+                            "superseded_by_mseq": records[cover_index]["mseq"],
+                        }
+                    )
+                elif path in held:
+                    statuses.append({"mseq": mseq, "verdict": "mismatch-held"})
+                    failed = True
+                else:
+                    current = tree.get(path)
+                    data = record["data"]
+                    append_from = record["append_from"]
+                    if current is None:
+                        statuses.append({"mseq": mseq, "verdict": "mismatch-held"})
+                        held.add(path)
+                        failed = True
+                    elif len(current) == append_from:
+                        tree[path] = current + data
+                        statuses.append({"mseq": mseq, "verdict": "applied"})
+                    elif (
+                        len(current) >= append_from + len(data)
+                        and current[append_from : append_from + len(data)] == data
+                    ):
+                        statuses.append(
+                            {"mseq": mseq, "verdict": "skipped-idempotent"}
+                        )
+                    else:
+                        statuses.append({"mseq": mseq, "verdict": "mismatch-held"})
+                        held.add(path)
+                        failed = True
+            elif record["op"] == 1:
+                tree[path] = record["data"]
+                statuses.append({"mseq": mseq, "verdict": "applied"})
+            else:
+                for present in list(tree):
+                    if present == path or _is_ancestor_path(path, present):
+                        del tree[present]
+                statuses.append({"mseq": mseq, "verdict": "applied"})
+        candidates = [watermark] + [
+            entry["mseq"] for entry in records[: index + 1]
+        ]
+        steps.append(
+            {
+                "mseq": mseq,
+                "materialized_upto_mseq": _wal_replay_watermark(statuses, candidates),
+            }
+        )
+
+    final_candidates = [watermark] + [record["mseq"] for record in records]
+    final_watermark = _wal_replay_watermark(statuses, final_candidates)
+    return statuses, steps, tree, final_watermark, failed
+
+
+def _parse_wal_replay_records(doc_records, where):
+    if not isinstance(doc_records, list) or not doc_records:
+        raise SpecError(where + ": records must be a non-empty array")
+    records = []
+    for index, raw in enumerate(doc_records):
+        at = "{}[{}]".format(where, index)
+        if not isinstance(raw, dict):
+            raise SpecError(at + ": record must be an object")
+        required = {"mseq", "op", "path", "appended"}
+        allowed = required | {"append_from", "data"}
+        missing = required - set(raw)
+        extra = set(raw) - allowed
+        if missing:
+            raise SpecError(at + ": missing members " + str(sorted(missing)))
+        if extra:
+            raise SpecError(at + ": unexpected members " + str(sorted(extra)))
+        mseq = _uint(raw["mseq"], 64, at + ".mseq", minimum=1)
+        op = _uint(raw["op"], 8, at + ".op")
+        if op not in (1, 3):
+            raise SpecError(at + ".op: replay vectors admit only write (1) and remove (3)")
+        path = check_path(raw["path"], at + ".path")
+        appended = _boolean(raw["appended"], at + ".appended")
+        append_from = _uint(raw.get("append_from", 0), 64, at + ".append_from")
+        data = (
+            _wal_replay_content(raw["data"], at + ".data") if "data" in raw else b""
+        )
+        if op == 3:
+            if appended:
+                raise SpecError(at + ": a remove cannot be appended")
+            if append_from != 0 or data:
+                raise SpecError(at + ": a remove carries no append_from or data")
+        elif appended:
+            if "append_from" not in raw:
+                raise SpecError(at + ": an appended write needs append_from")
+            if "data" not in raw:
+                raise SpecError(at + ": an appended write needs data")
+        else:
+            if append_from != 0:
+                raise SpecError(at + ": a complete write has append_from 0")
+            if "data" not in raw:
+                raise SpecError(at + ": a complete write needs data")
+        records.append(
+            {
+                "mseq": mseq,
+                "op": op,
+                "path": path,
+                "appended": appended,
+                "append_from": append_from,
+                "data": data,
+            }
+        )
+    for previous, current in zip(records, records[1:]):
+        if current["mseq"] != previous["mseq"] + 1:
+            raise SpecError(where + ": retained mutation mseq values must be contiguous")
+    return records
+
+
+def _parse_wal_replay_verdicts(value, records, where):
+    if not isinstance(value, list) or len(value) != len(records):
+        raise SpecError(where + ": must carry one verdict per retained record")
+    verdicts = []
+    for index, (raw, record) in enumerate(zip(value, records)):
+        at = "{}[{}]".format(where, index)
+        if not isinstance(raw, dict):
+            raise SpecError(at + ": verdict must be an object")
+        required = {"mseq", "verdict"}
+        allowed = required | {"cover", "superseded_by_mseq"}
+        missing = required - set(raw)
+        extra = set(raw) - allowed
+        if missing:
+            raise SpecError(at + ": missing members " + str(sorted(missing)))
+        if extra:
+            raise SpecError(at + ": unexpected members " + str(sorted(extra)))
+        mseq = _uint(raw["mseq"], 64, at + ".mseq", minimum=1)
+        if mseq != record["mseq"]:
+            raise SpecError(
+                at + ".mseq: expected {} for retained record {}".format(
+                    record["mseq"], index
+                )
+            )
+        verdict = _string(raw["verdict"], at + ".verdict")
+        if verdict not in WAL_REPLAY_VERDICTS:
+            raise SpecError(at + ".verdict: not a WAL replay verdict")
+        parsed = {"mseq": mseq, "verdict": verdict}
+        if verdict == "settled-superseded":
+            cover = _string(raw.get("cover", ""), at + ".cover")
+            if cover not in WAL_REPLAY_COVERS:
+                raise SpecError(at + ".cover: not a replay cover kind")
+            parsed["cover"] = cover
+            parsed["superseded_by_mseq"] = _uint(
+                raw.get("superseded_by_mseq"), 64, at + ".superseded_by_mseq", minimum=1
+            )
+        elif "cover" in raw or "superseded_by_mseq" in raw:
+            raise SpecError(at + ": cover only belongs to a settled-superseded verdict")
+        verdicts.append(parsed)
+    return verdicts
+
+
+def _parse_wal_replay_watermark_steps(value, records, initial, where):
+    if not isinstance(value, list) or not value:
+        raise SpecError(where + ": watermark_steps must be a non-empty array")
+    if len(value) > len(records):
+        raise SpecError(where + ": more watermark_steps than retained records")
+    steps = []
+    for index, raw in enumerate(value):
+        at = "{}[{}]".format(where, index)
+        _mapping(raw, at, {"mseq", "materialized_upto_mseq"})
+        mseq = _uint(raw["mseq"], 64, at + ".mseq", minimum=1)
+        if mseq != records[index]["mseq"]:
+            raise SpecError(
+                at
+                + ".mseq: watermark_steps must follow the retained records in order;"
+                + " expected {}".format(records[index]["mseq"])
+            )
+        watermark = _uint(
+            raw["materialized_upto_mseq"],
+            64,
+            at + ".materialized_upto_mseq",
+            minimum=0,
+        )
+        if watermark < initial:
+            raise SpecError(
+                at + ".materialized_upto_mseq: below the input manifest watermark"
+            )
+        if watermark > max(initial, mseq):
+            raise SpecError(
+                at
+                + ".materialized_upto_mseq: cannot exceed the input watermark or the"
+                + " record's mseq"
+            )
+        if steps and watermark < steps[-1]["materialized_upto_mseq"]:
+            raise SpecError(at + ".materialized_upto_mseq: must not decrease")
+        steps.append({"mseq": mseq, "materialized_upto_mseq": watermark})
+    return steps
+
+
+def _check_wal_replay_watermark_steps(declared, computed, verdicts, where):
+    """Check the manifest invariant at each declared checkpoint.
+
+    A settled record at mseq m may not be passed while its covering record's
+    mseq is still above the recorded watermark; that is the conservative
+    settlement rule of wal.md section 6.2. The exact reference value is then
+    compared so a vector cannot declare a lower or higher step by accident.
+    """
+
+    if len(declared) > len(computed):
+        raise SpecError(where + ": watermark_steps exceeds the replayed records")
+    for index, (declared_step, computed_step) in enumerate(zip(declared, computed)):
+        watermark = declared_step["materialized_upto_mseq"]
+        for verdict in verdicts:
+            if (
+                verdict["verdict"] == "settled-superseded"
+                and verdict["mseq"] <= watermark
+                and verdict["superseded_by_mseq"] > watermark
+            ):
+                raise SpecError(
+                    "{}[{}].materialized_upto_mseq: {} passes settled record {}"
+                    " before its covering record {} is applied".format(
+                        where,
+                        index,
+                        watermark,
+                        verdict["mseq"],
+                        verdict["superseded_by_mseq"],
+                    )
+                )
+        if watermark != computed_step["materialized_upto_mseq"]:
+            raise SpecError(
+                "{}[{}].materialized_upto_mseq: declared {} but the replay"
+                " computes {}".format(
+                    where,
+                    index,
+                    watermark,
+                    computed_step["materialized_upto_mseq"],
+                )
+            )
+
+
+def _check_wal_replay_verdicts(declared, computed, records, where):
+    if len(declared) != len(computed):
+        raise SpecError(where + ": verdict count differs from the retained records")
+    for index, (expected, actual) in enumerate(zip(declared, computed)):
+        if expected["mseq"] != actual["mseq"] or expected["verdict"] != actual["verdict"]:
+            raise SpecError(
+                "{}[{}]: declared {} but replay computes {}".format(
+                    where, index, expected, actual
+                )
+            )
+        if actual["verdict"] != "settled-superseded":
+            continue
+        if expected["superseded_by_mseq"] != actual["superseded_by_mseq"]:
+            raise SpecError(
+                "{}[{}].superseded_by_mseq: declared {} but the next cover is {}".format(
+                    where,
+                    index,
+                    expected["superseded_by_mseq"],
+                    actual["superseded_by_mseq"],
+                )
+            )
+        cover_index = next(
+            (
+                position
+                for position, record in enumerate(records)
+                if record["mseq"] == actual["superseded_by_mseq"]
+            ),
+            None,
+        )
+        if cover_index is None or not _cover_label_matches(
+            expected["cover"], records, index, cover_index
+        ):
+            raise SpecError(
+                "{}[{}].cover: does not match the covering record".format(where, index)
+            )
+
+
+def _check_wal_replay_result(declared, computed, records, where):
+    _check_wal_replay_verdicts(
+        declared["records"], computed["records"], records, where + ".records"
+    )
+    if declared["materialized_upto_mseq"] != computed["materialized_upto_mseq"]:
+        raise SpecError(
+            where
+            + ".materialized_upto_mseq: declared {} but replay computes {}".format(
+                declared["materialized_upto_mseq"],
+                computed["materialized_upto_mseq"],
+            )
+        )
+    watermark = declared["materialized_upto_mseq"]
+    for verdict in declared["records"]:
+        if (
+            verdict["verdict"] == "settled-superseded"
+            and verdict["mseq"] <= watermark
+            and verdict["superseded_by_mseq"] > watermark
+        ):
+            raise SpecError(
+                where
+                + ".materialized_upto_mseq: {} passes settled record {} before its"
+                " covering record {} is applied".format(
+                    watermark, verdict["mseq"], verdict["superseded_by_mseq"]
+                )
+            )
+    if declared["failed"] != computed["failed"]:
+        raise SpecError(
+            where
+            + ".failed: declared {} but replay computes {}".format(
+                declared["failed"], computed["failed"]
+            )
+        )
+
+
+def check_wal_replay_vector(spec_dir, path, rep, schemas, state):
+    rel = str(path.relative_to(spec_dir))
+    rep.add(rel)
+    try:
+        doc = load_json(path)
+        if not isinstance(doc, dict):
+            raise SpecError("WAL replay vector is not an object")
+        schema = schemas.get(WAL_REPLAY_SCHEMA_NAME)
+        if schema is not None:
+            validate_json(doc, schema, rel)
+        _mapping(
+            doc,
+            rel,
+            {
+                "id",
+                "title",
+                "materialized_upto_mseq",
+                "copy",
+                "records",
+                "expected",
+            },
+        )
+        fixture_id = _string(doc["id"], rel + ".id")
+        if fixture_id != path.stem:
+            raise SpecError(rel + ".id: must equal the file name")
+        _string(doc["title"], rel + ".title")
+        watermark = _uint(
+            doc["materialized_upto_mseq"], 64, rel + ".materialized_upto_mseq"
+        )
+        copy = _wal_replay_tree(doc["copy"], rel + ".copy")
+        records = _parse_wal_replay_records(doc["records"], rel + ".records")
+        if watermark > records[0]["mseq"] and records[0]["mseq"] != 1:
+            raise SpecError(
+                rel
+                + ": a retained sequence starting above 1 needs a watermark below its first mseq"
+            )
+        if records[0]["mseq"] > 1 and watermark < records[0]["mseq"] - 1:
+            raise SpecError(
+                rel
+                + ": a retained sequence starting above 1 leaves an mseq hole above the watermark"
+            )
+
+        expected = doc["expected"]
+        if not isinstance(expected, dict):
+            raise SpecError(rel + ".expected: expected an object")
+        required = {"records", "materialized_upto_mseq", "tree", "failed"}
+        allowed = required | {"rebuilt_from_wal", "copy_replay", "watermark_steps"}
+        missing = required - set(expected)
+        extra = set(expected) - allowed
+        if missing:
+            raise SpecError(rel + ".expected: missing members " + str(sorted(missing)))
+        if extra:
+            raise SpecError(rel + ".expected: unexpected members " + str(sorted(extra)))
+        expected_verdicts = _parse_wal_replay_verdicts(
+            expected["records"], records, rel + ".expected.records"
+        )
+        expected_watermark = _uint(
+            expected["materialized_upto_mseq"],
+            64,
+            rel + ".expected.materialized_upto_mseq",
+        )
+        expected_tree = _wal_replay_tree(expected["tree"], rel + ".expected.tree")
+        expected_failed = _boolean(expected["failed"], rel + ".expected.failed")
+        rebuilt = _boolean(
+            expected.get("rebuilt_from_wal", False), rel + ".expected.rebuilt_from_wal"
+        )
+        expected_steps = (
+            _parse_wal_replay_watermark_steps(
+                expected["watermark_steps"],
+                records,
+                0 if rebuilt else watermark,
+                rel + ".expected.watermark_steps",
+            )
+            if "watermark_steps" in expected
+            else []
+        )
+
+        copy_statuses, copy_steps, copy_tree, copy_watermark, copy_failed = _wal_replay(
+            records, copy, watermark
+        )
+        copy_result = {
+            "records": copy_statuses,
+            "materialized_upto_mseq": copy_watermark,
+            "failed": copy_failed,
+        }
+        if "copy_replay" in expected:
+            raw_copy = expected["copy_replay"]
+            if not isinstance(raw_copy, dict):
+                raise SpecError(rel + ".expected.copy_replay: expected an object")
+            _mapping(
+                raw_copy,
+                rel + ".expected.copy_replay",
+                {"records", "materialized_upto_mseq", "failed"},
+            )
+            declared_copy = {
+                "records": _parse_wal_replay_verdicts(
+                    raw_copy["records"], records, rel + ".expected.copy_replay.records"
+                ),
+                "materialized_upto_mseq": _uint(
+                    raw_copy["materialized_upto_mseq"],
+                    64,
+                    rel + ".expected.copy_replay.materialized_upto_mseq",
+                ),
+                "failed": _boolean(
+                    raw_copy["failed"], rel + ".expected.copy_replay.failed"
+                ),
+            }
+            _check_wal_replay_result(
+                declared_copy, copy_result, records, rel + ".expected.copy_replay"
+            )
+        elif rebuilt:
+            raise SpecError(
+                rel + ".expected.copy_replay: required when rebuilt_from_wal is true"
+            )
+        else:
+            declared_copy = None
+
+        if rebuilt:
+            if records[0]["mseq"] != 1:
+                raise SpecError(
+                    rel + ".expected.rebuilt_from_wal: the retained WAL must start at mseq 1"
+                )
+            if not copy_failed:
+                raise SpecError(
+                    rel
+                    + ".expected.rebuilt_from_wal: the copy replay must leave a resync to rebuild"
+                )
+            final_statuses, final_steps, final_tree, final_watermark, final_failed = (
+                _wal_replay(records, {}, 0)
+            )
+        else:
+            if "copy_replay" in expected:
+                raise SpecError(
+                    rel
+                    + ".expected.copy_replay: only valid when rebuilt_from_wal is true"
+                )
+            final_statuses = copy_statuses
+            final_steps = copy_steps
+            final_tree = copy_tree
+            final_watermark = copy_watermark
+            final_failed = copy_failed
+
+        _check_wal_replay_result(
+            {
+                "records": expected_verdicts,
+                "materialized_upto_mseq": expected_watermark,
+                "failed": expected_failed,
+            },
+            {
+                "records": final_statuses,
+                "materialized_upto_mseq": final_watermark,
+                "failed": final_failed,
+            },
+            records,
+            rel + ".expected",
+        )
+        if expected_steps:
+            _check_wal_replay_watermark_steps(
+                expected_steps,
+                final_steps,
+                expected_verdicts,
+                rel + ".expected.watermark_steps",
+            )
+            state["watermark_steps"] += 1
+            for step in expected_steps:
+                for verdict in expected_verdicts:
+                    if (
+                        verdict["verdict"] == "settled-superseded"
+                        and verdict["mseq"] == step["mseq"]
+                        and verdict["superseded_by_mseq"] > step["mseq"]
+                        and step["materialized_upto_mseq"] < verdict["mseq"]
+                    ):
+                        state["settled_waits"] += 1
+        if expected_tree != final_tree:
+            raise SpecError(
+                rel
+                + ".expected.tree: declared does not equal the replayed materialized tree"
+            )
+        if rebuilt and final_failed:
+            raise SpecError(
+                rel + ".expected.rebuilt_from_wal: a successful rebuild cannot stay Failed"
+            )
+
+        state["settled"] += sum(
+            1 for verdict in final_statuses if verdict["verdict"] == "settled-superseded"
+        )
+        state["skipped"] += sum(
+            1 for verdict in final_statuses if verdict["verdict"] == "skipped-idempotent"
+        )
+        state["held"] += sum(
+            1 for verdict in final_statuses if verdict["verdict"] == "mismatch-held"
+        )
+        state["applied"] += sum(
+            1 for verdict in final_statuses if verdict["verdict"] == "applied"
+        )
+        state["already"] += sum(
+            1 for verdict in final_statuses if verdict["verdict"] == "already-materialized"
+        )
+        if declared_copy is not None:
+            state["already"] += sum(
+                1
+                for verdict in declared_copy["records"]
+                if verdict["verdict"] == "already-materialized"
+            )
+        state["rebuilt"] += 1 if rebuilt else 0
+        state["failed"] += 1 if final_failed else 0
+        state["passed"] += 1 if not final_failed else 0
+        for verdict in expected_verdicts + (
+            declared_copy["records"] if declared_copy is not None else []
+        ):
+            if verdict.get("superseded_by_mseq") is not None:
+                state["covers"].add(verdict["cover"])
+    except SpecError as exc:
+        rep.fail(rel, str(exc))
+
+
+def check_wal_replay_vectors(spec_dir, rep, schemas, full):
+    """Validate the WAL replay-semantics vectors and their cross-vector coverage."""
+
+    replay_dir = spec_dir / "golden" / "wal" / "replay"
+    state = {
+        "files": 0,
+        "settled": 0,
+        "skipped": 0,
+        "held": 0,
+        "applied": 0,
+        "already": 0,
+        "rebuilt": 0,
+        "failed": 0,
+        "passed": 0,
+        "watermark_steps": 0,
+        "settled_waits": 0,
+        "covers": set(),
+        "names": set(),
+    }
+    if not replay_dir.is_dir():
+        if full:
+            rep.fail("golden/wal/replay", "no WAL replay vector")
+        return state
+    if WAL_REPLAY_SCHEMA_NAME not in schemas:
+        rep.add("schema/" + WAL_REPLAY_SCHEMA_NAME)
+        rep.fail(
+            "schema/" + WAL_REPLAY_SCHEMA_NAME,
+            "WAL replay schema is required but missing",
+        )
+    paths = sorted(replay_dir.glob("*.json"))
+    state["files"] = len(paths)
+    state["names"] = {path.name for path in paths}
+    for path in paths:
+        check_wal_replay_vector(spec_dir, path, rep, schemas, state)
+    if state["files"] == 0:
+        if full:
+            rep.fail("golden/wal/replay", "no WAL replay vector")
+        return state
+    missing = [name for name in WAL_REPLAY_VECTOR_FILES if name not in state["names"]]
+    if missing:
+        rep.fail(
+            "golden/wal/replay",
+            "required WAL replay vectors are missing: {}".format(missing),
+        )
+    if state["settled"] < 1:
+        rep.fail("golden/wal/replay", "no settled-superseded verdict")
+    if state["skipped"] < 1:
+        rep.fail("golden/wal/replay", "no skipped-idempotent verdict")
+    if state["held"] < 1:
+        rep.fail("golden/wal/replay", "no mismatch-held verdict")
+    if state["applied"] < 1:
+        rep.fail("golden/wal/replay", "no applied verdict")
+    if state["already"] < 1:
+        rep.fail("golden/wal/replay", "no already-materialized verdict")
+    if state["rebuilt"] < 1:
+        rep.fail("golden/wal/replay", "no rebuilt_from_wal vector")
+    if state["failed"] < 1 or state["passed"] < 1:
+        rep.fail("golden/wal/replay", "vectors must cover both Failed and non-Failed outcomes")
+    if state["watermark_steps"] < 1:
+        rep.fail("golden/wal/replay", "no vector declares watermark_steps")
+    if state["settled_waits"] < 1:
+        rep.fail(
+            "golden/wal/replay",
+            "no vector proves a settled record holds the watermark before its cover",
+        )
+    for cover in ("complete-write", "truncate", "remove", "ancestor-remove", "repair-write"):
+        if cover not in state["covers"]:
+            rep.fail("golden/wal/replay", "no settled cover of kind " + cover)
+    return state
+
+
+# ---------------------------------------------------------------------------
 # manifest.json schema.
 # ---------------------------------------------------------------------------
 
@@ -1960,6 +2725,12 @@ WAL_DOC_TOKENS = (
     "next epoch close",
     "No resync state is persisted in the manifest",
     "never discarded",
+    # Conservative settlement (CCR-1 round 2): a settled record is passed only once its cover is
+    # applied and inside the same contiguous prefix; a settled record whose cover is above the
+    # watermark still blocks it. The manifest schema is not changed.
+    "covering record has been applied to the materialized copy",
+    "has been applied at or below the recorded watermark",
+    "cover's `mseq` is at most the watermark",
     # D17: the never-reused high-water formula.
     "max(last_mseq, WAL tail) + 1",
     "`last_mseq`",
@@ -2019,6 +2790,8 @@ WAL_FORBIDDEN_TOKENS = (
     "needs_resync",
     "needs-resync",
     "applied to the materialized copy or deferred",
+    "its bytes are settled, the watermark may pass it",
+    "settled-superseded by a later retained record; a strictly contiguous watermark",
 )
 EXEC_FORBIDDEN_TOKENS = (
     "`step_id` is the call's `XL_IDEMPOTENCY_KEY`",
@@ -2220,6 +2993,7 @@ def check_spec(spec_dir, full):
             rep.fail("golden/README.md", "does not document the {} convention".format(token))
 
     check_wal_vectors(spec_dir, rep, full)
+    check_wal_replay_vectors(spec_dir, rep, schemas, full)
     check_manifest_schema(rep, schemas, texts, full)
     check_handoff_schemas(spec_dir, rep, schemas, texts, full)
     check_decision_references(spec_dir, found, texts, rep)
@@ -2248,8 +3022,8 @@ def main(argv=None):
     parser.add_argument(
         "--full",
         action="store_true",
-        help="require the WAL, exec, handoff and budgets documents, the manifest and handoff "
-        "schemas and the WAL vectors",
+        help="require the WAL, exec, handoff and budgets documents, the manifest, handoff and "
+        "replay schemas and the WAL and replay vectors",
     )
     args = parser.parse_args(argv)
     spec_dir = args.spec_dir.resolve()

@@ -1,0 +1,84 @@
+{
+  "id": "recovery-rebuilds-from-wal",
+  "title": "A boot resync with the retained WAL starting at mseq 1 rebuilds the copy from the WAL",
+  "materialized_upto_mseq": 1,
+  "copy": {
+    "/dsh/workspace/notes.txt": {
+      "content_utf8": "HELLO WORLD!"
+    }
+  },
+  "records": [
+    {
+      "mseq": 1,
+      "op": 1,
+      "path": "/dsh/workspace/notes.txt",
+      "appended": false,
+      "append_from": 0,
+      "data": {
+        "content_utf8": "hello"
+      }
+    },
+    {
+      "mseq": 2,
+      "op": 1,
+      "path": "/dsh/workspace/notes.txt",
+      "appended": true,
+      "append_from": 5,
+      "data": {
+        "content_utf8": " world"
+      }
+    },
+    {
+      "mseq": 3,
+      "op": 1,
+      "path": "/dsh/workspace/notes.txt",
+      "appended": true,
+      "append_from": 11,
+      "data": {
+        "content_utf8": "!"
+      }
+    }
+  ],
+  "expected": {
+    "records": [
+      {
+        "mseq": 1,
+        "verdict": "applied"
+      },
+      {
+        "mseq": 2,
+        "verdict": "applied"
+      },
+      {
+        "mseq": 3,
+        "verdict": "applied"
+      }
+    ],
+    "copy_replay": {
+      "records": [
+        {
+          "mseq": 1,
+          "verdict": "already-materialized"
+        },
+        {
+          "mseq": 2,
+          "verdict": "mismatch-held"
+        },
+        {
+          "mseq": 3,
+          "verdict": "mismatch-held"
+        }
+      ],
+      "materialized_upto_mseq": 1,
+      "failed": true
+    },
+    "materialized_upto_mseq": 3,
+    "tree": {
+      "/dsh/workspace/notes.txt": {
+        "content_utf8": "hello world!"
+      }
+    },
+    "failed": false,
+    "rebuilt_from_wal": true
+  }
+}

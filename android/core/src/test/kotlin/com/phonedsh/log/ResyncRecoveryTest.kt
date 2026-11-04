@@ -20,6 +20,7 @@ package com.phonedsh.log
 import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -32,7 +33,7 @@ class ResyncRecoveryTest {
     val temporary = TemporaryFolder()
 
     @Test
-    fun copyAheadStartupReplayRebuildsFromWal() = runBlocking {
+    fun copyAheadCoveredAppendSettlesWithoutARebuild() = runBlocking {
         val root = temporary.newFolder("copy-ahead").toPath()
         val paths = WalPaths(root)
         val first = newLog(root, RecordingDurability(root))
@@ -56,17 +57,43 @@ class ResyncRecoveryTest {
         assertTrue("copy-ahead must recover: $outcome", outcome is RecoveryOutcome.Recovered)
         outcome as RecoveryOutcome.Recovered
 
-        assertEquals("the rebuilt copy settles every retained record", emptyList<String>(), outcome.resyncRequired)
+        // The later complete write is the cover CCR-1 adds: mseq 2 is settled
+        // rather than a base mismatch, so no resync and no rebuild is needed.
+        assertEquals("the cover settles every retained record", emptyList<String>(), outcome.resyncRequired)
         assertEquals(3L, outcome.effectiveTail)
         assertEquals(3L, outcome.materializedUptoMseq)
-        assertTrue("the full-tree rebuild ran", outcome.fullReconcile)
+        assertFalse("a covered append must not trigger the §7.2 rebuild", outcome.fullReconcile)
         assertTrue(
-            "the replay diagnostic names the path it held before the rebuild",
-            sinkEvents.filterIsInstance<WalLogEvent.ResyncRequired>()
-                .any { it.path == F && it.mseq == 2L },
+            "a settled-superseded record is not a resync diagnostic",
+            sinkEvents.filterIsInstance<WalLogEvent.ResyncRequired>().isEmpty(),
         )
         assertEquals("zz", materializedText(paths, F))
         assertEquals(3L, reopened.closeEpoch().durableUpto)
+    }
+
+    @Test
+    fun divergedCopyRebuildsFromWalWhenTheRetainedTailStartsAtOne() = runBlocking {
+        val root = temporary.newFolder("diverged-copy").toPath()
+        val paths = WalPaths(root)
+        val first = newLog(root, RecordingDurability(root))
+        assertTrue(first.recover() is RecoveryOutcome.Recovered)
+        assertEquals(1L, first.appendMutation(writeMutation(F, "hello")).mseq)
+        first.closeEpoch()
+        assertEquals(2L, first.appendMutation(appendedMutation(F, 5, " world")).mseq)
+        // The copy diverges from the WAL-derived bytes the way a copy that ran
+        // ahead of an old manifest watermark does. The retained WAL starts at
+        // mseq 1 with no hole, so §7.2 permits the from-empty rebuild.
+        java.nio.file.Files.writeString(paths.materialized(F), "HELLO WORLD!")
+
+        val reopened = newLog(root, RecordingDurability(root), bootId = BootId.random())
+        val outcome = reopened.recover()
+        assertTrue("a mseq-1 divergence must rebuild: $outcome", outcome is RecoveryOutcome.Recovered)
+        outcome as RecoveryOutcome.Recovered
+        assertEquals(emptyList<String>(), outcome.resyncRequired)
+        assertTrue("the from-empty rebuild ran", outcome.fullReconcile)
+        assertEquals(2L, outcome.materializedUptoMseq)
+        assertEquals("hello world", materializedText(paths, F))
+        assertEquals(2L, reopened.closeEpoch().durableUpto)
     }
 
     @Test
@@ -79,6 +106,9 @@ class ResyncRecoveryTest {
         first.closeEpoch()
         first.appendMutation(appendedMutation(F, 10, "klmnop"))
         first.appendMutation(writeMutation(F, "zz"))
+        // The cover settles the first append, but this later append depends on
+        // the rewritten base and is not covered by anything retained.
+        first.appendMutation(appendedMutation(F, 6, "!"))
 
         // Drop the epoch-1 segment. Its only mutation is at/below the manifest
         // watermark, so the listed-missing rule drops the manifest entry; the
@@ -95,7 +125,7 @@ class ResyncRecoveryTest {
         outcome as RecoveryOutcome.Failed
         assertEquals("WAL_RESYNC_UNREPAIRED", outcome.code)
         assertTrue("the detail names the held path: ${outcome.detail}", outcome.detail.contains(F))
-        assertTrue("the detail names the held mseq: ${outcome.detail}", outcome.detail.contains("2"))
+        assertTrue("the detail names the held mseq: ${outcome.detail}", outcome.detail.contains("4"))
         assertTrue("the retained WAL is never deleted", Files.exists(kept.single()))
         assertEquals("the materialized copy is left as it was", "zz", materializedText(paths, F))
     }

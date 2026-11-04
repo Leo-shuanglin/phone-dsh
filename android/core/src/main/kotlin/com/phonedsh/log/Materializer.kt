@@ -106,10 +106,12 @@ internal class EpochChanges(private val paths: WalPaths) {
  * `materialized.staging/` for the §7.2 staged reconcile. Materialization is
  * always derived from WAL records, never an input to a write (`wal.md` §6).
  *
- * D9 (`wal.md` §6.2) is decided by [NativeWal.appendedReplay], not by a local
- * size comparison: the kernel owns the skip/applied/resync verdict, and a
- * second implementation here is exactly the drift the two WAL goldens exist to
- * prevent.
+ * D9 (`wal.md` §6.2) is decided by the kernel, not by a local size comparison:
+ * [MaterializationLedger] checks supersession first with
+ * [NativeWal.retainedSupersession], and this class asks
+ * [NativeWal.appendedReplay] for the remaining three-way applied/skip/resync
+ * verdict. A second implementation here is exactly the drift the WAL goldens
+ * exist to prevent.
  *
  * Every I/O failure is a host defect (`wal.md` §5.1): [LogException] with
  * [LogFailure.MATERIALIZATION_FAILED]. A missing chmod target and a

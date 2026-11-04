@@ -20,6 +20,7 @@
 package com.phonedsh.dsh.host
 
 import com.phonedsh.controller.Admission
+import com.phonedsh.controller.ControllerFailure
 import com.phonedsh.controller.ControllerStateMachine
 import com.phonedsh.controller.HostState
 import com.phonedsh.log.BootId as LogBootId
@@ -40,6 +41,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -558,6 +561,250 @@ class VfsSinkTest {
         }
     }
 
+    // ---- 9. live supersession and VFS_CONFLICT --------------------------------
+
+    /**
+     * CCR-1 on the live path: a later complete write of the held path settles
+     * the appended mismatch before any repair arrives. No second resync is
+     * needed and the epoch can close.
+     */
+    @Test
+    fun aLaterCompleteWriteSettlesTheHeldAppendBeforeTheRepair() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val connection = connect(host)
+                send(host, connection, mutFrame(mseq = 1, path = HELD, text = "abc", seq = 2))
+                send(host, connection, appendedFrame(mseq = 2, path = HELD, appendFrom = 10, text = "xyz", seq = 3))
+                assertEquals(
+                    "the mismatch is held and one resync is outstanding",
+                    1,
+                    fieldsOf(connection, HostFrame.VFS_RESYNC).size,
+                )
+                assertEquals(1L, log.materializedUptoMseq)
+
+                // The Worker's complete write is not the byte-identical repair;
+                // it is a later retained complete write and covers mseq 2.
+                send(host, connection, mutFrame(mseq = 3, path = HELD, text = "worker-fix", seq = 4))
+                assertEquals(3L, log.materializedUptoMseq)
+                runBlocking { assertEquals(3L, host.closeEpoch()) }
+                assertEquals(
+                    "the cover settles the path; no second VFS_RESYNC",
+                    1,
+                    fieldsOf(connection, HostFrame.VFS_RESYNC).size,
+                )
+                assertEquals(HostState.RUNNING, host.controller.state)
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    /**
+     * channel.md §10: a `VFS_CONFLICT` for an already superseded path is not
+     * terminal. The covering write arrived first (the Worker ordering rule), so
+     * the log has no live repair left and the conflict only closes the
+     * Worker's own connection.
+     */
+    @Test
+    fun aConflictForASettledPathIsIgnored() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val connection = connect(host)
+                send(host, connection, mutFrame(mseq = 1, path = HELD, text = "abc", seq = 2))
+                send(host, connection, appendedFrame(mseq = 2, path = HELD, appendFrom = 10, text = "xyz", seq = 3))
+                // The cover is sent before the conflict, as channel.md §10 requires.
+                send(host, connection, mutFrame(mseq = 3, path = HELD, text = "fixed", seq = 4))
+                assertEquals(3L, log.materializedUptoMseq)
+
+                send(host, connection, workerErrorFrame("VFS_CONFLICT", seq = 5))
+                assertEquals(
+                    "a conflict for a settled path must not enter Failed",
+                    HostState.RUNNING,
+                    host.controller.state,
+                )
+                assertTrue(host.controller.lastFailure == null)
+                assertNull(log.outstandingResync())
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    /**
+     * `channel.md` §10 "`ref_seq` names the offending frame": with two paths
+     * held, the conflict for the **settled** one is superseded and must be
+     * ignored even though the other path is still held (A = held[0] must not
+     * decide the answer). The conflict for the still-held path is terminal and
+     * its detail names that path and its held mseq, not the first pending one.
+     */
+    @Test
+    fun aConflictForOneOfTwoHeldPathsUsesRefSeqAndOnlyTheStillHeldPathIsTerminal() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val connection = connect(host)
+                // Two paths hold an appended mismatch at different mseqs. A is
+                // settled by a later complete write below; B stays held.
+                send(host, connection, mutFrame(mseq = 1, path = HELD, text = "abc", seq = 2))
+                send(host, connection, appendedFrame(mseq = 2, path = HELD, appendFrom = 10, text = "xyz", seq = 3))
+                send(host, connection, mutFrame(mseq = 3, path = OTHER, text = "def", seq = 4))
+                send(host, connection, appendedFrame(mseq = 4, path = OTHER, appendFrom = 20, text = "uvw", seq = 5))
+                assertEquals(
+                    "both paths must be held before the cover arrives",
+                    listOf(HELD, OTHER),
+                    log.outstandingResyncs().map { it.path },
+                )
+                val heldResync = resyncSeqOf(connection, HELD)
+                val otherResync = resyncSeqOf(connection, OTHER)
+                assertNotNull("A must have a VFS_RESYNC seq", heldResync)
+                assertNotNull("B must have a VFS_RESYNC seq", otherResync)
+                assertTrue("the two requests have distinct seqs", heldResync != otherResync)
+
+                // A's cover settles it; B is still held, so the pending set is
+                // not empty. This is the multi-path shape that used to turn A's
+                // superseded conflict into a Failed.
+                send(host, connection, mutFrame(mseq = 5, path = HELD, text = "fixed", seq = 6))
+                assertEquals(
+                    "only B remains held",
+                    listOf(OTHER),
+                    log.outstandingResyncs().map { it.path },
+                )
+
+                // ref_seq names A's VFS_RESYNC: A is superseded, so the conflict
+                // is ignored even though B is still pending.
+                send(
+                    host,
+                    connection,
+                    workerErrorFrame("VFS_CONFLICT", seq = 7, conflictRefSeq = heldResync),
+                )
+                assertEquals(
+                    "a superseded conflict must not enter Failed while another path is held",
+                    HostState.RUNNING,
+                    host.controller.state,
+                )
+                assertNull(host.controller.lastFailure)
+                assertTrue(
+                    "the ignored conflict must not close the connection",
+                    connection.closes.isEmpty(),
+                )
+
+                // ref_seq names B's VFS_RESYNC: B is still held, so this is the
+                // terminal §5.2 case, and the detail names B and mseq 4.
+                send(
+                    host,
+                    connection,
+                    workerErrorFrame("VFS_CONFLICT", seq = 8, conflictRefSeq = otherResync),
+                )
+                runBlocking { withTimeout(5_000) { host.state.first { it == HostState.FAILED } } }
+                assertEquals(HostState.FAILED, host.controller.state)
+                assertEquals(ControllerFailure.UNREPAIRED_BASE_MISMATCH, host.controller.lastFailure)
+                val detail = host.controller.lastFailureDetail.orEmpty()
+                assertTrue("the failure names ref_seq's path: $detail", detail.contains(OTHER))
+                assertTrue("the failure names B's held mseq: $detail", detail.contains("mseq 4"))
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    /** Unknown `ref_seq` + empty pending set: the existing ignore rule. */
+    @Test
+    fun anUnknownConflictRefSeqWithNoPendingRepairIsIgnored() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val connection = connect(host)
+                // No path is held at all. A ref_seq the host never sent resolves
+                // to no path, so the fallback rule sees an empty pending set.
+                send(
+                    host,
+                    connection,
+                    workerErrorFrame("VFS_CONFLICT", seq = 2, conflictRefSeq = 9_999L),
+                )
+                assertEquals(
+                    "an unknown ref_seq with nothing pending must not enter Failed",
+                    HostState.RUNNING,
+                    host.controller.state,
+                )
+                assertNull(host.controller.lastFailure)
+                assertTrue("the ignored conflict must not close", connection.closes.isEmpty())
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    /** Unknown `ref_seq` + a still-held path: the existing terminal fallback. */
+    @Test
+    fun anUnknownConflictRefSeqWithAPendingRepairIsTerminal() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val connection = connect(host)
+                send(host, connection, mutFrame(mseq = 1, path = HELD, text = "abc", seq = 2))
+                send(host, connection, appendedFrame(mseq = 2, path = HELD, appendFrom = 10, text = "xyz", seq = 3))
+                assertEquals(2L, log.outstandingResync()?.mseq)
+
+                send(
+                    host,
+                    connection,
+                    workerErrorFrame("VFS_CONFLICT", seq = 4, conflictRefSeq = 9_999L),
+                )
+                runBlocking { withTimeout(5_000) { host.state.first { it == HostState.FAILED } } }
+                assertEquals(HostState.FAILED, host.controller.state)
+                assertEquals(ControllerFailure.UNREPAIRED_BASE_MISMATCH, host.controller.lastFailure)
+                val detail = host.controller.lastFailureDetail.orEmpty()
+                assertTrue("the fallback names the held path: $detail", detail.contains(HELD))
+                assertTrue("the fallback names the held mseq: $detail", detail.contains("mseq 2"))
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
+    /** The negative half: a conflict with no cover is the terminal §5.2 case. */
+    @Test
+    fun aConflictForAnUnrepairedPathIsTerminalAndNamesPathAndMseq() {
+        FakePlatform().use { platform ->
+            val log = newLog(platform)
+            val host = newHost(platform, log)
+            startHost(platform, host)
+            try {
+                val connection = connect(host)
+                send(host, connection, mutFrame(mseq = 1, path = HELD, text = "abc", seq = 2))
+                send(host, connection, appendedFrame(mseq = 2, path = HELD, appendFrom = 10, text = "xyz", seq = 3))
+                assertEquals(2L, log.outstandingResync()?.mseq)
+
+                send(host, connection, workerErrorFrame("VFS_CONFLICT", seq = 4))
+                runBlocking { withTimeout(5_000) { host.state.first { it == HostState.FAILED } } }
+                assertEquals(HostState.FAILED, host.controller.state)
+                assertEquals(ControllerFailure.UNREPAIRED_BASE_MISMATCH, host.controller.lastFailure)
+                assertTrue(
+                    "the failure names the held path: ${host.controller.lastFailureDetail}",
+                    host.controller.lastFailureDetail?.contains(HELD) == true,
+                )
+                assertTrue(
+                    "the failure names the held mseq: ${host.controller.lastFailureDetail}",
+                    host.controller.lastFailureDetail?.contains("mseq 2") == true,
+                )
+            } finally {
+                host.stop()
+            }
+        }
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private fun newLog(platform: FakePlatform): WorkspaceLog = WorkspaceLog(
@@ -643,6 +890,29 @@ class VfsSinkTest {
         return WireCodec.encode(fields, seq = seq)
     }
 
+    private fun resyncSeqOf(connection: RecordingLoopbackConnection, path: String): Long? =
+        connection.sent
+            .firstOrNull { frame ->
+                HostFrame.typeOf(frame) == HostFrame.VFS_RESYNC &&
+                    JSONObject(WireCodec.decode(frame)).getString("path") == path
+            }
+            ?.let { HostFrame.seqOf(it) }
+
+    /**
+     * One worker `ERROR`.
+     *
+     * @param seq the ERROR's own inbound connection seq.
+     * @param conflictRefSeq the `ref_seq` member naming the offending host
+     *   frame; `null` keeps the pre-r2 shape with no `ref_seq` at all.
+     */
+    private fun workerErrorFrame(code: String, seq: Long, conflictRefSeq: Long? = null): ByteArray {
+        val ref = conflictRefSeq?.let { "\"ref_seq\":$it," }.orEmpty()
+        return WireCodec.encode(
+            """{"type":"ERROR","fields":{"code":"$code",${ref}"message":"the path is no longer a regular file"}}""",
+            seq = seq,
+        )
+    }
+
     private fun barrierFrame(wantLevel: Int, uptoMseq: Long): ByteArray = WireCodec.encode(
         """{"type":"VFS_BARRIER","fields":{"upto_mseq":$uptoMseq,"want_level":$wantLevel}}""",
         seq = 3,
@@ -695,5 +965,8 @@ class VfsSinkTest {
 
         /** The workspace-relative path these resync tests hold. */
         const val HELD = "/dsh/workspace/held.txt"
+
+        /** The second held path of the multi-path VFS_CONFLICT test. */
+        const val OTHER = "/dsh/workspace/other.txt"
     }
 }

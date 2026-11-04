@@ -233,3 +233,15 @@ lives in the same commit as the change and names the rule it corrects.
   one sentence saying what it carries and which member names the injector — otherwise it is a `kind`
   no reader can interpret. The two lines also pin that `unknown` (no source reported) reads as a user
   message, which is what keeps every legacy fixture's main prompt a bubble.
+- **2026-11-04 — `wal.md` 374 → 412.** CCR-1 freezes the fourth D9 verdict, `superseded`: a later
+  retained complete write or remove of the path (or an ancestor) settles an appended record before
+  the base check, while an uncovered mismatch still stays held and Failed. The new text needs the
+  priority over the base check, the live-repair settlement, and the "only covered bytes" boundary.
+  Round 2 of the review rejects the weaker settlement: a superseded record is settled only once its
+  covering record has been applied, and it holds the contiguous watermark until the cover is inside
+  the same prefix. §5.1, §6.2, §7, §7.1 and §10 now state that rule and the manifest invariant; the
+  replay vectors gain an optional `watermark_steps` checkpoint so the checker rejects a watermark
+  that passes a settled record before its cover. CCR-2 writes the boot-resync order into §5.1/§7.2
+  and removes the apparent conflict with "reconcile never uses the WAL alone": the mseq-1 invariant
+  rebuild is that exception. These lines are new normative text, not prose; no other rule was
+  deleted to make room.

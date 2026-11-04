@@ -163,4 +163,92 @@ class DrainLaneTest {
             clock.close()
         }
     }
+
+    /**
+     * `budgets.md` §1/§2: the drain waits for a connected Worker's
+     * `VFS_RESYNC` answer before it closes the epoch. The close is a separate
+     * step after the wait; the fixture's "Worker answers at 100 ms, close at
+     * 200 ms" order is this seam.
+     */
+    @Test
+    fun theOpenResyncIsSettledBeforeTheEpochCloseStarts() {
+        val clock = FakePlatform()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val closed = CompletableDeferred<Unit>()
+        val drained = CompletableDeferred<DrainLane.DrainOutcome>()
+        val events = mutableListOf<String>()
+
+        val lane = DrainLane(
+            scope = scope,
+            clock = clock,
+            closeEpoch = {
+                events += "close"
+                9L
+            },
+            waitForResyncs = { remaining ->
+                events += "wait:$remaining"
+                true
+            },
+            stopWorker = { events += "stop" },
+            awaitWorkerStopped = { true },
+            onDeadlineElapsed = { events += "deadline" },
+            onDrained = { outcome -> events += "drained"; drained.complete(outcome) },
+            logger = logger,
+        )
+        try {
+            runBlocking {
+                lane.arm(clock.monotonicMillis() + 30_000L)
+                val outcome = withTimeout(5_000) { drained.await() }
+                assertEquals(DrainLane.Reason.CLOSED, outcome.reason)
+                assertEquals(9L, outcome.durableUpto)
+                assertEquals(listOf("wait:30000", "close", "stop", "drained"), events)
+            }
+        } finally {
+            scope.cancel()
+            closed.complete(Unit)
+            clock.close()
+        }
+    }
+
+    /**
+     * The negative half of the drain wait: an unanswered resync at the deadline
+     * still runs the close so the WAL's §5.2 refusal can name the path and
+     * mseq, and the deadline signal is fed before the worker stop.
+     */
+    @Test
+    fun anUnansweredResyncAtTheDeadlineRunsTheFailingClose() {
+        val clock = FakePlatform()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val drained = CompletableDeferred<DrainLane.DrainOutcome>()
+        var closes = 0
+        var deadlineFed = 0
+
+        val lane = DrainLane(
+            scope = scope,
+            clock = clock,
+            closeEpoch = {
+                closes += 1
+                throw IllegalStateException("base mismatch at /dsh/workspace/held.txt mseq 2")
+            },
+            waitForResyncs = { false },
+            stopWorker = {},
+            awaitWorkerStopped = { true },
+            onDeadlineElapsed = { deadlineFed += 1 },
+            onDrained = { drained.complete(it) },
+            logger = logger,
+        )
+        try {
+            runBlocking {
+                lane.arm(clock.monotonicMillis() + 30_000L)
+                val outcome = withTimeout(5_000) { drained.await() }
+                assertEquals(DrainLane.Reason.DEADLINE, outcome.reason)
+                assertEquals("the deadline signal is fed once", 1, deadlineFed)
+                assertEquals("the close still ran and surfaced the refusal", 1, closes)
+                assertEquals(null, outcome.durableUpto)
+            }
+        } finally {
+            scope.cancel()
+            clock.close()
+        }
+    }
 }

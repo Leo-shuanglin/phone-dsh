@@ -63,6 +63,8 @@ pub use record::{
     RECORD_PREFIX_BYTES,
 };
 pub use recovery::{RecoveryInput, RecoveryPlan, SegmentFacts};
-pub use replay::{appended_replay, ReplayDecision};
+pub use replay::{
+    appended_replay, retained_supersession, CoverKind, ReplayDecision, RetainedRecord, Supersession,
+};
 pub use segment::SegmentName;
 pub use tear::{classify_tail, scan_segment, SegmentScan, TailVerdict, Truncation};

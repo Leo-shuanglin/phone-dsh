@@ -210,6 +210,18 @@ class HostWalWiringTest {
                     ),
                 )
                 fixture.appendMutation(write("/dsh/workspace/held.txt", "zz"))
+                // The complete write covers the first append; this later append
+                // depends on the rewritten base and has no retained cover.
+                fixture.appendMutation(
+                    MutationBody(
+                        op = VfsOp.WRITE,
+                        mode = 420,
+                        path = "/dsh/workspace/held.txt",
+                        data = "!".toByteArray(Charsets.UTF_8),
+                        appended = true,
+                        appendFrom = 6L,
+                    ),
+                )
             }
             // The retained WAL must start above mseq 1: drop epoch 1's segment
             // after the manifest watermark already covers its only mutation.
@@ -244,7 +256,7 @@ class HostWalWiringTest {
                 )
                 assertTrue(
                     "the reason names the mseq: ${host.controller.lastFailureDetail}",
-                    host.controller.lastFailureDetail?.contains("mseq 2") == true,
+                    host.controller.lastFailureDetail?.contains("mseq 4") == true,
                 )
                 assertTrue("wal/1 stays off", host.hello.wal is WalUplink.Down)
             } finally {

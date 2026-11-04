@@ -93,8 +93,8 @@ means no dependency. Before dispatch the host MUST have appended every mutation 
 
 - `acked_mseq < requires_mseq` → the request waits; it is not executed early.
 - materialization of a path touched at or below `requires_mseq` is waiting for a base-mismatch repair
-  (wal.md §5.1) → the host waits for the resolving complete write; the accelerator never reads a
-  stale or deferred view.
+  (wal.md §5.1) or for the covering record of a settled-superseded append (wal.md §6.2) → the host
+  waits for that complete write or remove; the accelerator never reads a stale or deferred view.
 - `requires_mseq = 0` → dispatch as soon as admission is open.
 - The readiness wait ends at the earlier of 300 seconds and the caller's deadline, or when admission closes. It returns a terminal error without execution; the dedup entry stays replayable. This readiness fence creates no idempotency key and covers channel-to-materialization lag.
 

@@ -139,6 +139,11 @@ public struct WorkspaceLogRecovery: Equatable, Sendable {
     public var droppedSegments: [String]
     /// Paths whose appended base did not match; the host requests VFS_RESYNC.
     public var needsResync: [String]
+    /// The first retained mseq held by each pending path (wal.md §5.2 detail).
+    public var resyncHolds: [MaterializationHold]
+    /// The §7.2 materialized-copy invariant rebuilt the whole copy from a
+    /// retained WAL that starts at mseq 1 (wal.md §5.1, §7.2).
+    public var rebuiltFromWal: Bool
     /// This process boot differs from the manifest boot (wal.md §10).
     public var coldRecovery: Bool
     /// A staged reconcile was redone because of `reconcile.inprogress`.
@@ -158,6 +163,8 @@ public struct WorkspaceLogRecovery: Equatable, Sendable {
                 replayedRecords: Int = 0,
                 droppedSegments: [String] = [],
                 needsResync: [String] = [],
+                resyncHolds: [MaterializationHold] = [],
+                rebuiltFromWal: Bool = false,
                 coldRecovery: Bool = false,
                 reconciled: Bool = false,
                 localRepairs: [MaterializedInvariantLocalRepair] = []) {
@@ -171,6 +178,8 @@ public struct WorkspaceLogRecovery: Equatable, Sendable {
         self.replayedRecords = replayedRecords
         self.droppedSegments = droppedSegments
         self.needsResync = needsResync
+        self.resyncHolds = resyncHolds
+        self.rebuiltFromWal = rebuiltFromWal
         self.coldRecovery = coldRecovery
         self.reconciled = reconciled
         self.localRepairs = localRepairs

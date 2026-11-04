@@ -96,7 +96,7 @@ base 分支單邊前進不算本分支改動。一個檔案可同時屬於多個
 | ID | 觸發路徑 |
 | --- | --- |
 | P01 | `spec/v1/{channel.md,README.md}`、`spec/v1/schema/{hello,exec-req,exec-ctl,lifecycle,fence,error,console,api-*}.schema.json`、`spec/v1/golden/frames/**`、`Sources/PhoneDSHWire/**`（除 `WAL.swift`）、`Sources/PhoneDSHLoopback/{ChannelServer,DefaultChannelHandling,WebSocket,LoopbackServer}.swift`、`Sources/PhoneDSH/PhoneDSHChannel.swift`、`plugins/channel/src/**`（除 `wal*`）、`shell/crates/pdsh-wire/**`、`shell/crates/pdsh-jni/src/{lib,bridge}.rs`、`android/core/src/main/kotlin/com/phonedsh/wire/**`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostHello,HostChannel,VfsFrames,VfsSink,BootId}.kt`、`android/engine/src/main/kotlin/com/phonedsh/engine/{FrameType,HelloFields,ChannelReopenLane,ObservedChannelHandler}.kt` |
-| P02 | `spec/v1/wal.md`、`spec/v1/schema/manifest.schema.json`、`spec/v1/golden/wal/**`、`Sources/PhoneDSHWire/WAL.swift`、`Sources/PhoneDSHLog/**`、`plugins/channel/src/{wal,vfs-mutation}.ts`、`shell/crates/pdsh-wal/**`、`shell/crates/pdsh-jni/src/wal.rs`、`android/core/src/main/kotlin/com/phonedsh/log/**`、`android/core/src/main/kotlin/com/phonedsh/wire/{NativeWal,WalException}.kt`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostWal,WalUplink,HostLog}.kt`、`android/engine/src/main/kotlin/com/phonedsh/engine/BootOverlay*.kt` |
+| P02 | `spec/v1/wal.md`、`spec/v1/schema/{manifest,wal-replay}.schema.json`、`spec/v1/golden/wal/**`、`Sources/PhoneDSHWire/WAL.swift`、`Sources/PhoneDSHLog/**`、`plugins/channel/src/{wal,vfs-mutation}.ts`、`shell/crates/pdsh-wal/**`、`shell/crates/pdsh-jni/src/wal.rs`、`android/core/src/main/kotlin/com/phonedsh/log/**`、`android/core/src/main/kotlin/com/phonedsh/wire/{NativeWal,WalException}.kt`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostWal,WalUplink,HostLog}.kt`、`android/engine/src/main/kotlin/com/phonedsh/engine/BootOverlay*.kt` |
 | P03 | `spec/v1/{exec,handoff,budgets}.md`、`spec/v1/schema/{handoff-*,perturbation}.schema.json`、`spec/v1/golden/perturbations/**`、`Sources/PhoneDSHController/**`、`Sources/PhoneDSH/{Handoff,Background}/**`、`Sources/PhoneDSH/{PhoneDSHLedger,PhoneDSHHost,PhoneDSHLifecycle,PhoneDSHInactivity,HostFault}.swift`、`Sources/PhoneDSHAgentCore/{ExecBridgeHosting,Delegation}.swift`、`plugins/{exec-bridge,tool-journal,lifecycle-gate,subprocess-xl}/src/**`、`android/controller/src/main/**`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/{exec,journal,background}/**` |
 | P04 | `spec/v1/bridge.md`、`spec/v1/schema/bridge-message.schema.json`、`spec/v1/golden/bridge/**`、`Sources/PhoneDSHEngine/WebEngine*.swift`、`examples/probe-app/ProbeKit/MCPControlBridge.swift`、`plugins/phone-native-preview/src/**`、任何 `plugins/*/src/client/**` 中的 `postMessage`／`webkit.messageHandlers`、`android/engine/src/main/kotlin/com/phonedsh/engine/{WebViewEngine,WebViewKernel,NavigationPolicy,EngineCapabilities}.kt` |
 | P05 | `spec/v1/gateway-security.md`、`spec/v1/schema/gateway-vector.schema.json`、`spec/v1/golden/gateway/**`、`Sources/PhoneDSHGateway/**`、`Sources/PhoneDSHLoopback/{HTTPTransport,HTTPEgressFailure,StreamingForward,Loopback,Support}.swift`、`Sources/PhoneDSHAgentCore/{Credentials,HTTPSupport,ProviderError}.swift`、`plugins/llm-bridge/src/**`、`plugins/phone-mcp/src/{manager,schema,protocol}.ts`、`plugins/worker-entry/src/model-route.ts`、`android/net/src/main/**` |
@@ -168,8 +168,13 @@ base 分支單邊前進不算本分支改動。一個檔案可同時屬於多個
 
 ## 7. 已知差異：維護債，不是實作許可
 
-以下保留 revision 2 的原始 source review，不是 runtime 實驗；後續工具進度見 §9，本輪不關閉任何 GAP。本基線沒有修改任何訊息格式，也沒有宣稱它們已修好。
+以下保留 revision 2 的原始 source review，不是 runtime 實驗；後續工具進度見 §9，本輪不關閉任何 GAP（GAP-12／GAP-13 為本次新登記的 iOS 實作缺口，見下）。本基線沒有修改任何訊息格式，也沒有宣稱它們已修好。
 修正時附 contract delta 與 regression；**不得為了消除差異把規範改成寬鬆的實作現狀**。
+
+**本次凍結（2026-11-04）。** CCR-1（wal.md §6.2／§5.1 的 `superseded` 第四判定）與 CCR-2（drain 等待 outstanding VFS_RESYNC、啟動 mseq-1 重建、Failed→Recovering 順序）已由變更單
+[PC-20261104-wal-superseded-drain](../docs/protocol-changes/PC-20261104-wal-superseded-drain.md) 以 `status: frozen` 凍結；`contract_revision` = `5b573cb2`。
+第 2 輪審查把 settlement 收緊為保守語義：superseded 記錄只有在 cover 已套用、且 cover 的 mseq ≤ manifest 水位時才計入連續水位；replay vectors 以可選 `watermark_steps` 斷言這條不變式。
+GAP-12／GAP-13 是同一批實作要修的 iOS 缺口，不是合約變更。
 
 | ID／邊界 | 觀測 | 關閉條件 |
 | --- | --- | --- |
@@ -184,6 +189,8 @@ base 分支單邊前進不算本分支改動。一個檔案可同時屬於多個
 | GAP-09／狀態 | 狀態標記各自為政（見 §2 對照表）；v1 README 把含 28 個 `[NEW]` 的 bridge.md 標為 landed；budgets.md 與 platform whitelist 引用 `draft` 的 render-media-v1.md | 狀態對齊 §2 詞彙；normative 不再依賴 draft |
 | GAP-10／P13 | 至少 6 個 Remote service 共用 `phone` namespace，沒有方法名登記 | 建立方法清單，新增方法前查重 |
 | GAP-11／P14、P16 | 代碼引用 D21–D24，v1 README 決策表只到 D20 | 補入決策表或移到對應 code contract 的註解中並在此登記 |
+| GAP-12／P02（iOS） | iOS `WorkspaceLog` 定義 `defaultEpochIntervalSeconds = 45` 與 30–60 s 邊界，但沒有任何 timer 調用 `closeEpoch`；[wal.md](v1/wal.md) §5.2 的週期 close 在 iOS 缺席（Android 在 PR14 已有 lane）。由 [PC-20261104-wal-superseded-drain](../docs/protocol-changes/PC-20261104-wal-superseded-drain.md) 的 iOS implementer 修 | iOS 在 `Running` 且無 held resync 時按 30–60 s 週期 close；regression 在 60 s 視窗內斷言 `closeEpoch` 被調用一次，held 時不 close。runtime 證據後才關閉 |
+| GAP-13／P02（iOS） | iOS `WorkspaceLogService.pendingResyncPaths()` 沒有生產調用者；recovery 留下的 resync 不會在 HELLO 後重新請求，違反 wal.md §10 step 4 與 channel.md §9 item 6。由同一變更單的 iOS implementer 修 | `pendingResyncPaths()` 接到 HELLO 後路徑；regression 斷言每個 pending path 恰好一個帶 `mseq` 的 VFS_RESYNC，settle 後不重發。runtime 證據後才關閉 |
 
 只有修正來源、相關端測試及必要的 integration 證據齊備，才在此記錄關閉與修復 commit。
 

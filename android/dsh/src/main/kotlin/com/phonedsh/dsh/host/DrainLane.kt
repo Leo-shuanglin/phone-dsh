@@ -74,6 +74,11 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   the facade's per-boot [kotlinx.coroutines.Job] list (which `stop()` cancels).
  * @param clock the facade's monotonic clock; the deadline is a duration.
  * @param closeEpoch the WAL seam (`CLOSE_EPOCH` + `FSYNC_MATERIALIZED`).
+ * @param waitForResyncs waits up to the remaining deadline for every issued
+ *   `VFS_RESYNC` whose Worker is still connected to be answered and settled.
+ *   `true` means no wait is needed any more (nothing held, or the Worker is
+ *   disconnected); `false` means the deadline ended the wait with a repair still
+ *   outstanding. Defaults to `true` for a composition with no VFS seam.
  * @param stopWorker the `:engine` seam (`STOP_WORKER`).
  * @param awaitWorkerStopped waits until the worker really is gone; `Parked`
  *   claims "WebContent stopped" (§1), so the completion is not reported before
@@ -87,6 +92,7 @@ internal class DrainLane(
     private val scope: CoroutineScope,
     private val clock: Clock,
     private val closeEpoch: suspend () -> Long?,
+    private val waitForResyncs: suspend (remainingMillis: Long) -> Boolean = { true },
     private val stopWorker: () -> Unit,
     private val awaitWorkerStopped: suspend () -> Boolean,
     private val onDeadlineElapsed: () -> Unit,
@@ -171,12 +177,32 @@ internal class DrainLane(
     private suspend fun run(deadlineAtMillis: Long) {
         val remaining = (deadlineAtMillis - clock.monotonicMillis()).coerceAtLeast(0L)
         logger.info(
-            "drain: closing the epoch now (deadline in $remaining ms; this row was fed only " +
-                "after the turn-window read said no window is in place)",
+            "drain: waiting for outstanding VFS_RESYNC answers (deadline in $remaining ms; this " +
+                "row was fed only after the turn-window read said no window is in place)",
         )
-        val wait = closeBounded(remaining)
+        // budgets.md §1/§2: the wait includes every issued VFS_RESYNC whose
+        // Worker is still connected. A disconnected Worker is not waited for;
+        // the close below then either succeeds or surfaces the §5.2 failure.
+        val resyncsSettled = waitForResyncs(remaining)
+        val afterWait = (deadlineAtMillis - clock.monotonicMillis()).coerceAtLeast(0L)
+        val timedOutOnResync = !resyncsSettled
+        if (timedOutOnResync) {
+            logger.warn(
+                "drain deadline reached with an outstanding VFS_RESYNC; the close now runs so " +
+                    "wal.md §5.2 can name the unrepaired path and mseq",
+            )
+            onDeadlineElapsed()
+        }
+        val wait = if (timedOutOnResync) closeNow() else closeBounded(afterWait)
         val attempt = (wait as? CloseWait.Closed)?.attempt
         val reason = when {
+            timedOutOnResync -> {
+                // The deadline ended the wait; the close either surfaced the
+                // failure through the sink or (unexpectedly) succeeded. In both
+                // cases the row's deadline branch is the one recorded.
+                logger.warn("drain: deadline ended the resync wait (close failure=${attempt?.failure})")
+                Reason.DEADLINE
+            }
             attempt == null -> {
                 logger.warn(
                     "drain deadline reached with the epoch close still running; the wait is " +
@@ -215,6 +241,24 @@ internal class DrainLane(
                 "worker_stopped=${drained.workerStopped}",
         )
         onDrained(drained)
+    }
+
+    /**
+     * Runs the close now, without a wait.
+     *
+     * Used after the resync wait expired: the close is expected to refuse and
+     * report the held path/mseq, and it must do so before the worker is stopped
+     * rather than as a fire-and-forget child.
+     */
+    private suspend fun closeNow(): CloseWait {
+        val attempt = try {
+            CloseAttempt(durableUpto = closeEpoch(), failure = null)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            CloseAttempt(durableUpto = null, failure = failure.javaClass.simpleName)
+        }
+        return CloseWait.Closed(attempt)
     }
 
     /**

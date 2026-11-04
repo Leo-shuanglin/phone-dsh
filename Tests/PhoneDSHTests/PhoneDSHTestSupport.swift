@@ -304,6 +304,11 @@ actor MockWorker {
     private var receivedExecEvents: [(execID: String, type: String, replayed: Bool)] = []
     /// Raw payloads of the same events, for tests that inspect stdout/stderr.
     private var receivedExecEventBodies: [(execID: String, type: String, body: Data)] = []
+    /// VFS_RESYNC paths the host requested on this connection, in order.
+    private var receivedResyncPaths: [String] = []
+    /// Coarse order of worker-visible host frames across reconnects: "hello"
+    /// then "resync" proves the HELLO-before-VFS_RESYNC rule (channel.md §9).
+    private var timeline: [String] = []
     private var journalSequences: [String: UInt64] = [:]
     private var journalAcked: [String: UInt64] = [:]
 
@@ -354,6 +359,7 @@ actor MockWorker {
                                      lastMseq: lastMseq)
         helloCount += 1
         workerHelloSent = true
+        timeline.append("hello")
         try enqueueJSON(.hello, hello)
     }
 
@@ -551,6 +557,32 @@ actor MockWorker {
         return mseq
     }
 
+    /// Publishes an appended mutation (channel.md §3.1) at the next mseq.
+    @discardableResult
+    func appendFile(path: String, from: UInt64, data: Data,
+                    mode: UInt32 = 0o644) throws -> UInt64 {
+        let mseq = lastMseq + 1
+        let body = VfsMutationBody(op: .write, mode: mode,
+                                   mflags: [.appended], appendFrom: from,
+                                   path: path, data: data)
+        try enqueueFrame(.vfsMutation,
+                         payload: try VfsMutationPayload.encode(mseq: mseq, body: body))
+        lastMseq = mseq
+        return mseq
+    }
+
+    /// VFS_RESYNC paths the host issued, in order.
+    func resyncPaths() -> [String] { receivedResyncPaths }
+
+    /// Worker-visible host frame order across reconnects ("hello"/"resync").
+    func timelineEvents() -> [String] { timeline }
+
+    func waitForResync(path: String, timeout: TimeInterval = 5) async throws {
+        try await waitUntil(timeout: timeout) {
+            await self.receivedResyncPaths.contains(path)
+        }
+    }
+
     // MARK: remote.mux bridge (test side)
 
     func pushMuxFrame(_ frame: JSONValue, muxID: String) throws {
@@ -636,6 +668,10 @@ actor MockWorker {
             fenceFrames += 1
         case .lifecycle:
             lifecycleFrames += 1
+        case .vfsResync:
+            let body = try VfsResyncBody.decode(frame.payload)
+            receivedResyncPaths.append(body.path)
+            timeline.append("resync")
         case .apiRequest:
             let request = try ApiRequestFrame.decode(frame.payload)
             try respond(to: request)

@@ -261,6 +261,26 @@
             "unmeasured"
           ]
         },
+        "failure_detail": {
+          "description": "The host's failure detail when expected.state is Failed: the VFS path and mseq of the unrepaired base mismatch. Optional and additive; old readers ignore it. Required for a Failed fixture that asserts the drain/close mismatch diagnostic.",
+          "type": "object",
+          "required": [
+            "path",
+            "mseq"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "pattern": "^/dsh/(home|workspace)(/[^/]+)+$"
+            },
+            "mseq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          "additionalProperties": false
+        },
         "acked_prefix_preserved": {
           "description": "Every level-1 acked mseq must still be present in the WAL with the identical mutation.",
           "type": "boolean"
@@ -374,6 +394,14 @@
               ]
             },
             "admission": {
+              "enum": [
+                "swift-test",
+                "swift-source",
+                "spec-only",
+                "NEW"
+              ]
+            },
+            "failure_detail": {
               "enum": [
                 "swift-test",
                 "swift-source",

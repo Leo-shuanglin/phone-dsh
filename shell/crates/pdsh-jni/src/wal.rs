@@ -82,9 +82,10 @@ use pdsh_wal::epoch::EPOCH_CLOSE_BODY_BYTES;
 use pdsh_wal::json::{self, Json};
 use pdsh_wal::{
     appended_replay as replay_decision, classify_tail as classify_region_tail,
-    scan_segment as scan_segment_bytes, Checksum, Manifest, Record, RecordParseError,
-    RecoveryInput, RecoveryPlan, ReplayDecision, SegmentFacts, SegmentName, TailVerdict,
-    Truncation, WalError, BODY_HEADER_BYTES, HEADER_BYTES, OP_EPOCH_CLOSE, RECORD_PREFIX_BYTES,
+    retained_supersession as replay_supersession, scan_segment as scan_segment_bytes, Checksum,
+    CoverKind, Manifest, Record, RecordParseError, RecoveryInput, RecoveryPlan, ReplayDecision,
+    RetainedRecord, SegmentFacts, SegmentName, TailVerdict, Truncation, WalError,
+    BODY_HEADER_BYTES, HEADER_BYTES, OP_EPOCH_CLOSE, RECORD_PREFIX_BYTES,
 };
 
 /// `WAL_CORRUPT`, the only `wal.md` §10 state code.
@@ -542,6 +543,99 @@ pub fn appended_replay(
         ReplayDecision::Resync => "resync",
     };
     format!("{{\"verdict\":\"{verdict}\"}}")
+}
+
+/// The D9 retained-sequence supersession predicate (`wal.md` §6.2).
+///
+/// The input is a JSON array of retained records in ascending `mseq` order:
+/// `{"mseq":N,"op":1|3,"appended":bool,"path":"/dsh/..."}`. Unknown members are
+/// ignored (`spec/v1/README.md` §2); the output has one object per input record:
+///
+/// * `{"mseq":N,"verdict":"settled-superseded","cover":"complete-write|remove|ancestor-remove","superseded_by_mseq":M}`
+///   for an appended record a later retained record covers;
+/// * `{"mseq":N,"verdict":"not-superseded"}` otherwise.
+///
+/// The verdict alone must not advance a watermark: the caller uses
+/// `superseded_by_mseq` and only counts the settled record when that cover is
+/// inside the same contiguous prefix. `appended_replay` remains the one-record
+/// three-way base check; this entry point is the fourth D9 decision.
+pub fn retained_supersession(records_json: &str) -> Result<String, BridgeError> {
+    let value = json::parse(records_json)
+        .map_err(|error| BridgeError::Input(format!("retained records are not JSON: {error}")))?;
+    let records = value
+        .as_array()
+        .ok_or_else(|| BridgeError::Input("retained records must be a JSON array".to_string()))?;
+    let mut parsed: Vec<(u64, u8, bool, String)> = Vec::with_capacity(records.len());
+    for (index, record) in records.iter().enumerate() {
+        let at = format!("retained records[{index}]");
+        let object = record
+            .as_object()
+            .ok_or_else(|| BridgeError::Input(format!("{at} is not an object")))?;
+        let mseq = required_member(object, "mseq", &at)?
+            .as_u64()
+            .ok_or_else(|| BridgeError::Input(format!("{at}.mseq is not an integer")))?;
+        if mseq == 0 {
+            return Err(BridgeError::Input(format!("{at}.mseq must be at least 1")));
+        }
+        let op = required_member(object, "op", &at)?
+            .as_u64()
+            .ok_or_else(|| BridgeError::Input(format!("{at}.op is not an integer")))?;
+        let op = u8::try_from(op)
+            .map_err(|_| BridgeError::Input(format!("{at}.op does not fit a byte")))?;
+        let appended = match required_member(object, "appended", &at)? {
+            Json::Bool(value) => *value,
+            _ => {
+                return Err(BridgeError::Input(format!(
+                    "{at}.appended is not a boolean"
+                )))
+            }
+        };
+        let path = required_member(object, "path", &at)?
+            .as_str()
+            .ok_or_else(|| BridgeError::Input(format!("{at}.path is not a string")))?;
+        if path.is_empty() {
+            return Err(BridgeError::Input(format!("{at}.path is empty")));
+        }
+        parsed.push((mseq, op, appended, path.to_string()));
+    }
+    for pair in parsed.windows(2) {
+        if pair[1].0 <= pair[0].0 {
+            return Err(BridgeError::Input(
+                "retained records must be in strictly ascending mseq order".to_string(),
+            ));
+        }
+    }
+    let paths: Vec<String> = parsed.iter().map(|record| record.3.clone()).collect();
+    let retained: Vec<RetainedRecord<'_>> = parsed
+        .iter()
+        .zip(paths.iter())
+        .map(|(record, path)| RetainedRecord::new(record.0, record.1, record.2, path))
+        .collect();
+    let mut out = String::with_capacity(records.len() * 64 + 2);
+    out.push('[');
+    for (index, record) in retained.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"mseq\":");
+        out.push_str(&record.mseq.to_string());
+        match replay_supersession(&retained, index) {
+            Some(supersession) => {
+                out.push_str(",\"verdict\":\"settled-superseded\",\"cover\":\"");
+                out.push_str(match supersession.kind {
+                    CoverKind::CompleteWrite => "complete-write",
+                    CoverKind::Remove => "remove",
+                    CoverKind::AncestorRemove => "ancestor-remove",
+                });
+                out.push_str("\",\"superseded_by_mseq\":");
+                out.push_str(&supersession.cover_mseq.to_string());
+            }
+            None => out.push_str(",\"verdict\":\"not-superseded\""),
+        }
+        out.push('}');
+    }
+    out.push(']');
+    Ok(out)
 }
 
 /// The record array of [`records`].

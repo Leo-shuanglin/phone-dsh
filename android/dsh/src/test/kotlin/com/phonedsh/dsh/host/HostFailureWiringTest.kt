@@ -335,6 +335,7 @@ class HostFailureWiringTest {
                 persistedFailure = ControllerFailure.UNREPAIRED_BASE_MISMATCH,
                 persistedFailureDetail = "a prior close held the resync",
             )
+            val logger = RecordingHostLog()
             val host = DefaultPhoneDshHost(
                 engine = platform.engine,
                 controller = controller,
@@ -343,7 +344,7 @@ class HostFailureWiringTest {
                 notifier = platform,
                 wal = log.asHostWal(),
                 scope = CoroutineScope(Dispatchers.Unconfined),
-                logger = HostLog.None,
+                logger = logger,
             )
             try {
                 host.start()
@@ -364,8 +365,25 @@ class HostFailureWiringTest {
                 assertEquals(HostState.RECOVERING, controller.state)
                 assertNull("a successful reset clears the old failure", controller.lastFailure)
                 assertNotNull("recovery ran again and left the resync for the Worker", log.recovery)
+                // The frozen row order is recover -> pack overlay/start Worker
+                // -> HELLO -> VFS_RESYNC -> settle, and this row does not close
+                // an epoch. The host log is the order witness for the first two
+                // steps; the connection witnesses HELLO before RESYNC.
+                val messages = logger.messages
+                val resetStarted = messages.indexOfFirst { it.contains("user reset") }
+                val recovered = messages.indexOfFirst { it.contains("user reset recovery complete") }
+                assertTrue(
+                    "recovery precedes the replacement Worker start: $messages",
+                    resetStarted >= 0 && recovered > resetStarted,
+                )
+                assertEquals("exactly one replacement Worker start", 2, platform.engine.startCount)
 
                 val connection = connect(host)
+                assertEquals(
+                    "the host HELLO is the first frame on the recovered connection",
+                    HostFrame.HELLO,
+                    HostFrame.typeOf(connection.sent.first()),
+                )
                 assertTrue(
                     "the recovered resync is re-requested after HELLO",
                     connection.sent.any { HostFrame.typeOf(it) == HostFrame.VFS_RESYNC },

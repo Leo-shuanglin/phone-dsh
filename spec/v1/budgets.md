@@ -13,7 +13,7 @@ The host is always in exactly one of these states. Admission is `open` only in `
 | State | Admission | Meaning |
 |---|---|---|
 | `Running` | open | Foreground; the worker executes tool work and the phone holds the fence. |
-| `Draining` | closed | Close admission, wait for in-flight work, close a WAL epoch; 20 s deadline. |
+| `Draining` | closed | Close admission; until the 20 s deadline, wait for in-flight work and for every issued VFS_RESYNC whose Worker is still connected to be answered and settled (wal.md §5.1), then close a WAL epoch. A mismatch still unrepaired at the deadline enters `Failed` per wal.md §5.2 with its path and mseq; a disconnected Worker is not waited for. |
 | `Parked` | closed | Background; WAL durable, WebContent stopped, no work scheduled. |
 | `Recovering` | closed | Lease verification, WAL recovery, overlay pack, worker boot, replay; no side effect. |
 | `Backoff` | closed | Upstream 429/5xx or no network path; retry with backoff and jitter. |
@@ -40,7 +40,7 @@ before the transition.
 | boot: persisted `Failed` | `Backoff` or `Recovering` | process start | A future `next_retry_at_ms` restores closed Backoff; an elapsed or absent deadline starts Recovering, never open admission. |
 | boot: no persisted state | `Recovering` | process start | New workspace; WAL starts at mseq 1. |
 | `Running` | `Draining` | scenePhase background | Close admission; start the background task and the 20 s timer. |
-| `Draining` | `Parked` | background drain complete, or 20 s deadline | Close the epoch (wal.md §5.2), fsync, stop the worker. A deadline ends the wait and aborts in-flight channel requests; the epoch close still runs. |
+| `Draining` | `Parked` | background drain complete, or 20 s deadline | Close the epoch (wal.md §5.2), fsync, stop the worker. The wait includes outstanding VFS_RESYNC answers while the Worker is connected; a deadline ends the wait and aborts in-flight channel requests. If a base mismatch is still unrepaired the state becomes `Failed` (wal.md §5.2); otherwise the epoch close still runs. |
 | `Draining` | `Recovering` | restart path: planned WebContent restart, WebContent termination, or boot | Close the epoch, restart the worker, verify the lease. |
 | `Parked` | `Recovering` | scenePhase active | Boot the worker and verify the lease; admission stays closed. |
 | `Running` | `Recovering` | planned restart (policy, §4) or WebContent termination, still foreground | Close admission, close the epoch, restart WebContent at a tool-call boundary. |
@@ -54,7 +54,7 @@ before the transition.
 | `Remote` | `Reclaiming` | reclaim requested (user or foreground return) | POST the reclaim token (handoff.md §5). |
 | `Reclaiming` | `Recovering` | response applied, new fence persisted, epoch closed | Verify the lease; admission stays closed until `Recovering → Running`. |
 | any state | `Failed` | `WAL_CORRUPT`, unrepaired base mismatch at an epoch close, materialization I/O failure, quota still exceeded after compaction, or an unrecoverable host defect | Close admission, record the condition, keep every durable WAL and journal byte. |
-| `Failed` | `Recovering` | explicit user reset only, within this process | Clear the retry window and re-run recovery; the WAL may still fail the same condition. |
+| `Failed` | `Recovering` | explicit user reset only, within this process | Clear the retry window; re-run recovery in this order: recover, pack the overlay, start the Worker, HELLO, VFS_RESYNC, settle. This row does **not** close an epoch; the next close is a periodic close or a drain. The WAL may still fail the same condition. |
 
 No other edge exists. In particular, `Parked` never opens admission directly, `Remote` is never left
 without `Reclaiming`, and a drain deadline never reopens admission.

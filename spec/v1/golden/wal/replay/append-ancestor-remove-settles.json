@@ -1,0 +1,46 @@
+{
+  "id": "append-ancestor-remove-settles",
+  "title": "An appended record covered by a later remove of an ancestor is settled-superseded",
+  "materialized_upto_mseq": 0,
+  "copy": {
+    "/dsh/workspace/dir/a.txt": {
+      "content_utf8": "HELLO"
+    }
+  },
+  "records": [
+    {
+      "mseq": 1,
+      "op": 1,
+      "path": "/dsh/workspace/dir/a.txt",
+      "appended": true,
+      "append_from": 6,
+      "data": {
+        "content_utf8": " world"
+      }
+    },
+    {
+      "mseq": 2,
+      "op": 3,
+      "path": "/dsh/workspace/dir",
+      "appended": false
+    }
+  ],
+  "expected": {
+    "records": [
+      {
+        "mseq": 1,
+        "verdict": "settled-superseded",
+        "cover": "ancestor-remove",
+        "superseded_by_mseq": 2
+      },
+      {
+        "mseq": 2,
+        "verdict": "applied"
+      }
+    ],
+    "materialized_upto_mseq": 2,
+    "tree": {},
+    "failed": false,
+    "rebuilt_from_wal": false
+  }
+}

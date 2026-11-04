@@ -1,7 +1,7 @@
 // phone-dsh Android — :controller fixture reader over :core's JSON value type.
 // SPDX-License-Identifier: MIT
 //
-// The 16 normative perturbations under `spec/v1/golden/perturbations/` are JSON.
+// The 18 normative perturbations under `spec/v1/golden/perturbations/` are JSON.
 // :core already ships `JsonValue.parse` (RFC 8259, `com.phonedsh.agentcore`) and
 // `:controller` declares `:core` as an `api` dependency, so this file owns only
 // the typed member accessors the fixtures need — never a second parser.
@@ -69,9 +69,9 @@ internal class Fixture(val file: File, val root: JsonObject) {
     val fieldEvidence: Map<String, JsonValue> get() = expected.obj("field_evidence").members
 }
 
-/** Loads the 16 normative fixtures from `spec/v1/golden/perturbations/`. */
+/** Loads the 18 normative fixtures from `spec/v1/golden/perturbations/`. */
 internal object Fixtures {
-    const val EXPECTED_COUNT: Int = 16
+    const val EXPECTED_COUNT: Int = 18
     const val SPEC_RELATIVE_DIR: String = "spec/v1/golden/perturbations"
 
     fun loadAll(): List<Fixture> {

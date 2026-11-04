@@ -107,6 +107,7 @@ is asserting two edges, not one.
 | `journal_gap` | `none`, `step_open`, `step_abandoned`, `step_reconciled`, `unmeasured` | what the affected session's tool journal must show |
 | `surfaced_to_user` | `none`, `orphan_step_settlement`, `boot_recovery_report`, `stop_error_to_caller`, `scenario_run_failure`, `unmeasured` | the user-visible channel, if any |
 | `admission` | `open`, `closed`, `unmeasured` | admission after the timeline; open only in `Running` |
+| `failure_detail` | `{path: VFS path, mseq: integer}` | **additive (2026-11-04):** for a `Failed` fixture, the recorded failure detail must contain this path and mseq of the unrepaired base mismatch. Optional member; old fixtures omit it and old readers ignore it. |
 | `acked_prefix_preserved` | bool | every level-1 acked mseq present with the identical mutation |
 | `unacked_records_retained` | bool | a record appended without an ack still survives and replays |
 | `truncated_torn_tail` | bool | recovery truncated a torn tail |
@@ -153,6 +154,12 @@ must have no `field_evidence` entry, and the runner must not test it.
 `preconditions.admission` and `expected.admission` are constrained by D14: admission is `open` only
 in `Running`, so a fixture that pairs them otherwise is invalid and the checker rejects it.
 
+`drain-outstanding-resync-answered` and `drain-outstanding-resync-deadline-failed` are the two
+CCR-2 drain fixtures: the first requires the drain to wait for a connected Worker's already-issued
+VFS_RESYNC answer and settle it before the epoch close (`Parked`); the second requires `Failed` at
+the 20 s deadline when no answer arrives, with `expected.failure_detail` naming the mismatch path
+and mseq. Both are `spec-only` until the Swift and Kotlin implementations land their regressions.
+
 ## 5. Evidence
 
 `expected.field_evidence` maps each asserted member to where the assertion comes from:
@@ -189,7 +196,8 @@ The following members are `unmeasured` somewhere in this directory, and no fixtu
 
 * `surfaced_to_user` for `kill-9-after-write`, `kill-9-during-checkpoint`, `drain-deadline-20s`,
   `drain-background-task-expiry`, `power-loss-torn-tail`, `system-reclaim-host-killed`,
-  `cold-start-after-reboot` and `write-without-ack`. The iOS baseline has no user-visible report for
+  `cold-start-after-reboot` and `write-without-ack`; the two CCR-2 drain fixtures also leave it
+  `unmeasured`. The iOS baseline has no user-visible report for
   those paths; the Android tombstone notification and next-launch banner are plan items, not Swift
   behaviour. The one fixture that does assert a report is `force-stop-zero-callback`, where the
   member is `NEW`.

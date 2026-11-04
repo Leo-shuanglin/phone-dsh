@@ -1,0 +1,54 @@
+{
+  "id": "append-full-write-settles",
+  "title": "An appended record covered by a later complete write is settled-superseded",
+  "materialized_upto_mseq": 0,
+  "copy": {
+    "/dsh/workspace/notes.txt": {
+      "content_utf8": "HELLO"
+    }
+  },
+  "records": [
+    {
+      "mseq": 1,
+      "op": 1,
+      "path": "/dsh/workspace/notes.txt",
+      "appended": true,
+      "append_from": 6,
+      "data": {
+        "content_utf8": " world"
+      }
+    },
+    {
+      "mseq": 2,
+      "op": 1,
+      "path": "/dsh/workspace/notes.txt",
+      "appended": false,
+      "append_from": 0,
+      "data": {
+        "content_utf8": "fixed"
+      }
+    }
+  ],
+  "expected": {
+    "records": [
+      {
+        "mseq": 1,
+        "verdict": "settled-superseded",
+        "cover": "complete-write",
+        "superseded_by_mseq": 2
+      },
+      {
+        "mseq": 2,
+        "verdict": "applied"
+      }
+    ],
+    "materialized_upto_mseq": 2,
+    "tree": {
+      "/dsh/workspace/notes.txt": {
+        "content_utf8": "fixed"
+      }
+    },
+    "failed": false,
+    "rebuilt_from_wal": false
+  }
+}

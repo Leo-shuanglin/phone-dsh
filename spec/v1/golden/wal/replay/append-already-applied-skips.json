@@ -1,0 +1,38 @@
+{
+  "id": "append-already-applied-skips",
+  "title": "An appended record whose bytes are already at append_from is skipped idempotently",
+  "materialized_upto_mseq": 0,
+  "copy": {
+    "/dsh/workspace/notes.txt": {
+      "content_utf8": "hello world"
+    }
+  },
+  "records": [
+    {
+      "mseq": 1,
+      "op": 1,
+      "path": "/dsh/workspace/notes.txt",
+      "appended": true,
+      "append_from": 5,
+      "data": {
+        "content_utf8": " world"
+      }
+    }
+  ],
+  "expected": {
+    "records": [
+      {
+        "mseq": 1,
+        "verdict": "skipped-idempotent"
+      }
+    ],
+    "materialized_upto_mseq": 1,
+    "tree": {
+      "/dsh/workspace/notes.txt": {
+        "content_utf8": "hello world"
+      }
+    },
+    "failed": false,
+    "rebuilt_from_wal": false
+  }
+}

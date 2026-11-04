@@ -1,0 +1,301 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WAL replay semantics vector",
+  "description": "One language-neutral replay case for spec/v1/wal.md section 5.1, 6.2, 7.2 and 10: the materialized copy, the manifest watermark, the retained mutation sequence and the expected per-record verdict, final watermark, optional per-step watermarks, final tree and Failed outcome. The fixture is the oracle; the Swift and Kotlin recovery code must drive the real Materializer/WorkspaceLog with it. Documented in spec/v1/golden/wal/replay/README.md.",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "materialized_upto_mseq",
+    "copy",
+    "records",
+    "expected"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "minLength": 3,
+      "maxLength": 80
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 200
+    },
+    "materialized_upto_mseq": {
+      "description": "manifest.json materialized_upto_mseq: every retained mutation at or below it is already in the copy and is not replayed.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "copy": {
+      "description": "Initial materialized files: path -> contents. A path absent from this object is absent from the copy. Directories are implicit.",
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^/dsh/(home|workspace)(/[^/]+)+$"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["content_utf8"],
+            "properties": {
+              "content_utf8": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["content_hex"],
+            "properties": {
+              "content_hex": {
+                "type": "string",
+                "pattern": "^[0-9a-f]*$"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "records": {
+      "description": "Retained mutation records in ascending, contiguous mseq order. Epoch-close records are excluded: they never advance the watermark.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": ["mseq", "op", "path", "appended"],
+        "properties": {
+          "mseq": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "op": {
+            "description": "1 write (complete or appended), 3 remove (the whole subtree).",
+            "enum": [1, 3]
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^/dsh/(home|workspace)(/[^/]+)+$"
+          },
+          "appended": {
+            "type": "boolean"
+          },
+          "append_from": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "data": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["content_utf8"],
+                "properties": {
+                  "content_utf8": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": ["content_hex"],
+                "properties": {
+                  "content_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]*$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "expected": {
+      "type": "object",
+      "required": [
+        "records",
+        "materialized_upto_mseq",
+        "tree",
+        "failed"
+      ],
+      "properties": {
+        "records": {
+          "description": "One verdict per retained record, in input order. This is the final replay after any mseq-1 rebuild.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "required": ["mseq", "verdict"],
+            "properties": {
+              "mseq": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "verdict": {
+                "enum": [
+                  "applied",
+                  "skipped-idempotent",
+                  "settled-superseded",
+                  "mismatch-held",
+                  "already-materialized"
+                ]
+              },
+              "cover": {
+                "description": "For settled-superseded only: the kind of later record that covers this appended record.",
+                "enum": [
+                  "complete-write",
+                  "truncate",
+                  "remove",
+                  "ancestor-remove",
+                  "repair-write"
+                ]
+              },
+              "superseded_by_mseq": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "materialized_upto_mseq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "watermark_steps": {
+          "description": "Optional per-step checkpoints: after the retained record with this mseq has been decided, materialized_upto_mseq must not exceed this value. A settled-superseded record is not passed before its covering record's mseq is also at or below the checkpoint (wal.md §6.2, §7.1); the reference value is the highest legal watermark. Entries must be a contiguous prefix of records, in order.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "required": ["mseq", "materialized_upto_mseq"],
+            "properties": {
+              "mseq": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              },
+              "materialized_upto_mseq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "tree": {
+          "description": "Final materialized files after replay (or after the WAL rebuild when rebuilt_from_wal is true).",
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^/dsh/(home|workspace)(/[^/]+)+$"
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["content_utf8"],
+                "properties": {
+                  "content_utf8": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": ["content_hex"],
+                "properties": {
+                  "content_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]*$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "failed": {
+          "description": "true when at least one mismatch remains held after the final replay; the host enters Failed.",
+          "type": "boolean"
+        },
+        "rebuilt_from_wal": {
+          "description": "true when the recovery invariant rebuilt the whole copy from the retained WAL because it starts at mseq 1 and the copy diverged; records and tree then describe that rebuild.",
+          "type": "boolean"
+        },
+        "copy_replay": {
+          "description": "For rebuilt_from_wal vectors: the replay of the given copy before the rebuild. It must leave at least one mismatch held.",
+          "type": "object",
+          "required": ["records", "materialized_upto_mseq", "failed"],
+          "properties": {
+            "records": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "items": {
+                "type": "object",
+                "required": ["mseq", "verdict"],
+                "properties": {
+                  "mseq": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "verdict": {
+                    "enum": [
+                      "applied",
+                      "skipped-idempotent",
+                      "settled-superseded",
+                      "mismatch-held",
+                      "already-materialized"
+                    ]
+                  },
+                  "cover": {
+                    "enum": [
+                      "complete-write",
+                      "truncate",
+                      "remove",
+                      "ancestor-remove",
+                      "repair-write"
+                    ]
+                  },
+                  "superseded_by_mseq": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "materialized_upto_mseq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "failed": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,52 @@
+{
+  "id": "retained-not-from-one-stays-failed",
+  "title": "A copy divergence with the retained WAL starting above mseq 1 is not rebuilt and stays Failed",
+  "materialized_upto_mseq": 4,
+  "copy": {
+    "/dsh/workspace/notes.txt": {
+      "content_utf8": "HELLO"
+    }
+  },
+  "records": [
+    {
+      "mseq": 5,
+      "op": 1,
+      "path": "/dsh/workspace/notes.txt",
+      "appended": true,
+      "append_from": 6,
+      "data": {
+        "content_utf8": " world"
+      }
+    },
+    {
+      "mseq": 6,
+      "op": 1,
+      "path": "/dsh/workspace/notes.txt",
+      "appended": true,
+      "append_from": 12,
+      "data": {
+        "content_utf8": "!"
+      }
+    }
+  ],
+  "expected": {
+    "records": [
+      {
+        "mseq": 5,
+        "verdict": "mismatch-held"
+      },
+      {
+        "mseq": 6,
+        "verdict": "mismatch-held"
+      }
+    ],
+    "materialized_upto_mseq": 4,
+    "tree": {
+      "/dsh/workspace/notes.txt": {
+        "content_utf8": "HELLO"
+      }
+    },
+    "failed": true,
+    "rebuilt_from_wal": false
+  }
+}

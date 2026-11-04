@@ -90,6 +90,7 @@ PERTURBATION_ASSERTIONS = (
     "journal_gap",
     "surfaced_to_user",
     "admission",
+    "failure_detail",
     "acked_prefix_preserved",
     "unacked_records_retained",
     "truncated_torn_tail",
@@ -328,6 +329,8 @@ def check_perturbation(doc, rel, schema, result) -> None:
             problems.append("state_path does not contain expected.state")
     if "admission" in expected and expected["admission"] != UNMEASURED:
         check_admission_law(expected["state"], expected["admission"], "expected", problems)
+    if "failure_detail" in expected and expected["state"] != "Failed":
+        problems.append("expected.failure_detail requires expected.state Failed")
 
     durability = expected["durability_level"]
     tail = expected["wal_tail"]
