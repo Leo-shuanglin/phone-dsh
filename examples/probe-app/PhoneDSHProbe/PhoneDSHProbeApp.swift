@@ -37,6 +37,8 @@ struct PhoneDSHProbeApp: App {
                 // Single scene-phase observer. Chat keep-alive / park / resume
                 // and the background-matrix runner each receive the phase once.
                 // RootView and ChatPage do not observe scene phase.
+                // `deliver` serializes and supersedes its own deliveries; the
+                // Task here only leaves SwiftUI's synchronous callback.
                 .onChange(of: scenePhase) { _, newPhase in
                     Task { @MainActor in
                         await ProbeScenePhaseForwarding.deliver(

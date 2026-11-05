@@ -3880,6 +3880,16 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     /// depend on every App remembering to forward `scenePhase`. On iOS the
     /// current phase is emitted at install time so a host created in the
     /// background cannot inherit the foreground default.
+    ///
+    /// The observer maps every phase other than `.active` (including
+    /// `.inactive`) to `setForeground(false)`, so a call, a system dialog or the
+    /// app switcher stops a deferred termination recovery from booting here.
+    /// That is deliberately narrower than parking: this observer never calls
+    /// ``park()`` or ``resume()``. A caller that parks on leaving the foreground
+    /// (the probe app's `ChatModel`) decides from the same phases, and the two
+    /// must not disagree about who owns the host. A host that caller does not
+    /// park keeps running while `isForeground` is false; the background-boot
+    /// gate still holds.
     private func installProcessLifecycleObservation() {
         guard processLifecycle == nil else { return }
         let observer = PhoneDSHProcessLifecycle()
