@@ -190,6 +190,37 @@ PATH_PROJECTIONS = {'P01': {'authority': ['spec/v1/channel.md', 'spec/v1/schema'
          'evidence': []}}
 
 
+# New HarmonyOS ends remain partial until their runtime matrix is verified.
+HARMONY_ENDS = {'P01': ['harmony/host-rust/src/ws.rs', 'harmony/host-rust/src/host.rs'],
+ 'P02': ['harmony/host-rust/src/wal.rs', 'harmony/host-rust/src/overlay.rs'],
+ 'P03': ['harmony/host-rust/src/ws.rs', 'harmony/host-rust/src/wal.rs'],
+ 'P04': ['harmony/entry/src/main/ets/host/HostBridge.ets',
+         'harmony/web/engine.mjs',
+         'harmony/web/product-worker.mjs'],
+ 'P05': ['harmony/entry/src/main/ets/host/HostHttpProxy.ets',
+         'harmony/entry/src/main/ets/host/HostModelAlias.ets',
+         'harmony/host-rust/src/http.rs'],
+ 'P06': ['harmony/entry/src/main/ets/host/TranscriptProjection.ets',
+         'harmony/entry/src/main/ets/host/HostService.ets'],
+ 'P08': ['harmony/entry/src/main/ets/entryability/EntryAbility.ets'],
+ 'P09': ['harmony/entry/src/main/ets/ui', 'harmony/entry/src/main/ets/model/Contracts.ets'],
+ 'P12': ['harmony/host-rust/include/pdsh_host.h',
+         'harmony/entry/src/main/cpp/napi_init.cpp',
+         'harmony/entry/src/main/cpp/types/libpdshhost/index.d.ts'],
+ 'P13': ['harmony/entry/src/main/ets/host/HostService.ets'],
+ 'P14': ['harmony/web/engine.mjs'],
+ 'P16': ['harmony/host-rust/src/host.rs', 'harmony/web/product-worker.mjs'],
+ 'P18': ['harmony/entry/src/main/ets/host/HostPersistence.ets',
+         'harmony/entry/src/main/ets/model/ProviderProfiles.ets'],
+ 'P20': ['harmony/tools/stage-runtime.mjs', 'harmony/host-rust/src/bundle.rs']}
+for _contract, _paths in HARMONY_ENDS.items():
+    PATH_PROJECTIONS[_contract]['ends']['HarmonyOS'] = _paths
+    if 'partial' not in PATH_PROJECTIONS[_contract]['status']:
+        PATH_PROJECTIONS[_contract]['status'].append('partial')
+PATH_PROJECTIONS['P12']['authority'].append('harmony/host-rust/include/pdsh_host.h')
+PATH_PROJECTIONS['P18']['authority'].append('harmony/entry/src/main/ets/host/HostPersistence.ets')
+
+
 def registry_schema():
     string = {'type': 'string', 'minLength': 1}
     paths = {'type': 'array', 'items': string, 'minItems': 1, 'uniqueItems': True}

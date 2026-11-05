@@ -75,3 +75,12 @@ them. This table is maintained by hand; the staging test does not check it.
 DeepSeek Harness packages (`@deepseek-ai/*`) are not bundled: the packer takes
 them from the pinned checkout, and the image carries them as their own
 packages under the checkout's licence.
+
+## HarmonyOS client
+
+The native HarmonyOS client uses RaTeX 0.1.15 (MIT) and its embedded KaTeX fonts
+(SIL OFL 1.1), matching the Android renderer version. Versions, source references
+and bundled full texts are recorded in [harmony/THIRD_PARTY.md](../harmony/THIRD_PARTY.md).
+The earlier diagnostic example preserves one Apache-2.0 Huawei DevEco lifecycle
+template with its copyright and full license in
+[examples/harmony-probe/THIRD_PARTY.md](../examples/harmony-probe/THIRD_PARTY.md).

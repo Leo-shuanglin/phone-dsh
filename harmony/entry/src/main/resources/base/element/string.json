@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "phoneDSH 原生鸿蒙客户端"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "phoneDSH 原生鸿蒙客户端"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Phone DSH"
+    }
+  ]
+}

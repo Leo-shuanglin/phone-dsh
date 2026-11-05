@@ -47,6 +47,7 @@ SOURCE_ROOTS = [
     # Android adaptation tree: structure only in P0 (package markers), but the
     # SPDX and hygiene rules apply to it from the first file.
     "android",
+    "harmony",
 ]
 
 TEST_ROOTS = [

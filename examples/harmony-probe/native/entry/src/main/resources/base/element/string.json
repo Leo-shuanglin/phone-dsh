@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Native ArkWeb probe shell for PhoneDSH"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "PhoneDSH ArkWeb probe"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "PhoneDSHProbe"
+    }
+  ]
+}

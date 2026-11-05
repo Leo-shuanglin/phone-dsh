@@ -160,6 +160,10 @@
         "Kotlin": [
           "android/core/src/main/kotlin/com/phonedsh/wire",
           "android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostHello,HostChannel,VfsFrames}.kt"
+        ],
+        "HarmonyOS": [
+          "harmony/host-rust/src/ws.rs",
+          "harmony/host-rust/src/host.rs"
         ]
       },
       "triggers": [
@@ -204,9 +208,17 @@
         },
         {
           "glob": "android/engine/src/main/kotlin/com/phonedsh/engine/{FrameType,HelloFields,ChannelReopenLane,ObservedChannelHandler}.kt"
+        },
+        {
+          "glob": "harmony/host-rust/src/ws.rs"
+        },
+        {
+          "glob": "harmony/host-rust/src/host.rs"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [
         "Tests/PhoneDSHWireTests/GoldenFrameTests.swift",
         "plugins/channel/src/golden-frames.test.ts",
@@ -215,9 +227,9 @@
       ],
       "source": {
         "authority": "[v1/channel.md](v1/channel.md)、[v1/schema](v1/schema)、[golden/frames](v1/golden/frames)",
-        "ends": "Swift [PhoneDSHWire](../Sources/PhoneDSHWire/)、[ChannelServer](../Sources/PhoneDSHLoopback/ChannelServer.swift)、[PhoneDSHChannel](../Sources/PhoneDSH/PhoneDSHChannel.swift)；TS [channel](../plugins/channel/src/)；Rust [pdsh-wire](../shell/crates/pdsh-wire/) 經 [pdsh-jni](../shell/crates/pdsh-jni/) 供 Android；Kotlin [core/wire](../android/core/src/main/kotlin/com/phonedsh/wire/)（JNI 殼）、[dsh/host](../android/dsh/src/main/kotlin/com/phonedsh/dsh/host/) 的 HostHello／HostChannel／VfsFrames",
+        "ends": "Swift [PhoneDSHWire](../Sources/PhoneDSHWire/)、[ChannelServer](../Sources/PhoneDSHLoopback/ChannelServer.swift)、[PhoneDSHChannel](../Sources/PhoneDSH/PhoneDSHChannel.swift)；TS [channel](../plugins/channel/src/)；Rust [pdsh-wire](../shell/crates/pdsh-wire/) 經 [pdsh-jni](../shell/crates/pdsh-jni/) 供 Android；Kotlin [core/wire](../android/core/src/main/kotlin/com/phonedsh/wire/)（JNI 殼）、[dsh/host](../android/dsh/src/main/kotlin/com/phonedsh/dsh/host/) 的 HostHello／HostChannel／VfsFrames ；HarmonyOS partial `harmony/host-rust/src/ws.rs`, `harmony/host-rust/src/host.rs`",
         "evidence": "[Swift](../Tests/PhoneDSHWireTests/GoldenFrameTests.swift)、[TS](../plugins/channel/src/golden-frames.test.ts)、[Kotlin](../android/core/src/test/kotlin/com/phonedsh/wire/WireGoldenFramesTest.kt)、[Rust](../shell/crates/pdsh-wire/tests/golden_frames.rs)（`phone-rust-tests`；GAP-08 的其餘證據仍開放）",
-        "triggers": "`spec/v1/{channel.md,README.md}`、`spec/v1/schema/{hello,exec-req,exec-ctl,lifecycle,fence,error,console,api-*}.schema.json`、`spec/v1/golden/frames/**`、`Sources/PhoneDSHWire/**`（除 `WAL.swift`）、`Sources/PhoneDSHLoopback/{ChannelServer,DefaultChannelHandling,WebSocket,LoopbackServer}.swift`、`Sources/PhoneDSH/PhoneDSHChannel.swift`、`plugins/channel/src/**`（除 `wal*`）、`shell/crates/pdsh-wire/**`、`shell/crates/pdsh-jni/src/{lib,bridge}.rs`、`android/core/src/main/kotlin/com/phonedsh/wire/**`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostHello,HostChannel,VfsFrames,VfsSink,BootId}.kt`、`android/engine/src/main/kotlin/com/phonedsh/engine/{FrameType,HelloFields,ChannelReopenLane,ObservedChannelHandler}.kt`"
+        "triggers": "`spec/v1/{channel.md,README.md}`、`spec/v1/schema/{hello,exec-req,exec-ctl,lifecycle,fence,error,console,api-*}.schema.json`、`spec/v1/golden/frames/**`、`Sources/PhoneDSHWire/**`（除 `WAL.swift`）、`Sources/PhoneDSHLoopback/{ChannelServer,DefaultChannelHandling,WebSocket,LoopbackServer}.swift`、`Sources/PhoneDSH/PhoneDSHChannel.swift`、`plugins/channel/src/**`（除 `wal*`）、`shell/crates/pdsh-wire/**`、`shell/crates/pdsh-jni/src/{lib,bridge}.rs`、`android/core/src/main/kotlin/com/phonedsh/wire/**`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostHello,HostChannel,VfsFrames,VfsSink,BootId}.kt`、`android/engine/src/main/kotlin/com/phonedsh/engine/{FrameType,HelloFields,ChannelReopenLane,ObservedChannelHandler}.kt` 、`harmony/host-rust/src/ws.rs`、`harmony/host-rust/src/host.rs`"
       }
     },
     {
@@ -242,6 +254,10 @@
         ],
         "TypeScript": [
           "plugins/channel/src/wal.ts"
+        ],
+        "HarmonyOS": [
+          "harmony/host-rust/src/wal.rs",
+          "harmony/host-rust/src/overlay.rs"
         ]
       },
       "triggers": [
@@ -280,9 +296,17 @@
         },
         {
           "glob": "android/engine/src/main/kotlin/com/phonedsh/engine/BootOverlay*.kt"
+        },
+        {
+          "glob": "harmony/host-rust/src/wal.rs"
+        },
+        {
+          "glob": "harmony/host-rust/src/overlay.rs"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [
         "Tests/PhoneDSHWireTests/WALTests.swift",
         "Tests/PhoneDSHLogTests",
@@ -291,9 +315,9 @@
       ],
       "source": {
         "authority": "[v1/wal.md](v1/wal.md)、[manifest schema](v1/schema/manifest.schema.json)、[golden/wal](v1/golden/wal)",
-        "ends": "Swift [PhoneDSHLog](../Sources/PhoneDSHLog/)、[WAL.swift](../Sources/PhoneDSHWire/WAL.swift)；Rust [pdsh-wal](../shell/crates/pdsh-wal/)；Kotlin [core/log](../android/core/src/main/kotlin/com/phonedsh/log/)、`dsh/host/{HostWal,WalUplink}.kt`；TS `plugins/channel/src/wal.ts` 只是**對拍 codec**，無生產消費者",
+        "ends": "Swift [PhoneDSHLog](../Sources/PhoneDSHLog/)、[WAL.swift](../Sources/PhoneDSHWire/WAL.swift)；Rust [pdsh-wal](../shell/crates/pdsh-wal/)；Kotlin [core/log](../android/core/src/main/kotlin/com/phonedsh/log/)、`dsh/host/{HostWal,WalUplink}.kt`；TS `plugins/channel/src/wal.ts` 只是**對拍 codec**，無生產消費者 ；HarmonyOS partial `harmony/host-rust/src/wal.rs`, `harmony/host-rust/src/overlay.rs`",
         "evidence": "Swift `WALTests`、`PhoneDSHLogTests`；Kotlin `NativeWalGoldenTest`；Rust [golden_wal.rs](../shell/crates/pdsh-wal/tests/golden_wal.rs)（`phone-rust-tests`）",
-        "triggers": "`spec/v1/wal.md`、`spec/v1/schema/{manifest,wal-replay}.schema.json`、`spec/v1/golden/wal/**`、`Sources/PhoneDSHWire/WAL.swift`、`Sources/PhoneDSHLog/**`、`plugins/channel/src/{wal,vfs-mutation}.ts`、`shell/crates/pdsh-wal/**`、`shell/crates/pdsh-jni/src/wal.rs`、`android/core/src/main/kotlin/com/phonedsh/log/**`、`android/core/src/main/kotlin/com/phonedsh/wire/{NativeWal,WalException}.kt`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostWal,WalUplink,HostLog}.kt`、`android/engine/src/main/kotlin/com/phonedsh/engine/BootOverlay*.kt`"
+        "triggers": "`spec/v1/wal.md`、`spec/v1/schema/{manifest,wal-replay}.schema.json`、`spec/v1/golden/wal/**`、`Sources/PhoneDSHWire/WAL.swift`、`Sources/PhoneDSHLog/**`、`plugins/channel/src/{wal,vfs-mutation}.ts`、`shell/crates/pdsh-wal/**`、`shell/crates/pdsh-jni/src/wal.rs`、`android/core/src/main/kotlin/com/phonedsh/log/**`、`android/core/src/main/kotlin/com/phonedsh/wire/{NativeWal,WalException}.kt`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/host/{HostWal,WalUplink,HostLog}.kt`、`android/engine/src/main/kotlin/com/phonedsh/engine/BootOverlay*.kt` 、`harmony/host-rust/src/wal.rs`、`harmony/host-rust/src/overlay.rs`"
       }
     },
     {
@@ -318,6 +342,10 @@
         "Kotlin": [
           "android/controller/src/main",
           "android/dsh/src/main/kotlin/com/phonedsh/dsh/{exec,journal,background}/**"
+        ],
+        "HarmonyOS": [
+          "harmony/host-rust/src/ws.rs",
+          "harmony/host-rust/src/wal.rs"
         ]
       },
       "triggers": [
@@ -350,9 +378,17 @@
         },
         {
           "glob": "android/dsh/src/main/kotlin/com/phonedsh/dsh/{exec,journal,background}/**"
+        },
+        {
+          "glob": "harmony/host-rust/src/ws.rs"
+        },
+        {
+          "glob": "harmony/host-rust/src/wal.rs"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [
         "Tests/PhoneDSHControllerTests/{StepMachineJournalContractTests,SideEffectLedgerTests}.swift",
         "Tests/PhoneDSHTests/PhoneDSHDrainRecoveryContractTests.swift",
@@ -361,9 +397,9 @@
       ],
       "source": {
         "authority": "[v1/exec.md](v1/exec.md)、[v1/handoff.md](v1/handoff.md)、[v1/budgets.md](v1/budgets.md)、[golden/perturbations](v1/golden/perturbations)",
-        "ends": "Swift [PhoneDSHController](../Sources/PhoneDSHController/)、[Handoff](../Sources/PhoneDSH/Handoff/)、[Background](../Sources/PhoneDSH/Background/)、`PhoneDSHLedger.swift`、`PhoneDSHHost.swift`；TS `plugins/{exec-bridge,tool-journal,lifecycle-gate,subprocess-xl}`；Kotlin [android/controller](../android/controller/src/main/)、`android/dsh/.../dsh/{exec,journal,background}`",
+        "ends": "Swift [PhoneDSHController](../Sources/PhoneDSHController/)、[Handoff](../Sources/PhoneDSH/Handoff/)、[Background](../Sources/PhoneDSH/Background/)、`PhoneDSHLedger.swift`、`PhoneDSHHost.swift`；TS `plugins/{exec-bridge,tool-journal,lifecycle-gate,subprocess-xl}`；Kotlin [android/controller](../android/controller/src/main/)、`android/dsh/.../dsh/{exec,journal,background}` ；HarmonyOS partial `harmony/host-rust/src/ws.rs`, `harmony/host-rust/src/wal.rs`",
         "evidence": "`StepMachineJournalContractTests`、`SideEffectLedgerTests`、`PhoneDSHDrainRecoveryContractTests`、`plugins/tests/journal-sync.test.ts`、Kotlin `PerturbationFixtureTest`",
-        "triggers": "`spec/v1/{exec,handoff,budgets}.md`、`spec/v1/schema/{handoff-*,perturbation}.schema.json`、`spec/v1/golden/perturbations/**`、`Sources/PhoneDSHController/**`、`Sources/PhoneDSH/{Handoff,Background}/**`、`Sources/PhoneDSH/{PhoneDSHLedger,PhoneDSHHost,PhoneDSHLifecycle,PhoneDSHInactivity,HostFault}.swift`、`Sources/PhoneDSHAgentCore/{ExecBridgeHosting,Delegation}.swift`、`plugins/{exec-bridge,tool-journal,lifecycle-gate,subprocess-xl}/src/**`、`android/controller/src/main/**`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/{exec,journal,background}/**`"
+        "triggers": "`spec/v1/{exec,handoff,budgets}.md`、`spec/v1/schema/{handoff-*,perturbation}.schema.json`、`spec/v1/golden/perturbations/**`、`Sources/PhoneDSHController/**`、`Sources/PhoneDSH/{Handoff,Background}/**`、`Sources/PhoneDSH/{PhoneDSHLedger,PhoneDSHHost,PhoneDSHLifecycle,PhoneDSHInactivity,HostFault}.swift`、`Sources/PhoneDSHAgentCore/{ExecBridgeHosting,Delegation}.swift`、`plugins/{exec-bridge,tool-journal,lifecycle-gate,subprocess-xl}/src/**`、`android/controller/src/main/**`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/{exec,journal,background}/**` 、`harmony/host-rust/src/ws.rs`、`harmony/host-rust/src/wal.rs`"
       }
     },
     {
@@ -384,6 +420,11 @@
         ],
         "Kotlin": [
           "android/engine/src/main/kotlin/com/phonedsh/engine/{WebViewEngine,NavigationPolicy}.kt"
+        ],
+        "HarmonyOS": [
+          "harmony/entry/src/main/ets/host/HostBridge.ets",
+          "harmony/web/engine.mjs",
+          "harmony/web/product-worker.mjs"
         ]
       },
       "triggers": [
@@ -414,20 +455,30 @@
         },
         {
           "glob": "android/engine/src/main/kotlin/com/phonedsh/engine/{WebViewEngine,WebViewKernel,NavigationPolicy,EngineCapabilities}.kt"
+        },
+        {
+          "glob": "harmony/entry/src/main/ets/host/HostBridge.ets"
+        },
+        {
+          "glob": "harmony/web/engine.mjs"
+        },
+        {
+          "glob": "harmony/web/product-worker.mjs"
         }
       ],
       "status": [
         "target",
-        "legacy"
+        "legacy",
+        "partial"
       ],
       "evidence": [
         "spec/v1/tools/bridge_check.py"
       ],
       "source": {
         "authority": "[v1/bridge.md](v1/bridge.md)、[bridge schema](v1/schema/bridge-message.schema.json)、[golden/bridge](v1/golden/bridge)",
-        "ends": "**規範大半是 `target`**。現行 handler：`pdshNativePreview`（Swift `Sources/PhoneDSHEngine/WebEngineNativePreview.swift` ↔ [protocol.ts](../plugins/phone-native-preview/src/protocol.ts)，`legacy` 形狀）、directory import、`xlEngine` console、`pdshMcpControl`（↔ `examples/probe-app/ProbeKit/MCPControlBridge.swift`）、`pdshOpenModelSettings`（**倉內無接收端**）；Kotlin `android/engine/.../{WebViewEngine,NavigationPolicy}.kt`",
+        "ends": "**規範大半是 `target`**。現行 handler：`pdshNativePreview`（Swift `Sources/PhoneDSHEngine/WebEngineNativePreview.swift` ↔ [protocol.ts](../plugins/phone-native-preview/src/protocol.ts)，`legacy` 形狀）、directory import、`xlEngine` console、`pdshMcpControl`（↔ `examples/probe-app/ProbeKit/MCPControlBridge.swift`）、`pdshOpenModelSettings`（**倉內無接收端**）；Kotlin `android/engine/.../{WebViewEngine,NavigationPolicy}.kt` ；HarmonyOS partial `harmony/entry/src/main/ets/host/HostBridge.ets`, `harmony/web/engine.mjs`, `harmony/web/product-worker.mjs`",
         "evidence": "bridge goldens **沒有任何 runtime 消費者**，只有 `bridge_check.py`",
-        "triggers": "`spec/v1/bridge.md`、`spec/v1/schema/bridge-message.schema.json`、`spec/v1/golden/bridge/**`、`Sources/PhoneDSHEngine/WebEngine*.swift`、`examples/probe-app/ProbeKit/MCPControlBridge.swift`、`plugins/phone-native-preview/src/**`、任何 `plugins/*/src/client/**` 中的 `postMessage`／`webkit.messageHandlers`、`android/engine/src/main/kotlin/com/phonedsh/engine/{WebViewEngine,WebViewKernel,NavigationPolicy,EngineCapabilities}.kt`"
+        "triggers": "`spec/v1/bridge.md`、`spec/v1/schema/bridge-message.schema.json`、`spec/v1/golden/bridge/**`、`Sources/PhoneDSHEngine/WebEngine*.swift`、`examples/probe-app/ProbeKit/MCPControlBridge.swift`、`plugins/phone-native-preview/src/**`、任何 `plugins/*/src/client/**` 中的 `postMessage`／`webkit.messageHandlers`、`android/engine/src/main/kotlin/com/phonedsh/engine/{WebViewEngine,WebViewKernel,NavigationPolicy,EngineCapabilities}.kt` 、`harmony/entry/src/main/ets/host/HostBridge.ets`、`harmony/web/engine.mjs`、`harmony/web/product-worker.mjs`"
       }
     },
     {
@@ -449,6 +500,11 @@
         ],
         "Kotlin": [
           "android/net/src/main"
+        ],
+        "HarmonyOS": [
+          "harmony/entry/src/main/ets/host/HostHttpProxy.ets",
+          "harmony/entry/src/main/ets/host/HostModelAlias.ets",
+          "harmony/host-rust/src/http.rs"
         ]
       },
       "triggers": [
@@ -481,18 +537,29 @@
         },
         {
           "glob": "android/net/src/main/**"
+        },
+        {
+          "glob": "harmony/entry/src/main/ets/host/HostHttpProxy.ets"
+        },
+        {
+          "glob": "harmony/entry/src/main/ets/host/HostModelAlias.ets"
+        },
+        {
+          "glob": "harmony/host-rust/src/http.rs"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [
         "android/net/src/test/kotlin/com/phonedsh/gateway/GatewayVectorConformanceTest.kt",
         "Tests/PhoneDSHGatewayTests"
       ],
       "source": {
         "authority": "[v1/gateway-security.md](v1/gateway-security.md)、[gateway schema](v1/schema/gateway-vector.schema.json)、[golden/gateway](v1/golden/gateway)",
-        "ends": "Swift [PhoneDSHGateway](../Sources/PhoneDSHGateway/)、Loopback 中的 HTTP 部分（`HTTPTransport`、`StreamingForward` 等；ChannelServer／WebSocket 屬 P01）；TS `plugins/llm-bridge`、`plugins/phone-mcp/src/{manager,schema}.ts`；Kotlin [android/net](../android/net/src/main/)",
+        "ends": "Swift [PhoneDSHGateway](../Sources/PhoneDSHGateway/)、Loopback 中的 HTTP 部分（`HTTPTransport`、`StreamingForward` 等；ChannelServer／WebSocket 屬 P01）；TS `plugins/llm-bridge`、`plugins/phone-mcp/src/{manager,schema}.ts`；Kotlin [android/net](../android/net/src/main/) ；HarmonyOS partial `harmony/entry/src/main/ets/host/HostHttpProxy.ets`, `harmony/entry/src/main/ets/host/HostModelAlias.ets`, `harmony/host-rust/src/http.rs`",
         "evidence": "只有 Kotlin `GatewayVectorConformanceTest` 讀 golden；Swift `Tests/PhoneDSHGatewayTests` 不讀",
-        "triggers": "`spec/v1/gateway-security.md`、`spec/v1/schema/gateway-vector.schema.json`、`spec/v1/golden/gateway/**`、`Sources/PhoneDSHGateway/**`、`Sources/PhoneDSHLoopback/{HTTPTransport,HTTPEgressFailure,StreamingForward,Loopback,Support}.swift`、`Sources/PhoneDSHAgentCore/{Credentials,HTTPSupport,ProviderError}.swift`、`plugins/llm-bridge/src/**`、`plugins/phone-mcp/src/{manager,schema,protocol}.ts`、`plugins/worker-entry/src/model-route.ts`、`android/net/src/main/**`"
+        "triggers": "`spec/v1/gateway-security.md`、`spec/v1/schema/gateway-vector.schema.json`、`spec/v1/golden/gateway/**`、`Sources/PhoneDSHGateway/**`、`Sources/PhoneDSHLoopback/{HTTPTransport,HTTPEgressFailure,StreamingForward,Loopback,Support}.swift`、`Sources/PhoneDSHAgentCore/{Credentials,HTTPSupport,ProviderError}.swift`、`plugins/llm-bridge/src/**`、`plugins/phone-mcp/src/{manager,schema,protocol}.ts`、`plugins/worker-entry/src/model-route.ts`、`android/net/src/main/**` 、`harmony/entry/src/main/ets/host/HostHttpProxy.ets`、`harmony/entry/src/main/ets/host/HostModelAlias.ets`、`harmony/host-rust/src/http.rs`"
       }
     },
     {
@@ -512,6 +579,10 @@
         "Kotlin": [
           "android/core/src/main/kotlin/com/phonedsh/{agentcore,hostevents}/**",
           "android/dsh/src/main/kotlin/com/phonedsh/dsh/turn"
+        ],
+        "HarmonyOS": [
+          "harmony/entry/src/main/ets/host/TranscriptProjection.ets",
+          "harmony/entry/src/main/ets/host/HostService.ets"
         ]
       },
       "triggers": [
@@ -532,9 +603,17 @@
         },
         {
           "glob": "android/dsh/src/main/kotlin/com/phonedsh/dsh/turn/**"
+        },
+        {
+          "glob": "harmony/entry/src/main/ets/host/TranscriptProjection.ets"
+        },
+        {
+          "glob": "harmony/entry/src/main/ets/host/HostService.ets"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [
         "android/core/src/test/kotlin/com/phonedsh/agentcore/HarnessKindClosureTest.kt",
         "android/core/src/test/kotlin/com/phonedsh/hostevents/HostEventKindSchemaTest.kt",
@@ -542,9 +621,9 @@
       ],
       "source": {
         "authority": "[host/v1/README.md](host/v1/README.md)、[event-kinds](host/v1/event-kinds.md)、[host goldens](host/v1/golden)",
-        "ends": "Swift [AgentHarness](../Sources/PhoneDSHAgentCore/AgentHarness.swift)、[DSH/](../Sources/PhoneDSHAgentCore/DSH/)、`PhoneDSHEvents.swift`；Kotlin `android/core/.../{agentcore,hostevents}`、`android/dsh/.../turn`",
+        "ends": "Swift [AgentHarness](../Sources/PhoneDSHAgentCore/AgentHarness.swift)、[DSH/](../Sources/PhoneDSHAgentCore/DSH/)、`PhoneDSHEvents.swift`；Kotlin `android/core/.../{agentcore,hostevents}`、`android/dsh/.../turn` ；HarmonyOS partial `harmony/entry/src/main/ets/host/TranscriptProjection.ets`, `harmony/entry/src/main/ets/host/HostService.ets`",
         "evidence": "只有 Kotlin `HarnessKindClosureTest`、`HostEventKindSchemaTest` 讀 golden；Swift AgentCore tests 不讀",
-        "triggers": "`spec/host/v1/**`（除 `device-*`）、`Sources/PhoneDSHAgentCore/{AgentHarness.swift,DSH/**}`、`Sources/PhoneDSH/PhoneDSHEvents.swift`、`android/core/src/main/kotlin/com/phonedsh/{agentcore,hostevents}/**`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/turn/**`"
+        "triggers": "`spec/host/v1/**`（除 `device-*`）、`Sources/PhoneDSHAgentCore/{AgentHarness.swift,DSH/**}`、`Sources/PhoneDSH/PhoneDSHEvents.swift`、`android/core/src/main/kotlin/com/phonedsh/{agentcore,hostevents}/**`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/turn/**` 、`harmony/entry/src/main/ets/host/TranscriptProjection.ets`、`harmony/entry/src/main/ets/host/HostService.ets`"
       }
     },
     {
@@ -605,6 +684,9 @@
         ],
         "Kotlin": [
           "android/{platform,engine,net}/src/main/**"
+        ],
+        "HarmonyOS": [
+          "harmony/entry/src/main/ets/entryability/EntryAbility.ets"
         ]
       },
       "triggers": [
@@ -619,17 +701,22 @@
         },
         {
           "glob": "Sources/PhoneDSH/Background/**"
+        },
+        {
+          "glob": "harmony/entry/src/main/ets/entryability/EntryAbility.ets"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [
         "spec/platform/tools/platform_check.py"
       ],
       "source": {
         "authority": "[platform/README.md](platform/README.md)、[whitelist](platform/whitelist.json)",
-        "ends": "Swift OS API、`Sources/PhoneDSH/Background`；Android `:platform`／`:engine`／`:net`",
+        "ends": "Swift OS API、`Sources/PhoneDSH/Background`；Android `:platform`／`:engine`／`:net` ；HarmonyOS partial `harmony/entry/src/main/ets/entryability/EntryAbility.ets`",
         "evidence": "`platform_check.py`；whitelist 不代替 conformance",
-        "triggers": "`spec/platform/**`、`android/platform*/src/main/**`、`Sources/PhoneDSHController/Signals/**`、`Sources/PhoneDSH/Background/**`"
+        "triggers": "`spec/platform/**`、`android/platform*/src/main/**`、`Sources/PhoneDSHController/Signals/**`、`Sources/PhoneDSH/Background/**` 、`harmony/entry/src/main/ets/entryability/EntryAbility.ets`"
       }
     },
     {
@@ -647,6 +734,10 @@
         ],
         "Kotlin": [
           "android/lib"
+        ],
+        "HarmonyOS": [
+          "harmony/entry/src/main/ets/ui",
+          "harmony/entry/src/main/ets/model/Contracts.ets"
         ]
       },
       "triggers": [
@@ -667,9 +758,17 @@
         },
         {
           "glob": "android/lib/src/main/**"
+        },
+        {
+          "glob": "harmony/entry/src/main/ets/ui/**"
+        },
+        {
+          "glob": "harmony/entry/src/main/ets/model/Contracts.ets"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [
         "android/**/UiStateProjectorGoldenTest.kt",
         "android/**/TrajectoryNormalizerTest.kt",
@@ -678,9 +777,9 @@
       ],
       "source": {
         "authority": "[ui/v1/README.md](ui/v1/README.md)、[tokens](ui/v1/tokens.json)、[pages](ui/v1/pages)、[v1/trajectory.md](v1/trajectory.md)",
-        "ends": "iOS `examples/probe-app/PhoneDSHProbe`；Android `android/lib`",
+        "ends": "iOS `examples/probe-app/PhoneDSHProbe`；Android `android/lib` ；HarmonyOS partial `harmony/entry/src/main/ets/ui`, `harmony/entry/src/main/ets/model/Contracts.ets`",
         "evidence": "Kotlin `UiStateProjectorGoldenTest`、`TrajectoryNormalizerTest`；`ui_check.py`、`page_structure_check.py`",
-        "triggers": "`spec/ui/v1/**`、`spec/v1/trajectory.md`、`spec/v1/schema/{trajectory,ui-state-sequence}.schema.json`、`spec/v1/golden/trajectory/**`、`examples/probe-app/PhoneDSHProbe/**`、`android/lib/src/main/**`"
+        "triggers": "`spec/ui/v1/**`、`spec/v1/trajectory.md`、`spec/v1/schema/{trajectory,ui-state-sequence}.schema.json`、`spec/v1/golden/trajectory/**`、`examples/probe-app/PhoneDSHProbe/**`、`android/lib/src/main/**` 、`harmony/entry/src/main/ets/ui/**`、`harmony/entry/src/main/ets/model/Contracts.ets`"
       }
     },
     {
@@ -745,7 +844,8 @@
       "id": "P12",
       "owner_role": "native ABI owner",
       "authority": [
-        "shell/include/xzshell.h"
+        "shell/include/xzshell.h",
+        "harmony/host-rust/include/pdsh_host.h"
       ],
       "ends": {
         "Rust": [
@@ -757,6 +857,11 @@
         "Kotlin": [
           "android/shell/src/main/kotlin/com/phonedsh/shell",
           "android/core/src/main/kotlin/com/phonedsh/wire/Native*.kt"
+        ],
+        "HarmonyOS": [
+          "harmony/host-rust/include/pdsh_host.h",
+          "harmony/entry/src/main/cpp/napi_init.cpp",
+          "harmony/entry/src/main/cpp/types/libpdshhost/index.d.ts"
         ]
       },
       "triggers": [
@@ -777,18 +882,29 @@
         },
         {
           "glob": "android/core/src/main/kotlin/com/phonedsh/wire/Native*.kt"
+        },
+        {
+          "glob": "harmony/host-rust/include/pdsh_host.h"
+        },
+        {
+          "glob": "harmony/entry/src/main/cpp/napi_init.cpp"
+        },
+        {
+          "glob": "harmony/entry/src/main/cpp/types/libpdshhost/index.d.ts"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [
         "Package.swift",
         "android/tools/check-native-alignment.py"
       ],
       "source": {
-        "authority": "[shell/include/xzshell.h](../shell/include/xzshell.h)",
-        "ends": "Rust [pdsh-ffi](../shell/crates/pdsh-ffi/)、[pdsh-jni](../shell/crates/pdsh-jni/)；Swift [PhoneDSHShell](../Sources/PhoneDSHShell/)（含必須與 header 同步的 `PDSHShellCSurface.swift` stub）；Kotlin [android/shell](../android/shell/src/main/kotlin/com/phonedsh/shell/)、`core/wire/Native*.kt`",
+        "authority": "[shell/include/xzshell.h](../shell/include/xzshell.h) ；平台 host ABI [pdsh_host.h](../harmony/host-rust/include/pdsh_host.h)",
+        "ends": "Rust [pdsh-ffi](../shell/crates/pdsh-ffi/)、[pdsh-jni](../shell/crates/pdsh-jni/)；Swift [PhoneDSHShell](../Sources/PhoneDSHShell/)（含必須與 header 同步的 `PDSHShellCSurface.swift` stub）；Kotlin [android/shell](../android/shell/src/main/kotlin/com/phonedsh/shell/)、`core/wire/Native*.kt` ；HarmonyOS partial `harmony/host-rust/include/pdsh_host.h`, `harmony/entry/src/main/cpp/napi_init.cpp`, `harmony/entry/src/main/cpp/types/libpdshhost/index.d.ts`",
         "evidence": "以 [Package.swift](../Package.swift)、Android build wiring、`android/tools/check-native-alignment.py` 判斷是否真的連結；source 存在不等於可用",
-        "triggers": "`shell/include/**`、`shell/crates/{pdsh-ffi,pdsh-jni,pdsh-core}/**`、`shell/build-apple.sh`、`Sources/PhoneDSHShell/**`、`Package.swift`、`android/shell/src/main/**`、`android/core/src/main/kotlin/com/phonedsh/wire/Native*.kt`"
+        "triggers": "`shell/include/**`、`shell/crates/{pdsh-ffi,pdsh-jni,pdsh-core}/**`、`shell/build-apple.sh`、`Sources/PhoneDSHShell/**`、`Package.swift`、`android/shell/src/main/**`、`android/core/src/main/kotlin/com/phonedsh/wire/Native*.kt` 、`harmony/host-rust/include/pdsh_host.h`、`harmony/entry/src/main/cpp/napi_init.cpp`、`harmony/entry/src/main/cpp/types/libpdshhost/index.d.ts`"
       }
     },
     {
@@ -808,6 +924,9 @@
         ],
         "Swift": [
           "Sources/PhoneDSH/PhoneDSHWorkspaceImportSink.swift"
+        ],
+        "HarmonyOS": [
+          "harmony/entry/src/main/ets/host/HostService.ets"
         ]
       },
       "triggers": [
@@ -819,17 +938,22 @@
         },
         {
           "glob": "Sources/PhoneDSH/PhoneDSHWorkspaceImportSink.swift"
+        },
+        {
+          "glob": "harmony/entry/src/main/ets/host/HostService.ets"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [
         "plugins/tests/{phone-shell,phone-feature-admin,phone-mcp,phone-directory-import}.test.ts"
       ],
       "source": {
         "authority": "[phone-shell](../plugins/phone-shell/src/contract.ts)、[feature-admin](../plugins/phone-feature-admin/src/contracts.ts)、[phone-mcp](../plugins/phone-mcp/src/protocol.ts)、[directory-import](../plugins/phone-directory-import/src/types.ts)、`phone-model-config/src/remote.ts`、`surface-phone/src/management-remote.ts`",
-        "ends": "Web client、Swift `PhoneDSHWorkspaceImportSink.swift`",
+        "ends": "Web client、Swift `PhoneDSHWorkspaceImportSink.swift` ；HarmonyOS partial `harmony/entry/src/main/ets/host/HostService.ets`",
         "evidence": "[shell](../plugins/tests/phone-shell.test.ts)、[admin](../plugins/tests/phone-feature-admin.test.ts)、[mcp](../plugins/tests/phone-mcp.test.ts)、[import](../plugins/tests/phone-directory-import.test.ts)。至少 6 個 service 共用 `phone` namespace，**沒有方法名登記表**（GAP-10）",
-        "triggers": "`plugins/{phone-shell,phone-feature-admin,phone-mcp,phone-directory-import,phone-model-config}/src/{contract*,protocol,types,remote,service,index}.ts`、`plugins/surface-phone/src/management-remote.ts`、`Sources/PhoneDSH/PhoneDSHWorkspaceImportSink.swift`"
+        "triggers": "`plugins/{phone-shell,phone-feature-admin,phone-mcp,phone-directory-import,phone-model-config}/src/{contract*,protocol,types,remote,service,index}.ts`、`plugins/surface-phone/src/management-remote.ts`、`Sources/PhoneDSH/PhoneDSHWorkspaceImportSink.swift` 、`harmony/entry/src/main/ets/host/HostService.ets`"
       }
     },
     {
@@ -847,6 +971,9 @@
         ],
         "Kotlin": [
           "android/dsh/src/main/kotlin/com/phonedsh/dsh/turn/DshTurnClient.kt"
+        ],
+        "HarmonyOS": [
+          "harmony/web/engine.mjs"
         ]
       },
       "triggers": [
@@ -861,15 +988,20 @@
         },
         {
           "glob": "android/dsh/src/main/kotlin/com/phonedsh/dsh/turn/DshTurnClient.kt"
+        },
+        {
+          "glob": "harmony/web/engine.mjs"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [],
       "source": {
         "authority": "[ChannelDSHTransport.swift](../Sources/PhoneDSH/ChannelDSHTransport.swift)（`PhoneDSHMuxProtocol`，D22／D23）",
-        "ends": "`plugins/worker-entry/src/mux-{bridge,tunnel,json}.ts`；Swift `DSHRemoteTransport.swift`；Kotlin `android/dsh/.../turn/DshTurnClient.kt`",
+        "ends": "`plugins/worker-entry/src/mux-{bridge,tunnel,json}.ts`；Swift `DSHRemoteTransport.swift`；Kotlin `android/dsh/.../turn/DshTurnClient.kt` ；HarmonyOS partial `harmony/web/engine.mjs`",
         "evidence": "`/api/remote.mux`：`x-pdsh-mux-id`、`x-pdsh-mux-op`、NDJSON、4 MiB 分塊。D21–D24 不在 v1 決策表（GAP-11）",
-        "triggers": "`Sources/PhoneDSH/ChannelDSHTransport.swift`、`Sources/PhoneDSHAgentCore/DSH/DSHRemoteTransport.swift`、`plugins/worker-entry/src/mux-*.ts`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/turn/DshTurnClient.kt`"
+        "triggers": "`Sources/PhoneDSH/ChannelDSHTransport.swift`、`Sources/PhoneDSHAgentCore/DSH/DSHRemoteTransport.swift`、`plugins/worker-entry/src/mux-*.ts`、`android/dsh/src/main/kotlin/com/phonedsh/dsh/turn/DshTurnClient.kt` 、`harmony/web/engine.mjs`"
       }
     },
     {
@@ -919,6 +1051,10 @@
         ],
         "TypeScript": [
           "plugins/worker-entry/src/{web-boot,entry}.ts"
+        ],
+        "HarmonyOS": [
+          "harmony/host-rust/src/host.rs",
+          "harmony/web/product-worker.mjs"
         ]
       },
       "triggers": [
@@ -933,15 +1069,23 @@
         },
         {
           "glob": "plugins/worker-entry/{www/boot.js,src/web-boot.ts,src/entry.ts}"
+        },
+        {
+          "glob": "harmony/host-rust/src/host.rs"
+        },
+        {
+          "glob": "harmony/web/product-worker.mjs"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [],
       "source": {
         "authority": "Swift `PhoneDSHWorkerEnvironment`（[PhoneDSH.swift](../Sources/PhoneDSH/PhoneDSH.swift)）、`Sources/PhoneDSHEngine/WebEngineConfiguration.swift`",
-        "ends": "Kotlin `android/engine/.../WorkerEnvironment.kt`；Worker **兩份**解析器 `plugins/worker-entry/www/boot.js`、`src/web-boot.ts`，及 `src/entry.ts`",
+        "ends": "Kotlin `android/engine/.../WorkerEnvironment.kt`；Worker **兩份**解析器 `plugins/worker-entry/www/boot.js`、`src/web-boot.ts`，及 `src/entry.ts` ；HarmonyOS partial `harmony/host-rust/src/host.rs`, `harmony/web/product-worker.mjs`",
         "evidence": "URL 參數、init 幀、`PDSH_*` 環境變數（D24）、`__PDSH_*` 全域變數。兩份解析器必須同改",
-        "triggers": "`Sources/PhoneDSH/PhoneDSH.swift`、`Sources/PhoneDSHEngine/{WebEngineConfiguration,WebEngineScripts}.swift`、`android/engine/src/main/kotlin/com/phonedsh/engine/WorkerEnvironment.kt`、`plugins/worker-entry/{www/boot.js,src/web-boot.ts,src/entry.ts}`"
+        "triggers": "`Sources/PhoneDSH/PhoneDSH.swift`、`Sources/PhoneDSHEngine/{WebEngineConfiguration,WebEngineScripts}.swift`、`android/engine/src/main/kotlin/com/phonedsh/engine/WorkerEnvironment.kt`、`plugins/worker-entry/{www/boot.js,src/web-boot.ts,src/entry.ts}` 、`harmony/host-rust/src/host.rs`、`harmony/web/product-worker.mjs`"
       }
     },
     {
@@ -989,13 +1133,18 @@
       "authority": [
         "plugins/worker-entry/src/capabilities.ts",
         "plugins/phone-mcp/src/schema.ts",
-        "plugins/phone-model-config/src/model-config.ts"
+        "plugins/phone-model-config/src/model-config.ts",
+        "harmony/entry/src/main/ets/host/HostPersistence.ets"
       ],
       "ends": {
         "Swift": [
           "Sources/PhoneDSHLog/MaterializedInvariant.swift",
           "Sources/PhoneDSHScenario/ScenarioBudgets.swift",
           "Sources/PhoneDSH/Phone*Settings.swift"
+        ],
+        "HarmonyOS": [
+          "harmony/entry/src/main/ets/host/HostPersistence.ets",
+          "harmony/entry/src/main/ets/model/ProviderProfiles.ets"
         ]
       },
       "triggers": [
@@ -1019,15 +1168,23 @@
         },
         {
           "glob": "Sources/PhoneDSHScenario/ScenarioBudgets.swift"
+        },
+        {
+          "glob": "harmony/entry/src/main/ets/host/HostPersistence.ets"
+        },
+        {
+          "glob": "harmony/entry/src/main/ets/model/ProviderProfiles.ets"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [],
       "source": {
-        "authority": "`/dsh/home/capabilities.json`：`plugins/worker-entry/src/capabilities.ts`；`mcp.json`：`plugins/phone-mcp/src/schema.ts`（`MCP_CONFIG_VERSION`）；`PDSH_MODEL_PROVIDER_JSON`：`plugins/phone-model-config/src/model-config.ts`",
-        "ends": "Swift `MaterializedInvariant.swift`、`ScenarioBudgets.swift`、`Sources/PhoneDSH/Phone*Settings.swift`；未查得 Kotlin 讀寫這三種設定的對應端",
+        "authority": "`/dsh/home/capabilities.json`：`plugins/worker-entry/src/capabilities.ts`；`mcp.json`：`plugins/phone-mcp/src/schema.ts`（`MCP_CONFIG_VERSION`）；`PDSH_MODEL_PROVIDER_JSON`：`plugins/phone-model-config/src/model-config.ts` ；Harmony 私有设置 [HostPersistence.ets](../harmony/entry/src/main/ets/host/HostPersistence.ets)",
+        "ends": "Swift `MaterializedInvariant.swift`、`ScenarioBudgets.swift`、`Sources/PhoneDSH/Phone*Settings.swift`；未查得 Kotlin 讀寫這三種設定的對應端 ；HarmonyOS partial `harmony/entry/src/main/ets/host/HostPersistence.ets`, `harmony/entry/src/main/ets/model/ProviderProfiles.ets`",
         "evidence": "讀寫兩端、舊資料、降級一起評估；UserDefaults key 名也是協議",
-        "triggers": "`plugins/worker-entry/src/capabilities.ts`、`plugins/shell-ext/src/contract.ts`、`plugins/phone-mcp/src/schema.ts`、`plugins/phone-model-config/src/model-config.ts`、`Sources/PhoneDSH/Phone*Settings.swift`、`Sources/PhoneDSHLog/MaterializedInvariant.swift`、`Sources/PhoneDSHScenario/ScenarioBudgets.swift`"
+        "triggers": "`plugins/worker-entry/src/capabilities.ts`、`plugins/shell-ext/src/contract.ts`、`plugins/phone-mcp/src/schema.ts`、`plugins/phone-model-config/src/model-config.ts`、`Sources/PhoneDSH/Phone*Settings.swift`、`Sources/PhoneDSHLog/MaterializedInvariant.swift`、`Sources/PhoneDSHScenario/ScenarioBudgets.swift` 、`harmony/entry/src/main/ets/host/HostPersistence.ets`、`harmony/entry/src/main/ets/model/ProviderProfiles.ets`"
       }
     },
     {
@@ -1078,6 +1235,10 @@
         ],
         "Kotlin": [
           "android/engine/src/main/kotlin/com/phonedsh/engine/*WorkerAssetSource.kt"
+        ],
+        "HarmonyOS": [
+          "harmony/tools/stage-runtime.mjs",
+          "harmony/host-rust/src/bundle.rs"
         ]
       },
       "triggers": [
@@ -1095,15 +1256,23 @@
         },
         {
           "glob": "android/engine/src/main/kotlin/com/phonedsh/engine/{WorkerAssets,*WorkerAssetSource}.kt"
+        },
+        {
+          "glob": "harmony/tools/stage-runtime.mjs"
+        },
+        {
+          "glob": "harmony/host-rust/src/bundle.rs"
         }
       ],
-      "status": [],
+      "status": [
+        "partial"
+      ],
       "evidence": [],
       "source": {
         "authority": "`plugins/scripts/pack-image.mjs`、[dsh-pin.json](../plugins/dsh-pin.json)",
-        "ends": "Swift `LoopbackServer.swift`；Kotlin `android/engine/.../*WorkerAssetSource.kt`",
+        "ends": "Swift `LoopbackServer.swift`；Kotlin `android/engine/.../*WorkerAssetSource.kt` ；HarmonyOS partial `harmony/tools/stage-runtime.mjs`, `harmony/host-rust/src/bundle.rs`",
         "evidence": "`manifest.json`、`sizes.json`、`config/vfs-manifest.json`、lazy／overlay tar",
-        "triggers": "`plugins/scripts/pack-image.mjs`、`plugins/dsh-pin.json`、`plugins/bundle/**`、`Sources/PhoneDSHLoopback/LoopbackServer.swift`、`android/engine/src/main/kotlin/com/phonedsh/engine/{WorkerAssets,*WorkerAssetSource}.kt`"
+        "triggers": "`plugins/scripts/pack-image.mjs`、`plugins/dsh-pin.json`、`plugins/bundle/**`、`Sources/PhoneDSHLoopback/LoopbackServer.swift`、`android/engine/src/main/kotlin/com/phonedsh/engine/{WorkerAssets,*WorkerAssetSource}.kt` 、`harmony/tools/stage-runtime.mjs`、`harmony/host-rust/src/bundle.rs`"
       }
     },
     {

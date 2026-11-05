@@ -1,0 +1,16 @@
+.hvigor/
+.cache/
+oh_modules/
+local.properties
+**/build/
+**/target/
+entry/src/main/resources/rawfile/runtime.zip
+signing/
+*.p12
+*.p7b
+*.cer
+.idea/
+node_modules/
+**/.cxx/
+**/.verifybuild/
+**/.verifyhome/
