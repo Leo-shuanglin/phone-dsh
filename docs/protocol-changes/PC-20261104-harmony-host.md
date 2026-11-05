@@ -178,3 +178,7 @@ Base: `42d4dbf748e73a52877b9d82df15c8f521c7d932`. Protocol impact: P06; P09; P14
 用户排队消息以真实 `user/message` 及 seq 投影。按 Worker `source.rpcId` 去掉已有首条乐观消息的同一回执；禁止按文本去重。保留现有消息大小限制和已支持文本部件。
 
 旧/新 App 都与同一固定 Worker 互通，Worker/schema/WAL 和旧数据不改；旧 App 的只读历史依然可读。旧 App 仍有首轮关闭缺陷。实现范围为 Android `ChatTurnRunner.kt`、`ProbeEngineViewModel.kt`、`ChatSurface.kt` 及其现有 JVM 测试。验证以真实 HostChannel 的两个有序 turn、非空及过期投影和实际模拟器队列为准；鸿蒙继续使用当前实现，不改其 Worker 端。
+
+## android-parity-9 设置首页分组布局
+
+Base: `769791b5`. Protocol impact: P09。校准后的设置截图显示鸿蒙组标题左内距 8vp，Android 33dp；Android 设置列表从导航下方留 45dp，组卡间距 35dp。按既有 Android `SettingsIndexList` / `SettingsChrome` 口径修正鸿蒙设置首页。组标题沿 secondary 13，顶部和底部各 12；首页导航行使用 22 图标槽与 6 图文间距，值使用正文 16 和次要文字颜色，继续保留值宽不超过半行。外观和语言行使用向下符号。其他页面复用的 NavRow 保留原默认；不改菜单提交、已保存偏好或真实权限事实。Android 和共享 token 不变，原图保留。验收比较同密度卡间隔、左内距和实际选项读回。
