@@ -16,12 +16,8 @@ import { Palette, Metrics, Copy } from './Palette';
 import { NativeCodeBlock } from './NativeCodeBlock';
 import { MarkdownImage } from './MarkdownImage';
 import { ImageBytes } from '../model/Contracts';
-import {
-  InlineMathSegment,
-  MathFormula,
-  hasInlineMath,
-  inlineMathSegments
-} from './MathFormula';
+import { MathFormula } from './MathFormula';
+import { NativeInlineText } from './NativeInlineText';
 import {
   MarkdownBlock,
   MarkdownBlockKind,
@@ -36,11 +32,9 @@ import {
   MarkdownMathBlock,
   MarkdownParagraphBlock,
   MarkdownQuoteBlock,
-  MarkdownRun,
   MarkdownTableAlign,
   MarkdownTableBlock,
   MarkdownVariant,
-  flattenInlines,
   parseMarkdownOrPlain
 } from '../model/MarkdownModel';
 
@@ -91,14 +85,11 @@ struct MarkdownTableBody {
   }
 
   private bodyLine(): number {
-    if (this.compact()) {
-      return 18;
-    }
-    return this.bodySize() + 8;
+    return this.compact() ? 0 : Math.max(24, this.bodySize() * 1.5);
   }
 
-  private codeSize(): number {
-    return this.codeFontSize > 0 ? this.codeFontSize : Metrics.listItemSize;
+  private inlineCodeSize(): number {
+    return this.compact() ? 13 : (this.codeFontSize > 0 ? this.codeFontSize : 13) + 1;
   }
 
   private columns(): number {
@@ -170,90 +161,22 @@ struct MarkdownTableBody {
       this.columns() * TABLE_COLUMN_MIN_WIDTH <= this.availableWidth;
   }
 
-  private openRun(run: MarkdownRun): void {
-    if (run.style.target !== null) {
-      this.onOpenTarget(run.style.target);
-    }
-  }
-
   @Builder
-  InlineMathText(inlines: MarkdownInline[], fontSize: number, color: string, lineHeight: number, baseWeight: number | FontWeight, align: TextAlign) {
-    Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Center }) {
-      ForEach(inlineMathSegments(inlines), (segment: InlineMathSegment) => {
-        if (segment.math) {
-          MathFormula({
-            latex: segment.text,
-            fontSize: fontSize,
-            color: color,
-            displayMode: false
-          })
-        } else {
-          Text(segment.text)
-            .fontSize(segment.style.code ? this.codeSize() :
-              (segment.style.footnote ? Math.max(fontSize - 4, 9) : fontSize))
-            .fontColor(segment.style.link ? this.pal().sessionAccent :
-              (segment.style.footnote ? this.pal().sessionAccent : color))
-            .fontWeight(segment.style.bold ? 600 : baseWeight)
-            .fontStyle(segment.style.italic ? FontStyle.Italic : FontStyle.Normal)
-            .decoration({
-              type: segment.style.link ? TextDecorationType.Underline :
-                (segment.style.strike ? TextDecorationType.LineThrough : TextDecorationType.None),
-              color: segment.style.link ? this.pal().sessionAccent : color
-            })
-            .lineHeight(lineHeight)
-            .textAlign(align)
-            .onClick(() => {
-              if (segment.style.link && segment.style.target !== null) {
-                this.onOpenTarget(segment.style.target);
-              }
-            })
-        }
-      }, (segment: InlineMathSegment, index: number) => index.toString() + JSON.stringify(segment))
-    }
-    .width('100%')
-  }
-
-  @Builder
-  InlineText(inlines: MarkdownInline[], fontSize: number, color: string, lineHeight: number, baseWeight: number | FontWeight, align: TextAlign) {
-    if (inlines.length === 0) {
-      Text('')
-        .fontSize(fontSize)
-        .fontColor(color)
-        .width('100%')
-    } else if (hasInlineMath(inlines)) {
-      this.InlineMathText(inlines, fontSize, color, lineHeight, baseWeight, align)
-    } else {
-      Text() {
-        ForEach(flattenInlines(inlines), (run: MarkdownRun) => {
-          Span(run.text)
-            .fontSize(run.style.code ? this.codeSize() :
-              (run.style.footnote ? Math.max(fontSize - 4, 9) : fontSize))
-            .fontColor(run.style.link ? this.pal().sessionAccent :
-              (run.style.footnote ? this.pal().sessionAccent : color))
-            .fontWeight(run.style.bold ? 600 : baseWeight)
-            .fontStyle(run.style.italic ? FontStyle.Italic : FontStyle.Normal)
-            .decoration({
-              type: run.style.link ? TextDecorationType.Underline :
-                (run.style.strike ? TextDecorationType.LineThrough : TextDecorationType.None),
-              color: run.style.link ? this.pal().sessionAccent : color
-            })
-            .textBackgroundStyle({
-              color: run.style.code ? this.pal().sessionInlineCode : '#00000000',
-              radius: 3
-            })
-            .onClick(() => {
-              if (run.style.link) {
-                this.openRun(run);
-              }
-            })
-        })
+  InlineText(inlines: MarkdownInline[], fontSize: number, color: string, lineHeight: number,
+    baseWeight: number | FontWeight, align: TextAlign) {
+    NativeInlineText({
+      inlines: inlines,
+      fontSize: fontSize,
+      codeFontSize: this.inlineCodeSize(),
+      lineHeight: lineHeight,
+      baseWeight: baseWeight,
+      paragraphAlignment: align,
+      color: color,
+      dark: this.dark,
+      onOpenTarget: (target: MarkdownLinkTarget): void => {
+        this.onOpenTarget(target);
       }
-      .fontSize(fontSize)
-      .fontColor(color)
-      .lineHeight(lineHeight)
-      .width('100%')
-      .textAlign(align)
-    }
+    })
   }
 
   @Builder
@@ -264,7 +187,7 @@ struct MarkdownTableBody {
           this.InlineText(
             cell,
             this.bodySize(),
-            this.pal().textPrimary,
+            this.pal().sessionPrimary,
             this.bodyLine(),
             header ? 600 : FontWeight.Normal,
             this.alignAt(alignments, index)
@@ -318,7 +241,7 @@ struct MarkdownTableBody {
               this.InlineText(
                 this.cellAt(cells, column),
                 this.bodySize(),
-                this.pal().textPrimary,
+                this.pal().sessionPrimary,
                 this.bodyLine(),
                 FontWeight.Normal,
                 TextAlign.Start
@@ -407,43 +330,26 @@ export struct MarkdownBody {
   }
 
   private bodyLine(): number {
-    if (this.compact()) { return 18; }
-    return this.bodySize() + 8;
+    return this.compact() ? 0 : Math.max(24, this.bodySize() * 1.5);
   }
 
-  private codeSize(): number {
-    return this.codeFontSize > 0 ? this.codeFontSize : Metrics.listItemSize;
+  private inlineCodeSize(): number {
+    return this.compact() ? 13 : (this.codeFontSize > 0 ? this.codeFontSize : 13) + 1;
   }
 
   private bodyColor(): string {
-    return this.compact() ? this.pal().textTertiary : this.pal().textPrimary;
+    return this.compact() ? this.pal().sessionTertiary : this.pal().sessionPrimary;
   }
 
   private headingSize(level: number): number {
     if (this.compact()) {
       return Metrics.secondarySize;
     }
-    const base: number = this.bodySize();
-    if (level <= 1) {
-      return base + 8;
-    }
-    if (level === 2) {
-      return base + 6;
-    }
-    if (level === 3) {
-      return base + 4;
-    }
-    if (level === 4) {
-      return base + 1;
-    }
-    return base;
-  }
-
-  private openRun(run: MarkdownRun): void {
-    if (run.style.target === null) {
-      return;
-    }
-    this.openTarget(run.style.target);
+    if (level <= 1) { return 24; }
+    if (level === 2) { return 22; }
+    if (level === 3) { return 20; }
+    if (level === 4) { return 17; }
+    return this.bodySize();
   }
 
   private openTarget(target: MarkdownLinkTarget): void {
@@ -478,85 +384,21 @@ export struct MarkdownBody {
 
 
   @Builder
-  InlineMathText(inlines: MarkdownInline[], fontSize: number, color: string, lineHeight: number, baseBold: boolean, align: TextAlign) {
-    Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Center }) {
-      ForEach(inlineMathSegments(inlines), (segment: InlineMathSegment) => {
-        if (segment.math) {
-          MathFormula({
-            latex: segment.text,
-            fontSize: fontSize,
-            color: color,
-            displayMode: false
-          })
-        } else {
-          Text(segment.text)
-            .fontSize(segment.style.code ? this.codeSize() :
-              (segment.style.footnote ? Math.max(fontSize - 4, 9) : fontSize))
-            .fontColor(segment.style.link ? this.pal().sessionAccent :
-              (segment.style.footnote ? this.pal().sessionAccent : color))
-            .fontWeight(segment.style.bold ? 600 :
-              (baseBold ? FontWeight.Bold : FontWeight.Normal))
-            .fontStyle(segment.style.italic ? FontStyle.Italic : FontStyle.Normal)
-            .decoration({
-              type: segment.style.link ? TextDecorationType.Underline :
-                (segment.style.strike ? TextDecorationType.LineThrough : TextDecorationType.None),
-              color: segment.style.link ? this.pal().sessionAccent : color
-            })
-            .lineHeight(lineHeight)
-            .textAlign(align)
-            .onClick(() => {
-              if (segment.style.link && segment.style.target !== null) {
-                this.openTarget(segment.style.target);
-              }
-            })
-        }
-      }, (segment: InlineMathSegment, index: number) => index.toString() + JSON.stringify(segment))
-    }
-    .width('100%')
-  }
-
-  @Builder
-  InlineText(inlines: MarkdownInline[], fontSize: number, color: string, lineHeight: number, baseBold: boolean, align: TextAlign) {
-    if (inlines.length === 0) {
-      Text('')
-        .fontSize(fontSize)
-        .fontColor(color)
-        .width('100%')
-    } else if (hasInlineMath(inlines)) {
-      this.InlineMathText(inlines, fontSize, color, lineHeight, baseBold, align)
-    } else {
-      Text() {
-        ForEach(flattenInlines(inlines), (run: MarkdownRun) => {
-          Span(run.text)
-            .fontSize(run.style.code ? this.codeSize() :
-              (run.style.footnote ? Math.max(fontSize - 4, 9) : fontSize))
-            .fontColor(run.style.link ? this.pal().sessionAccent :
-              (run.style.footnote ? this.pal().sessionAccent : color))
-            .fontWeight(run.style.bold ? 600 :
-              (baseBold ? FontWeight.Bold : FontWeight.Normal))
-            .fontStyle(run.style.italic ? FontStyle.Italic : FontStyle.Normal)
-            .decoration({
-              type: run.style.link ? TextDecorationType.Underline :
-                (run.style.strike ? TextDecorationType.LineThrough : TextDecorationType.None),
-              color: run.style.link ? this.pal().sessionAccent : color
-            })
-            .textBackgroundStyle({
-              color: run.style.code ? this.pal().sessionInlineCode : '#00000000',
-              radius: 3
-            })
-            .onClick(() => {
-              if (run.style.link) {
-                this.openRun(run);
-              }
-            })
-        })
+  InlineText(inlines: MarkdownInline[], fontSize: number, color: string, lineHeight: number,
+    baseWeight: number | FontWeight, align: TextAlign) {
+    NativeInlineText({
+      inlines: inlines,
+      fontSize: fontSize,
+      codeFontSize: this.inlineCodeSize(),
+      lineHeight: lineHeight,
+      baseWeight: baseWeight,
+      paragraphAlignment: align,
+      color: color,
+      dark: this.dark,
+      onOpenTarget: (target: MarkdownLinkTarget): void => {
+        this.openTarget(target);
       }
-      .fontSize(fontSize)
-      .fontColor(color)
-      .lineHeight(lineHeight)
-      .width('100%')
-      .textAlign(align)
-    }
+    })
   }
 
   @Builder
@@ -566,7 +408,7 @@ export struct MarkdownBody {
       this.bodySize(),
       this.bodyColor(),
       this.bodyLine(),
-      false,
+      FontWeight.Normal,
       TextAlign.Start
     )
   }
@@ -576,9 +418,9 @@ export struct MarkdownBody {
     this.InlineText(
       block.inlines,
       this.headingSize(block.level),
-      this.compact() ? this.bodyColor() : this.pal().textPrimary,
-      this.headingSize(block.level) * 1.35,
-      true,
+      this.pal().sessionPrimary,
+      this.bodyLine(),
+      !this.compact() && block.level <= 2 ? 700 : 600,
       TextAlign.Start
     )
   }
@@ -672,7 +514,7 @@ export struct MarkdownBody {
                   this.bodySize(),
                   this.bodyColor(),
                   this.bodyLine(),
-                  false,
+                  FontWeight.Normal,
                   TextAlign.Start
                 )
               }

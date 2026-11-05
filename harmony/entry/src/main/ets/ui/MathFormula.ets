@@ -19,6 +19,7 @@ import {
   MarkdownFootnoteInline,
   MarkdownImageInline,
   MarkdownInline,
+  MarkdownInlineKind,
   MarkdownLinkInline,
   MarkdownLinkKind,
   MarkdownMathInline,
@@ -200,44 +201,47 @@ export class InlineMathSegment {
 function appendSegments(out: InlineMathSegment[], inlines: MarkdownInline[], base: MarkdownSpanStyle): void {
   for (let i: number = 0; i < inlines.length; i++) {
     const part: MarkdownInline = inlines[i];
-    if (part instanceof MarkdownTextInline) {
-      out.push(new InlineMathSegment(false, part.text, base.clone()));
-    } else if (part instanceof MarkdownStrongInline) {
+    // Dispatch on the data-only `kind` rather than `instanceof`: @Prop deep
+    // copies a child's array and the copy may not keep the concrete prototype.
+    if (part.kind === MarkdownInlineKind.Text) {
+      out.push(new InlineMathSegment(false, (part as MarkdownTextInline).text, base.clone()));
+    } else if (part.kind === MarkdownInlineKind.Strong) {
       const next: MarkdownSpanStyle = base.clone();
       next.bold = true;
-      appendSegments(out, part.children, next);
-    } else if (part instanceof MarkdownEmphasisInline) {
+      appendSegments(out, (part as MarkdownStrongInline).children, next);
+    } else if (part.kind === MarkdownInlineKind.Emphasis) {
       const next: MarkdownSpanStyle = base.clone();
       next.italic = true;
-      appendSegments(out, part.children, next);
-    } else if (part instanceof MarkdownDeleteInline) {
+      appendSegments(out, (part as MarkdownEmphasisInline).children, next);
+    } else if (part.kind === MarkdownInlineKind.Delete) {
       const next: MarkdownSpanStyle = base.clone();
       next.strike = true;
-      appendSegments(out, part.children, next);
-    } else if (part instanceof MarkdownCodeInline) {
+      appendSegments(out, (part as MarkdownDeleteInline).children, next);
+    } else if (part.kind === MarkdownInlineKind.Code) {
       const next: MarkdownSpanStyle = base.clone();
       next.code = true;
-      out.push(new InlineMathSegment(false, part.code, next));
-    } else if (part instanceof MarkdownLinkInline) {
-      const target = markdownLinkTarget(part.destination);
+      out.push(new InlineMathSegment(false, (part as MarkdownCodeInline).code, next));
+    } else if (part.kind === MarkdownInlineKind.Link) {
+      const link: MarkdownLinkInline = part as MarkdownLinkInline;
+      const target = markdownLinkTarget(link.destination);
       if (target === null || target.kind === MarkdownLinkKind.ResourceUri) {
-        appendSegments(out, part.children, base);
+        appendSegments(out, link.children, base);
       } else {
         const next: MarkdownSpanStyle = base.clone();
         next.link = true;
         next.target = target;
-        appendSegments(out, part.children, next);
+        appendSegments(out, link.children, next);
       }
-    } else if (part instanceof MarkdownImageInline) {
+    } else if (part.kind === MarkdownInlineKind.Image) {
       const next: MarkdownSpanStyle = base.clone();
       next.italic = true;
-      out.push(new InlineMathSegment(false, part.alt, next));
-    } else if (part instanceof MarkdownMathInline) {
-      out.push(new InlineMathSegment(true, part.latex, base.clone()));
-    } else if (part instanceof MarkdownFootnoteInline) {
+      out.push(new InlineMathSegment(false, (part as MarkdownImageInline).alt, next));
+    } else if (part.kind === MarkdownInlineKind.Math) {
+      out.push(new InlineMathSegment(true, (part as MarkdownMathInline).latex, base.clone()));
+    } else if (part.kind === MarkdownInlineKind.Footnote) {
       const next: MarkdownSpanStyle = base.clone();
       next.footnote = true;
-      out.push(new InlineMathSegment(false, '[' + part.id + ']', next));
+      out.push(new InlineMathSegment(false, '[' + (part as MarkdownFootnoteInline).id + ']', next));
     }
   }
 }
@@ -252,36 +256,86 @@ export function inlineMathSegments(
   return out;
 }
 
-/** True when recursive inline markup contains TeX. */
-export function hasInlineMath(inlines: MarkdownInline[]): boolean {
-  for (let i: number = 0; i < inlines.length; i++) {
-    const part: MarkdownInline = inlines[i];
-    if (part instanceof MarkdownMathInline) {
-      return true;
-    }
-    if (part instanceof MarkdownStrongInline && hasInlineMath(part.children)) {
-      return true;
-    }
-    if (part instanceof MarkdownEmphasisInline && hasInlineMath(part.children)) {
-      return true;
-    }
-    if (part instanceof MarkdownDeleteInline && hasInlineMath(part.children)) {
-      return true;
-    }
-    if (part instanceof MarkdownLinkInline && hasInlineMath(part.children)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function roundUp(value: number): number {
   return Math.max(1, Math.ceil(value));
 }
 
+/** Decoded pixel bounds for one formula image. */
+export class MathPixelSize {
+  width: number;
+  height: number;
+
+  constructor(width: number, height: number) {
+    this.width = width;
+    this.height = height;
+  }
+}
+
 /**
- * Renders one formula. Inline mode returns an intrinsically sized image for a
- * Flex paragraph; display mode is a horizontally scrollable image.
+ * Converts a RaTeX logical (vp) result into decode pixels at the actual display
+ * density. Both the display-math and inline paths use this helper so the
+ * 8192 edge / 4,194,304 area caps can never drift apart.
+ */
+export function boundedMathPixelSize(
+  widthVp: number,
+  heightVp: number,
+  vp2px: (value: number) => number
+): MathPixelSize {
+  let width: number = roundUp(vp2px(widthVp));
+  let height: number = roundUp(vp2px(heightVp));
+  if (width > MAX_PIXEL_EDGE || height > MAX_PIXEL_EDGE) {
+    const edgeScale: number = Math.min(MAX_PIXEL_EDGE / width, MAX_PIXEL_EDGE / height);
+    width = Math.max(1, Math.floor(width * edgeScale));
+    height = Math.max(1, Math.floor(height * edgeScale));
+  }
+  if (width * height > MAX_PIXEL_AREA) {
+    const areaScale: number = Math.sqrt(MAX_PIXEL_AREA / (width * height));
+    width = Math.max(1, Math.floor(width * areaScale));
+    height = Math.max(1, Math.floor(height * areaScale));
+  }
+  return new MathPixelSize(width, height);
+}
+
+/**
+ * Decodes one SVG byte buffer at the bounded target size. The caller owns the
+ * returned PixelMap; the ImageSource is always released by this function.
+ */
+export async function decodeMathPixelMap(
+  bytes: Uint8Array,
+  widthVp: number,
+  heightVp: number,
+  vp2px: (value: number) => number
+): Promise<image.PixelMap> {
+  const target: MathPixelSize = boundedMathPixelSize(widthVp, heightVp, vp2px);
+  const source: image.ImageSource = image.createImageSource(bytes.buffer as ArrayBuffer);
+  if (source === undefined) {
+    throw new Error('原生公式图片解码失败');
+  }
+  try {
+    return await source.createPixelMap({
+      desiredSize: {
+        width: target.width,
+        height: target.height
+      }
+    });
+  } finally {
+    source.release().then(() => {}).catch(() => {});
+  }
+}
+
+/** Convenience wrapper for callers that only have the SVG text. */
+export async function decodeMathSvg(
+  svg: string,
+  widthVp: number,
+  heightVp: number,
+  vp2px: (value: number) => number
+): Promise<image.PixelMap> {
+  const bytes: Uint8Array = new util.TextEncoder().encodeInto(svg);
+  return decodeMathPixelMap(bytes, widthVp, heightVp, vp2px);
+}
+
+/**
+ * Renders a display formula as a horizontally scrollable native image.
  */
 @Component
 export struct MathFormula {
@@ -319,10 +373,6 @@ export struct MathFormula {
     if (previous !== undefined) {
       previous.release().then(() => {}).catch(() => {});
     }
-  }
-
-  private releaseSource(source: image.ImageSource): void {
-    source.release().then(() => {}).catch(() => {});
   }
 
   private reload(): void {
@@ -392,78 +442,36 @@ export struct MathFormula {
       this.loading = false;
       return;
     }
-    // Bound createPixelMap even if a mismatched native library returned an
-    // oversized logical size: preserve aspect ratio inside 8192x8192 / 4Mi px.
-    let width: number = roundUp(this.getUIContext().vp2px(result.width));
-    let height: number = roundUp(this.getUIContext().vp2px(result.height));
-    if (width > MAX_PIXEL_EDGE || height > MAX_PIXEL_EDGE) {
-      const edgeScale: number = Math.min(MAX_PIXEL_EDGE / width, MAX_PIXEL_EDGE / height);
-      width = Math.max(1, Math.floor(width * edgeScale));
-      height = Math.max(1, Math.floor(height * edgeScale));
-    }
-    if (width * height > MAX_PIXEL_AREA) {
-      const areaScale: number = Math.sqrt(MAX_PIXEL_AREA / (width * height));
-      width = Math.max(1, Math.floor(width * areaScale));
-      height = Math.max(1, Math.floor(height * areaScale));
-    }
-    const buffer: ArrayBuffer = bytes.buffer as ArrayBuffer;
-    let source: image.ImageSource | undefined = undefined;
-    try {
-      source = image.createImageSource(buffer);
-    } catch (error) {
-      this.failure = Copy.tr('原生公式图片解码失败');
-      this.retryable = true;
+    // decodeMathPixelMap applies the same 8192x8192 / 4Mi px cap as the inline
+    // path and always releases its ImageSource in a finally block.
+    const context = this.getUIContext();
+    decodeMathPixelMap(
+      bytes,
+      result.width,
+      result.height,
+      (value: number): number => context.vp2px(value)
+    ).then((pixelMap: image.PixelMap) => {
+      if (generation !== this.generation) {
+        // A newer reload/disappear won the race: release the stale bitmap
+        // promptly and do not publish it to state.
+        pixelMap.release().then(() => {}).catch(() => {});
+        return;
+      }
+      const previous: image.PixelMap | undefined = this.pixel;
+      this.pixel = pixelMap;
       this.loading = false;
-      return;
-    }
-    if (source === undefined) {
-      this.failure = Copy.tr('原生公式图片解码失败');
-      this.retryable = true;
-      this.loading = false;
-      return;
-    }
-    const opened: image.ImageSource = source;
-    try {
-      opened.createPixelMap({
-        desiredSize: {
-          width: width,
-          height: height
-        }
-      }).then((pixelMap: image.PixelMap) => {
-        if (generation !== this.generation) {
-          // A newer reload/disappear won the race: release both promptly and do
-          // not publish the stale bitmap to state.
-          pixelMap.release().then(() => {}).catch(() => {});
-          this.releaseSource(opened);
-          return;
-        }
-        const previous: image.PixelMap | undefined = this.pixel;
-        this.pixel = pixelMap;
-        this.loading = false;
-        this.releaseSource(opened);
-        if (previous !== undefined) {
-          previous.release().then(() => {}).catch(() => {});
-        }
-      }).catch(() => {
-        this.releaseSource(opened);
-        if (generation === this.generation) {
-          // Image(pixelMap) is preferred; the data URI keeps a native Image path
-          // if this device's ImageSource cannot decode SVG directly. Keep the
-          // fallback visible and expose an explicit retry.
-          this.retryable = true;
-          this.loading = false;
-        }
-      });
-    } catch (error) {
-      // createPixelMap can throw synchronously for an invalid state; release
-      // the source on that path too instead of leaking it.
-      this.releaseSource(opened);
+      if (previous !== undefined) {
+        previous.release().then(() => {}).catch(() => {});
+      }
+    }).catch(() => {
       if (generation === this.generation) {
-        this.failure = Copy.tr('原生公式图片解码失败');
+        // Image(pixelMap) is preferred; the data URI keeps a native Image path
+        // if this device's ImageSource cannot decode SVG directly. Keep the
+        // fallback visible and expose an explicit retry.
         this.retryable = true;
         this.loading = false;
       }
-    }
+    });
   }
 
   private showFailure(): boolean {
