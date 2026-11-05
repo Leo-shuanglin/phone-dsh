@@ -1,0 +1,39 @@
+[package]
+name = "pdsh-host"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Native phone-dsh host for HarmonyOS: loopback HTTP/WS, WAL, overlay, FFI."
+
+[lib]
+name = "pdsh_host"
+crate-type = ["staticlib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "pdsh-host-desktop"
+path = "src/bin/pdsh-host-desktop.rs"
+
+[workspace]
+
+[dependencies]
+pdsh-wire = { path = "../../shell/crates/pdsh-wire" }
+pdsh-wal = { path = "../../shell/crates/pdsh-wal" }
+serde_json = "1.0"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+flate2 = "1.0"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+base64 = "0.22"
+libc = "0.2"
+
+ratex-parser = "=0.1.15"
+ratex-layout = "=0.1.15"
+ratex-types = "=0.1.15"
+ratex-svg = { version = "=0.1.15", default-features = false, features = ["embed-fonts"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "unwind"

@@ -2124,6 +2124,10 @@ class ProbeEngineViewModel private constructor(application: Application) : Andro
      */
     private val chatTurnGeneration = AtomicLong(0L)
 
+    @Volatile
+    private var sealedBusyGeneration = -1L
+    private val busySubmissionVersion = AtomicLong(0L)
+
     private val turnScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     /** The ViewModel's queue transaction, bound to the same state and Worker channel. */
@@ -3662,7 +3666,11 @@ class ProbeEngineViewModel private constructor(application: Application) : Andro
         requestId: com.phonedsh.ui.state.StateRequestId,
         text: String,
         mode: com.phonedsh.ui.state.EnterMode,
-    ): Boolean = chatQueueActions.submitWhileRunning(workerSessionId, requestId, text, mode)
+    ): Boolean {
+        if (sealedBusyGeneration == chatTurnGeneration.get()) return false
+        busySubmissionVersion.incrementAndGet()
+        return chatQueueActions.submitWhileRunning(workerSessionId, requestId, text, mode)
+    }
 
     /** Retry the original failed input in its existing session without adding a second user row. */
     internal fun retryFailedChat(sessionId: String, requestId: com.phonedsh.ui.state.StateRequestId): Boolean {
@@ -3825,6 +3833,24 @@ class ProbeEngineViewModel private constructor(application: Application) : Andro
                         mutableChat.update { live ->
                             if (turnGeneration != chatTurnGeneration.get() || live.chatId != chatId) live
                             else live.copy(reasoningStreaming = live.reasoningStreaming + text)
+                        }
+                    },
+                    busySubmissionVersion = {
+                        withContext(Dispatchers.Main.immediate) {
+                            busySubmissionVersion.get().takeIf { mutableChat.value.localQueueItems.none { it.busy == true } }
+                        }
+                    },
+                    sealBusySubmissions = { readVersion ->
+                        withContext(Dispatchers.Main.immediate) {
+                            val live = mutableChat.value
+                            if (turnGeneration != chatTurnGeneration.get() || live.chatId != chatId) {
+                                true
+                            } else if (busySubmissionVersion.get() != readVersion || live.localQueueItems.any { it.busy == true }) {
+                                false
+                            } else {
+                                sealedBusyGeneration = turnGeneration
+                                true
+                            }
                         }
                     },
                 )

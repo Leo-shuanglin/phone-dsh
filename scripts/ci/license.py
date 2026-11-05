@@ -26,6 +26,9 @@ import common
 import modules
 
 SOURCE_EXTENSIONS = {
+    ".ets",
+    ".cpp",
+    ".h",
     # Android port: the Kotlin sources and the Gradle scripts carry the same
     # SPDX header as every other source root, so they are covered from the day
     # the adaptation tree lands rather than after its first release.

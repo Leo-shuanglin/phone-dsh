@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+cmake_minimum_required(VERSION 3.5.0)
+project(pdshhost)
+set(CMAKE_CXX_STANDARD 17)
+set(PDSH_RUST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../host-rust" CACHE PATH "Rust host crate")
+add_library(pdshrust STATIC IMPORTED)
+set_target_properties(pdshrust PROPERTIES IMPORTED_LOCATION "${PDSH_RUST_ROOT}/target/aarch64-unknown-linux-ohos/release/libpdsh_host.a")
+add_library(pdshhost SHARED napi_init.cpp artifacts_napi.cpp math_napi.cpp)
+target_include_directories(pdshhost PRIVATE "${PDSH_RUST_ROOT}/include")
+target_link_libraries(pdshhost PRIVATE pdshrust libace_napi.z.so libhilog_ndk.z.so dl m)
+target_link_options(pdshhost PRIVATE "-Wl,--exclude-libs,ALL")

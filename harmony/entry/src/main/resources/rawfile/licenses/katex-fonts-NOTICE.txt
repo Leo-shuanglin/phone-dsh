@@ -1,0 +1,16 @@
+KaTeX fonts — notice
+====================
+
+Component: the KaTeX glyph fonts (KaTeX_*.ttf) embedded at compile time by
+ratex-katex-fonts 0.1.15 through RaTeX's embed-fonts feature.
+
+Copyright (c) Khan Academy and other KaTeX contributors.
+
+Official source: https://github.com/KaTeX/KaTeX
+Font license:    https://github.com/KaTeX/KaTeX/blob/main/LICENSE
+SIL OFL 1.1:     https://openfontlicense.org/open-font-license-official-text/
+
+The font files are redistributed unmodified under the SIL Open Font License,
+Version 1.1. The full license text is included after the upstream notice below.
+
+Upstream notice, copied verbatim from RaTeX 0.1.15 THIRD_PARTY_NOTICES.txt:

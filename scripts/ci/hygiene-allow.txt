@@ -136,3 +136,8 @@ spec/v1/golden/gateway/fail-003\.json:.*https://:443
 # links (github.com/protocolbuffers/protocolbuffers.github.io), not a private
 # hostname. Exact matched spelling only; credentials/home paths remain checked.
 ^protocolbuffers\.github\.io$
+
+# Harmony font license attribution uses the public SIL license site.
+^openfontlicense\.org$
+# Deliberate reserved-domain mail/userinfo fixtures exercise link rejection.
+^harmony/(host-rust/src/tests\.rs|tests/(markdown-model|resource-locator)\.test\.mjs):.*(pw@example\.(com|test)|user@example\.test|p@a\.test|dev@example\.com)

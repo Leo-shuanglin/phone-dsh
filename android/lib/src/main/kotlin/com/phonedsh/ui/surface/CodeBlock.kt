@@ -120,9 +120,8 @@ public fun CodeBlock(
                 style = type.codeAction.copy(color = tokens.colors.secondary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
+                modifier = Modifier.weight(1f),
             )
-            Box(modifier = Modifier.weight(1f))
             // `Components.swift:171-176`: text.alignleft / arrow.left.and.right,
             // 28 x 28, plain style.
             Box(

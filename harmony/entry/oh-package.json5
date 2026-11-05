@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "0.1.0",
+  "description": "phoneDSH native HarmonyOS product shell",
+  "license": "MIT",
+  "dependencies": {
+    "libpdshhost.so": "file:./src/main/cpp/types/libpdshhost"
+  }
+}

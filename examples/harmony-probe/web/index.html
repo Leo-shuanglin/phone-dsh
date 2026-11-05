@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>phoneDSH 鸿蒙链路探针</title>
+<style>
+body{margin:0;background:#111b29;color:#e8f0fc;font:15px/1.6 system-ui;padding:24px}h1{font-size:23px}pre{background:#1c2c40;padding:16px;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere}button{background:#65d4c4;color:#11212a;border:0;padding:12px 24px;border-radius:8px;font:inherit}ul{padding:0;list-style:none}li{padding:10px 12px;margin:6px 0;background:#1c2c40;border-radius:8px}.pass{color:#8de0bd}.fail{color:#ffb4ad}summary{cursor:pointer;color:#a6bddc}
+</style>
+<h1>phoneDSH 核心链路探针</h1>
+<p>实际 Worker · 有序通道 · Shell · WASM · 文件回读</p>
+<button id="start">开始验证</button>
+<p id="verdict">尚未运行。桌面浏览器结果不能证明鸿蒙兼容。</p>
+<ul id="checks"></ul>
+<details><summary>查看原始 JSON 记录</summary><pre id="status"></pre></details>
+<script type="module" src="./probe.mjs"></script>
+</html>

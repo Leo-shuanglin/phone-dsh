@@ -28,6 +28,7 @@ import com.phonedsh.dsh.turn.DshTurnException
 import com.phonedsh.loopback.ChannelCloseCause
 import com.phonedsh.loopback.LoopbackConnection
 import com.phonedsh.wire.WireCodec
+import com.phonedsh.hostevents.HostEvent
 import com.phonedsh.hostevents.HostEventKind
 import java.util.LinkedHashMap
 import kotlinx.coroutines.CompletableDeferred
@@ -150,6 +151,55 @@ class ChatTurnRunnerTest {
         assertTrue("the peer held the stream quiet across multiple read windows", System.currentTimeMillis() - startedAt >= 80)
         assertTrue(outcome.completed)
         assertEquals(2, outcome.events.count { it.kind == HostEventKind.TURN_STARTED || it.kind == HostEventKind.TURN_ENDED })
+    }
+
+    @Test
+    fun followStaysOpenForAQueuedTurnEvenAfterTheWorkerHasFinishedIt() = runBlocking<Unit> {
+        val peer = ScriptedRunnerPeer(this)
+        val host = testHost()
+        peer.attach(host)
+        peer.connect()
+        peer.turnEndDelayMillis = 1
+        peer.secondTurnAlreadyCompleted = true
+        val runner = ChatTurnRunner(host, DshTurnClient(host), nextReadTimeoutMillis = 20)
+        val seen = mutableListOf<HostEvent>()
+        val outcome = withTimeout(2_000) {
+            runner.run("session-existing", "first prompt", {}, seen::add, {})
+        }
+        assertEquals(listOf("turn-0001", "turn-0002"), seen.filter {
+            it.kind == HostEventKind.TURN_ENDED
+        }.map { it.turnId })
+        assertTrue(outcome.completed)
+        assertEquals("second answer", outcome.assistantText)
+        assertEquals(1, peer.promptRequestIds.size)
+        assertEquals(listOf(peer.openMuxId), peer.muxCloseIds)
+    }
+
+    @Test
+    fun staleEmptyProjectionAndChangedSubmissionVersionCannotCloseTheFollow() = runBlocking<Unit> {
+        val peer = ScriptedRunnerPeer(this)
+        val host = testHost()
+        peer.attach(host)
+        peer.connect()
+        peer.turnEndDelayMillis = 1
+        peer.staleFirstProjection = true
+        val runner = ChatTurnRunner(host, DshTurnClient(host), nextReadTimeoutMillis = 20)
+        var sealAttempts = 0
+        val outcome = withTimeout(2_000) {
+            runner.run(
+                "session-existing", "first prompt", {}, {}, {},
+                busySubmissionVersion = { peer.projectionReads.toLong() },
+                sealBusySubmissions = { version ->
+                    sealAttempts++
+                    assertEquals((peer.projectionReads - 1).toLong(), version)
+                    sealAttempts >= 2
+                },
+            )
+        }
+        assertTrue(outcome.completed)
+        assertEquals(3, peer.projectionReads)
+        assertEquals(2, sealAttempts)
+        assertEquals(listOf(peer.openMuxId), peer.muxCloseIds)
     }
 
     @Test
@@ -304,6 +354,9 @@ class ChatTurnRunnerTest {
         lateinit var host: HostChannel
         var sendTurnStartedOnPrompt: Boolean = true
         var turnEndDelayMillis: Long? = null
+        var secondTurnAlreadyCompleted: Boolean = false
+        var staleFirstProjection: Boolean = false
+        var projectionReads: Int = 0
         val promptRequestIds = mutableListOf<String>()
         val promptModes = mutableListOf<String>()
         var openMuxId: String? = null
@@ -314,6 +367,7 @@ class ChatTurnRunnerTest {
         var lastFailure: Throwable? = null
         private var workerSeq = 2L
         private var followRequestId: Int? = null
+        private var promptSessionId: String = ""
 
         fun attach(host: HostChannel) { this.host = host }
 
@@ -376,6 +430,7 @@ class ChatTurnRunnerTest {
                 path == "/api/session/prompt" -> {
                     val request = (((JsonValue.parse(String(body, Charsets.UTF_8)) as JsonObject)["payload"] as JsonObject)
                         ["args"] as JsonObject)["request"] as JsonObject
+                    promptSessionId = (request["sessionId"] as JsonString).value
                     promptRequestIds += (request["requestId"] as JsonString).value
                     promptModes += (request["mode"] as JsonString).value
                     if (sendTurnStartedOnPrompt) {
@@ -392,17 +447,34 @@ class ChatTurnRunnerTest {
                     }
                     sendUnaryResponse(reqId, rpcId)
                 }
+                path == "/api/session/list" -> {
+                    projectionReads++
+                    val asOfSeq = when {
+                        secondTurnAlreadyCompleted -> 5
+                        staleFirstProjection && projectionReads == 1 -> 1
+                        else -> 2
+                    }
+                    val value = JsonValue.parse(
+                        """{"items":[{"sessionId":"$promptSessionId","formatStatus":"current","agentAvailable":true,"running":false,"projections":{"kind":"sequenced","asOfSeq":$asOfSeq,"values":{"inbox":{"next-step":[],"next-turn":[]}}}}]}""",
+                    )
+                    sendUnaryResponse(reqId, rpcId, value)
+                    if (secondTurnAlreadyCompleted && projectionReads == 1) {
+                        sendFollowLine("""{"type":"item","streamId":"follow","value":{"type":"event","event":{"seq":3,"type":"turn/start","data":{"turn":2}}}}""")
+                        sendFollowLine("""{"type":"item","streamId":"follow","value":{"type":"event","event":{"seq":4,"type":"assistant/message","data":{"turn":2,"message":{"content":[{"type":"text","text":"second answer"}]}}}}}""")
+                        sendFollowLine("""{"type":"item","streamId":"follow","value":{"type":"event","event":{"seq":5,"type":"turn/end","data":{"turn":2,"reason":{"kind":"completed"}}}}}""")
+                    }
+                }
                 else -> sendUnaryResponse(reqId, rpcId)
             }
         }
 
-        private suspend fun sendUnaryResponse(reqId: Int, rpcId: String?) {
+        private suspend fun sendUnaryResponse(reqId: Int, rpcId: String?, value: JsonValue = JsonObject(emptyMap())) {
             val envelope = JsonObject(
                 linkedMapOf(
                     "type" to JsonString("server-response"),
                     "rpcId" to JsonString(rpcId ?: "test-no-rpc"),
                     "result" to JsonObject(
-                        linkedMapOf("ok" to JsonBool(true), "value" to JsonObject(emptyMap())),
+                        linkedMapOf("ok" to JsonBool(true), "value" to value),
                     ),
                 ),
             )

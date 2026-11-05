@@ -38,6 +38,27 @@ import org.junit.Test
 
 class ChatSurfaceTest {
     @Test
+    fun `admitted duplicate text is a new bubble unless its request matches the optimistic prompt`() {
+        val ui = ChatUiState(
+            chatId = "chat",
+            running = true,
+            turnToken = "live",
+            activeTurnNodeId = "live-turn-0002",
+            lastPromptRequestId = "first",
+            nodes = listOf(userNodeOf("chat", "live", "repeat", 1)),
+        )
+        fun message(seq: Int, rpcId: String): HostEvent = HostEvent.project(JsonValue.parse(
+            """{"seq":$seq,"type":"user/message","data":{"source":{"kind":"user","rpcId":"$rpcId"},"content":[{"type":"text","text":"repeat"}]}}""",
+        ) as JsonObject)!!
+        val first = ui.applyChatEvent("chat", message(2, "first"), 2)
+        assertEquals(ui.nodes, first.nodes)
+        val admitted = first.applyChatEvent("chat", message(3, "queued"), 3)
+        assertEquals(listOf("repeat", "repeat"), admitted.nodes.map { it.text })
+        assertEquals("live-turn-0002", admitted.nodes.last().turnID)
+        assertEquals(admitted.nodes, admitted.applyChatEvent("chat", message(3, "queued"), 4).nodes)
+    }
+
+    @Test
     fun `session metrics and stored compact choice reach the page state`() {
         val snapshot = ChatSessionSnapshot(
             sessionStats = SessionStats(2, 3, 1.0, 2.0, 3.0, 1, 1000.0, 25),
