@@ -198,32 +198,37 @@ internal fun ChatRowItem(
     // PR22 reading content uses the source HomeSpec's 20pt inset.
     val horizontal = if (inListCard) Dp(0f) else HomeMetrics.contentInset
     when (row) {
-        is ChatRow.User -> Column(
-            modifier = modifier
-                .fillMaxWidth()
-                .padding(horizontal = horizontal),
-            verticalArrangement = Arrangement.spacedBy(HomeMetrics.paragraphGap),
-        ) {
-            // Two row elements, two edges: the bubble hugs the trailing edge,
-            // the queue label hugs the leading edge (iOS `queueLine` sits in a
-            // leading VStack under a trailing `userBubble`). The bubble surface
-            // never learns that a label exists.
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                MessageContextMenu(text = row.text, includeShare = true, modifier = Modifier.align(Alignment.CenterEnd)) {
-                    ChatBubble(
-                        role = BubbleRole.USER,
-                        text = row.text,
-                    // ChatBubble applies its own 20pt inset rule to the supplied
-                    // container width; this measured width is already the content column.
-                    containerWidth = maxWidth,
-                    )
+        is ChatRow.User -> BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+            // Capture the row's real container before this row applies its reading
+            // inset. ChatBubble's shared rule already subtracts `contentInset`
+            // (`ChatMetrics.userBubbleMaxWidth`), so passing the inset content column
+            // would deduct it twice (360 -> 320 -> 224 instead of the shared 256).
+            val rowContainerWidth = maxWidth
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = horizontal),
+                verticalArrangement = Arrangement.spacedBy(HomeMetrics.paragraphGap),
+            ) {
+                // Two row elements, two edges: the bubble hugs the trailing edge,
+                // the queue label hugs the leading edge (iOS `queueLine` sits in a
+                // leading VStack under a trailing `userBubble`). The bubble surface
+                // never learns that a label exists.
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    MessageContextMenu(text = row.text, includeShare = true, modifier = Modifier.align(Alignment.CenterEnd)) {
+                        ChatBubble(
+                            role = BubbleRole.USER,
+                            text = row.text,
+                            containerWidth = rowContainerWidth,
+                        )
+                    }
                 }
-            }
-            if (row.attachments.isNotEmpty()) {
-                AttachmentList(attachments = row.attachments, onOpenFile = onOpenFile)
-            }
-            if (row.badge != null) {
-                BubbleBadge(text = row.badge, modifier = Modifier.align(Alignment.Start))
+                if (row.attachments.isNotEmpty()) {
+                    AttachmentList(attachments = row.attachments, onOpenFile = onOpenFile)
+                }
+                if (row.badge != null) {
+                    BubbleBadge(text = row.badge, modifier = Modifier.align(Alignment.Start))
+                }
             }
         }
 
