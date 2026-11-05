@@ -156,3 +156,13 @@ Protocol impact: P09。校准后截图确认 Android CodeBlock 对语言标签�
 英文设置长权限摘要曾占尽横向空间，使标题按单字换行并产生巨大空白。两端的设置导航行应保留可见标题，右侧值限内行宽的一半，单行省略，不改实际值或无障碍文本。此处是本地 UI 测量约束，不增加共享 token、持久化字段或远端协议。实际 Compose 回归须覆盖尾部复制控件和长值标题；最终验收另用同密度模拟器截图。
 
 实现者独占 Android `CodeBlock.kt`、`SettingsPage.kt` 和对应渲染测试，以及 Harmony `ShellSupport.ets` 的 NavRow 值约束。协调者合并、构建及原图对照。SDK SVG `fillColor` 实测破坏 `fill=none` 的线框，代码卡片改用既有图标生成器从 `colors.sessionSecondary` 派生的同路径 ink 变体，旧默认图标不改。
+
+## android-parity-7 行内排版冻结
+
+Protocol impact: P09; P12: none — 既有 renderMath 输入、SVG/width/height/baseline 输出与 native ABI 不变。原 Flex 混排把文本片段和公式当独立块，不能完成 Android 的单段落换行。API20 实测探针比较了 SVG data URI 和 ImageKit PixelMap 的 ImageSpan：前者 onError 且蓝色图像像素为 0，后者实际渲染出 3312 绿色像素。采用同一 Text 内 Span + ImageSpan 的 PixelMap 路径。
+
+`NativeInlineText` 只接收 `inlines/fontSize/codeFontSize/lineHeight/baseWeight/align/color/dark/onOpenTarget`。继承现有 Markdown 解析与链接安全策略。所有片段在同一原生 Text 排版；公式以 RaTeX 尺寸为 vp，ImageSpan baselineOffset 为 `baseline - height`。按实际 fp→vp 和显示密度渲染；ImageSource 始终释放，PixelMap 属于组件，替换、失效与销毁释放，过期异步结果不得发布。使用既有 SVG 缓存与 8192 边、4,194,304 像素解码上限。失败保留原 TeX。无网络加载、无 WebView 渲染、无 Snapshot 中的资源句柄。
+
+校准截图同一窄表卡片背景高度为 Harmony 602px / Android 510px。差异来自首尾固定行高；保持角色行高在行间，避免给单行标签/值强加整段 leading。API20 使用实测默认字体自然高度计算间距，`lineSpacing(...,{onlyBetweenLines:true})`；不增加手调偏移。正文角色行高沿 Android `UiType.applyPreferences` 的 16/24 比例和下限，标题使用既有固定字号，行内代码 normal 为 code role+1、compact 为13。系统字形仍按各平台真实字体。原消息复制完整源码；选区 TeX 复制与长公式还要单独验收，不能推断通过。
+
+实现者独占 `ui/NativeInlineText.ets`、`ui/MathFormula.ets` 中现有解码器复用；协调者负责 MarkdownBody/表格消费、FontRole 样式和真实设备验证。有效分式/矩阵、无效 TeX、长段落跨行、链接、放大字体、重排后旧结果清理是验收用例。同 HAP 同次升级，不改 Worker、schema 或旧数据。
