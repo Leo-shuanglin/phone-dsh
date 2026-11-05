@@ -80,3 +80,15 @@ contract_revision: docs/design/harmony/ARCHITECTURE.md@image-resource-4
 ArkTS 通过配对 HostBridge 和 ShellActions 的类型化 image loader/资源打开动作消费字节，资源对象留在 UI 组件，不塞入 ShellSnapshot。本地路径和 dsh-resource/file/sandbox 链接按 Android 预览解析器的安全根与会话规则解析，未知会话与越界明确拒绝。远程图片沿用 Android 的凭据为空、最多 8 MiB、逐跳校验且最多三次重定向、解码边长最多 2048 的策略；平台拒绝明文 HTTP 时显示失败，不放宽系统安全配置。不得调用模型代理或借用模型密钥加载图片。显示、全屏查看、失败、重试与过期结果需实测。
 
 产物测量起点保存在宿主私有 SessionRecord.artifactsFromMseq，并在冷启动恢复时读取。该字段不是 Worker schema 或 wire 字段；后续无写入回合不能清空此前会话产物。旧会话缺字段仍为未测量，不推断历史归属。
+
+## android-parity-1 冻结
+
+Base/head 为 `c5aec33824f468f76ac324df5d116fe7a56c564f`。Protocol impact: P09。此修订只对齐现有 Android 的富文本可见行为，不修改共享 Markdown schema、wire、WAL、Worker API、NAPI 或持久化格式。
+
+当前鸿蒙代码块无语法色，窄表格始终显示等宽网格。预期行为以同一基线的 Android `CodeHighlighter.kt`、`CodeBlock.kt` 和 `MarkdownBody.kt` 为准。代码高亮按字符串、注释、数字、关键词顺序覆盖，保留原始文本及 UTF-16 偏移。内模块类型冻结为 `CodeInk = 'base' | 'string' | 'comment' | 'number' | 'keyword'`，`CodeRun { text: string; ink: CodeInk }`，入口为 `highlightCode(source: string): CodeRun[]`。调用者只用现有主题色，不增加依赖或颜色权威。
+
+表格按真实可用宽度与 Android 最小列宽阈值选择网格或逐行卡片，保持 header/value、对齐、compact 模式和资源链接语义。空文本、未识别 token、嵌套注释/字符串覆盖、尾随换行及窄屏多列表格是验收输入；代码复制结果必须逐字符一致。正反用例由真实高亮函数和现有 Markdown parser 驱动，不放宽任何规范验证。
+
+实现者独占 `ui/MarkdownBody.ets`、`model/CodeHighlight.ets` 与 `tests/code-highlight.test.mjs`。协调者负责合并、ArkTS 构建、Android/Harmony 模拟器对照及契约记录。新旧 HAP 都读取原 Worker Markdown 文本；无磁盘迁移，无回滚数据变更，版本保持同 HAP 配对接口。
+
+验收命令为 `node --test harmony/tests/*.test.mjs` 和 `devecocli build`，再以匹配的宽度、字体大小和 light/dark 状态截取两个平台的真实显示结果。未完成模拟器对照前不得升级成整体 1:1 通过。
