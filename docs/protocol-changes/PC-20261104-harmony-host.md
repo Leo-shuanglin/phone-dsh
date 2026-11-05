@@ -126,3 +126,11 @@ Protocol impact: P09。真实配对截图确认鸿蒙代码卡片缺少 Android 
 以既有组件结构移植，不另造渲染协议。内部 ArkUI `NativeCodeBlock` 只接收 language/body/dark，复用已测 CodeHighlight，保留原始字符串复制。Code banner 使用现有 `colors.sessionCodeBanner`，边框使用 `colors.sessionBorderL2`，不新增色值权威。换行默认开启，关闭后水平滚动且短内容左对齐；长内容折叠、展开、收起和暗色均须在模拟器实测。普通用户字体角色设置及 Worker/NAPI/持久化均不变。
 
 实现者只写新的 `ui/NativeCodeBlock.ets`。协调者负责 Palette 中既有 token 的绑定、MarkdownBody 接入、语言字典、构建和两端 UI 验收。导出结构与唯一消费者同 HAP 更新，旧文件无需迁移。此修订不允许为了对照而改 Android 基线或隐藏像素差异。
+
+## android-parity-4 气泡宽度裁决
+
+Protocol impact: P09。用户明确选择按共享规范修正两端，并保留旧 Android 截图。规范 `geometry.bubbleMaxWidthRatio` 的 0.8 不变，360 逻辑宽度、20 两侧阅读边距时最大气泡为 `(360 - 40) * 0.8 = 256`。真实 Android 截图出现约 224，是 ChatRows 在扣掉边距后又把内容列宽交给仍会扣边距的 ChatBubble，重复扣除了一次。鸿蒙现有内容列 80% 不应被缩窄去复制这个错误。
+
+修复 Android 私有 ChatRowItem 的测量归属，在外层水平阅读边距之前获取真实行容器宽度，再传给既有 ChatBubble。不得改公共 ChatBubble API、ChatMetrics 公式、共享 token、golden 或主题来压平差异；不得改为窗口常量，也不能用补偿常数掩盖调用者错误。窄容器和正常容器都必须执行真实 Compose 测量回归。鸿蒙端按同一公式在模拟器读回实际尺寸。
+
+修正前图像固定保留在 `docs/design/harmony/parity/before/`，后续不覆盖它们。修正后 Android APK 另记源 revision 与哈希，不冒充原 bd1dea5 基线。实现者独占 Android `ChatRows.kt` 和新的 `ChatUserBubbleWidthTest.kt`，协调者先跑新增测试在旧实现上失败，再合并修正重跑并抓取两端图像。无网络、持久化或 Native ABI 变更。
