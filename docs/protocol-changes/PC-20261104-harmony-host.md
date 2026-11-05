@@ -182,3 +182,9 @@ Base: `42d4dbf748e73a52877b9d82df15c8f521c7d932`. Protocol impact: P06; P09; P14
 ## android-parity-9 设置首页分组布局
 
 Base: `769791b5`. Protocol impact: P09。校准后的设置截图显示鸿蒙组标题左内距 8vp，Android 33dp；Android 设置列表从导航下方留 45dp，组卡间距 35dp。按既有 Android `SettingsIndexList` / `SettingsChrome` 口径修正鸿蒙设置首页。组标题沿 secondary 13，顶部和底部各 12；首页导航行使用 22 图标槽与 6 图文间距，值使用正文 16 和次要文字颜色，继续保留值宽不超过半行。外观和语言行使用向下符号。其他页面复用的 NavRow 保留原默认；不改菜单提交、已保存偏好或真实权限事实。Android 和共享 token 不变，原图保留。验收比较同密度卡间隔、左内距和实际选项读回。
+
+### android-parity-8-r2 可见的完成证明
+
+CONTRACT CHANGE REQUEST: P06/P14 @ `769791b5` 的第一版读了内部 `turnBoundary`。模拟器已接收并显示后续回合，但最后产生 `invalid_response`；固定 Worker 的 `SessionProjectionRegistry.snapshot` 只发布有 `wire` 定义的 projection，`turnBoundary` 没有。该内部字段不得暴露或在客户端复制。
+
+改用现有 `session/list` 精确匹配会话，要求 live `agentAvailable:true`、`formatStatus:'current'`、`running:false` 和同序号域的 `projections.kind:'sequenced'`。其 `asOfSeq` 必须覆盖所见 `turn/end` 且不得领先已读 follow 原始事件，两个 inbox lane 均已读空。未知、冷缓存、过期或领先继续有限等待。Worker `follow` 按其既有序号顺序传递所有事件；未知事件仍可推进读回水位。忙时提交版本与收尾门闩规则不变。没有 API、schema、存盘或其它平台变化；测试 peer 必须提供真实的公开 list 形状。
