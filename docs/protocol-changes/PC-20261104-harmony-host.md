@@ -118,3 +118,11 @@ Protocol impact: P14; P04; P06: none — 不改 DSH 事件或答案内容。真�
 独立复核发现重复/空题目 ID 以及不匹配的 answer map 仍可能产生错题或空答案。当前同 HAP 私有 UI 编码修订为整组校验，ID 必须是非空且互异的字符串；非法组显示请求错误，不生成部分问题或发送结果。有效 JSON answer map 必须覆盖当前整组题目，每题值为字符串数组或既有单字符串形式；显式跳过用该题的空数组表达，不能用缺失字段代替跳过。未知/缺失 ID、损坏的组 JSON 和非字符串选择拒绝提交并保留当前卡片。
 
 合法单题保留不歧义的原始字符串兼容路径；多题不支持广播标量。JSON object/array 外观的非法编码不能当作原始用户回答发送。UI 生成 JSON 字典时必须正确支持任意合法 ID，包括 `__proto__`，不依赖 JavaScript 对象原型赋值。此校验只作用于已有配对 UI/host 接缝，不修改 DSH types、Worker schema 或协议错误代码。新旧 HAP 不混用接口，持久化格式不变。
+
+## android-parity-3 代码卡片冻结
+
+Protocol impact: P09。真实配对截图确认鸿蒙代码卡片缺少 Android 既有的分区头部、换行开关、复制图标、边框和长内容展开功能，短行还被水平 Scroll 居中。权威为同一基线的 `CodeBlock.kt` 与现有 UI tokens，保持 Android 源字体 13、默认行高 `navSubtitle(14.5)+codeLineSpacing(5)`、头部高 34、圆角 12、外边距 2、内边距 12、控制框 28、复制反馈 1000ms、长内容阈值 24 行或 2400 字符、折叠上限 300、展开行高 32。
+
+以既有组件结构移植，不另造渲染协议。内部 ArkUI `NativeCodeBlock` 只接收 language/body/dark，复用已测 CodeHighlight，保留原始字符串复制。Code banner 使用现有 `colors.sessionCodeBanner`，边框使用 `colors.sessionBorderL2`，不新增色值权威。换行默认开启，关闭后水平滚动且短内容左对齐；长内容折叠、展开、收起和暗色均须在模拟器实测。普通用户字体角色设置及 Worker/NAPI/持久化均不变。
+
+实现者只写新的 `ui/NativeCodeBlock.ets`。协调者负责 Palette 中既有 token 的绑定、MarkdownBody 接入、语言字典、构建和两端 UI 验收。导出结构与唯一消费者同 HAP 更新，旧文件无需迁移。此修订不允许为了对照而改 Android 基线或隐藏像素差异。
