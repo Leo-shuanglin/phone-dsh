@@ -46,6 +46,9 @@
 // inference provider.
 package com.phonedsh.probe
 
+import com.phonedsh.agentcore.JsonArray
+import com.phonedsh.agentcore.JsonBool
+import com.phonedsh.agentcore.JsonNumber
 import com.phonedsh.agentcore.JsonObject
 import com.phonedsh.agentcore.JsonString
 import com.phonedsh.agentcore.JsonValue
@@ -152,6 +155,8 @@ internal class ChatTurnRunner(
         promptRequestId: String? = null,
         /** `queue` or `steer`; the latter is only issued by the live-turn composer. */
         promptMode: String = "queue",
+        busySubmissionVersion: suspend () -> Long? = { 0L },
+        sealBusySubmissions: suspend (Long) -> Boolean = { true },
     ): ChatTurnOutcome {
         val requested = workerSessionId
         if (requested != null) {
@@ -172,6 +177,8 @@ internal class ChatTurnRunner(
                     onInteractiveRequest,
                     onInteractiveCancel,
                     onReasoningDelta,
+                    busySubmissionVersion,
+                    sealBusySubmissions,
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -190,7 +197,7 @@ internal class ChatTurnRunner(
         log("chat turn: new worker session=$created (previous=${requested ?: "none"})")
         return oneTurn(
             created, prompt, promptRequestId, promptMode, onSession, onEvent, onDelta,
-            onInteractiveRequest, onInteractiveCancel, onReasoningDelta,
+            onInteractiveRequest, onInteractiveCancel, onReasoningDelta, busySubmissionVersion, sealBusySubmissions,
         )
             .copy(contextReset = requested != null)
     }
@@ -230,12 +237,32 @@ internal class ChatTurnRunner(
         onInteractiveRequest: ((PendingRemoteRequest, suspend (JsonValue) -> Unit) -> Unit)?,
         onInteractiveCancel: ((String) -> Unit)?,
         onReasoningDelta: (String) -> Unit,
+        busySubmissionVersion: suspend () -> Long?,
+        sealBusySubmissions: suspend (Long) -> Boolean,
     ): ChatTurnOutcome {
         onSession(sessionId)
         val follow = openFollow(sessionId)
         val events = ArrayList<HostEvent>()
         val live = StringBuilder()
         var endReason: String? = null
+        var endEvent: HostEvent? = null
+        var followSeq = -1L
+        var settleUntilNanos = 0L
+        suspend fun isDrained(): Boolean {
+            val terminal = endEvent ?: return false
+            if (settleUntilNanos - System.nanoTime() <= 0L) {
+                throw DshTurnException("invalid_response", "无法确认后续排队状态。")
+            }
+            val version = busySubmissionVersion() ?: return false
+            val sessions = try {
+                client.call("session/list", timeoutMillis = QUEUE_PROJECTION_TIMEOUT_MILLIS)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return false
+            }
+            return queueDrainedAt(sessionId, terminal, followSeq, sessions) && sealBusySubmissions(version)
+        }
         val pendingRemoteRequests = ConcurrentHashMap.newKeySet<String>()
         try {
             val prefetchedItems = ArrayDeque<JsonObject>()
@@ -259,6 +286,8 @@ internal class ChatTurnRunner(
                 // legitimately remain open without a total wall-clock cutoff.
                 val timeout = if (events.isEmpty()) {
                     (firstEventDeadline - System.currentTimeMillis()).coerceAtLeast(1L)
+                } else if (endEvent != null) {
+                    minOf(nextReadTimeoutMillis, QUEUE_SETTLE_POLL_MILLIS)
                 } else {
                     nextReadTimeoutMillis
                 }
@@ -274,6 +303,9 @@ internal class ChatTurnRunner(
                                 "no_turn_started",
                                 "the session accepted no turn; the Worker may have reloaded",
                             )
+                        }
+                        if (endEvent != null && isDrained()) {
+                            return ChatTurnOutcome(events, endReason, live.toString())
                         }
                         continue
                     }
@@ -338,12 +370,21 @@ internal class ChatTurnRunner(
                 when (value.text("type")) {
                     "event" -> {
                         val event = value["event"] as? JsonObject ?: continue
+                        val seq = (event["seq"] as? JsonNumber)?.asLongOrNull()
+                        if (seq != null) followSeq = maxOf(followSeq, seq)
                         for (projected in HostEventProjection.projectAll(event)) {
+                            if (projected.kind == HostEventKind.TURN_STARTED) {
+                                endReason = null
+                                endEvent = null
+                                live.setLength(0)
+                            }
                             events += projected
                             onEvent(projected)
                             if (projected.kind == HostEventKind.TURN_ENDED) {
                                 endReason = projected.turnEndReason
-                                return ChatTurnOutcome(events, endReason, live.toString())
+                                endEvent = projected
+                                settleUntilNanos = System.nanoTime() + QUEUE_SETTLE_TIMEOUT_MILLIS * 1_000_000L
+                                if (isDrained()) return ChatTurnOutcome(events, endReason, live.toString())
                             }
                         }
                     }
@@ -377,7 +418,24 @@ internal class ChatTurnRunner(
             follow.close()
         }
         log("chat turn: session/follow ended events=${events.size} liveChars=${live.length}")
-        return ChatTurnOutcome(events, endReason, live.toString())
+        return ChatTurnOutcome(events, null, live.toString())
+    }
+
+    private fun queueDrainedAt(sessionId: String, terminal: HostEvent, followSeq: Long, sessions: JsonValue): Boolean {
+        val endSeq = terminal.seq ?: return false
+        val items = ((sessions as? JsonObject)?.get("items") as? JsonArray)?.values ?: return false
+        val session = items.filterIsInstance<JsonObject>().singleOrNull { it.text("sessionId") == sessionId } ?: return false
+        if (session["agentAvailable"] != JsonBool(true) || session["running"] != JsonBool(false) ||
+            session.text("formatStatus") != "current"
+        ) return false
+        val read = session["projections"] as? JsonObject ?: return false
+        if (read.text("kind") != "sequenced") return false
+        val asOfSeq = (read["asOfSeq"] as? JsonNumber)?.asLongOrNull() ?: return false
+        if (asOfSeq < endSeq || asOfSeq > followSeq) return false
+        val values = read["values"] as? JsonObject ?: return false
+        val inbox = values["inbox"] as? JsonObject ?: return false
+        return (inbox["next-turn"] as? JsonArray)?.values?.isEmpty() == true &&
+            (inbox["next-step"] as? JsonArray)?.values?.isEmpty() == true
     }
 
     /** The iOS remote harness waits for the `$events` client registration before prompts can race it. */
@@ -525,6 +583,9 @@ internal class ChatTurnRunner(
         const val WORKSPACE = "/dsh/workspace"
         const val MAX_MESSAGES = 64
         const val NEXT_TIMEOUT_MILLIS = 45_000L
+        const val QUEUE_SETTLE_TIMEOUT_MILLIS = 20_000L
+        const val QUEUE_PROJECTION_TIMEOUT_MILLIS = 3_000L
+        const val QUEUE_SETTLE_POLL_MILLIS = 750L
 
         /** How long the first durable event of a turn may take (a reloaded page never sends one). */
         const val FIRST_EVENT_TIMEOUT_MILLIS = 20_000L

@@ -198,7 +198,7 @@ internal fun projectSubagentHistory(
                     return SubagentHistoryProjection(emptyList(), "子会话包含本机未支持的历史消息类型；未打开子会话。")
                 }
                 val text = textParts.joinToString("\n")
-                if (text.isNotBlank()) nodes += subagentHistoryUserNode(chatId, event, text, ordinal)
+                if (text.isNotBlank()) nodes += durableUserNode(chatId, event, text, ordinal)
             } else {
                 chatNodeOf(chatId, "", event, ordinal)?.let(nodes::add)
             }
@@ -207,13 +207,13 @@ internal fun projectSubagentHistory(
     return SubagentHistoryProjection(nodes.distinctBy { it.nodeID })
 }
 
-private fun subagentHistoryUserNode(
+private fun durableUserNode(
     chatId: String,
     event: HostEvent,
     text: String,
     ordinal: Int,
+    turnId: String = event.turnId ?: FALLBACK_TURN_ID,
 ): UiStateNode {
-    val turnId = event.turnId ?: FALLBACK_TURN_ID
     val seq = event.seq?.toInt() ?: ordinal
     return UiStateNode(
         kind = UiStateKind.BUBBLE,
@@ -421,10 +421,31 @@ internal fun ChatUiState.applyChatEvent(chatId: String, event: HostEvent, ordina
         val turn = turnNode(chatId, id).copy(props = JsonObject(mapOf(
             "startedAtMs" to (event.raw["time"] ?: com.phonedsh.agentcore.JsonNull),
         )))
-        return copy(activeTurnNodeId = id,
-            nodes = nodes.filterNot { it.nodeID == turn.nodeID } + turn)
+        return copy(
+            activeTurnNodeId = id,
+            streaming = "",
+            reasoningStreaming = "",
+            nodes = nodes.filterNot { it.nodeID == turn.nodeID } + turn,
+        )
     }
-    val node = chatNodeOf(chatId, turnToken, event, ordinal) ?: return this
+    val node = if (event.kind == HostEventKind.USER_MESSAGE) {
+        val data = event.data ?: return this
+        val source = data["source"] as? JsonObject ?: return this
+        if ((source["kind"] as? JsonString)?.value != "user") return this
+        val rpcId = (source["rpcId"] as? JsonString)?.value
+        if (rpcId != null && rpcId == lastPromptRequestId) return this
+        val turnId = activeTurnNodeId ?: return this
+        val content = data["content"] as? JsonArray ?: return this
+        val text = content.values.mapNotNull { value ->
+            val part = value as? JsonObject ?: return@mapNotNull null
+            if ((part["type"] as? JsonString)?.value != "text") return@mapNotNull null
+            (part["text"] as? JsonString)?.value
+        }.joinToString("\n")
+        if (text.isBlank()) return this
+        durableUserNode(chatId, event, text, ordinal, turnId)
+    } else {
+        chatNodeOf(chatId, turnToken, event, ordinal) ?: return this
+    }
     if (nodes.any { it.nodeID == node.nodeID }) return this
     return copy(
         nodes = nodes + node,
