@@ -201,6 +201,38 @@ final class WebSearchHostConfigurationSimTests: XCTestCase {
         }
     }
 
+    func testClearingIndependentKeyStopsAdvertisingSearchAndFetchAtNextStart() async throws {
+        let searchBase = "https://search.example/v1/tools"
+        _ = try settings.save(mode: .searchAPI, baseURL: searchBase, apiKey: "fixture-search-key")
+        let model = modelProvider(modelHost: "api.deepseek.com", modelValue: "fixture-model-key",
+                                  allowedAudience: "/anthropic/v1/messages")
+        let modelProfile = profile("https://api.deepseek.com/anthropic")
+        var configured = ModelProviderLaunchPlan(credentialProvider: model)
+        WebSearchHostConfiguration.apply(to: &configured, modelProfile: modelProfile, settings: settings)
+        XCTAssertEqual(configured.environment[PhoneWebSearchSettings.workerProviderKey], "deepseek-search-api")
+        XCTAssertEqual(configured.environment[PhoneWebSearchSettings.workerFetchProviderKey], "deepseek-fetch-api")
+
+        _ = try settings.clearAPIKey()
+        XCTAssertEqual(try settings.load().configuration.baseURL, searchBase)
+        var restarted = ModelProviderLaunchPlan(
+            allowedModelHosts: ["https://api.deepseek.com"],
+            credentialProvider: model,
+            environment: configured.environment
+        )
+        let resolved = WebSearchHostConfiguration.apply(
+            to: &restarted, modelProfile: modelProfile, settings: settings)
+
+        XCTAssertEqual(resolved.mode, .searchAPI)
+        XCTAssertEqual(restarted.allowedModelHosts, ["https://api.deepseek.com"])
+        XCTAssertNil(restarted.environment[PhoneWebSearchSettings.workerProviderKey])
+        XCTAssertNil(restarted.environment[PhoneWebSearchSettings.workerFetchProviderKey])
+        XCTAssertNil(restarted.environment[PhoneWebSearchSettings.workerBaseURLKey])
+        XCTAssertNil(restarted.environment[PhoneWebSearchSettings.workerAPIKeyEnv])
+        let modelCredential = try await restarted.credentialProvider.credential(
+            for: CredentialScope(service: "api.deepseek.com", audience: "/anthropic/v1/messages"))
+        XCTAssertEqual(modelCredential.value, "fixture-model-key")
+    }
+
     // MARK: - Corrupt document
 
     func testCorruptDocumentFailsClosedWithActionableCopyAndNoProviderSelection() async throws {

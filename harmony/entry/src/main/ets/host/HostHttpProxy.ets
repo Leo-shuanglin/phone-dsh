@@ -13,7 +13,8 @@ import {
   NativeModelOrigin,
   parseNativeModelOrigin,
   providerModelPathAdmitted,
-  resolveNativeModelAlias
+  resolveNativeModelAlias,
+  resolveOfficialWebToolTarget
 } from './HostModelAlias';
 import {
   asRecord,
@@ -31,6 +32,8 @@ export class ModelRouteConfig {
   baseUrl: string = '';
   model: string = '';
   encoder: string = 'deepseek';
+  /** Frozen at boot: the official Search/Fetch grant is on for this run only. */
+  officialWebTools: boolean = false;
 }
 
 export class ProviderProbeResult {
@@ -464,7 +467,10 @@ export class HostHttpProxy {
       this.fail(id, 403, 'host_not_allowed');
       return;
     }
-    if (!providerModelPathAdmitted(this.route.baseUrl, parsed.path)) {
+    const officialTarget: string = this.route.officialWebTools
+      ? resolveOfficialWebToolTarget(this.route.baseUrl, method, target)
+      : '';
+    if (officialTarget.length === 0 && !providerModelPathAdmitted(this.route.baseUrl, parsed.path)) {
       this.fail(id, 403, 'redirect_scope_mismatch');
       return;
     }
@@ -490,9 +496,15 @@ export class HostHttpProxy {
       return;
     }
     const outbound = sanitizedRequest(incoming);
-    injectCredential(outbound, key, this.route.encoder);
+    if (officialTarget.length > 0) {
+      outbound['authorization'] = `Bearer ${key}`;
+    } else {
+      injectCredential(outbound, key, this.route.encoder);
+    }
     outbound['accept-encoding'] = 'identity';
-    const finalTarget = `https://${hostPort(parsed)}${parsed.path}${parsed.query.length > 0 ? '?' + parsed.query : ''}`;
+    const finalTarget = officialTarget.length > 0
+      ? officialTarget
+      : `https://${hostPort(parsed)}${parsed.path}${parsed.query.length > 0 ? '?' + parsed.query : ''}`;
     this.openExchange(id, method, finalTarget, outbound, toArrayBuffer(bodyBytes), encodeUtf8(key));
   }
 

@@ -287,6 +287,55 @@ export function resolveNativeModelAlias(origin: NativeModelOrigin, rawTarget: st
   return result;
 }
 
+const OFFICIAL_WEB_HOST: string = 'api.deepseek.com';
+const OFFICIAL_WEB_PORT: number = 443;
+const OFFICIAL_WEB_BASE_PATHS: string[] = ['/', '/v1', '/anthropic', '/anthropic/v1'];
+const OFFICIAL_WEB_SEARCH_URL: string = 'https://api.deepseek.com/v1/tools/search';
+const OFFICIAL_WEB_FETCH_URL: string = 'https://api.deepseek.com/v1/tools/fetch';
+
+export function officialWebModelBaseEligible(baseUrl: string): boolean {
+  const text = baseUrl.trim();
+  if (text.length === 0 || text.includes('?') || text.includes('#')) {
+    return false;
+  }
+  const parsed = parseAbsolute(text, false);
+  if (parsed === null) {
+    return false;
+  }
+  if (parsed.scheme !== 'https' || parsed.host !== OFFICIAL_WEB_HOST || parsed.port !== OFFICIAL_WEB_PORT) {
+    return false;
+  }
+  const path = parsed.path;
+  for (let index = 0; index < OFFICIAL_WEB_BASE_PATHS.length; index++) {
+    const base = OFFICIAL_WEB_BASE_PATHS[index];
+    if (path === base) {
+      return true;
+    }
+    if (base !== '/' && path === base + '/') {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function resolveOfficialWebToolTarget(providerBaseUrl: string, method: string,
+  rawTarget: string): string {
+  if (!officialWebModelBaseEligible(providerBaseUrl)) {
+    return '';
+  }
+  if (method.trim().toUpperCase() !== 'POST') {
+    return '';
+  }
+  const target = rawTarget.trim();
+  if (target === OFFICIAL_WEB_SEARCH_URL) {
+    return OFFICIAL_WEB_SEARCH_URL;
+  }
+  if (target === OFFICIAL_WEB_FETCH_URL) {
+    return OFFICIAL_WEB_FETCH_URL;
+  }
+  return '';
+}
+
 /**
  * True when `path` is one of the configured provider's model-protocol paths.
  *

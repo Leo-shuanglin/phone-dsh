@@ -25,9 +25,9 @@
 // DND access and hardware presence).
 //
 // Not measured (so `null`): archived sessions, pinned order, the session queue,
-// schedules, session configuration, web-search settings, MCP servers, memory
-// budget and power. The workspace *catalog* is not measured either: this host has
-// no `workspace/list` read, so the one folder row below is the single workspace
+// schedules, session configuration, MCP servers, memory budget and power. The
+// workspace *catalog* is not measured either: this host has no
+// `workspace/list` read, so the one folder row below is the single workspace
 // root this app itself owns, not a catalog entry.
 package com.phonedsh.probe
 
@@ -69,6 +69,7 @@ import com.phonedsh.ui.page.SettingsPlatformFacts
 import com.phonedsh.ui.page.ShellLimits
 import com.phonedsh.ui.page.ShellSnapshot
 import com.phonedsh.ui.page.WebSearchFacts
+import com.phonedsh.ui.page.WebSearchMode
 import com.phonedsh.ui.page.WebSurfaceFacts
 import com.phonedsh.ui.page.WebSurfaceSnapshot
 import com.phonedsh.ui.page.WebViewRuntime
@@ -108,6 +109,9 @@ import java.time.ZoneId
  *   of the permission mapping reads.
  * @param permissionInFlight the capability whose system permission prompt is on
  *   screen, or `null`; the page disarms that one row while it is up.
+ * @param officialWebSearchEnabled whether this launch mounted the automatic
+ *   official Search/Fetch grant (selected official model + readable saved key).
+ *   It is measured in the composition root, not re-derived by the page.
  */
 internal data class HostReadings(
     val webView: View?,
@@ -116,6 +120,7 @@ internal data class HostReadings(
     val webViewVersion: String?,
     val webViewKernel: WebViewKernelReport?,
     val egressGrant: GatewayHostRule?,
+    val officialWebSearchEnabled: Boolean = false,
     val batteryExemption: FactState,
     val background: HostBackgroundReadings,
     val workspacePresent: Boolean,
@@ -259,10 +264,15 @@ internal fun buildNavFacts(
         // is installed — a host without it has no save command, and saying NO is the
         // difference between "the page is read-only" and "this build cannot save".
         modelProvider = modelProviderFacts(engineFact),
-        // 网页搜索 is (b): this host cannot make the write *work*, not merely
-        // *land*. The reason is the host's own sentence and the page prints it
-        // under the disabled controls (see WEB_SEARCH_READ_ONLY_REASON).
         webSearch = WebSearchFacts(
+            mode = WebSearchMode.FOLLOW_MODEL,
+            modelSearchSupported = when {
+                readings.officialWebSearchEnabled -> FactState.YES
+                ProbeLaunchConfig.active().deepseekBaseUrl != null -> FactState.NO
+                else -> FactState.UNKNOWN
+            },
+            noModelProfile = ProbeLaunchConfig.active().deepseekBaseUrl == null,
+            hasCredential = if (readings.officialWebSearchEnabled) FactState.YES else FactState.UNKNOWN,
             writable = FactState.NO,
             readOnlyReason = WEB_SEARCH_READ_ONLY_REASON,
             // 什么时候生效 offers the one engine verb that matches this state; the page
@@ -846,20 +856,5 @@ private fun shellSnapshot(handshake: HandshakeSummary?): ShellSnapshot {
 /** The HELLO capability prefix one executable accelerator is advertised under. */
 private const val ACCELERATOR_CAPABILITY_PREFIX: String = "accelerator:"
 
-/**
- * Why 网页搜索 is read-only on this host — the host's own sentence, printed under
- * the disabled mode rows.
- *
- * This is the (b) answer, and the distinction matters: the page *could* be given a
- * store, but the write would not work. An independent search service needs its key
- * injected by the host's egress proxy on the `/search` and `/fetch` paths
- * (`PhoneWebSearchSettings` on iOS does exactly that), and this App's proxy is
- * `ModelGatewayCredentialProvider`: one model endpoint, no search/fetch route, and
- * the launch allow-list holds one exact origin. A saved configuration would leave
- * the Worker with a placeholder key and a host the gateway may not even reach, so
- * a 保存 button here would be a promise the engine cannot keep.
- */
 private const val WEB_SEARCH_READ_ONLY_REASON: String =
-    "只读：独立搜索服务的密钥要由宿主在出网时注入 /search、/fetch 两条路径；" +
-        "Android 的出网代理只认模型服务的那个端点，没有搜索凭证路由，" +
-        "启动时也只放行一个精确 origin。写这份配置引擎用不上，所以本页不提供保存。"
+    "网页搜索和抓取会自动使用官方 DeepSeek 模型服务的密钥。请在「模型服务」保存密钥，然后重启本地引擎。"

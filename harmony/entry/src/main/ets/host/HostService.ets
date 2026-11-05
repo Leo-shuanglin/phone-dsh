@@ -136,6 +136,7 @@ import {
   ProviderProbeResult,
   ProxyResponder
 } from './HostHttpProxy';
+import { officialWebModelBaseEligible } from './HostModelAlias';
 import { DraftRecord, HostPersistence, StoredChatDocument } from './HostPersistence';
 import { HostPhonePermissions } from './HostPhonePermissions';
 import { HostSecure, KeyReadResult, KeyWriteResult } from './HostSecure';
@@ -318,6 +319,10 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
   // or selecting another profile never reroutes the running Worker; the next
   // native start re-freezes this from the then-selected record.
   private bootProvider: ProviderProfileRecord | null = null;
+  // Frozen at boot: eligible official DeepSeek base plus a live, readable
+  // model key. It gates both the launch flag and the proxy's tool routes; a
+  // stale UI key fact never decides it.
+  private officialWebTools: boolean = false;
   private initialized: boolean = false;
   private initPromise: Promise<void> | null = null;
   private nativeRunning: boolean = false;
@@ -3072,9 +3077,13 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       this.engineFailed(this.uiCopy('原生事件回调安装失败'));
       return;
     }
-    const boot = this.selectedProvider();
-    this.bootProvider = boot === null ? null : cloneProviderProfile(boot);
-    const launchError = this.writeModelLaunch(root);
+    const bootState = this.providerState();
+    this.bootProvider = selectedProviderProfile(bootState);
+    this.officialWebTools = await this.resolveOfficialWebTools(this.bootProvider);
+    if (this.disposed) {
+      return;
+    }
+    const launchError = this.writeModelLaunch(root, bootState);
     if (launchError.length > 0) {
       this.engineFailed(launchError);
       return;
@@ -3209,7 +3218,25 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       route.model = profile.model;
       route.encoder = profile.encoder;
     }
+    route.officialWebTools = this.officialWebTools;
     this.proxy.setRoute(route);
+  }
+
+  /**
+   * The official Search/Fetch grant needs exactly two facts at startup: an
+   * eligible official DeepSeek model base, and a model key this host can read
+   * now. A missing or unreadable key leaves both tools disabled.
+   */
+  private async resolveOfficialWebTools(profile: ProviderProfileRecord | null): Promise<boolean> {
+    if (profile === null || !officialWebModelBaseEligible(profile.baseUrl)) {
+      return false;
+    }
+    try {
+      const result: KeyReadResult = await this.secure.read(providerCredentialAlias(profile));
+      return result.status === 'ok' && result.value.trim().length > 0;
+    } catch (error) {
+      return false;
+    }
   }
 
   private async modelKey(): Promise<string> {
@@ -3341,7 +3368,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     return `provider-${Date.now().toString(36)}`;
   }
 
-  private writeModelLaunch(root: string): string {
+  private writeModelLaunch(root: string, state: ProviderProfilesState): string {
     if (this.persistence === null) {
       return '私有存储不可用';
     }
@@ -3355,8 +3382,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       }
       return '';
     }
-    const state = this.providerState();
-    const document: string = providerLaunchDocument(state);
+    const document: string = providerLaunchDocument(state, this.officialWebTools);
     if (document.length === 0 || providerLaunchSelectedModel(state).length === 0) {
       return '模型服务投影为空，无法启动本地引擎';
     }
@@ -5040,16 +5066,16 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     const paths = new NamedItem();
     paths.id = 'egress:paths';
     paths.title = this.uiCopy('放行的模型路径');
-    paths.subtitle = this.uiCopy('仅模型协议路径');
-    paths.detail = this.uiCopy('路径范围由当前模型服务的基地址和 HostHttpProxy 的模型协议表决定；不在其中时拒绝，不改道、不跟随重定向。');
+    paths.subtitle = this.uiCopy('模型协议路径 + 官方工具路径');
+    paths.detail = this.uiCopy('路径范围由当前模型服务的基地址和 HostHttpProxy 的模型协议表决定；官方 DeepSeek 模型服务在启动放行时另加 /v1/tools/search 与 /v1/tools/fetch 两条 POST。其余路径拒绝，不改道、不跟随重定向。');
     paths.enabled = false;
     items.push(paths);
 
     const others = new NamedItem();
     others.id = 'egress:worker';
     others.title = this.uiCopy('其他 Worker 出网');
-    others.subtitle = this.uiCopy('拒绝');
-    others.detail = this.uiCopy('没有通用白名单、搜索凭证路由或 MCP 出网授权；Worker 不能把宿主密钥带到其他主机。');
+    others.subtitle = this.uiCopy('除官方工具外默认拒绝');
+    others.detail = this.uiCopy('没有通用白名单或 MCP 出网授权；官方 Search/Fetch 仅按上述精确路径复用模型密钥，Worker 不能把宿主密钥带到其他主机。');
     others.enabled = false;
     items.push(others);
 

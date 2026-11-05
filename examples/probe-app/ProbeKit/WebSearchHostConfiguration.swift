@@ -133,15 +133,11 @@ public enum WebSearchHostConfiguration {
         if !resolved.followsModelSearch {
             plan.environment.removeValue(forKey: modelSearchBaseEnvironmentKey)
         }
-        // A caller may reuse a launch plan. Publishing no provider (empty,
-        // unsupported follow-model or a corrupt document) must also remove a
-        // stale provider id, otherwise the Worker could expose a tool with no
-        // provider behind it.
-        if resolved.environment[PhoneWebSearchSettings.workerProviderKey] == nil {
-            plan.environment.removeValue(forKey: PhoneWebSearchSettings.workerProviderKey)
-        }
-        if resolved.environment[PhoneWebSearchSettings.workerFetchProviderKey] == nil {
-            plan.environment.removeValue(forKey: PhoneWebSearchSettings.workerFetchProviderKey)
+        for key in [PhoneWebSearchSettings.workerProviderKey,
+                    PhoneWebSearchSettings.workerFetchProviderKey,
+                    PhoneWebSearchSettings.workerBaseURLKey,
+                    PhoneWebSearchSettings.workerAPIKeyEnv] {
+            plan.environment.removeValue(forKey: key)
         }
         plan.environment.merge(resolved.environment) { _, new in new }
         return resolved
@@ -154,6 +150,9 @@ public enum WebSearchHostConfiguration {
         -> WebSearchHostLaunchPlan {
         do {
             let snapshot = try settings.load()
+            if snapshot.configuration.mode == .searchAPI && !snapshot.hasCredential {
+                return WebSearchHostLaunchPlan(credentialProvider: modelProvider, mode: .searchAPI)
+            }
             let credentialProvider = settings.makeCredentialProvider(modelProvider: modelProvider)
             let hostRules = try settings.allowedHostRules()
             let environment = try settings.environmentEntries()
