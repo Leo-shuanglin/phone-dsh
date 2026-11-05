@@ -92,3 +92,15 @@ Base/head 为 `c5aec33824f468f76ac324df5d116fe7a56c564f`。Protocol impact: P09�
 实现者独占 `ui/MarkdownBody.ets`、`model/CodeHighlight.ets` 与 `tests/code-highlight.test.mjs`。协调者负责合并、ArkTS 构建、Android/Harmony 模拟器对照及契约记录。新旧 HAP 都读取原 Worker Markdown 文本；无磁盘迁移，无回滚数据变更，版本保持同 HAP 配对接口。
 
 验收命令为 `node --test harmony/tests/*.test.mjs` 和 `devecocli build`，再以匹配的宽度、字体大小和 light/dark 状态截取两个平台的真实显示结果。未完成模拟器对照前不得升级成整体 1:1 通过。
+
+## android-parity-2 冻结
+
+Base 为 `c5aec33824f468f76ac324df5d116fe7a56c564f`。Protocol impact: P06; P09; P14: none — `$events/result` 的既有 DSH envelope 和字段完全不变。本修订修复多题请求只显示首题、将同一答案写到全部题目的可见错误。
+
+权威是固定 DSH 的 `user-questions/src/types.ts`，与 Android `ChatSessionSnapshot.questionOutcome`、`ChatPage.QuestionTakeover`。ShellSnapshot 的 PendingRequest 新增 data-only `questions`，每题保留 `id/question/detail/header/options[].label+description/multiSelect`。保留现有 `answerRequest(id, answer: string)`；问题回答按 Android 已用的 JSON 对象 `{questionId: [wireLabels, customText]}` 编码，每个问题分别映射到既有 `{kind:'result',value:{answers:[{id,selected,custom?}]}}`，不新增 Worker 字段或第二种 answer RPC。
+
+原生 UI 按题推进，支持上一题、下一题、跳过、单选、多选、自定义文本和 Android 的推荐选项。单选自定义文本替代选项，多选可以同时保留自定义文本。提交前逐题检查，不用第一题答案填充其他题，不生成虚构“回答”选项。拒绝或传输失败保留各题草稿；同一 eventId 的提交期间禁止重复请求。
+
+新增本地 `dismissPending(id)` 只隐藏卡片，不能发送允许、拒绝或 `$events/result`。问题占用 composer seat，权限审批留在卡片区域。切换会话/停引擎清理可见的旧 pending，底层取消仅按既有事件或 runtime 生命周期处理。此处不宣称 timed/continued 问题已完成，相关能力必须另按实际 projection/RPC 验收。
+
+同 HAP 的 UI/host 同次升级，不混用新旧接口。持久化格式、旧会话数据和回滚均不受影响。实现者独占 `model/Contracts.ets`、`model/QuestionAnswers.ets`、`host/HostService.ets`、`ui/ChatView.ets` 与对应纯测试。不得修改模型代理、VFS、wire、WAL、其他 UI、规范或 DSH。协调者执行编译和真实 ask_user_question 多题回合验收，保留未测试项。
