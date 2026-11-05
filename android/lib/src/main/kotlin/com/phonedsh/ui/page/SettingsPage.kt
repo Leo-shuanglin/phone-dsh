@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
@@ -33,6 +34,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -56,6 +58,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextOverflow
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.UiTags
 import com.phonedsh.ui.state.EngineLifecycleFacts
@@ -1504,12 +1507,17 @@ private fun SettingsIndexRow(entry: SettingsIndexEntry, dividerBelow: Boolean) {
                 }
             }
             entry.value?.let { value ->
-                androidx.compose.foundation.text.BasicText(
-                    text = value,
-                    style = settingsLabelStyle().copy(color = tokens.colors.textSecondary),
-                    maxLines = 1,
-                    modifier = Modifier.testTag(UiPageTags.SETTINGS_INDEX_VALUE_PREFIX + entry.id),
-                )
+                BoxWithConstraints {
+                    androidx.compose.foundation.text.BasicText(
+                        text = value,
+                        style = settingsLabelStyle().copy(color = tokens.colors.textSecondary),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .widthIn(max = maxWidth * 0.5f)
+                            .testTag(UiPageTags.SETTINGS_INDEX_VALUE_PREFIX + entry.id),
+                    )
+                }
             }
             if (entry.onToggle != null) {
                 SettingsSwitch(checked = entry.toggleChecked == true, enabled = entry.enabled)

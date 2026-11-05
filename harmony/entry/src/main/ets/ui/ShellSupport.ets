@@ -196,6 +196,7 @@ export struct NavRow {
             .fontColor(this.pal().textSubtle)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .constraintSize({ maxWidth: '50%' })
             .margin({ left: 8 })
         }
         if (this.showChevron) {

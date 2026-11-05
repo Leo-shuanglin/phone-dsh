@@ -8,24 +8,28 @@ import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.phonedsh.ui.UiStrings
 import com.phonedsh.ui.state.EngineLifecycleFacts
 import com.phonedsh.ui.state.EngineLifecycleStatus
 import com.phonedsh.ui.theme.PdshTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34], qualifiers = "w411dp-h891dp")
@@ -197,6 +201,40 @@ class SettingsPageTest {
         compose.onNodeWithText("2", substring = false).assertIsDisplayed()
         scrollTo("版本")
         compose.onNodeWithText("0.1.0").assertIsDisplayed()
+    }
+
+    @Test
+    // Legacy Robolectric text measures one dp per glyph; native metrics reproduce the device's value width.
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun `a long permission summary stays within half the row and leaves the title visible`() {
+        val summary = "1 of 9 measured permissions available"
+        show(
+            facts = SettingsFacts(
+                preferences = SettingsPreferences(language = SettingsLanguage.EN),
+                phonePermissionSummary = summary,
+            ),
+            onOpenPhonePermissions = {},
+        )
+        scrollTo("Phone permissions")
+        val rowTag = com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_ROW_PREFIX + "phonePermissions"
+        val row = compose.onNodeWithTag(rowTag, useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val value = compose.onNodeWithTag(
+            com.phonedsh.ui.page.UiPageTags.SETTINGS_INDEX_VALUE_PREFIX + "phonePermissions",
+            useUnmergedTree = true,
+        ).getUnclippedBoundsInRoot()
+        val title = compose.onNodeWithText("Phone permissions", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val rowWidth = row.right - row.left
+        val rowHeight = row.bottom - row.top
+        val valueWidth = value.right - value.left
+        val titleWidth = title.right - title.left
+        compose.onNodeWithTag(rowTag).assertTextContains(summary)
+        compose.onNodeWithTag(rowTag).assertTextContains("Phone permissions")
+        assertTrue(
+            "trailing value $valueWidth must stay within half the $rowWidth row",
+            valueWidth <= rowWidth * 0.5f + 1.dp,
+        )
+        assertTrue("title width $titleWidth collapsed", titleWidth >= 48.dp)
+        assertTrue("row height $rowHeight is the unbounded-value blank row", rowHeight <= 96.dp)
     }
 
     @Test

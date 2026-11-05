@@ -8,6 +8,7 @@
 package com.phonedsh.ui.surface
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -34,6 +35,19 @@ class CodeBlockSurfaceTest {
                 CodeBlock(language = "swift", body = body)
             }
         }
+    }
+
+    @Test
+    fun `the copy action sits on the card's trailing 12 dp inset`() {
+        show("let scheme = \"PhoneDSHProbe\"")
+        val card = compose.onNodeWithTag(CODE_BLOCK_TAG).getUnclippedBoundsInRoot()
+        val copy = compose.onNodeWithTag(CODE_COPY_TAG).getUnclippedBoundsInRoot()
+        assertEquals(
+            "copy right edge must align with the 12 dp header inset",
+            12f,
+            (card.right - copy.right).value,
+            0.5f,
+        )
     }
 
     @Test
