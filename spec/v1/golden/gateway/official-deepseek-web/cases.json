@@ -1,0 +1,27 @@
+{
+  "modelBases": [
+    {"url":"https://api.deepseek.com","supported":true},
+    {"url":"https://api.deepseek.com/v1","supported":true},
+    {"url":"https://API.DEEPSEEK.COM:443/anthropic/","supported":true},
+    {"url":"https://api.deepseek.com/anthropic/v1","supported":true},
+    {"url":"https://api.deepseek.com/v2","supported":false},
+    {"url":"https://api.deepseek.com:8443/v1","supported":false},
+    {"url":"http://api.deepseek.com/v1","supported":false},
+    {"url":"https://api.deepseek.com.example.invalid/v1","supported":false},
+    {"url":"https://user@api.deepseek.com/v1","supported":false},
+    {"url":"https://api.deepseek.com/v1?model=x","supported":false},
+    {"url":"https://api.deepseek.com/v1#fragment","supported":false},
+    {"url":"https://api.deepseek.com/v1/../v1","supported":false}
+  ],
+  "requests": [
+    {"method":"POST","url":"https://api.deepseek.com/v1/tools/search","allowed":true},
+    {"method":"POST","url":"https://api.deepseek.com/v1/tools/fetch","allowed":true},
+    {"method":"GET","url":"https://api.deepseek.com/v1/tools/search","allowed":false},
+    {"method":"POST","url":"https://api.deepseek.com/v1/tools/search?x=1","allowed":false},
+    {"method":"POST","url":"https://api.deepseek.com/v1/tools/search#x","allowed":false},
+    {"method":"POST","url":"https://api.deepseek.com/v1/tools/search/extra","allowed":false},
+    {"method":"POST","url":"https://api.deepseek.com/v1/tools/%73earch","allowed":false},
+    {"method":"POST","url":"https://api.deepseek.com:8443/v1/tools/search","allowed":false},
+    {"method":"POST","url":"https://api.deepseek.com.example.invalid/v1/tools/fetch","allowed":false}
+  ]
+}
