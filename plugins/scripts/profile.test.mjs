@@ -3,6 +3,7 @@
 // `!!js` expressions intact, and every row id must exist in a 0.2.1 roster or
 // be declared by this file's insert list.
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -447,10 +448,10 @@ test('DSH patch-row conversion preserves !!js expressions in config and insert r
   assert.equal(rows[1].insert[0].name, '@scope/sample')
 })
 
-test('the packed image carries every browser bundle and composes __DSH_BOOT__', {
+test('the packed image carries browser bundles and gates web tools in every preset', {
   skip,
   timeout: 300_000,
-}, async () => {
+}, async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'pdsh-profile-image-'))
   scratch.push(directory)
   const pin = readPin()
@@ -495,4 +496,111 @@ test('the packed image carries every browser bundle and composes __DSH_BOOT__', 
   assert.equal(sizes.dsh_pin_commit, pin.commit)
   assert.equal(sizes.dsh_checkout, result.checkout)
   assert.equal(sizes.dsh_version, pin.version)
+  await t.test('the serialized profile registers only supported web tools', async (t) => {
+    const patch = join(directory, 'packed-home.patch.yml')
+    writeFileSync(patch, execFileSync('tar', [
+      '-xOzf', join(directory, 'image.tar.gz'), 'home/cordis.patch.yml',
+    ]))
+    const rows = await loadRows(patch)
+    const load = path => import(pathToFileURL(join(checkout, path)).href)
+    const toolWeb = await load('packages/web/tool-web/lib/index.js')
+    const { Context } = await load('vendor/cordis/lib/index.js')
+    const { default: WebRuntime } = await load('packages/web/web/lib/index.js')
+    const { createLaunchEnvironmentSnapshot } = await load('packages/util/launch-environment/lib/index.js')
+    const messagesProvider = await load('packages/web/web-search-deepseek/lib/index.js')
+    const apiProvider = await load('packages/web/web-deepseek-api/lib/index.js')
+    const resolvedConfig = (row, env) => Object.fromEntries(Object.entries(row.config).map(
+      ([key, value]) => [key, evaluateLoaderValue(value, env)],
+    ))
+    const presets = flattenRows(rows).filter(row => row.name === '@deepseek-ai/dsh-agent-preset')
+    assert.deepEqual(presets.map(row => row.id).sort(), [
+      'preset-cordis', 'preset-minimal', 'preset-phone', 'preset-ptc', 'preset-standard',
+    ])
+    const toolRows = [
+      ['top-level', findRow(rows, 'tool-web')],
+      ...presets.map(preset => [preset.id, findRow(preset.config.plugins, 'tool-web')]),
+    ]
+    const source = 'https://example.test/fixture'
+    t.mock.method(globalThis, 'fetch', async (url, init) => {
+      const headers = new Headers(init.headers)
+      switch (url) {
+        case 'https://model.test/anthropic/v1/messages':
+          assert.equal(headers.get('x-api-key'), 'test-model-key')
+          return Response.json({ content: [{
+            type: 'web_search_tool_result',
+            content: [{ type: 'web_search_result', url: source, title: 'Fixture' }],
+          }] })
+        case 'https://search.test/v1/tools/search':
+          assert.equal(headers.get('authorization'), 'Bearer test-search-key')
+          return Response.json({ results: [{ url: source, title: 'Fixture', snippet: 'Result', date: null }] })
+        case 'https://search.test/v1/tools/fetch':
+          assert.equal(headers.get('authorization'), 'Bearer test-search-key')
+          return Response.json({ content: 'Fixture page' })
+        default:
+          assert.fail(`unexpected request to ${url}`)
+      }
+    })
+
+    for (const [scope, row] of toolRows) {
+      if (scope === 'preset-minimal') {
+        assert.equal(row, undefined)
+        continue
+      }
+      assert.ok(row, scope)
+      for (const [mode, env, expected] of [
+        ['no backend', {}, []],
+        ['unsupported backend', { PDSH_WEB_SEARCH_PROVIDER: 'unsupported' }, []],
+        ['fetch only', { PDSH_WEB_FETCH_PROVIDER: 'deepseek-fetch-api' }, []],
+        ['official Messages search', {
+          PDSH_WEB_SEARCH_PROVIDER: 'deepseek-official',
+          DEEPSEEK_SEARCH_BASE_URL: 'https://model.test/anthropic/v1',
+          DEEPSEEK_API_KEY: 'test-model-key',
+        }, ['web_search']],
+        ['independent Search/Fetch', {
+          PDSH_WEB_SEARCH_PROVIDER: 'deepseek-search-api',
+          PDSH_WEB_FETCH_PROVIDER: 'deepseek-fetch-api',
+          DEEPSEEK_SEARCH_API_BASE_URL: 'https://search.test/v1/tools',
+          DEEPSEEK_SEARCH_API_KEY: 'test-search-key',
+        }, ['web_search', 'web_fetch']],
+      ]) {
+        const registered = new Map()
+        const ctx = new Context()
+        try {
+          ctx.provide('launchEnvironment', createLaunchEnvironmentSnapshot([{ source: 'process', values: env }]))
+          await ctx.plugin(WebRuntime, resolvedConfig(findRow(rows, 'web'), env))
+          for (const [id, plugin] of [
+            ['web-search-deepseek', messagesProvider],
+            ['web-deepseek-api', apiProvider],
+          ]) {
+            const providerRow = findRow(rows, id)
+            if (!evaluateLoaderValue(providerRow.disabled, env)) {
+              await ctx.plugin(plugin, resolvedConfig(providerRow, env))
+            }
+          }
+          if (!evaluateLoaderValue(row.disabled, env)) {
+            toolWeb.apply({
+              web: ctx.web,
+              tools: { register: tool => registered.set(tool.name, tool) },
+              systemPrompt: { section() {}, getSectionOrder() { return 0 } },
+            }, toolWeb.Config(resolvedConfig(row, env)))
+          }
+          assert.deepEqual([...registered.keys()], expected, `${scope}: ${mode}`)
+
+          const execution = { signal: new AbortController().signal }
+          const search = registered.get('web_search')
+          if (search) {
+            const result = await search.execute({ queries: ['fixture'] }, execution)
+            assert.equal(result.sources[0]?.url, source)
+          }
+          const fetch = registered.get('web_fetch')
+          if (fetch) {
+            const result = await fetch.execute({ url: source }, execution)
+            assert.equal(result.body.content, 'Fixture page')
+          }
+        } finally {
+          await ctx.fiber.dispose()
+        }
+      }
+    }
+  })
 })
