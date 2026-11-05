@@ -6,7 +6,7 @@ contracts: [P05, P09, P16, P18, P20]
 status: implemented
 breaking: false
 base: 6c040fe1fc56c0d263293faaf208105a5e8fc315
-contract_revision: 81764173ef7e76334abb3b7e7ea11c35c1749b77
+contract_revision: 01b003e3bbbd702ff5419957810bad0e4972c473
 ```
 
 The Android and Harmony hosts do not supply a search provider. With the new launch,
@@ -30,7 +30,7 @@ records the reused launch entries.
 | Producer → consumer | Behavior |
 | --- | --- |
 | Old host → new Worker | Absent IDs keep tools hidden. Older Harmony launch documents have no flag and remain readable. |
-| New host → old Worker | The pinned Worker already accepts the four environment entries and routes external fetches through the existing gateway. An older Harmony Rust host ignores the optional private flag and keeps search off. |
+| New host → old Worker | The older Worker accepts the four provider entries. A cookie-authenticated Android launch can still bypass the gateway until the Worker image is updated. An older Harmony Rust host ignores the optional private flag and keeps search off. |
 | New host → new Worker | Both official operations use the selected stored model key. Missing, unreadable and nonofficial launch configurations leave the tools hidden. |
 | Persisted data → new or rollback | Existing profiles and secrets remain readable. The host regenerates the private launch document at startup. A rollback drops the extra routes and flag. |
 
@@ -44,3 +44,21 @@ regression. The full verification matrix is recorded on [PR #37](https://github.
 | --- | --- |
 | `eb8ac88b` | Frozen gateway scope, shared request cases and Worker launch contract. |
 | `81764173` | Registered the same gateway clause in its own document to stay within the gateway spec line cap. The fixture still decodes to the same values. |
+
+
+Android product shell follow-up:
+
+- The Android launch already supplies the per-start token in the Worker environment
+  and omits an explicit WebSocket bearer. The bridge now uses that same token
+  on the existing gateway only for the canonical official web operations.
+  The Android gateway already accepts it. No launch variables, endpoints or
+  headers were added. Other requests keep their previous transport.
+- Android process groups keep the complete first row ID. Two groups anchored
+  on different tool calls remain distinct even when both event IDs end in
+  `tool-call`. Row keys are local to the visible list and are not persisted.
+- Acceptance uses the cookie-authenticated bridge regression, the Android
+  projection regression and the rebuilt APK on a physical phone.
+
+| Revision | Change |
+| --- | --- |
+| `01b003e3` | Froze the scoped bearer fallback and Android process row identity after reproducing both defects in the product shell. |

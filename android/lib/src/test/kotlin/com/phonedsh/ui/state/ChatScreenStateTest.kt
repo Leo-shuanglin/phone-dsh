@@ -773,6 +773,38 @@ class ChatScreenStateTest {
     }
 
     @Test
+    fun `two tool runs in one turn keep distinct full-row-id process keys`() {
+        val events = listOf(
+            HarnessEvent("s1", 0L, 1L, HarnessKind.TurnStarted("1")),
+            HarnessEvent(
+                "s1", 1L, 2L,
+                HarnessKind.ToolCall("call-1", "read", JsonObject(mapOf("file_path" to JsonString("notes/a.md")))),
+            ),
+            HarnessEvent("s1", 2L, 3L, HarnessKind.ToolResult("call-1", isError = false, summary = "read notes/a.md")),
+            HarnessEvent("s1", 3L, 4L, HarnessKind.AssistantMessage("First step done.")),
+            HarnessEvent(
+                "s1", 4L, 5L,
+                HarnessKind.ToolCall("call-2", "bash", JsonObject(mapOf("command" to JsonString("ls")))),
+            ),
+            HarnessEvent("s1", 5L, 6L, HarnessKind.ToolResult("call-2", isError = false, summary = "notes/a.md")),
+        )
+        val rows = ChatScreenState.from(UiStateProjector.project(events)).rows
+        assertEquals(
+            listOf(ChatRow.ProcessGroup::class, ChatRow.Assistant::class, ChatRow.ProcessGroup::class),
+            rows.map { it::class },
+        )
+        val groups = rows.filterIsInstance<ChatRow.ProcessGroup>()
+        assertEquals("two independent process groups", 2, groups.map { it.id }.toSet().size)
+        val beforeResult = ChatScreenState.from(UiStateProjector.project(events.dropLast(1)))
+            .rows.filterIsInstance<ChatRow.ProcessGroup>()
+        assertEquals(beforeResult.map { it.id }, groups.map { it.id })
+        val runs = groups.map { it.entries.filterIsInstance<ChatRow.ToolRun>().single() }
+        assertEquals(listOf("read", "bash"), runs.map { it.title })
+        assertEquals(listOf("read notes/a.md", "notes/a.md"), runs.map { it.summary })
+        assertEquals(listOf(2, 2), runs.map { it.entries.single().sourceEventCount })
+    }
+
+    @Test
     fun `tool detail carrier preserves call arguments result body metadata and file path`() {
         val args = JsonObject(
             mapOf(

@@ -185,17 +185,29 @@ export function workerRuntime(): boolean {
   return typeof process.env.PDSH_CHANNEL_TOKEN === 'string' && process.env.PDSH_CHANNEL_TOKEN !== ''
 }
 
-/** The implicit Worker host route: `/v1/http` on the loopback origin, bearer from the environment. */
+const OFFICIAL_SEARCH_API_BASE = 'https://api.deepseek.com/v1/tools'
+
+/** The implicit Worker host route on the same loopback origin as the channel. */
 export function defaultHostProxy(): HostProxyOptions | undefined {
-  const token = process.env.PDSH_CHANNEL_TOKEN ?? process.env.PDSH_EXEC_BRIDGE_TOKEN
-  if (token === undefined || token === '') return undefined
+  const env = process.env
+  const channelToken = env.PDSH_CHANNEL_TOKEN || env.PDSH_EXEC_BRIDGE_TOKEN
+  const cookieWebTools = !channelToken
+    && env.PDSH_WEB_SEARCH_PROVIDER === 'deepseek-search-api'
+    && env.DEEPSEEK_SEARCH_API_BASE_URL === OFFICIAL_SEARCH_API_BASE
+  const token = cookieWebTools ? env.PDSH_DSH_LAUNCH_TOKEN : channelToken
   const origin = globalThis.location?.origin
-  const url = process.env.PDSH_CHANNEL_ORIGIN
-    ?? process.env.PDSH_EXEC_BRIDGE_URL
+  const url = env.PDSH_CHANNEL_ORIGIN
+    ?? env.PDSH_EXEC_BRIDGE_URL
     ?? (origin !== undefined && (origin.startsWith('http://') || origin.startsWith('https://')) ? origin : undefined)
-    ?? httpOriginFromChannelUrl(process.env.PDSH_CHANNEL_URL)
-  if (url === undefined || url === '') return undefined
-  return { url, token }
+    ?? httpOriginFromChannelUrl(env.PDSH_CHANNEL_URL)
+  if (!token || !url) {
+    if (cookieWebTools) throw new Error('llm-bridge: official web tools need the host gateway and launch bearer')
+    return undefined
+  }
+  return cookieWebTools
+    ? { url, token, match: target => target.href === `${OFFICIAL_SEARCH_API_BASE}/search`
+      || target.href === `${OFFICIAL_SEARCH_API_BASE}/fetch` }
+    : { url, token }
 }
 
 interface ToolCallStore { getStore(): { key: string } | undefined }
@@ -215,7 +227,9 @@ export function installNodeFetch(options: InstallOptions = {}): () => void {
   const proxy = explicit ?? (worker ? defaultHostProxy() : undefined)
   // In the Worker even a loopback URL has no node:http client: every request is
   // carried by the page's same-origin fetch to the host /v1/http route.
-  const routed = proxy !== undefined && explicit === undefined && worker ? { ...proxy, match: () => true } : proxy
+  const routed = proxy !== undefined && explicit === undefined && worker && proxy.match === undefined
+    ? { ...proxy, match: () => true }
+    : proxy
   if (!worker && mode === 'auto' && routed === undefined && nativeFetchUsable()) return () => {}
   const hosts = new Set(options.idempotencyHosts ?? [])
   const extraHeaders = (url: URL, viaProxy: boolean): Record<string, string> | undefined => {
