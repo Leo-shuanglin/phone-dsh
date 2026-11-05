@@ -112,3 +112,9 @@ Protocol impact: P14; P04; P06: none — 不改 DSH 事件或答案内容。真�
 页面适配器只将 product-worker.mjs 实际提供的八个私有命令 `$diagnose/$writeFile/$readFile/$listFiles/$openBinaryRead/$readBinaryChunk/$closeBinaryRead/$command` 送入本地消息通道；既有 `$follow/$events/$close` 保持其专用流处理。其他 DSH 方法按既有 RPC envelope 经 WorkerTunnel 传递，包括 `$events/result`。不新增方法、消息字段或错误语义。producer/consumer 仍在同 HAP 配对，旧磁盘数据不变。
 
 回归必须执行真实 engine.mjs 的 dispatcher，分别验证 `$events/result` 的 `/api/$events/result` 路由、普通 DSH RPC、全部真实本地命令，以及非法路径拒绝。不得仅比较源码字符串或手写第二个 dispatcher。
+
+### android-parity-2c 回答完整性
+
+独立复核发现重复/空题目 ID 以及不匹配的 answer map 仍可能产生错题或空答案。当前同 HAP 私有 UI 编码修订为整组校验，ID 必须是非空且互异的字符串；非法组显示请求错误，不生成部分问题或发送结果。有效 JSON answer map 必须覆盖当前整组题目，每题值为字符串数组或既有单字符串形式；显式跳过用该题的空数组表达，不能用缺失字段代替跳过。未知/缺失 ID、损坏的组 JSON 和非字符串选择拒绝提交并保留当前卡片。
+
+合法单题保留不歧义的原始字符串兼容路径；多题不支持广播标量。JSON object/array 外观的非法编码不能当作原始用户回答发送。UI 生成 JSON 字典时必须正确支持任意合法 ID，包括 `__proto__`，不依赖 JavaScript 对象原型赋值。此校验只作用于已有配对 UI/host 接缝，不修改 DSH types、Worker schema 或协议错误代码。新旧 HAP 不混用接口，持久化格式不变。
