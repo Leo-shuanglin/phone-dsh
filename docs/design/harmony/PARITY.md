@@ -2,45 +2,45 @@
 
 Status: INCOMPLETE. PR #34 contains the first verified native client; it does not certify whole-product 1:1.
 
-Android source baseline is `bd1dea5ee5cc0576eb75fb45d8eb97107c92e275`. The frozen first Harmony commit is `c5aec33824f468f76ac324df5d116fe7a56c564f`. Android is rebuilt from this checkout with the same unmodified Android source and the pinned Worker bundle, rather than reusing a cached APK with a different hash.
+Android source baseline is `bd1dea5ee5cc0576eb75fb45d8eb97107c92e275`. The frozen first Harmony commit is `c5aec33824f468f76ac324df5d116fe7a56c564f`. The pre-fix Android reference was rebuilt from that source with the pinned Worker. The post-fix Android APK is rebuilt from this branch, using the same Worker rather than a cached APK.
 
 Both local emulators use a 1080 × 2340 display at 2.625× logical scale (420 dpi). The initial Android capture used 480 dpi and is retained as a pre-calibration artifact, not a same-frame pixel comparison. Harmony DisplayManagerService reports VirtualWidth 411, VirtualHeight 891 and Density 2.625; the corrected paired logical width is approximately 411.43. The Android AVD is `PhoneDSH_Android35_Parity` on port 5580; the existing HarmonyOS API20 phone emulator uses HDC 127.0.0.1:5555. System bars, fonts and OS dialogs must be reported separately from app geometry; they are not silently treated as equal pixels.
 
 ## Route coverage
 
-A route is not accepted merely because its component exists. Each row needs corresponding Android/Harmony screenshots and interaction readback. `PENDING` means no matched run is complete.
+A route is accepted only after both emulators show the matching page and its actions are read back. `Navigation observed` records an actual visit; it leaves content, geometry and behavior open. `PENDING` means no matched run is complete.
 
 | Harmony route | Paired emulator result | Required evidence |
 | --- | --- | --- |
-| Chat | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Sessions | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| WorkspaceFolders | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Files | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Automation | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Configuration | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Settings | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| ModelProvider | PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Chat | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Sessions | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
+| WorkspaceFolders | Navigation observed on both; Android reports read-only, Harmony CRUD verified separately | Native route screenshot, actual data state, actions and back navigation |
+| Files | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Automation | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Configuration | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Settings | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
+| ModelProvider | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
 | WebSearch | PENDING | Native route screenshot, actual data state, actions and back navigation |
 | Mcp | PENDING | Native route screenshot, actual data state, actions and back navigation |
 | McpEditor | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Runtime | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Egress | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Workbench | PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Runtime | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Egress | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Workbench | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
 | Tools | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Export | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| DeviceConnection | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| DeviceSession | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| SessionArtifacts | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| AgentPresets | PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Export | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
+| DeviceConnection | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
+| DeviceSession | BLOCKED on Harmony: no native device connector | Native route screenshot, actual data state, actions and back navigation |
+| SessionArtifacts | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
+| AgentPresets | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
 | PluginInventory | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| PhonePermissions | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| ChatPreferences | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| SettingsDocument | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Shortcuts | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| FontSize | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| ArchivedSessions | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| About | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Licenses | PENDING | Native route screenshot, actual data state, actions and back navigation |
+| PhonePermissions | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
+| ChatPreferences | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
+| SettingsDocument | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Shortcuts | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
+| FontSize | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
+| ArchivedSessions | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
+| About | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Licenses | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
 | Preview | PENDING | Native route screenshot, actual data state, actions and back navigation |
 | Probes | PENDING | Native route screenshot, actual data state, actions and back navigation |
 
@@ -71,3 +71,5 @@ Checkpoint tests: 102 Harmony Node tests pass; 3 real Android Compose bubble tes
 Queue checkpoint: API20 with the pinned Worker. The final workbench readback was `EDIT=EDITED8450`, `THIRD=THIRD8450`, `REMOVED_FILE_ABSENT`. The separate steer run observed the Bash tool in progress, followed by the assistant's exact `STEER_APPLIED8492` response and an idle composer. Its first polling window expired before the 45-second tool returned; a later UI readback proved completion. The original queue preference was restored. All 112 Harmony Node tests passed.
 
 Layout checkpoint: 19 Android Compose tests pass. The two new tests reproduce the old failures (152dp instead of the 12dp code action inset; permission summary wider than half the settings row). The Harmony inline Text uses native ImageSpan for TeX and extra leading only between lines. The [native screenshot](parity/checkpoint/harmony-inline-math.png) shows a real restored reply, with an inline fraction, inline superscript, narrow table and display matrix. The 30-line native code fixture expanded and returned to its capped height.
+
+Settings index: [before Harmony](parity/before/harmony-settings-index.png), [after Harmony](parity/checkpoint/harmony-settings-index.png), and [Android reference](parity/checkpoint/android-settings-index.png) are actual 420 dpi captures. A center-column pixel scan measured the first card-to-card gap as 105px before, 194px after and 205px on Android. Settings language changed to English and was restored to Chinese on the new HAP. The top offset, native glyph and OS permission facts still differ. The Android folders page disclosed that this host does not implement create/switch/delete; the Harmony proof in VERIFICATION.md covers its own CRUD. No paired navigation result counts as full parity.

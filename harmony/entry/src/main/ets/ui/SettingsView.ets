@@ -169,25 +169,34 @@ export struct SettingsIndexView {
   }
 
   @Builder
+  IndexSectionLabel(label: string, first: boolean = false) {
+    Text(Copy.tr(label))
+      .fontSize(Metrics.secondarySize)
+      .fontColor(this.pal().textSecondary)
+      .width('100%')
+      .padding({ left: 33, right: 16, top: first ? 12 : 47, bottom: 12 })
+  }
+
+  @Builder
   ProviderGroup() {
-    SectionLabel({ label: Copy.tr('模型与智能体'), dark: this.dark })
+    this.IndexSectionLabel('模型与智能体', true)
     Column() {
       NavRow({
         label: Copy.tr('模型服务'), value: this.snapshot.settings.provider.name, glyph: 'CPU',
-        dark: this.dark, rowId: 'settings.row.modelProvider', showDivider: true,
+        dark: this.dark, settingsIndex: true, rowId: 'settings.row.modelProvider', showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.ModelProvider);
         }
       })
       NavRow({
-        label: Copy.tr('Agent 预设'), glyph: 'PEOPLE', dark: this.dark, rowId: 'settings.row.agentPresets',
+        label: Copy.tr('Agent 预设'), glyph: 'PEOPLE', dark: this.dark, settingsIndex: true, rowId: 'settings.row.agentPresets',
         showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.AgentPresets);
         }
       })
       NavRow({
-        label: Copy.tr('插件与工具'), glyph: 'PUZZLE', dark: this.dark, rowId: 'settings.row.plugins',
+        label: Copy.tr('插件与工具'), glyph: 'PUZZLE', dark: this.dark, settingsIndex: true, rowId: 'settings.row.plugins',
         showDivider: false,
         onTap: () => {
           this.requireActions().navigate(Page.Configuration);
@@ -202,24 +211,24 @@ export struct SettingsIndexView {
 
   @Builder
   PermissionGroup() {
-    SectionLabel({ label: Copy.tr('权限与隐私'), dark: this.dark })
+    this.IndexSectionLabel('权限与隐私')
     Column() {
       NavRow({
         label: Copy.tr('新会话默认权限'), value: Copy.permissionLabel(this.snapshot.settings.permission),
-        glyph: 'LOCK_SHIELD', dark: this.dark, rowId: 'settings.row.permission', showDivider: true,
+        glyph: 'LOCK_SHIELD', dark: this.dark, settingsIndex: true, rowId: 'settings.row.permission', showDivider: true,
         onTap: () => {
           this.menuKind = 'permission';
         }
       })
       NavRow({
         label: Copy.tr('手机权限'), value: Copy.unknown, glyph: 'HAND', dark: this.dark,
-        rowId: 'settings.row.phonePermissions', showDivider: true,
+        settingsIndex: true, rowId: 'settings.row.phonePermissions', showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.PhonePermissions);
         }
       })
       NavRow({
-        label: Copy.tr('网络访问'), glyph: 'NETWORK', dark: this.dark, rowId: 'settings.row.egress',
+        label: Copy.tr('网络访问'), glyph: 'NETWORK', dark: this.dark, settingsIndex: true, rowId: 'settings.row.egress',
         showDivider: false,
         onTap: () => {
           this.requireActions().navigate(Page.Egress);
@@ -234,38 +243,38 @@ export struct SettingsIndexView {
 
   @Builder
   ConversationGroup() {
-    SectionLabel({ label: Copy.tr('对话'), dark: this.dark })
+    this.IndexSectionLabel('对话')
     Column() {
       NavRow({
         label: Copy.tr('外观'), value: Copy.themeLabel(this.snapshot.settings.theme), glyph: 'GEAR',
-        dark: this.dark, rowId: 'settings.row.appearance', showDivider: true,
+        dark: this.dark, settingsIndex: true, menuChevron: true, rowId: 'settings.row.appearance', showDivider: true,
         onTap: () => {
           this.menuKind = 'appearance';
         }
       })
       NavRow({
         label: Copy.tr('语言'), value: Copy.languageLabel(this.snapshot.settings.language), glyph: 'GLOBE',
-        dark: this.dark, rowId: 'settings.row.language', showDivider: true,
+        dark: this.dark, settingsIndex: true, menuChevron: true, rowId: 'settings.row.language', showDivider: true,
         onTap: () => {
           this.menuKind = 'language';
         }
       })
       NavRow({
         label: Copy.tr('字号'), value: this.snapshot.settings.fontSize.toString() + ' pt', glyph: 'TEXT_SIZE',
-        dark: this.dark, rowId: 'settings.row.fontSize', showDivider: true,
+        dark: this.dark, settingsIndex: true, rowId: 'settings.row.fontSize', showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.FontSize);
         }
       })
       NavRow({
-        label: Copy.tr('工作过程'), glyph: 'LIST', dark: this.dark, rowId: 'settings.row.chatPreferences',
+        label: Copy.tr('工作过程'), glyph: 'LIST', dark: this.dark, settingsIndex: true, rowId: 'settings.row.chatPreferences',
         showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.ChatPreferences);
         }
       })
       NavRow({
-        label: Copy.tr('快捷键'), glyph: 'COMMAND', dark: this.dark, rowId: 'settings.row.shortcuts',
+        label: Copy.tr('快捷键'), glyph: 'COMMAND', dark: this.dark, settingsIndex: true, rowId: 'settings.row.shortcuts',
         showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.Shortcuts);
@@ -274,7 +283,7 @@ export struct SettingsIndexView {
       NavRow({
         label: Copy.tr('繁忙时的发送行为'),
         value: Copy.tr(this.snapshot.settings.busyEnter === 'steer' ? '补充当前任务' : '排到下一轮'),
-        glyph: 'LIST', dark: this.dark, rowId: 'settings.row.busyEnter', showDivider: false,
+        glyph: 'LIST', dark: this.dark, settingsIndex: true, rowId: 'settings.row.busyEnter', showDivider: false,
         onTap: () => {
           this.menuKind = 'busyEnter';
         }
@@ -288,24 +297,24 @@ export struct SettingsIndexView {
 
   @Builder
   SessionsFilesGroup() {
-    SectionLabel({ label: Copy.tr('会话与文件'), dark: this.dark })
+    this.IndexSectionLabel('会话与文件')
     Column() {
       NavRow({
         label: Copy.tr('文件夹'), value: Copy.fill('{0} 个', [this.snapshot.folders.length.toString()]), glyph: 'FOLDER',
-        dark: this.dark, rowId: 'settings.row.folders', showDivider: true,
+        dark: this.dark, settingsIndex: true, rowId: 'settings.row.folders', showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.WorkspaceFolders);
         }
       })
       NavRow({
         label: Copy.tr('已归档会话'), value: this.archivedValue(), glyph: 'ARCHIVE', dark: this.dark,
-        rowId: 'settings.row.archived', showDivider: true,
+        settingsIndex: true, rowId: 'settings.row.archived', showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.ArchivedSessions);
         }
       })
       NavRow({
-        label: Copy.tr('文件'), glyph: 'DOCUMENT', dark: this.dark, rowId: 'settings.row.files',
+        label: Copy.tr('文件'), glyph: 'DOCUMENT', dark: this.dark, settingsIndex: true, rowId: 'settings.row.files',
         showDivider: false,
         onTap: () => {
           this.requireActions().navigate(Page.Files);
@@ -320,7 +329,7 @@ export struct SettingsIndexView {
 
   @Builder
   EngineGroup() {
-    SectionLabel({ label: Copy.tr('引擎'), dark: this.dark })
+    this.IndexSectionLabel('引擎')
     Column() {
       InfoRow({
         label: Copy.tr('引擎状态'),
@@ -331,7 +340,7 @@ export struct SettingsIndexView {
       })
       if (this.snapshot.engine === EnginePhase.Failed) {
         NavRow({
-          label: Copy.tr('重新启动引擎'), glyph: 'REFRESH', dark: this.dark, rowId: 'settings.row.restartEngine',
+          label: Copy.tr('重新启动引擎'), glyph: 'REFRESH', dark: this.dark, settingsIndex: true, rowId: 'settings.row.restartEngine',
           showDivider: true,
           onTap: () => {
             this.run(this.requireActions().startEngine());
@@ -339,28 +348,28 @@ export struct SettingsIndexView {
         })
       }
       NavRow({
-        label: Copy.tr('运行状态'), glyph: 'WAVEFORM', dark: this.dark, rowId: 'settings.row.runtime',
+        label: Copy.tr('运行状态'), glyph: 'WAVEFORM', dark: this.dark, settingsIndex: true, rowId: 'settings.row.runtime',
         showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.Runtime);
         }
       })
       NavRow({
-        label: Copy.tr('配置文件'), glyph: 'DOCUMENT', dark: this.dark, rowId: 'settings.row.document',
+        label: Copy.tr('配置文件'), glyph: 'DOCUMENT', dark: this.dark, settingsIndex: true, rowId: 'settings.row.document',
         showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.SettingsDocument);
         }
       })
       NavRow({
-        label: Copy.tr('导出诊断'), glyph: 'DOCUMENT', dark: this.dark, rowId: 'settings.row.export',
+        label: Copy.tr('导出诊断'), glyph: 'DOCUMENT', dark: this.dark, settingsIndex: true, rowId: 'settings.row.export',
         showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.Export);
         }
       })
       NavRow({
-        label: Copy.tr('设备连接'), glyph: 'DEVICE', dark: this.dark, rowId: 'settings.row.device',
+        label: Copy.tr('设备连接'), glyph: 'DEVICE', dark: this.dark, settingsIndex: true, rowId: 'settings.row.device',
         showDivider: false,
         onTap: () => {
           this.requireActions().navigate(Page.DeviceConnection);
@@ -382,10 +391,10 @@ export struct SettingsIndexView {
 
   @Builder
   AboutGroup() {
-    SectionLabel({ label: Copy.tr('关于'), dark: this.dark })
+    this.IndexSectionLabel('关于')
     Column() {
       NavRow({
-        label: Copy.tr('关于 Phone DSH'), glyph: 'INFO', dark: this.dark, rowId: 'settings.row.about',
+        label: Copy.tr('关于 Phone DSH'), glyph: 'INFO', dark: this.dark, settingsIndex: true, rowId: 'settings.row.about',
         showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.About);
@@ -393,7 +402,7 @@ export struct SettingsIndexView {
       })
       InfoRow({ label: Copy.tr('版本'), value: Copy.unknown, dark: this.dark, showDivider: true })
       NavRow({
-        label: Copy.tr('开源许可'), glyph: 'DOCUMENT', dark: this.dark, rowId: 'settings.row.licenses',
+        label: Copy.tr('开源许可'), glyph: 'DOCUMENT', dark: this.dark, settingsIndex: true, rowId: 'settings.row.licenses',
         showDivider: false,
         onTap: () => {
           this.requireActions().navigate(Page.Licenses);
@@ -408,7 +417,7 @@ export struct SettingsIndexView {
 
   @Builder
   PlatformGroup() {
-    SectionLabel({ label: Copy.tr('平台差异'), dark: this.dark })
+    this.IndexSectionLabel('平台差异')
     Column() {
       InfoRow({ label: Copy.tr('通知权限'), value: Copy.unknown, dark: this.dark, showDivider: true })
       InfoRow({ label: Copy.tr('电池优化'), value: Copy.unknown, dark: this.dark, showDivider: true })
@@ -478,6 +487,7 @@ export struct SettingsIndexView {
               .height(32)
           }
           .width('100%')
+          .padding({ top: 45 })
         }
         .align(Alignment.TopStart)
         .layoutWeight(1)

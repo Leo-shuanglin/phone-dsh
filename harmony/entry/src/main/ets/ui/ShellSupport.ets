@@ -165,6 +165,8 @@ export struct NavRow {
   @Prop showDivider: boolean = true;
   @Prop showChevron: boolean = true;
   @Prop rowId: string = '';
+  @Prop settingsIndex: boolean = false;
+  @Prop menuChevron: boolean = false;
   onTap: () => void = () => {};
 
   private pal(): Palette {
@@ -179,36 +181,42 @@ export struct NavRow {
             name: this.label,
             symbol: this.glyph,
             dark: this.dark,
-            iconSize: 17,
+            iconSize: this.settingsIndex ? 22 : 17,
             muted: !this.rowEnabled
           })
-            .width(28)
+            .width(this.settingsIndex ? 22 : 28)
             .height(24)
         }
         Text(this.label)
           .fontSize(Metrics.bodySize)
           .fontColor(this.rowEnabled ? this.pal().textPrimary : this.pal().textTertiary)
           .layoutWeight(1)
-          .margin({ left: this.glyph.length > 0 ? 8 : 0 })
+          .margin({ left: this.glyph.length > 0 ? (this.settingsIndex ? 6 : 8) : 0 })
         if (this.value.length > 0) {
           Text(this.value)
-            .fontSize(15)
-            .fontColor(this.pal().textSubtle)
+            .fontSize(this.settingsIndex ? Metrics.bodySize : 15)
+            .fontColor(this.settingsIndex ? this.pal().textSecondary : this.pal().textSubtle)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .constraintSize({ maxWidth: '50%' })
-            .margin({ left: 8 })
+            .margin({ left: this.settingsIndex ? 0 : 8 })
         }
         if (this.showChevron) {
-          NativeIcon({ name: '进入', symbol: 'CHEVRON_RIGHT', dark: this.dark, iconSize: 18, muted: true })
-            .width(18)
-            .height(18)
-            .margin({ left: 4 })
+          NativeIcon({
+            name: this.menuChevron ? '展开' : '进入',
+            symbol: this.menuChevron ? 'CHEVRON_DOWN' : 'CHEVRON_RIGHT',
+            dark: this.dark,
+            iconSize: this.settingsIndex ? 22 : 18,
+            muted: true
+          })
+            .width(this.settingsIndex ? 22 : 18)
+            .height(this.settingsIndex ? 22 : 18)
+            .margin({ left: this.settingsIndex ? 6 : 4, right: this.settingsIndex ? 6 : 0 })
         }
       }
       .width('100%')
       .constraintSize({ minHeight: Metrics.rowHeight })
-      .padding({ left: 16, right: 14, top: 8, bottom: 8 })
+      .padding({ left: 16, right: this.settingsIndex ? 0 : 14, top: 8, bottom: 8 })
       .alignItems(VerticalAlign.Center)
       .opacity(this.rowEnabled ? 1 : 0.55)
       .id(this.rowId)
