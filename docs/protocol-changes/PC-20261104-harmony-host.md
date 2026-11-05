@@ -134,3 +134,17 @@ Protocol impact: P09。用户明确选择按共享规范修正两端，并保留
 修复 Android 私有 ChatRowItem 的测量归属，在外层水平阅读边距之前获取真实行容器宽度，再传给既有 ChatBubble。不得改公共 ChatBubble API、ChatMetrics 公式、共享 token、golden 或主题来压平差异；不得改为窗口常量，也不能用补偿常数掩盖调用者错误。窄容器和正常容器都必须执行真实 Compose 测量回归。鸿蒙端按同一公式在模拟器读回实际尺寸。
 
 修正前图像固定保留在 `docs/design/harmony/parity/before/`，后续不覆盖它们。修正后 Android APK 另记源 revision 与哈希，不冒充原 bd1dea5 基线。实现者独占 Android `ChatRows.kt` 和新的 `ChatUserBubbleWidthTest.kt`，协调者先跑新增测试在旧实现上失败，再合并修正重跑并抓取两端图像。无网络、持久化或 Native ABI 变更。
+
+## android-parity-5 队列冻结
+
+Protocol impact: P06; P09; P14; P15: none — 不更改 mux frame 或 DSH RPC envelope。权威为固定 DSH `session/updateQueue` 与 `session/projections`，以及 Android `ChatQueueActions`、`DshChatQueueTransport`、`ChatSessionSnapshot`。鸿蒙当前只由本地 pendingTurns 推算排队数，无法编辑/移除真实待执行消息，且把 steer 当新 turn 计数。
+
+只读取已实现的 `session/projections {request:{sessionId}}` 中 `kind:'sequenced', values.inbox['next-turn']`。只认 kebab-case 字段。未知、缺字段、失败、`migration-required` 都不能当空队列。实际 item.id、content text parts、source.kind='user' 的 rpcId 是身份来源。预览保留文本，混合非文本内容不可编辑，实际 durable 行可移除；Android 当前 durable next-turn 的 canSteer=false 不得伪造可引导。已有忙时输入的 `session/prompt mode:'steer'` 继续可用。
+
+同 HAP ShellSnapshot 用 data-only `queueItems: QueueItem[] | null`（null 未知、[] 已读空）、`localQueueItems: QueueItem[]`、`queueFailure` 取代展示用 queueCount。QueueItem 区分 local/durable，含 item id、拥有该行的 workerSessionId、promptRequestId、text、lane/state、canEdit/canRemove/canSteer、busy。暂态 echo 从实际提交 requestId 关联，按 durable source.rpcId 或已接纳的 user/message 退役，不能按文本相等。首条普通输入保持现有方式；忙时排队/引导不提前伪造进入 transcript。已有 send action 不分裂出第二套协议。
+
+ShellActions 新增 `updateQueueItem(workerSessionId, itemId, action, replacement?)`，action 为 edit/remove/steer。只操作当前会话真实可编辑的 durable id，记录单行提交中，`session/updateQueue {request:{sessionId,itemId,action:{kind,content?}}}`；edit 的 content 是既有 `{type:'text',text}` 数组。accepted 不表示成功或执行。再次读 sequenced projection 证实 edit 内容、remove 缺失或真实 steer 退出 next-turn 后才发布成功；读取失败不得报成功。过期会话/运行时响应不落在新页，未知状态不显示 0。不得混用 UI 操作 id、prompt requestId、外层 RPC id 或 WAL mseq。
+
+pendingTurns 可保留为私有回合组与产物范围记账，不能作为队列展示；忙时 steer 不增加预期 turn，成功移除自己提交的待执行项只按匹配的 requestId 退役一次。保持真实 turn/start、turn/end 与取消事件语义，不猜测旧进程仍活着；已有会话切换/停止时清除可见队列并重新读取。旧磁盘数据不变，同 HAP 两端同时升级。
+
+实现者独占 `model/QueueModel.ets`、`model/Contracts.ets`、`host/HostService.ets`、`ui/ChatView.ets`、`tests/queue-model.test.mjs`。保留现有多题、locale、RichText、RCP、WAL/安全防线。协调者运行现有 Worker 实测：长 bash 回合中排入三条、按 durable id 移除中间项、编辑另一个、观察实际工具/消息记录与最终空队列；验证忙时 steer 不产生幽灵运行态。不可仅凭模型复述或前端计数算通过。
