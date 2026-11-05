@@ -5,20 +5,24 @@
 // ------------------------------------------------------------
 // The host's park / drain / resume contract was written as a caller duty: the
 // App was expected to observe its own scene phase and forward it to the host.
-// The function written for exactly that — `ChatModel.scenePhaseChanged` at
-// examples/probe-app/PhoneDSHProbe/ChatModel.swift:1311 — has no call site
-// anywhere in the repository. The wiring that does exist (PhoneDSHProbeApp
-// line 37 -> `AppModel.scenePhaseChanged`, AppModel.swift:142) forwards into
-// ProbeKit.BackgroundProbe and never reaches it. So the lifecycle events were
-// observed and then dropped: iOS froze the WKWebView Worker mid-turn, the
-// connections it held died, and the host's keep-alive, drain and resume paths
-// became dead code that no test could reach.
+// That call was lost when WebHostModel was removed, so `ChatModel.scenePhaseChanged`
+// had no caller and the remaining hook (PhoneDSHProbeApp ->
+// `AppModel.scenePhaseChanged`) forwarded only into ProbeKit.BackgroundProbe.
+// iOS froze the WKWebView Worker mid-turn.
+//
+// The probe app forwards SwiftUI scene phase again from the one `onChange` in
+// PhoneDSHProbeApp. `ProbeScenePhaseForwarding` delivers each phase to
+// `ChatModel` (silent-audio keep-alive, park, resume) and to
+// `AppModel.scenePhaseChanged` (the background-matrix runner). RootView and
+// ChatPage do not observe scene phase. Chat keep-alive stays in the probe app;
+// it does not call `setForeground(_:)`.
 //
 // A safety mechanism cannot depend on every App remembering to forward an
 // event, so the observation itself is a library concern. This type registers
 // the platform notifications itself, needs nothing from the App, and never
 // calls the host: turning a phase into `PhoneDSHHost.setForeground(_:)` is the
-// integrator's one line (see the DEBUG note at the bottom of this file).
+// integrator's one line (see the DEBUG note at the bottom of this file). The
+// host installs that line itself.
 
 import Foundation
 

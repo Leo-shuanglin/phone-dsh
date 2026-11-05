@@ -1468,6 +1468,10 @@ final class ChatModel {
     /// event after returning is an error. A park drains the work in flight
     /// (up to `drainDeadline`, 20 s here) and cancels what is still open; a
     /// resume replays the WAL and the same session continues.
+    ///
+    /// `PhoneDSHProbeApp` is the caller, through `ProbeScenePhaseForwarding`.
+    /// A running turn with background keep-alive holds a silent playback
+    /// session and leaves the host running. An idle host still parks.
     func scenePhaseChanged(_ phase: ScenePhase) async {
         guard let host else { return }
         switch phase {

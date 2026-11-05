@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import AVFoundation
 import Observation
+import ProbeKit
 import Speech
 
 /// On-device dictation. Only an explicit microphone tap requests permission.
@@ -103,7 +104,9 @@ final class ComposerVoiceInput: NSObject, AVSpeechSynthesizerDelegate {
         engine?.inputNode.removeTap(onBus: 0)
         engine = nil
         recording = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // Deactivating the shared session also drops the silent keep-alive.
+        // The lease reclaims playback when that session is held.
+        PhoneAudioSessionLease.releaseMicrophoneUser()
     }
 
     func speak(_ text: String) {

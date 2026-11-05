@@ -15,6 +15,7 @@
 import AVFoundation
 import Foundation
 import MediaPlayer
+import ProbeKit
 
 @MainActor
 final class SilentAudioKeepAlive {
@@ -66,6 +67,9 @@ final class SilentAudioKeepAlive {
         player.play()
         isActive = true
         observeSession()
+        PhoneAudioSessionLease.beginKeepAlive { [weak self] in
+            self?.reclaimAfterForeignRelease()
+        }
         onEvent?("keep-alive audio session active (playback, mixWithOthers)")
     }
 
@@ -112,14 +116,49 @@ final class SilentAudioKeepAlive {
     }
 
     /// Stops rendering and releases the session. Idempotent.
+    ///
+    /// The lease is cleared before `setActive(false)`. A microphone release
+    /// that re-enters during teardown then deactivates, and does not start
+    /// the player again.
     func stop() {
         guard isActive else { return }
         player.stop()
         engine.stop()
         isActive = false
+        PhoneAudioSessionLease.endKeepAlive()
         unobserveSession()
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
         onEvent?("keep-alive audio session released")
+    }
+
+    /// Restores `.playback` + `.mixWithOthers` after dictation or the record
+    /// tool finishes. Those callers share this session and would otherwise
+    /// leave it inactive. A healthy silent player is left alone.
+    private func reclaimAfterForeignRelease() {
+        guard isActive else { return }
+        let session = AVAudioSession.sharedInstance()
+        let previousCategory = session.category
+        let wasMixing = session.categoryOptions.contains(.mixWithOthers)
+        let engineWasRunning = engine.isRunning
+        let playerWasPlaying = player.isPlaying
+        if previousCategory == .playback && wasMixing && engineWasRunning && playerWasPlaying {
+            return
+        }
+        do {
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try session.setActive(true, options: [])
+            if !engine.isRunning {
+                engine.mainMixerNode.outputVolume = 1.0
+                try engine.start()
+            }
+            if !player.isPlaying, let buffer {
+                player.scheduleBuffer(buffer, at: nil, options: [.loops])
+                player.play()
+            }
+            onEvent?("keep-alive audio reclaimed (was \(previousCategory.rawValue), mixing=\(wasMixing), engine=\(engineWasRunning))")
+        } catch {
+            onEvent?("keep-alive audio reclaim failed: \(error)")
+        }
     }
 
     // MARK: - Interruptions
@@ -171,6 +210,7 @@ final class SilentAudioKeepAlive {
     private func restartAfterReset() {
         guard isActive else { return }
         isActive = false
+        PhoneAudioSessionLease.endKeepAlive()
         do {
             try start()
             onEvent?("keep-alive audio restarted after a media-services reset")

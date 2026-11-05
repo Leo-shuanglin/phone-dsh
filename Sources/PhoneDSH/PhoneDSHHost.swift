@@ -201,11 +201,13 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     private var recoveringTermination = false
     /// The process-lifecycle observer this host installed itself (P1).
     ///
-    /// The host observes the platform instead of trusting the App to forward
-    /// `scenePhase`: the build that lost that forwarding call (the App's only
-    /// `scenePhaseChanged` hook had no caller) froze the Worker without ever
-    /// draining, so no `pendingRecovery` gate could have helped. Observing here
-    /// makes "the App forgot" structurally unable to disable the gate.
+    /// The host observes the platform so `setForeground(_:)` does not depend on
+    /// the App forwarding `scenePhase`. The probe app forwards scene phase to
+    /// `ChatModel` for keep-alive, park and resume. A build that dropped that
+    /// call froze the Worker with no drain, and this gate would not have run
+    /// either. Observing here keeps the gate on when an App forgets to forward.
+    /// This observer only updates the foreground flag and consumes
+    /// `pendingRecovery`. The silent audio session stays in the probe app.
     private var processLifecycle: PhoneDSHProcessLifecycle?
 
     /// Extra replacement-Worker boot attempts after a `.boot`-class failure.
@@ -3878,6 +3880,16 @@ public actor PhoneDSHHost: PhoneDSHHosting {
     /// depend on every App remembering to forward `scenePhase`. On iOS the
     /// current phase is emitted at install time so a host created in the
     /// background cannot inherit the foreground default.
+    ///
+    /// The observer maps every phase other than `.active` (including
+    /// `.inactive`) to `setForeground(false)`, so a call, a system dialog or the
+    /// app switcher stops a deferred termination recovery from booting here.
+    /// That is deliberately narrower than parking: this observer never calls
+    /// ``park()`` or ``resume()``. A caller that parks on leaving the foreground
+    /// (the probe app's `ChatModel`) decides from the same phases, and the two
+    /// must not disagree about who owns the host. A host that caller does not
+    /// park keeps running while `isForeground` is false; the background-boot
+    /// gate still holds.
     private func installProcessLifecycleObservation() {
         guard processLifecycle == nil else { return }
         let observer = PhoneDSHProcessLifecycle()
