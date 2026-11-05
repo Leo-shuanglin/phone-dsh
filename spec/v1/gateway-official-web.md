@@ -1,4 +1,4 @@
-# Official DeepSeek Search and Fetch on Android and Harmony
+# Official DeepSeek Search and Fetch on Android, Harmony and iOS
 
 For a selected model service on `https://api.deepseek.com` at port 443, the host may reuse
 its saved model credential for the official Search and Fetch API. The supported model base
@@ -19,6 +19,11 @@ above when the official Search API is selected. Other requests keep their existi
 transport. The bridge must not send those two requests directly if the host
 route or launch bearer is unavailable.
 
+On iOS, follow-model mode uses this grant with the selected model key.
+Independent Search/Fetch mode keeps its own endpoint and credential routing.
+The Worker receives the existing provider IDs, official base URL, and placeholder.
+The gateway resolves the grant before dispatch and refuses redirects for this grant.
+
 The [shared route cases](golden/gateway/official-deepseek-web/cases.json) exercise
-the model base and request scope rules on both hosts. The existing gateway schema,
+the model base and request scope rules on the phone hosts. The existing gateway schema,
 `/v1/http` envelope, failure vocabulary and general redirect rules are unchanged.
