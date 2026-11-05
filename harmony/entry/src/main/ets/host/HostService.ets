@@ -33,6 +33,26 @@ import {
   ShellSnapshot,
   Workspace
 } from '../model/Contracts';
+import {
+  QueueItem,
+  QueueItemAction,
+  QueueItemState,
+  QueueOrigin,
+  QueueProjectionResult,
+  acknowledgeLocalQueuePrompt,
+  admittedUserPromptRequestId,
+  containsPromptRequestId,
+  durableQueueItemById,
+  encodeQueueUpdate,
+  failLocalQueuePrompt,
+  localQueueEcho,
+  mergeDurableQueue,
+  parseQueueProjection,
+  queueActionConfirmed,
+  retireLocalQueueByDurable,
+  retireLocalQueuePrompt,
+  retireOwnedQueueRequest
+} from '../model/QueueModel';
 import { LocaleText } from '../model/LocaleText';
 import {
   ComposerReferenceSessionFact,
@@ -310,6 +330,15 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
   private activeStreamSessionId: string = '';
   private streamClosedByUs: boolean = false;
   private pendingTurns: number = 0;
+  // The private turn group still owns artifact ranges, but it no longer drives
+  // any visible queue count. These ids are only our own still-pending queued
+  // prompts; a durable remove may retire exactly one of them.
+  private pendingOwnQueueRequestIds: string[] = [];
+  // Bumped on session/runtime switch. Every async queue response must still
+  // match this generation and the active Worker session before it lands.
+  private queueGeneration: number = 0;
+  private queueRefreshInFlight: boolean = false;
+  private queueRefreshQueued: boolean = false;
   // One measured mseq range per session turn group. The watermark is the cached
   // native ACK, read without the Store lock; see beginArtifacts/endArtifacts.
   private artifactsOpen: boolean = false;
@@ -412,6 +441,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     this.snapshot.failure = message;
     this.snapshot.running = false;
     this.pendingTurns = 0;
+    this.clearQueueState();
     this.emit();
   }
 
@@ -434,6 +464,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     this.snapshot.failure = this.clean(message);
     this.snapshot.running = false;
     this.pendingTurns = 0;
+    this.clearQueueState();
     this.emit();
   }
 
@@ -581,6 +612,10 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     const mode = this.snapshot.running && this.snapshot.settings.busyEnter === 'steer' ? 'steer' : 'queue';
     const finalPrompt = this.withAttachments(prompt, attachments);
     const requestId = uniqueId('prompt');
+    if (this.snapshot.running) {
+      await this.sendWhileRunning(session, requestId, prompt, finalPrompt, mode);
+      return;
+    }
     const userRow = new ChatRow();
     userRow.id = uniqueId('row');
     userRow.kind = RowKind.User;
@@ -602,12 +637,10 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     this.pendingTurns = this.pendingTurns + 1;
     this.snapshot.running = true;
     this.snapshot.stopping = false;
-    this.snapshot.queueCount = this.pendingTurns > 1 ? this.pendingTurns - 1 : 0;
     this.snapshot.streamingText = '';
     this.snapshot.reasoningText = '';
     this.emit();
     let submitted = false;
-    let contextLost = false;
     try {
       await this.ensureEventStream();
     } catch (eventError) {
@@ -620,7 +653,6 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     } catch (error) {
       const first = this.clean(errorText(error as Error));
       if (this.workerSessionGone(first)) {
-        contextLost = true;
         session.workerSessionId = '';
         this.snapshot.notice = CONTEXT_LOST;
         try {
@@ -643,12 +675,306 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     if (submitted) {
       this.snapshot.attachmentPaths = [];
       this.persistNow();
-      if (contextLost) {
-        this.emit();
-      } else {
-        this.emit();
+      await this.refreshQueueFor(session.workerSessionId);
+      this.emit();
+    }
+  }
+
+  /**
+   * Busy queue/steer submission. The transcript stays owned by the Worker: this
+   * only publishes a local echo tied to the real prompt requestId. It is
+   * retired later by a durable `source.rpcId` or an admitted user/message.
+   */
+  private async sendWhileRunning(session: SessionRecord, requestId: string, text: string,
+    finalPrompt: string, mode: string): Promise<void> {
+    const generation = this.queueGeneration;
+    const workerSessionId = session.workerSessionId;
+    const lane = mode === 'steer' ? 'steered' : 'next-turn';
+    const echo = localQueueEcho(session.workerSessionId, requestId, text, lane);
+    const echoes = this.snapshot.localQueueItems.filter(
+      (item: QueueItem) => item.promptRequestId !== requestId);
+    this.snapshot.localQueueItems = echoes.concat([echo]);
+    this.snapshot.draft = '';
+    this.snapshot.failure = '';
+    this.snapshot.notice = '';
+    this.snapshot.stopping = false;
+    if (this.snapshot.running) {
+      // A steer joins the current turn. Only a real queued turn increases the
+      // expected turn count used by artifact ranges and cancel guards.
+      if (mode !== 'steer') {
+        if (this.pendingTurns === 0) {
+          this.beginArtifacts(session);
+        }
+        this.pendingTurns = this.pendingTurns + 1;
+        if (!this.pendingOwnQueueRequestIds.includes(requestId)) {
+          this.pendingOwnQueueRequestIds.push(requestId);
+        }
       }
     }
+    if (session.title === '新会话' || session.title.length === 0) {
+      session.title = this.titleFor(text);
+      this.snapshot.title = session.title;
+    }
+    this.emit();
+    try {
+      await this.ensureEventStream();
+    } catch (eventError) {
+      this.snapshot.notice = this.uiFill('实时审批事件流不可用：{0}',
+        [this.clean(errorText(eventError as Error))]);
+    }
+    try {
+      await this.openFollow(session);
+      await this.promptOnce(requestId, session, finalPrompt, mode);
+    } catch (error) {
+      const message = this.clean(errorText(error as Error));
+      // An accepted prompt can lose its response. Durable source.rpcId is the
+      // only proof that the echo succeeded; text is never a correlation key.
+      const accepted = await this.fetchQueueProjection(workerSessionId);
+      if (!this.queueStillCurrent(generation, workerSessionId)) {
+        return;
+      }
+      if (accepted.items !== null && containsPromptRequestId(accepted.items, requestId)) {
+        this.applyQueueResult(workerSessionId, generation, accepted);
+        this.snapshot.localQueueItems = acknowledgeLocalQueuePrompt(
+          this.snapshot.localQueueItems, requestId);
+        if (mode !== 'steer') {
+          this.snapshot.attachmentPaths = [];
+        }
+        this.persistNow();
+        this.emit();
+        return;
+      }
+      // A user/message admitted the prompt while the response was in flight;
+      // the event retired this exact echo by rpcId. Do not report failure or
+      // restore a duplicate draft for a turn that already exists.
+      if (!this.hasLocalQueueRequest(requestId)) {
+        this.persistNow();
+        this.emit();
+        return;
+      }
+      this.failBusySend(text, requestId, mode, message);
+      return;
+    }
+    if (!this.queueStillCurrent(generation, workerSessionId)) {
+      return;
+    }
+    this.snapshot.localQueueItems = acknowledgeLocalQueuePrompt(this.snapshot.localQueueItems, requestId);
+    this.snapshot.attachmentPaths = [];
+    this.persistNow();
+    await this.refreshQueueFor(workerSessionId);
+    this.emit();
+  }
+
+  /**
+   * Mutate one durable next-turn row. The RPC acceptance is not success: the
+   * same sequenced projection must confirm the edit, removal or real steer.
+   */
+  async updateQueueItem(workerSessionId: string, itemId: string, action: QueueItemAction,
+    replacement?: string): Promise<void> {
+    const session = this.activeSession();
+    if (session === null || workerSessionId.length === 0 ||
+      session.workerSessionId !== workerSessionId || itemId.length === 0) {
+      return;
+    }
+    const rows = this.snapshot.queueItems;
+    if (rows === null) {
+      throw new Error(this.uiCopy('队列状态未知，不能执行队列操作。'));
+    }
+    const target = durableQueueItemById(rows, itemId);
+    if (target === null || target.busy || target.workerSessionId !== workerSessionId) {
+      return;
+    }
+    const text = replacement === undefined ? '' : replacement;
+    if (action === QueueItemAction.Edit) {
+      if (!target.canEdit || text.trim().length === 0) {
+        return;
+      }
+    } else if (action === QueueItemAction.Remove) {
+      if (!target.canRemove) {
+        return;
+      }
+    } else if (action === QueueItemAction.Steer) {
+      if (!target.canSteer) {
+        return;
+      }
+    } else {
+      return;
+    }
+    const args = encodeQueueUpdate(workerSessionId, itemId, action, text);
+    if (args === null) {
+      return;
+    }
+    const generation = this.queueGeneration;
+    const previousLane = target.lane;
+    const ownedRequestId = target.promptRequestId;
+    this.markQueueBusy(itemId, action);
+    this.emit();
+    let callFailure = '';
+    try {
+      await this.pageBridge.call('session/updateQueue', args as Object, 15000);
+    } catch (error) {
+      callFailure = this.clean(errorText(error as Error));
+    }
+    if (!this.queueStillCurrent(generation, workerSessionId)) {
+      return;
+    }
+    const fresh = await this.fetchQueueProjection(workerSessionId);
+    if (!this.queueStillCurrent(generation, workerSessionId)) {
+      return;
+    }
+    if (fresh.items === null) {
+      this.snapshot.queueItems = null;
+      this.snapshot.queueFailure = this.queueFailureText(fresh.failure);
+      this.emit();
+      if (callFailure.length > 0) {
+        throw new Error(this.uiFill('队列操作未确认：{0}', [callFailure]));
+      }
+      throw new Error(this.uiCopy('队列操作已提交，但无法重新读取队列确认结果。'));
+    }
+    this.applyQueueRead(workerSessionId, generation, fresh.items);
+    if (callFailure.length > 0) {
+      const stillThere = durableQueueItemById(this.snapshot.queueItems, itemId);
+      const targetGone = callFailure.includes('session/queue-item-not-found');
+      if (stillThere !== null) {
+        this.markQueueFailure(itemId, callFailure, action);
+        this.emit();
+        throw new Error(this.uiFill('队列操作未确认：{0}', [callFailure]));
+      }
+      if (action === QueueItemAction.Steer && callFailure.includes('session/steer-unavailable')) {
+        this.emit();
+        return;
+      }
+      // A disappeared target is the authoritative remove/admit outcome. It is
+      // not proof of an edited/steered row, so no success is published.
+      this.clearQueueRow(itemId);
+      this.emit();
+      if (!targetGone) {
+        throw new Error(this.uiFill('队列操作未确认：{0}', [callFailure]));
+      }
+      return;
+    }
+    const confirmed = queueActionConfirmed(action, itemId, previousLane, text, this.snapshot.queueItems);
+    if (!confirmed) {
+      this.markQueueFailure(itemId,
+        this.uiCopy('队列操作没有被 Worker 的 sequenced projection 确认'), action);
+      this.emit();
+      throw new Error(this.uiCopy('队列操作没有被 Worker 确认。'));
+    }
+    if (action === QueueItemAction.Remove) {
+      this.retireOwnedQueueTurn(ownedRequestId);
+    }
+    this.clearQueueActionRow(itemId);
+    this.emit();
+  }
+
+  private markQueueBusy(itemId: string, action: QueueItemAction): void {
+    const rows = this.snapshot.queueItems;
+    if (rows === null) {
+      return;
+    }
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      if (row.origin === QueueOrigin.Durable && row.id === itemId) {
+        row.busy = true;
+        row.action = action;
+        row.failure = '';
+        row.state = QueueItemState.Ready;
+      }
+    }
+  }
+
+  private markQueueFailure(itemId: string, message: string, action: QueueItemAction): void {
+    const rows = this.snapshot.queueItems;
+    if (rows === null) {
+      return;
+    }
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      if (row.origin === QueueOrigin.Durable && row.id === itemId) {
+        row.busy = false;
+        row.action = action;
+        row.failure = message;
+        row.state = QueueItemState.Failed;
+      }
+    }
+  }
+
+  private clearQueueActionRow(itemId: string): void {
+    const rows = this.snapshot.queueItems;
+    if (rows === null) {
+      return;
+    }
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      if (row.origin === QueueOrigin.Durable && row.id === itemId) {
+        row.busy = false;
+        row.action = '';
+        row.failure = '';
+        row.state = QueueItemState.Ready;
+      }
+    }
+  }
+
+  private clearQueueRow(itemId: string): void {
+    const rows = this.snapshot.queueItems;
+    if (rows === null) {
+      return;
+    }
+    const next: QueueItem[] = [];
+    for (let index = 0; index < rows.length; index++) {
+      if (rows[index].id !== itemId || rows[index].origin !== QueueOrigin.Durable) {
+        next.push(rows[index]);
+      }
+    }
+    this.snapshot.queueItems = next;
+  }
+
+  private retireOwnedQueueTurn(promptRequestId: string): void {
+    const retired = retireOwnedQueueRequest(this.pendingOwnQueueRequestIds, promptRequestId);
+    this.pendingOwnQueueRequestIds = retired.remaining;
+    if (!retired.removed || this.pendingTurns === 0) {
+      return;
+    }
+    this.pendingTurns = this.pendingTurns - 1;
+    this.snapshot.running = this.pendingTurns > 0;
+    if (this.pendingTurns === 0) {
+      this.pendingOwnQueueRequestIds = [];
+      this.endArtifacts();
+      this.closeActiveStream();
+    }
+  }
+
+  private hasLocalQueueRequest(promptRequestId: string): boolean {
+    for (let index = 0; index < this.snapshot.localQueueItems.length; index++) {
+      if (this.snapshot.localQueueItems[index].promptRequestId === promptRequestId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private failBusySend(text: string, requestId: string, mode: string, message: string): void {
+    if (mode !== 'steer') {
+      const retired = retireOwnedQueueRequest(this.pendingOwnQueueRequestIds, requestId);
+      this.pendingOwnQueueRequestIds = retired.remaining;
+      if (retired.removed && this.pendingTurns > 0) {
+        this.pendingTurns = this.pendingTurns - 1;
+        this.snapshot.running = this.pendingTurns > 0;
+      }
+    }
+    this.snapshot.localQueueItems = failLocalQueuePrompt(this.snapshot.localQueueItems, requestId, message);
+    this.snapshot.draft = text;
+    if (this.snapshot.activeSessionId.length > 0) {
+      this.drafts.set(this.snapshot.activeSessionId, text);
+    }
+    this.snapshot.failure = this.uiFill('发送失败：{0}', [message]);
+    if (this.pendingTurns === 0) {
+      this.pendingOwnQueueRequestIds = [];
+      this.endArtifacts();
+      this.closeActiveStream();
+    }
+    this.persistNow();
+    this.emit();
   }
 
   /**
@@ -704,6 +1030,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       this.snapshot.running = false;
       this.pendingTurns = 0;
       this.endArtifacts();
+      this.clearQueueState();
       this.snapshot.stopping = false;
       this.emit();
       return;
@@ -756,6 +1083,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       throw new Error(outcome.error);
     }
     this.clearVisiblePending();
+    this.clearQueueState();
     this.resetSessionControls();
     this.emit();
     this.refreshControlsQuietly();
@@ -803,6 +1131,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     this.snapshot.failure = '';
     if (previousActiveSessionId !== session.id) {
       this.clearVisiblePending();
+      this.clearQueueState();
     }
     this.resetSessionControls();
     this.emit();
@@ -1428,6 +1757,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
         this.pendingTurns = 0;
         this.clearArtifactsMeasurement();
         this.clearVisiblePending();
+        this.clearQueueState();
         this.snapshot.running = false;
         this.snapshot.stopping = false;
         this.resetSessionControls();
@@ -1449,6 +1779,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     this.pendingTurns = 0;
     this.clearArtifactsMeasurement();
     this.clearVisiblePending();
+    this.clearQueueState();
     this.snapshot.running = false;
     this.snapshot.stopping = false;
     if (this.nativeRunning) {
@@ -2231,7 +2562,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       this.endArtifacts();
       this.snapshot.running = false;
       this.snapshot.stopping = false;
-      this.snapshot.queueCount = 0;
+      this.clearQueueState();
       if (error.length > 0 && error !== 'cancelled') {
         this.snapshot.failure = this.uiFill('会话事件流中断：{0}', [this.clean(error)]);
         this.appendRow(this.errorRow(this.uiCopy('会话事件流中断'), this.clean(error)));
@@ -2298,6 +2629,135 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     const session = this.activeSession();
     const currentWorker = session === null ? '' : session.workerSessionId;
     return currentWorker === workerSessionId;
+  }
+
+  private queueStillCurrent(generation: number, workerSessionId: string): boolean {
+    if (generation !== this.queueGeneration) {
+      return false;
+    }
+    const session = this.activeSession();
+    return session !== null && session.workerSessionId === workerSessionId;
+  }
+
+  private queueFailureText(message: string): string {
+    const clean = this.clean(message);
+    if (clean.includes('migration-required')) {
+      return this.uiCopy('队列需要迁移，暂时无法读取。');
+    }
+    return this.uiFill('队列状态读取失败：{0}', [clean]);
+  }
+
+  private applyQueueRead(workerSessionId: string, generation: number, items: QueueItem[]): void {
+    if (!this.queueStillCurrent(generation, workerSessionId)) {
+      return;
+    }
+    const merged = mergeDurableQueue(this.snapshot.queueItems, items);
+    this.snapshot.queueItems = merged;
+    this.snapshot.queueFailure = '';
+    if (merged !== null) {
+      this.snapshot.localQueueItems = retireLocalQueueByDurable(this.snapshot.localQueueItems, merged);
+    }
+  }
+
+  private applyQueueResult(workerSessionId: string, generation: number,
+    result: QueueProjectionResult): void {
+    if (!this.queueStillCurrent(generation, workerSessionId)) {
+      return;
+    }
+    if (result.items === null) {
+      this.snapshot.queueItems = null;
+      this.snapshot.queueFailure = this.queueFailureText(result.failure);
+      return;
+    }
+    this.applyQueueRead(workerSessionId, generation, result.items);
+  }
+
+  private async fetchQueueProjection(workerSessionId: string): Promise<QueueProjectionResult> {
+    const result = new QueueProjectionResult();
+    if (workerSessionId.length === 0) {
+      result.items = [];
+      return result;
+    }
+    const request: Record<string, Object> = {};
+    request['sessionId'] = workerSessionId;
+    try {
+      const value = await this.pageBridge.call('session/projections',
+        new RequestWrapper(request), 5000);
+      return parseQueueProjection(workerSessionId, this.catalogRoot(value));
+    } catch (error) {
+      result.items = null;
+      result.failure = this.clean(errorText(error as Error));
+      return result;
+    }
+  }
+
+  private async refreshQueueFor(workerSessionId: string): Promise<void> {
+    const generation = this.queueGeneration;
+    if (workerSessionId.length === 0) {
+      if (this.queueStillCurrent(generation, workerSessionId)) {
+        this.snapshot.queueItems = [];
+        this.snapshot.queueFailure = '';
+        this.snapshot.localQueueItems = [];
+      }
+      return;
+    }
+    const result = await this.fetchQueueProjection(workerSessionId);
+    this.applyQueueResult(workerSessionId, generation, result);
+  }
+
+  /**
+   * Event-driven refresh only: session open, prompt ack, user admission and
+   * real turn facts. Coalesce overlapping reads instead of polling.
+   */
+  private refreshQueueQuietly(): void {
+    const session = this.activeSession();
+    if (session === null) {
+      return;
+    }
+    const workerSessionId = session.workerSessionId;
+    if (workerSessionId.length === 0) {
+      if (this.queueStillCurrent(this.queueGeneration, workerSessionId)) {
+        this.snapshot.queueItems = [];
+        this.snapshot.queueFailure = '';
+        this.emit();
+      }
+      return;
+    }
+    if (this.queueRefreshInFlight) {
+      this.queueRefreshQueued = true;
+      return;
+    }
+    this.queueRefreshInFlight = true;
+    const generation = this.queueGeneration;
+    this.fetchQueueProjection(workerSessionId).then((result: QueueProjectionResult) => {
+      this.queueRefreshInFlight = false;
+      this.applyQueueResult(workerSessionId, generation, result);
+      this.emit();
+      if (this.queueRefreshQueued) {
+        this.queueRefreshQueued = false;
+        this.refreshQueueQuietly();
+      }
+    }, (error: Error) => {
+      this.queueRefreshInFlight = false;
+      if (this.queueStillCurrent(generation, workerSessionId)) {
+        this.snapshot.queueItems = null;
+        this.snapshot.queueFailure = this.uiFill('队列状态读取失败：{0}',
+          [this.clean(errorText(error))]);
+      }
+      this.emit();
+      if (this.queueRefreshQueued) {
+        this.queueRefreshQueued = false;
+        this.refreshQueueQuietly();
+      }
+    });
+  }
+
+  private clearQueueState(): void {
+    this.queueGeneration = this.queueGeneration + 1;
+    this.snapshot.queueItems = null;
+    this.snapshot.localQueueItems = [];
+    this.snapshot.queueFailure = '';
+    this.pendingOwnQueueRequestIds = [];
   }
 
   private catalogRoot(value: Object): Record<string, Object> | null {
@@ -2410,6 +2870,9 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     if (workerSessionId.length === 0) {
       this.snapshot.modelSelection = new SessionModelSelection();
       this.snapshot.currentPermission = '';
+      this.snapshot.queueItems = [];
+      this.snapshot.localQueueItems = [];
+      this.snapshot.queueFailure = '';
       this.emit();
       return true;
     }
@@ -2434,9 +2897,13 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     if (projectionRoot === null) {
       this.projectionFailure = `会话状态读取失败：${projectionFailure}`;
       this.snapshot.failure = this.projectionFailure;
+      this.snapshot.queueItems = null;
+      this.snapshot.queueFailure = this.queueFailureText(projectionFailure);
       this.emit();
       return false;
     }
+    const queue = parseQueueProjection(workerSessionId, projectionRoot);
+    this.applyQueueResult(workerSessionId, this.queueGeneration, queue);
     this.snapshot.modelSelection = selectionFromProjections(projectionRoot);
     this.snapshot.currentPermission = permissionFromProjections(projectionRoot);
     // Metrics are a straight read of the Worker's own projection units. A unit
@@ -2976,7 +3443,6 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
   private failSend(text: string, message: string): void {
     this.pendingTurns = this.pendingTurns > 0 ? this.pendingTurns - 1 : 0;
     this.snapshot.running = this.pendingTurns > 0;
-    this.snapshot.queueCount = this.pendingTurns > 1 ? this.pendingTurns - 1 : 0;
     this.snapshot.stopping = false;
     this.snapshot.draft = text;
     if (this.snapshot.activeSessionId.length > 0) {
@@ -2985,6 +3451,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     this.snapshot.failure = this.uiFill('发送失败：{0}', [message]);
     this.appendRow(this.errorRow(this.uiCopy('发送失败'), message));
     if (this.pendingTurns === 0) {
+      this.pendingOwnQueueRequestIds = [];
       this.endArtifacts();
       this.closeActiveStream();
     }
@@ -3301,6 +3768,19 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       // mergeTranscript adopts an optimistic user row and updates the tool row
       // a prior call already created.
       const projected = projectEvent(event, workerSessionId);
+      if (type === 'user/message') {
+        const admitted = admittedUserPromptRequestId(event);
+        if (admitted.length > 0) {
+          const beforeLocal = this.snapshot.localQueueItems.length;
+          this.snapshot.localQueueItems = retireLocalQueuePrompt(
+            this.snapshot.localQueueItems, admitted);
+          const retired = retireOwnedQueueRequest(this.pendingOwnQueueRequestIds, admitted);
+          this.pendingOwnQueueRequestIds = retired.remaining;
+          if (beforeLocal !== this.snapshot.localQueueItems.length || retired.removed) {
+            this.refreshQueueQuietly();
+          }
+        }
+      }
       if (this.snapshot.debuggable && (type === 'tool/call' || type === 'tool/result')) {
         const data = asRecord(event['data']);
         const message = asRecord(data === null ? null : data['message']);
@@ -3324,6 +3804,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
         this.pendingTurns = Math.max(this.pendingTurns, 1);
       }
       this.emit();
+      this.refreshQueueQuietly();
       return;
     }
     if (type === 'turn/end') {
@@ -3347,6 +3828,8 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       this.emit();
       if (this.pendingTurns === 0) {
         this.refreshControlsQuietly();
+      } else {
+        this.refreshQueueQuietly();
       }
       return;
     }
@@ -3454,8 +3937,8 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     this.pendingTurns = this.pendingTurns > 0 ? this.pendingTurns - 1 : 0;
     this.snapshot.running = this.pendingTurns > 0;
     this.snapshot.stopping = false;
-    this.snapshot.queueCount = this.pendingTurns > 1 ? this.pendingTurns - 1 : 0;
     if (this.pendingTurns === 0) {
+      this.pendingOwnQueueRequestIds = [];
       this.endArtifacts();
     }
     if (this.stopTimer >= 0) {
@@ -3586,7 +4069,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       this.snapshot.running = false;
       this.pendingTurns = 0;
       this.endArtifacts();
-      this.snapshot.queueCount = 0;
+      this.clearQueueState();
       this.snapshot.failure = this.uiCopy('取消请求已发送，但运行时未在 10 秒内确认本轮结束。');
       this.appendRow(this.errorRow(this.uiCopy('取消未确认'), 'Worker 没有报告 turn/end；本地界面已停止等待。'));
       this.closeActiveStream();

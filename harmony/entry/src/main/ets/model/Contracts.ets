@@ -18,8 +18,22 @@ import {
   TokenUsageDTO,
   TurnOutcome
 } from './ChatMetrics';
+import {
+  QueueItem,
+  QueueItemAction,
+  QueueItemState,
+  QueueOrigin
+} from './QueueModel';
 
-export { ProviderModelRecord, ProviderProfileRecord, PendingQuestion };
+export {
+  ProviderModelRecord,
+  ProviderProfileRecord,
+  PendingQuestion,
+  QueueItem,
+  QueueItemAction,
+  QueueItemState,
+  QueueOrigin
+};
 export enum Page {
   Chat = 'Chat',
   Sessions = 'Sessions',
@@ -270,7 +284,12 @@ export class ShellSnapshot {
   stopping: boolean = false;
   streamingText: string = '';
   reasoningText: string = '';
-  queueCount: number = 0;
+  // Durable DSH inbox rows. `null` means the sequenced projection was not read
+  // or was invalid/migration-required; `[]` is a confirmed empty queue. Display
+  // must never derive a queue count from local turn bookkeeping.
+  queueItems: QueueItem[] | null = null;
+  localQueueItems: QueueItem[] = [];
+  queueFailure: string = '';
   settings: Settings = new Settings();
   pending: PendingRequest[] = [];
   filesPhase: LoadPhase = LoadPhase.Unknown;
@@ -322,6 +341,12 @@ export interface ShellActions {
   clearNotice(): void;
   setDraft(text: string): void;
   send(text: string): Promise<void>;
+  /**
+   * Mutates one durable `next-turn` row and publishes success only after a
+   * fresh sequenced projection confirms the edit/remove/real steer.
+   */
+  updateQueueItem(workerSessionId: string, itemId: string, action: QueueItemAction,
+    replacement?: string): Promise<void>;
   stopTurn(): Promise<void>;
   newSession(folderId?: string): Promise<void>;
   openSession(id: string): Promise<void>;

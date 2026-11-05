@@ -68,6 +68,7 @@ export struct SettingsIndexView {
     if (kind === 'appearance') { next.theme = value; }
     if (kind === 'language') { next.language = value; }
     if (kind === 'permission') { next.permission = value; }
+    if (kind === 'busyEnter') { next.busyEnter = value; }
     this.menuKind = '';
     this.run(this.requireActions().saveSettings(next));
   }
@@ -76,6 +77,7 @@ export struct SettingsIndexView {
     if (this.menuKind === 'appearance') { return Copy.tr('外观'); }
     if (this.menuKind === 'language') { return Copy.tr('语言'); }
     if (this.menuKind === 'permission') { return Copy.tr('新会话默认权限'); }
+    if (this.menuKind === 'busyEnter') { return Copy.tr('繁忙时的发送行为'); }
     return '';
   }
 
@@ -83,6 +85,7 @@ export struct SettingsIndexView {
     if (this.menuKind === 'appearance') { return this.snapshot.settings.theme === value; }
     if (this.menuKind === 'language') { return this.snapshot.settings.language === value; }
     if (this.menuKind === 'permission') { return this.snapshot.settings.permission === value; }
+    if (this.menuKind === 'busyEnter') { return this.snapshot.settings.busyEnter === value; }
     return false;
   }
 
@@ -127,6 +130,9 @@ export struct SettingsIndexView {
             this.MenuOption(Copy.tr('跟随系统'), 'system')
             this.MenuOption(Copy.tr('中文'), 'zh')
             this.MenuOption('English', 'en')
+          } else if (this.menuKind === 'busyEnter') {
+            this.MenuOption(Copy.tr('排到下一轮'), 'queue')
+            this.MenuOption(Copy.tr('补充当前任务'), 'steer')
           } else {
             this.MenuOption(Copy.tr('仅可查看'), 'read-only')
             this.MenuOption(Copy.tr('工作区内修改'), 'workspace-write')
@@ -260,9 +266,17 @@ export struct SettingsIndexView {
       })
       NavRow({
         label: Copy.tr('快捷键'), glyph: 'COMMAND', dark: this.dark, rowId: 'settings.row.shortcuts',
-        showDivider: false,
+        showDivider: true,
         onTap: () => {
           this.requireActions().navigate(Page.Shortcuts);
+        }
+      })
+      NavRow({
+        label: Copy.tr('繁忙时的发送行为'),
+        value: Copy.tr(this.snapshot.settings.busyEnter === 'steer' ? '补充当前任务' : '排到下一轮'),
+        glyph: 'LIST', dark: this.dark, rowId: 'settings.row.busyEnter', showDivider: false,
+        onTap: () => {
+          this.menuKind = 'busyEnter';
         }
       })
     }

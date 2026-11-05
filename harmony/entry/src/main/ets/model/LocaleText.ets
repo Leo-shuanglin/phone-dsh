@@ -12,6 +12,13 @@ export class LocaleText {
   static readonly EN: string = 'en';
 
   private static readonly EN_BY_ZH: Record<string, string> = {
+    "队列状态未知，不能执行队列操作。": "Queue state is unknown; queue actions are unavailable.",
+    "队列操作未确认：{0}": "Queue change was not confirmed: {0}",
+    "队列操作已提交，但无法重新读取队列确认结果。": "The queue change was submitted, but its result could not be read back.",
+    "队列操作没有被 Worker 的 sequenced projection 确认": "The Worker projection did not confirm the queue change",
+    "队列操作没有被 Worker 确认。": "The Worker did not confirm the queue change.",
+    "队列需要迁移，暂时无法读取。": "The queue needs migration and cannot be read yet.",
+    "队列状态读取失败：{0}": "Could not read the queue: {0}",
     "关闭自动换行": "Disable wrapping",
     "自动换行": "Wrap lines",
     "关闭换行": "Disable wrapping",
@@ -677,6 +684,9 @@ export class LocaleText {
       'Message or create a task; / for commands, @ for files or chats',
     '补充当前任务…': 'Add to the current task…',
     '排入下一轮…': 'Queue for the next turn…',
+    '繁忙时的发送行为': 'Send while busy',
+    '排到下一轮': 'Queue for the next turn',
+    '补充当前任务': 'Add to the current task',
     '默认': 'Default',
     '导出对话记录': 'Export conversation',
     '打开会话列表': 'Open sessions',

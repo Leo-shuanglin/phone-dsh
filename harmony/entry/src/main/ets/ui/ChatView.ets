@@ -5,7 +5,7 @@ import { ImageLoadControl } from '../model/ImageLoadControl';
 
 import {
   ShellSnapshot, ShellActions, ChatRow, RowKind, Page, PendingRequest,
-  EnginePhase, ImageBytes, LoadPhase
+  EnginePhase, ImageBytes, LoadPhase, QueueItem, QueueItemAction, QueueItemState, QueueOrigin
 } from '../model/Contracts';
 import {
   ComposerReferenceMenu,
@@ -87,6 +87,10 @@ export struct ChatView {
   @State questionDrafts: QuestionDraft[] = [];
   @State questionError: string = '';
   @State questionSubmittingId: string = '';
+  // Queue edit is a local overlay; the row itself is the durable identity.
+  @State queueEditId: string = '';
+  @State queueEditWorkerId: string = '';
+  @State queueEditText: string = '';
   @State expandedTurns: string[] = [];
   // One renderer-owned binding per stable row id. The observed objects live
   // outside the data-only snapshot; ForEach iterates these wrappers.
@@ -206,6 +210,9 @@ export struct ChatView {
       this.commandOpen = false;
     }
     this.syncQuestionState();
+    if (this.queueEditId.length > 0 && this.findQueueItem(this.queueEditId) === null) {
+      this.cancelQueueEdit();
+    }
   }
 
   private availableCommands(): ComposerCommand[] {
@@ -317,6 +324,83 @@ export struct ChatView {
       return Copy.tr('补充当前任务…');
     }
     return Copy.tr('排入下一轮…');
+  }
+
+  /** Local echoes plus the authoritative durable next-turn rows. */
+  private queueRows(): QueueItem[] {
+    const durable: QueueItem[] = this.snapshot.queueItems === null ? [] : this.snapshot.queueItems;
+    return this.snapshot.localQueueItems.concat(durable);
+  }
+
+  private queueVisible(): boolean {
+    return this.queueRows().length > 0 || this.snapshot.queueFailure.length > 0;
+  }
+
+  private queueKey(item: QueueItem): string {
+    return item.origin + ':' + item.id;
+  }
+
+  private queueFirstLine(item: QueueItem): string {
+    const newline: number = item.text.indexOf('\n');
+    return newline >= 0 ? item.text.substring(0, newline) : item.text;
+  }
+
+  private queueStateLabel(item: QueueItem): string {
+    if (item.busy) {
+      return Copy.tr('提交') + '…';
+    }
+    if (item.state === QueueItemState.Failed) {
+      return Copy.tr('失败');
+    }
+    if (item.state === QueueItemState.Pending) {
+      return Copy.tr('排队中');
+    }
+    return Copy.tr('已排队');
+  }
+
+  private findQueueItem(itemId: string): QueueItem | null {
+    const rows = this.queueRows();
+    for (let index: number = 0; index < rows.length; index++) {
+      if (rows[index].id === itemId && rows[index].origin === QueueOrigin.Durable) {
+        return rows[index];
+      }
+    }
+    return null;
+  }
+
+  private openQueueEdit(item: QueueItem): void {
+    if (item.origin !== QueueOrigin.Durable || item.busy || !item.canEdit) {
+      return;
+    }
+    this.queueEditId = item.id;
+    this.queueEditWorkerId = item.workerSessionId;
+    this.queueEditText = item.text;
+  }
+
+  private cancelQueueEdit(): void {
+    this.queueEditId = '';
+    this.queueEditWorkerId = '';
+    this.queueEditText = '';
+  }
+
+  private saveQueueEdit(): void {
+    const item = this.findQueueItem(this.queueEditId);
+    if (item === null || item.workerSessionId !== this.queueEditWorkerId ||
+      item.busy || !item.canEdit || this.queueEditText.trim().length === 0) {
+      return;
+    }
+    const replacement: string = this.queueEditText;
+    this.cancelQueueEdit();
+    this.run(this.requireActions().updateQueueItem(
+      item.workerSessionId, item.id, QueueItemAction.Edit, replacement));
+  }
+
+  private removeQueueItem(item: QueueItem): void {
+    if (item.origin !== QueueOrigin.Durable || item.busy || !item.canRemove) {
+      return;
+    }
+    this.run(this.requireActions().updateQueueItem(
+      item.workerSessionId, item.id, QueueItemAction.Remove));
   }
 
   private currentModel(): string {
@@ -1923,6 +2007,152 @@ export struct ChatView {
   }
 
   @Builder
+  QueueDock() {
+    Column() {
+      if (this.snapshot.queueFailure.length > 0) {
+        Text(this.snapshot.queueFailure)
+          .fontSize(Metrics.captionSize)
+          .fontColor(this.pal().sessionDanger)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .padding({ left: 4, right: 4 })
+          .id('chat.queue.failure')
+      }
+      ForEach(this.queueRows(), (item: QueueItem) => {
+        this.QueueRow(item)
+      })
+    }
+    .width('100%')
+    .padding({ left: 4, right: 4, bottom: 6 })
+  }
+
+  @Builder
+  QueueRow(item: QueueItem) {
+    Column() {
+      Row() {
+        Text(this.queueFirstLine(item))
+          .fontSize(Metrics.captionSize)
+          .fontColor(item.state === QueueItemState.Failed
+            ? this.pal().sessionDanger : this.pal().textSecondary)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        Text(this.queueStateLabel(item))
+          .fontSize(Metrics.captionSize)
+          .fontColor(item.state === QueueItemState.Failed
+            ? this.pal().sessionDanger : this.pal().textTertiary)
+          .margin({ left: 6 })
+        if (item.origin === QueueOrigin.Durable && !item.busy) {
+          if (item.canEdit) {
+            NativeIcon({ name: Copy.tr('编辑'), symbol: 'PENCIL', dark: this.dark, iconSize: 15 })
+              .width(28)
+              .height(28)
+              .accessibilityText(Copy.tr('编辑'))
+              .id('chat.queue.edit.' + this.queueKey(item))
+              .onClick(() => {
+                this.openQueueEdit(item);
+              })
+          }
+          if (item.canRemove) {
+            NativeIcon({ name: Copy.tr('删除'), symbol: 'TRASH', dark: this.dark, iconSize: 15 })
+              .width(28)
+              .height(28)
+              .accessibilityText(Copy.tr('删除'))
+              .id('chat.queue.remove.' + this.queueKey(item))
+              .onClick(() => {
+                this.removeQueueItem(item);
+              })
+          }
+        }
+      }
+      .width('100%')
+      .height(30)
+      .id('chat.queue.row.' + this.queueKey(item))
+      if (item.failure.length > 0) {
+        Text(item.failure)
+          .fontSize(Metrics.captionSize)
+          .fontColor(this.pal().sessionDanger)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .padding({ left: 2 })
+      }
+    }
+    .width('100%')
+  }
+
+  @Builder
+  QueueEditOverlay() {
+    Stack({ alignContent: Alignment.Center }) {
+      Text('')
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#66000000')
+        .id('chat.queue.edit.scrim')
+        .onClick(() => {
+          this.cancelQueueEdit();
+        })
+      Column() {
+        Text(Copy.tr('编辑'))
+          .fontSize(Metrics.bodySize)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.pal().textPrimary)
+        TextInput({ text: this.queueEditText, placeholder: Copy.tr('编辑') })
+          .fontSize(Metrics.bodySize)
+          .fontColor(this.pal().textPrimary)
+          .backgroundColor(this.pal().sessionSelector)
+          .borderRadius(10)
+          .padding({ left: 10, right: 10 })
+          .margin({ top: 10 })
+          .id('chat.queue.edit.field')
+          .onChange((value: string) => {
+            this.queueEditText = value;
+          })
+        Row() {
+          Text(Copy.tr('取消'))
+            .fontSize(Metrics.bodySize)
+            .fontColor(this.pal().textSecondary)
+            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+            .id('chat.queue.edit.cancel')
+            .onClick(() => {
+              this.cancelQueueEdit();
+            })
+          Text(Copy.tr('保存'))
+            .fontSize(Metrics.bodySize)
+            .fontColor(this.queueEditText.trim().length > 0
+              ? this.pal().sessionAccent : this.pal().textTertiary)
+            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+            .id('chat.queue.edit.save')
+            .onClick(() => {
+              this.saveQueueEdit();
+            })
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.End)
+        .margin({ top: 8 })
+      }
+      .width('84%')
+      .padding(16)
+      .backgroundColor(this.pal().surface)
+      .borderRadius(14)
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  private submitComposerDraft(): void {
+    if (this.draft.trim().length === 0 || this.snapshot.stopping) {
+      return;
+    }
+    this.referenceOpen = false;
+    this.referenceRequested = false;
+    this.followTail = true;
+    this.scheduleTail();
+    this.run(this.requireActions().send(this.draft));
+  }
+
+  @Builder
   ComposerDock() {
     Column() {
       if (this.actionError.length > 0) {
@@ -1941,11 +2171,8 @@ export struct ChatView {
         this.CommandMenu()
       }
       this.Attachments()
-      if (this.snapshot.queueCount > 0) {
-        Text(Copy.fill('排队中 {0} 条', [this.snapshot.queueCount.toString()]))
-          .fontSize(Metrics.captionSize)
-          .fontColor(this.pal().textSecondary)
-          .padding({ left: 4, bottom: 6 })
+      if (this.queueVisible()) {
+        this.QueueDock()
       }
       if (this.referenceOpen) {
         this.ReferenceMenu()
@@ -1971,6 +2198,8 @@ export struct ChatView {
           .margin({ top: 4 })
           .constraintSize({ minHeight: 44, maxHeight: 160 })
           .id('chat.composer.input')
+          .enterKeyType(EnterKeyType.Send)
+          .onSubmit(() => { this.submitComposerDraft(); })
           .onChange((value: string) => {
             this.draft = value;
             this.requireActions().setDraft(value);
@@ -2081,7 +2310,8 @@ export struct ChatView {
                   this.run(this.requireActions().stopTurn());
                 }
               })
-          } else {
+          }
+          if (!this.snapshot.running || this.draft.trim().length > 0) {
             NativeIcon({ name: '发送消息', symbol: 'SEND', dark: !this.dark, iconSize: 20 })
               .width(Metrics.sendButton)
               .height(Metrics.sendButton)
@@ -2091,13 +2321,7 @@ export struct ChatView {
               .accessibilityText(Copy.tr('发送消息'))
               .id('chat.composer.send')
               .onClick(() => {
-                if (this.draft.length > 0) {
-                  this.referenceOpen = false;
-                  this.referenceRequested = false;
-                  this.followTail = true;
-                  this.scheduleTail();
-                  this.run(this.requireActions().send(this.draft));
-                }
+                this.submitComposerDraft();
               })
           }
         }
@@ -2241,6 +2465,9 @@ export struct ChatView {
             this.headerMenuOpen = false;
           })
         this.HeaderMenuPanel()
+      }
+      if (this.queueEditId.length > 0) {
+        this.QueueEditOverlay()
       }
     }
     .width('100%')
