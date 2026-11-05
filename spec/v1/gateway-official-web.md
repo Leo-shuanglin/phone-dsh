@@ -12,6 +12,13 @@ It grants no other origin, path, method, URL alias or redirect. The host strips 
 credentials, then injects the saved model key as Bearer authentication regardless of
 the model encoder. Each request resolves the key again. A missing or unreadable key
 fails before contacting the upstream. Responses must not expose the key.
+In a cookie-authenticated phone Worker launch, the bridge uses the existing
+`PDSH_DSH_LAUNCH_TOKEN` as the bearer on `/v1/http` when there is no explicit
+channel or exec-bridge token. This fallback is scoped to the two canonical URLs
+above when the official Search API is selected. Other requests keep their existing
+transport. The bridge must not send those two requests directly if the host
+route or launch bearer is unavailable.
+
 The [shared route cases](golden/gateway/official-deepseek-web/cases.json) exercise
 the model base and request scope rules on both hosts. The existing gateway schema,
 `/v1/http` envelope, failure vocabulary and general redirect rules are unchanged.
