@@ -111,6 +111,7 @@ function hostModule(name, imports = {}) {
 
 const remoteKit = asModule(`
   export const outbound = [];
+  export const responses = [];
   export const rcp = {
     Request: class {
       constructor(url, method, headers, body) { Object.assign(this, { url, method, headers, body }); }
@@ -119,6 +120,9 @@ const remoteKit = asModule(`
       return {
         async fetch(request) {
           outbound.push({ request, requestConfiguration });
+          const chunks = responses.shift() ?? [];
+          const events = requestConfiguration.tracing.httpEventsHandler;
+          for (const chunk of chunks) events.onDataReceive(new TextEncoder().encode(chunk).buffer);
           return { statusCode: 200, headers: { 'content-type': 'application/json' } };
         },
         close() {},
@@ -127,7 +131,7 @@ const remoteKit = asModule(`
     },
   };
 `);
-const { outbound } = await import(remoteKit);
+const { outbound, responses } = await import(remoteKit);
 const { HostHttpProxy } = await import(hostModule('HostHttpProxy', {
   '@kit.NetworkKit': asModule('export const http = {};'),
   '@kit.RemoteCommunicationKit': remoteKit,
@@ -186,6 +190,13 @@ try {
   await request(100, 'POST', canonical[0]);
   assert.equal(outbound.length, 2);
   assert.ok(replies.some(reply => reply.id === 100 && reply.status === 401));
+
+  key = 'fixture-model-key';
+  responses.push(['fixture-model-', 'key']);
+  await request(101, 'POST', canonical[1]);
+  assert.equal(outbound.length, 3);
+  assert.ok(replies.some(reply => reply.id === 101 && reply.status === 502));
+  assert.ok(!replies.some(reply => reply.id === 101 && reply.status === 200));
 } finally {
   proxy.dispose();
 }
