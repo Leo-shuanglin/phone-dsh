@@ -21,8 +21,8 @@ A route is accepted only after both emulators show the matching page and its act
 | Settings | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
 | ModelProvider | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
 | WebSearch | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Mcp | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| McpEditor | PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Mcp | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
+| McpEditor | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
 | Runtime | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
 | Egress | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
 | Workbench | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
@@ -41,8 +41,8 @@ A route is accepted only after both emulators show the matching page and its act
 | ArchivedSessions | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
 | About | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
 | Licenses | Navigation observed on both; parity PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Preview | PENDING | Native route screenshot, actual data state, actions and back navigation |
-| Probes | PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Preview | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
+| Probes | Harmony navigation observed; Android PENDING | Native route screenshot, actual data state, actions and back navigation |
 
 ## Interaction coverage
 
@@ -51,7 +51,7 @@ A route is accepted only after both emulators show the matching page and its act
 | Model/tool/stop/cold recovery | Prior Harmony real-model proofs in VERIFICATION.md | Android real model reply passed; paired tool/stop/recovery still PENDING |
 | Structured questions | Old HAP reproduced first-question-only failure; live model read back first=A1 and second=X2,Y2 after routing fix | Harmony PASS; Android comparison PENDING |
 | Rich text code, tables and math | Both rendered RICH8433 code and table cards. Harmony copy feedback, wrap, expand and collapse were observed. A real Harmony reply flowed inline fractions and superscripts with text and rendered a display matrix again after reinstall/relaunch. | Android header regression fixed in Compose; paired final captures, invalid TeX and streaming interaction pending |
-| Queue, steer, remove and approvals | Harmony read back three durable items during a live Bash turn, removed the middle item, edited another without changing its ID, and verified file side effects after the queue drained. A busy steer changed the live assistant reply; the turn returned to idle with no queued item. | Harmony queue and busy steer PASS; Android queue drain and removal PASS. Same-run Android edit, paired steer and approvals PENDING |
+| Queue, steer, remove and approvals | Harmony read back three durable items during a live Bash turn, removed the middle item, edited another without changing its ID, and verified file side effects after the queue drained. A busy steer changed the live assistant reply; the turn returned to idle with no queued item. | Harmony queue and busy steer PASS; Android queue drain and removal PASS. Android edit and cold restore PASS in a separate run; paired steer and approvals PENDING |
 | Files, import/export, resource/image viewer | Basic Harmony read/write and binary cold proof already recorded | PENDING complete type/action matrix |
 | Settings/provider/automation/folders | Prior Harmony CRUD/readback/restoration proved | PENDING Android matched run |
 | Background/Ubuntu/device/hardware | Android/Harmony platform semantics differ | PENDING actual capability/constraint evidence |
@@ -74,4 +74,6 @@ Layout checkpoint: 19 Android Compose tests pass. The two new tests reproduce th
 
 Settings index: [before Harmony](parity/before/harmony-settings-index.png), [after Harmony](parity/checkpoint/harmony-settings-index.png), and [Android reference](parity/checkpoint/android-settings-index.png) are actual 420 dpi captures. A center-column pixel scan measured the first card-to-card gap as 105px before, 194px after and 205px on Android. Settings language changed to English and was restored to Chinese on the new HAP. The top offset, native glyph and OS permission facts still differ. The Android folders page disclosed that this host does not implement create/switch/delete; the Harmony proof in VERIFICATION.md covers its own CRUD. No paired navigation result counts as full parity.
 
-Android queue observation: the original APK stopped following at the first turn end, leaving a stale queue after three submissions. The new runner keeps the same follow until the public live session summary confirms idle and its inbox watermark has been read. On the API35 emulator, an ordinary real model round returned to idle. A long Bash turn then accepted three entries, the middle entry was removed, and one follow recorded three real `turn_ended` events (initial plus two queued) before the composer returned to idle with an empty queue. Editing was read back in an earlier candidate, but this final run did not submit its incomplete edit input. These are separate observations. The 34 runner and chat surface JVM tests pass, including a regression that fails before the fix, a stale projection and a repeated user message with distinct request IDs.
+Android queue observation: the original APK stopped following at the first turn end, leaving a stale queue after three submissions. The new runner keeps the same follow until the public live session summary confirms idle and its inbox watermark has been read. On the API35 emulator, an ordinary real model round returned to idle. A long Bash turn then accepted three entries, the middle entry was removed, and one follow recorded three real `turn_ended` events (initial plus two queued) before the composer returned to idle with an empty queue. A separate run on the same APK replaced the queued prompt, read the changed item back, observed the real assistant reply `D8580`, and recovered that reply with an idle, empty queue after force-stop and cold launch. The 34 runner and chat surface JVM tests pass, including a regression that fails before the fix, a stale projection and a repeated user message with distinct request IDs.
+
+Navigation checkpoint: 29 of 31 Harmony routes were opened on the API20 emulator; 15 routes were observed on both platforms. This counts page visits, not parity. The Harmony MCP editor was visibly read-only. Preview displayed the real `queue-8450-edited.txt` bytes, including the terminating newline. WebSearch and DeviceSession remain without a successful current Harmony route visit; DeviceSession requires a connector the native host does not provide.
