@@ -45,6 +45,7 @@ export class Palette {
   get pageDanger(): string { return this.dark ? '#F25A5A' : '#C0392B'; }
   get sessionSelector(): string { return this.dark ? '#353638' : '#EFEFEF'; }
   get sessionCode(): string { return this.dark ? '#1B1B1E' : '#FFFFFF'; }
+  get sessionCodeBanner(): string { return this.dark ? '#232325' : '#EFEFEF'; }
   get sessionInlineCode(): string { return this.dark ? '#2A2A2C' : '#EFEFEF'; }
   get scrim(): string { return '#48000000'; }
 }

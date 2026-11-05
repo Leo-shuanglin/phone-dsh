@@ -47,6 +47,11 @@ import {
   TurnOutcome
 } from '../model/ChatMetrics';
 import {
+  QuestionOutcome,
+  buildQuestionOutcome,
+  parseQuestionItems
+} from '../model/QuestionAnswers';
+import {
   LegacyProvider,
   PROVIDER_LAUNCH_FILE,
   ProviderProfilesState,
@@ -261,21 +266,6 @@ interface PermissionOutcome {
   value: string;
 }
 
-interface QuestionAnswer {
-  id: string;
-  selected: string[];
-  custom?: string;
-}
-
-interface QuestionAnswers {
-  answers: QuestionAnswer[];
-}
-
-interface QuestionOutcome {
-  kind: string;
-  value: QuestionAnswers;
-}
-
 const CONFIG_SPECS: ConfigSpec[] = [
   new ConfigSpec('agent-loop', 'maxParallelToolCalls', 'number'),
   new ConfigSpec('subagent', 'maxDepth', 'number'),
@@ -331,6 +321,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
   private followWaiters: Map<string, () => void> = new Map();
   private followSeen: Set<string> = new Set();
   private pendingMeta: Map<string, PendingMeta> = new Map();
+  private answeringRequests: Map<string, boolean> = new Map();
   private itemMeta: Map<string, ItemMeta> = new Map();
   private automationRecords: Map<string, AutomationSchedule> = new Map();
   private modelChoices: string[] = [];
@@ -764,6 +755,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       this.emit();
       throw new Error(outcome.error);
     }
+    this.clearVisiblePending();
     this.resetSessionControls();
     this.emit();
     this.refreshControlsQuietly();
@@ -809,6 +801,9 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       throw new Error(outcome.error);
     }
     this.snapshot.failure = '';
+    if (previousActiveSessionId !== session.id) {
+      this.clearVisiblePending();
+    }
     this.resetSessionControls();
     this.emit();
     this.refreshControlsQuietly();
@@ -1432,6 +1427,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
         this.closeAllStreams();
         this.pendingTurns = 0;
         this.clearArtifactsMeasurement();
+        this.clearVisiblePending();
         this.snapshot.running = false;
         this.snapshot.stopping = false;
         this.resetSessionControls();
@@ -1452,6 +1448,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     this.eventsReady = false;
     this.pendingTurns = 0;
     this.clearArtifactsMeasurement();
+    this.clearVisiblePending();
     this.snapshot.running = false;
     this.snapshot.stopping = false;
     if (this.nativeRunning) {
@@ -1972,24 +1969,41 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       this.emit();
       return;
     }
-    let outcome: Object;
-    if (meta.eventKind === 'user-questions/request') {
-      outcome = this.questionOutcome(meta, answer) as Object;
-    } else {
-      const allowed = answer === 'allow' || answer === 'approved' ||
-        answer.includes('允许') || answer.toLowerCase().includes('allow');
-      const permission: PermissionOutcome = { kind: 'result', value: allowed ? 'allowed-once' : 'rejected' };
-      outcome = permission as Object;
+    if (this.answeringRequests.has(id)) {
+      return;
     }
-    const args: EventAnswerArgs = { clientId: meta.clientId, eventId: meta.id, outcome: outcome };
+    this.answeringRequests.set(id, true);
     try {
-      await this.pageBridge.call('$events/result', args as Object, 15000);
-      this.removePending(id);
-      this.snapshot.notice = this.uiCopy('已提交回答。');
-      this.snapshot.failure = '';
-    } catch (error) {
-      this.snapshot.failure = this.uiFill('回答未送达：{0}', [this.clean(errorText(error as Error))]);
+      let outcome: Object;
+      if (meta.eventKind === 'user-questions/request') {
+        outcome = this.questionOutcome(meta, answer) as Object;
+      } else {
+        const allowed = answer === 'allow' || answer === 'approved' ||
+          answer.includes('允许') || answer.toLowerCase().includes('allow');
+        const permission: PermissionOutcome = { kind: 'result', value: allowed ? 'allowed-once' : 'rejected' };
+        outcome = permission as Object;
+      }
+      const args: EventAnswerArgs = { clientId: meta.clientId, eventId: meta.id, outcome: outcome };
+      try {
+        await this.pageBridge.call('$events/result', args as Object, 15000);
+        this.removePending(id);
+        this.snapshot.notice = this.uiCopy('已提交回答。');
+        this.snapshot.failure = '';
+      } catch (error) {
+        this.snapshot.failure = this.uiFill('回答未送达：{0}', [this.clean(errorText(error as Error))]);
+      }
+    } finally {
+      this.answeringRequests.delete(id);
     }
+    this.emit();
+  }
+
+  /**
+   * Android dismiss only hides the card. The responder and event stay live, so
+   * this method never sends `$events/result` and never mutates the answer.
+   */
+  async dismissPending(id: string): Promise<void> {
+    this.hidePending(id);
     this.emit();
   }
 
@@ -3143,6 +3157,16 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
     pending.title = this.pendingTitle(body, eventKind);
     pending.detail = this.pendingDetail(body, eventKind);
     pending.choices = this.pendingChoices(body, eventKind);
+    if (pending.kind === 'question') {
+      try {
+        pending.questions = parseQuestionItems(body);
+      } catch (error) {
+        this.pendingMeta.delete(eventId);
+        this.snapshot.failure = this.uiFill('问题请求无效：{0}', [this.clean(errorText(error as Error))]);
+        this.emit();
+        return;
+      }
+    }
     const next: PendingRequest[] = [];
     for (let index = 0; index < this.snapshot.pending.length; index++) {
       if (this.snapshot.pending[index].id !== eventId) {
@@ -5267,6 +5291,7 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
   }
 
   private selectFallbackSession(): void {
+    this.clearVisiblePending();
     this.snapshot.activeSessionId = '';
     this.snapshot.rows = [];
     this.snapshot.title = '新会话';
@@ -5365,46 +5390,15 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
         choices.push(label);
       }
     }
-    if (choices.length === 0) {
-      choices.push('回答');
-    }
     return choices;
   }
 
   private questionOutcome(meta: PendingMeta, answer: string): QuestionOutcome {
-    const outcome = meta.body;
-    const questions = asArray(outcome === null ? null : outcome['questions']);
-    const answers: QuestionAnswer[] = [];
-    for (let index = 0; index < questions.length; index++) {
-      const question = asRecord(questions[index]);
-      const id = jsonString(question, 'id', '');
-      if (id.length === 0) {
-        continue;
-      }
-      const labels: string[] = [];
-      const options = asArray(question === null ? null : question['options']);
-      for (let optionIndex = 0; optionIndex < options.length; optionIndex++) {
-        const option = asRecord(options[optionIndex]);
-        const label = jsonString(option, 'label', '');
-        if (label.length > 0) {
-          labels.push(label);
-        }
-      }
-      const entry: QuestionAnswer = { id: id, selected: [] };
-      if (labels.indexOf(answer) >= 0) {
-        entry.selected = [answer];
-      } else {
-        entry.custom = answer;
-      }
-      answers.push(entry);
-    }
-    const value: QuestionAnswers = { answers: answers };
-    const result: QuestionOutcome = { kind: 'result', value: value };
-    return result;
+    return buildQuestionOutcome(parseQuestionItems(meta.body), answer);
   }
 
-  private removePending(id: string): void {
-    this.pendingMeta.delete(id);
+  /** Drops only the visible card; the responder stays live for Worker events. */
+  private hidePending(id: string): void {
     const next: PendingRequest[] = [];
     for (let index = 0; index < this.snapshot.pending.length; index++) {
       if (this.snapshot.pending[index].id !== id) {
@@ -5412,6 +5406,19 @@ export class HostService implements ShellActions, PageBridgeListener, ProxyRespo
       }
     }
     this.snapshot.pending = next;
+  }
+
+  /** A conversation or runtime switch must never show another session's card. */
+  private clearVisiblePending(): void {
+    if (this.snapshot.pending.length > 0) {
+      this.snapshot.pending = [];
+    }
+  }
+
+  private removePending(id: string): void {
+    this.pendingMeta.delete(id);
+    this.answeringRequests.delete(id);
+    this.hidePending(id);
   }
 
   private async ensureRpcReady(timeoutMillis: number): Promise<boolean> {

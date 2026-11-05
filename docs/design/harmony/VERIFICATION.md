@@ -47,7 +47,7 @@ IDs, are not counted as product passes.
   replay, duplicate writes and restart behavior.
 - Shared spec, cross-tree and Rust wire/WAL gates passed.
 - The pinned Worker image pack and no-DSH-patch gate passed.
-- The unsigned development HAP built successfully and installed normally. Final candidate is build40.
+- The unsigned development HAP built successfully and installed normally. The initial PR candidate is build40. See [PARITY.md](PARITY.md) for subsequent emulator comparisons.
 - Aggregate repository CI is **not green**. The unchanged Android baseline has
   hygiene/SPDX findings; the iOS UI catalog has stale source anchors. The plugin
   bridge test expects different accelerator output. macOS WebKit visibility

@@ -22,6 +22,22 @@ import {
   permissionTitle
 } from '../model/SessionControls';
 import { ComposerCommand, commandSuggestions } from '../model/ComposerInput';
+import {
+  PendingQuestion,
+  PendingQuestionOption,
+  QuestionDraft,
+  defaultQuestionDrafts,
+  encodeQuestionAnswers,
+  findQuestionDraft,
+  hasRecommendedSuffix,
+  missingQuestionIndex,
+  questionDisplayLabel,
+  questionDraftAnswered,
+  replaceQuestionDraft,
+  withQuestionCustom,
+  withQuestionOption,
+  withQuestionSkipped
+} from '../model/QuestionAnswers';
 import { Palette, Metrics, Copy } from './Palette';
 import {
   clockLabel,
@@ -67,8 +83,10 @@ export struct ChatView {
   @State headerMenuOpen: boolean = false;
   @State actionError: string = '';
   @State copiedRowId: string = '';
-  @State questionChoice: string = '';
-  @State questionCustom: string = '';
+  @State questionIndex: number = 0;
+  @State questionDrafts: QuestionDraft[] = [];
+  @State questionError: string = '';
+  @State questionSubmittingId: string = '';
   @State expandedTurns: string[] = [];
   // One renderer-owned binding per stable row id. The observed objects live
   // outside the data-only snapshot; ForEach iterates these wrappers.
@@ -79,12 +97,14 @@ export struct ChatView {
   private lastTranscriptKey: string = '';
   private lastSessionId: string = '';
   private referenceRequested: boolean = false;
+  private questionStateKey: string = '';
   private bindingById: Map<string, ChatRowBinding> = new Map<string, ChatRowBinding>();
 
   aboutToAppear(): void {
     this.draft = this.snapshot.draft;
     this.noteDraftChanged(this.draft);
     this.syncRowBindings();
+    this.syncQuestionState();
     this.scheduleTail();
     if (this.registerBackHandler !== undefined) {
       this.registerBackHandler((): boolean => {
@@ -185,10 +205,7 @@ export struct ChatView {
     if (!this.commandFromAdd && (!typed.startsWith('/') || typed.indexOf(' ') >= 0 || this.snapshot.attachmentPaths.length > 0)) {
       this.commandOpen = false;
     }
-    if (this.snapshot.pending.length === 0) {
-      this.questionChoice = '';
-      this.questionCustom = '';
-    }
+    this.syncQuestionState();
   }
 
   private availableCommands(): ComposerCommand[] {
@@ -486,17 +503,198 @@ export struct ChatView {
     this.syncRowBindings();
   }
 
-  private submitQuestion(request: PendingRequest): void {
-    let answer: string = this.questionCustom;
-    if (answer.length === 0) {
-      answer = this.questionChoice;
+  private permissionRequests(): PendingRequest[] {
+    const result: PendingRequest[] = [];
+    for (let index = 0; index < this.snapshot.pending.length; index++) {
+      if (!this.isQuestion(this.snapshot.pending[index])) {
+        result.push(this.snapshot.pending[index]);
+      }
     }
-    if (answer.length === 0) {
+    return result;
+  }
+
+  /** One real question request owns the composer seat, like Android. */
+  private questionRequest(): PendingRequest | null {
+    for (let index = 0; index < this.snapshot.pending.length; index++) {
+      if (this.isQuestion(this.snapshot.pending[index])) {
+        return this.snapshot.pending[index];
+      }
+    }
+    return null;
+  }
+
+  private hasQuestionPending(): boolean {
+    return this.questionRequest() !== null;
+  }
+
+  private activeQuestionRequest(): PendingRequest {
+    const request = this.questionRequest();
+    return request === null ? new PendingRequest() : request;
+  }
+
+  private questionStateSignature(request: PendingRequest): string {
+    let key = request.id;
+    for (let index = 0; index < request.questions.length; index++) {
+      const question = request.questions[index];
+      key += '|' + question.id + ':' + question.question.length.toString()
+        + ':' + question.options.length.toString() + ':' + (question.multiSelect ? '1' : '0');
+      for (let optionIndex = 0; optionIndex < question.options.length; optionIndex++) {
+        key += ',' + question.options[optionIndex].label.length.toString();
+      }
+    }
+    return key;
+  }
+
+  /**
+   * A new request, changed question set, dismissal, or session switch rebuilds
+   * the drafts. A failed submit keeps the same key, so every draft survives.
+   */
+  private syncQuestionState(): void {
+    const request = this.questionRequest();
+    if (request === null) {
+      if (this.questionStateKey.length > 0 || this.questionDrafts.length > 0) {
+        this.questionStateKey = '';
+        this.questionIndex = 0;
+        this.questionDrafts = [];
+        this.questionError = '';
+        this.questionSubmittingId = '';
+      }
       return;
     }
-    this.run(this.requireActions().answerRequest(request.id, answer));
-    this.questionChoice = '';
-    this.questionCustom = '';
+    const key = this.questionStateSignature(request);
+    if (key === this.questionStateKey) {
+      return;
+    }
+    this.questionStateKey = key;
+    this.questionIndex = 0;
+    this.questionDrafts = request.questions.length > 0 ? defaultQuestionDrafts(request.questions) : [];
+    this.questionError = '';
+    this.questionSubmittingId = '';
+  }
+
+  private currentQuestion(request: PendingRequest): PendingQuestion {
+    const questions = request.questions;
+    if (questions.length === 0) {
+      return new PendingQuestion();
+    }
+    let index = this.questionIndex;
+    if (index < 0) {
+      index = 0;
+    }
+    if (index >= questions.length) {
+      index = questions.length - 1;
+    }
+    return questions[index];
+  }
+
+  private currentQuestionDraft(request: PendingRequest): QuestionDraft {
+    return findQuestionDraft(this.questionDrafts, this.currentQuestion(request).id);
+  }
+
+  private questionBusy(request: PendingRequest): boolean {
+    return this.questionSubmittingId === request.id;
+  }
+
+  private questionLast(request: PendingRequest): boolean {
+    return this.questionIndex >= request.questions.length - 1;
+  }
+
+  private questionGroupComplete(request: PendingRequest): boolean {
+    return missingQuestionIndex(request.questions, this.questionDrafts) < 0;
+  }
+
+  private questionCanAdvance(request: PendingRequest): boolean {
+    return questionDraftAnswered(this.currentQuestionDraft(request));
+  }
+
+  private questionOptionSelected(request: PendingRequest, label: string): boolean {
+    return this.currentQuestionDraft(request).selected.indexOf(label) >= 0;
+  }
+
+  private saveQuestionDraft(next: QuestionDraft): void {
+    this.questionDrafts = replaceQuestionDraft(this.questionDrafts, next);
+    this.questionError = '';
+  }
+
+  private selectQuestionOption(request: PendingRequest, label: string): void {
+    if (this.questionBusy(request)) {
+      return;
+    }
+    this.saveQuestionDraft(withQuestionOption(this.currentQuestion(request), this.currentQuestionDraft(request), label));
+  }
+
+  private updateQuestionCustom(request: PendingRequest, value: string): void {
+    if (this.questionBusy(request)) {
+      return;
+    }
+    this.saveQuestionDraft(withQuestionCustom(this.currentQuestion(request), this.currentQuestionDraft(request), value));
+  }
+
+  private previousQuestion(): void {
+    if (this.questionIndex > 0) {
+      this.questionIndex = this.questionIndex - 1;
+      this.questionError = '';
+    }
+  }
+
+  private nextQuestion(request: PendingRequest): void {
+    if (this.questionBusy(request) || this.questionLast(request)) {
+      return;
+    }
+    this.questionIndex = this.questionIndex + 1;
+    this.questionError = '';
+  }
+
+  private skipQuestion(request: PendingRequest): void {
+    if (this.questionBusy(request) || request.questions.length === 0) {
+      return;
+    }
+    const nextDrafts = replaceQuestionDraft(this.questionDrafts, withQuestionSkipped(this.currentQuestionDraft(request)));
+    this.questionDrafts = nextDrafts;
+    this.questionError = '';
+    if (this.questionLast(request)) {
+      this.sendQuestionAnswers(request, nextDrafts);
+    } else {
+      this.questionIndex = this.questionIndex + 1;
+    }
+  }
+
+  private submitQuestion(request: PendingRequest): void {
+    this.sendQuestionAnswers(request, this.questionDrafts);
+  }
+
+  private sendQuestionAnswers(request: PendingRequest, drafts: QuestionDraft[]): void {
+    if (this.questionBusy(request) || request.questions.length === 0) {
+      return;
+    }
+    const missing = missingQuestionIndex(request.questions, drafts);
+    if (missing >= 0) {
+      this.questionIndex = missing;
+      this.questionError = Copy.tr('请先完成这道问题。');
+      return;
+    }
+    const actions = this.requireActions();
+    this.questionError = '';
+    this.questionSubmittingId = request.id;
+    const answer = encodeQuestionAnswers(request.questions, drafts);
+    this.run(this.answerQuestion(actions, request.id, answer));
+  }
+
+  private async answerQuestion(actions: ShellActions, id: string, answer: string): Promise<void> {
+    try {
+      await actions.answerRequest(id, answer);
+    } finally {
+      if (this.questionSubmittingId === id) {
+        this.questionSubmittingId = '';
+      }
+    }
+  }
+
+  private dismissQuestion(request: PendingRequest): void {
+    if (this.questionBusy(request)) {
+      return;
+    }
+    this.run(this.requireActions().dismissPending(request.id));
   }
 
   private chooseModel(option: SessionModelOption, effortId: string): void {
@@ -893,12 +1091,266 @@ export struct ChatView {
   }
 
   @Builder
-  PendingArea() {
-    if (this.snapshot.pending.length > 0) {
+  QuestionDock() {
+    this.QuestionTakeover(this.activeQuestionRequest())
+  }
+
+  @Builder
+  QuestionTakeover(request: PendingRequest) {
+    Column() {
       Column() {
-        this.PendingCard(this.snapshot.pending[0])
-        if (this.snapshot.pending.length > 1) {
-          Text(Copy.fill('还有 {0} 个待确认', [(this.snapshot.pending.length - 1).toString()]))
+        Row() {
+          Column() {
+            if (this.currentQuestion(request).header.length > 0) {
+              Text(this.currentQuestion(request).header)
+                .fontSize(Metrics.captionSize)
+                .fontColor(this.pal().textTertiary)
+                .width('100%')
+            }
+            Text(this.currentQuestion(request).question.length > 0
+              ? this.currentQuestion(request).question
+              : (request.title.length > 0 ? request.title : Copy.tr('需要你的回答')))
+              .fontSize(Metrics.pageTitleSize)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.pal().textPrimary)
+              .width('100%')
+              .margin({ top: 2 })
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+          NativeIcon({ name: '放弃整组问题', symbol: 'CLOSE', dark: this.dark, iconSize: 18 })
+            .width(36)
+            .height(36)
+            .accessibilityText(Copy.tr('放弃整组问题'))
+            .opacity(this.questionBusy(request) ? 0.4 : 1)
+            .id('chat.question.' + request.id + '.dismiss')
+            .onClick(() => {
+              this.dismissQuestion(request);
+            })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Top)
+
+        if (request.questions.length > 0) {
+          Scroll() {
+            Column() {
+              if (this.currentQuestion(request).detail.length > 0) {
+                MarkdownBody({
+                  markdown: this.currentQuestion(request).detail,
+                  dark: this.dark,
+                  bodyFontSize: this.bodyFontSize,
+                  codeFontSize: this.codeFontSize,
+                  loadImage: this.loadImage,
+                  onOpenResource: this.onOpenResource,
+                  onOpenPath: (path: string) => {
+                    if (path.length > 0) {
+                      this.run(this.requireActions().openFile(path));
+                    }
+                  }
+                })
+                  .width('100%')
+                  .margin({ top: 4, bottom: 4 })
+              }
+              if (this.currentQuestion(request).options.length > 0) {
+                Column() {
+                  ForEach(this.currentQuestion(request).options, (option: PendingQuestionOption, index: number) => {
+                    this.QuestionOptionRow(request, option, index)
+                  }, (option: PendingQuestionOption, index: number) => option.label + ':' + index.toString()
+                    + ':' + (this.questionOptionSelected(request, option.label) ? '1' : '0')
+                    + ':' + (this.questionBusy(request) ? '1' : '0'))
+                }
+                .width('100%')
+                .margin({ top: 6 })
+              }
+              Row() {
+                if (this.currentQuestion(request).options.length > 0) {
+                  NativeIcon({ name: '自定义回答', symbol: 'PLUS', dark: this.dark, iconSize: 16, muted: true })
+                    .width(22)
+                    .height(22)
+                }
+                TextInput({
+                  text: this.currentQuestionDraft(request).custom,
+                  placeholder: this.currentQuestion(request).options.length === 0
+                    ? Copy.tr('输入你的答案') : Copy.tr('自定义回答')
+                })
+                  .fontSize(Metrics.processSize)
+                  .fontColor(this.pal().textPrimary)
+                  .placeholderColor(this.pal().inputPlaceholder)
+                  .height(44)
+                  .layoutWeight(1)
+                  .backgroundColor('#00000000')
+                  .padding({ left: 4, right: 4 })
+                  .id('chat.question.' + request.id + '.custom')
+                  .onChange((value: string) => {
+                    this.updateQuestionCustom(request, value);
+                  })
+              }
+              .width('100%')
+              .constraintSize({ minHeight: 44 })
+              .margin({ top: 4 })
+              if (this.questionError.length > 0) {
+                Text(this.questionError)
+                  .fontSize(Metrics.captionSize)
+                  .fontColor(this.pal().pageWarning)
+                  .width('100%')
+                  .margin({ top: 4 })
+              }
+            }
+            .width('100%')
+          }
+          .width('100%')
+          .constraintSize({ maxHeight: 300 })
+          .scrollBar(BarState.Off)
+
+          Row() {
+            NativeIcon({ name: '上一题', symbol: 'CHEVRON_LEFT', dark: this.dark, iconSize: 18 })
+              .width(36)
+              .height(36)
+              .opacity(this.questionIndex > 0 && !this.questionBusy(request) ? 1 : 0.35)
+              .accessibilityText(Copy.tr('上一题'))
+              .id('chat.question.' + request.id + '.previous')
+              .onClick(() => {
+                if (!this.questionBusy(request)) {
+                  this.previousQuestion();
+                }
+              })
+            Text((this.questionIndex + 1).toString() + ' / ' + request.questions.length.toString())
+              .fontSize(Metrics.secondarySize)
+              .fontColor(this.pal().textSecondary)
+              .margin({ left: 4, right: 4 })
+            NativeIcon({ name: '下一题', symbol: 'CHEVRON_RIGHT', dark: this.dark, iconSize: 18 })
+              .width(36)
+              .height(36)
+              .opacity(!this.questionLast(request) && !this.questionBusy(request) ? 1 : 0.35)
+              .accessibilityText(Copy.tr('下一题'))
+              .id('chat.question.' + request.id + '.next')
+              .onClick(() => {
+                this.nextQuestion(request);
+              })
+            Blank().layoutWeight(1)
+          }
+          .width('100%')
+          .margin({ top: 2 })
+
+          Row() {
+            Text(Copy.tr('跳过'))
+              .fontSize(Metrics.processSize)
+              .fontColor(this.questionBusy(request) ? this.pal().textTertiary : this.pal().textSecondary)
+              .padding({ left: 6, right: 6, top: 10, bottom: 10 })
+              .id('chat.question.' + request.id + '.skip')
+              .onClick(() => {
+                this.skipQuestion(request);
+              })
+            Blank().layoutWeight(1)
+            PillButton({
+              label: this.questionBusy(request) ? Copy.tr('正在提交…')
+                : (this.questionLast(request) ? Copy.tr('提交回答') : Copy.tr('下一题')),
+              dark: this.dark,
+              compact: true,
+              disabled: this.questionBusy(request) || (this.questionLast(request)
+                ? !this.questionGroupComplete(request) : !this.questionCanAdvance(request)),
+              buttonId: 'chat.question.' + request.id + '.submit',
+              onTap: () => {
+                if (this.questionLast(request)) {
+                  this.submitQuestion(request);
+                } else {
+                  this.nextQuestion(request);
+                }
+              }
+            })
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Center)
+          .margin({ top: 4 })
+        } else {
+          Text(Copy.tr('这个问题没有可回答的选项。'))
+            .fontSize(Metrics.processSize)
+            .fontColor(this.pal().textTertiary)
+            .width('100%')
+            .margin({ top: 8, bottom: 8 })
+        }
+      }
+      .width('100%')
+      .padding({ left: 14, right: 14, top: 12, bottom: 10 })
+      .backgroundColor(this.pal().surface)
+      .borderRadius(Metrics.composerRadius)
+      .border({ width: Metrics.hairline, color: this.pal().borderList })
+    }
+    .width('100%')
+    .padding({ left: Metrics.chromeInset, right: Metrics.chromeInset, bottom: 8 })
+  }
+
+  @Builder
+  QuestionOptionRow(request: PendingRequest, option: PendingQuestionOption, index: number) {
+    Row() {
+      if (this.currentQuestion(request).multiSelect) {
+        Stack() {
+          if (this.questionOptionSelected(request, option.label)) {
+            NativeIcon({ name: '已选中', symbol: 'CHECK', dark: this.dark, iconSize: 14 })
+              .width(14)
+              .height(14)
+          }
+        }
+        .width(18)
+        .height(18)
+        .borderRadius(4)
+        .border({ width: Metrics.hairline, color: this.pal().borderList })
+      } else {
+        Stack() {
+          Text((index + 1).toString())
+            .fontSize(11)
+            .fontColor(this.pal().textSecondary)
+        }
+        .width(22)
+        .height(22)
+        .borderRadius(11)
+        .backgroundColor(this.pal().sessionSelector)
+      }
+      Column() {
+        Text(questionDisplayLabel(option.label))
+          .fontSize(Metrics.processSize)
+          .fontColor(this.pal().textPrimary)
+          .width('100%')
+        if (option.description.length > 0) {
+          Text(option.description)
+            .fontSize(Metrics.secondarySize)
+            .fontColor(this.pal().textTertiary)
+            .width('100%')
+            .margin({ top: 2 })
+        }
+        if (hasRecommendedSuffix(option.label)) {
+          Text(Copy.tr('推荐'))
+            .fontSize(Metrics.captionSize)
+            .fontColor(this.pal().sessionAccent)
+            .margin({ top: 2 })
+        }
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      .margin({ left: 10 })
+    }
+    .width('100%')
+    .constraintSize({ minHeight: 44 })
+    .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+    .borderRadius(10)
+    .backgroundColor(this.questionOptionSelected(request, option.label) && !this.currentQuestion(request).multiSelect
+      ? this.pal().sessionSelector : '#00000000')
+    .opacity(this.questionBusy(request) ? 0.6 : 1)
+    .id('chat.question.' + request.id + '.option.' + index.toString())
+    .onClick(() => {
+      this.selectQuestionOption(request, option.label);
+    })
+  }
+
+  @Builder
+  PendingArea() {
+    if (this.permissionRequests().length > 0) {
+      Column() {
+        ForEach(this.permissionRequests(), (request: PendingRequest) => {
+          this.PendingCard(request)
+        }, (request: PendingRequest) => request.id)
+        if (this.permissionRequests().length > 1) {
+          Text(Copy.fill('还有 {0} 个待确认', [(this.permissionRequests().length - 1).toString()]))
             .fontSize(Metrics.captionSize)
             .fontColor(this.pal().textSubtle)
             .margin({ top: 6, left: 2 })
@@ -913,13 +1365,12 @@ export struct ChatView {
   PendingCard(request: PendingRequest) {
     Column() {
       Row() {
-        Text(this.isQuestion(request) ? (request.title.length > 0 ? request.title : Copy.tr('需要你的回答'))
-          : (request.title.length > 0 ? request.title : Copy.tr('需要授权')))
+        Text(request.title.length > 0 ? request.title : Copy.tr('需要授权'))
           .fontSize(Metrics.pageTitleSize)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.pal().sessionPrimary)
           .layoutWeight(1)
-        Tag({ text: this.isQuestion(request) ? Copy.tr('问题') : Copy.tr('授权'), dark: this.dark, tone: 'warning' })
+        Tag({ text: Copy.tr('授权'), dark: this.dark, tone: 'warning' })
       }
       .width('100%')
       if (request.detail.length > 0) {
@@ -930,66 +1381,7 @@ export struct ChatView {
           .width('100%')
           .margin({ top: 6 })
       }
-      if (this.isQuestion(request)) {
-        if (request.choices.length > 0) {
-          Column() {
-            ForEach(request.choices, (choice: string) => {
-              Row() {
-                Text(this.questionChoice === choice ? '●' : '○')
-                  .fontSize(15)
-                  .fontColor(this.questionChoice === choice ? this.pal().sessionAccent : this.pal().sessionSecondary)
-                  .accessibilityText(this.questionChoice === choice ? Copy.tr('已选中') : Copy.tr('未选中'))
-                Text(choice)
-                  .fontSize(Metrics.processSize)
-                  .fontColor(this.pal().sessionPrimary)
-                  .layoutWeight(1)
-                  .margin({ left: 8 })
-              }
-              .width('100%')
-              .constraintSize({ minHeight: 40 })
-              .padding({ left: 8, right: 8 })
-              .id('chat.pending.' + request.id + '.choice.' + choice)
-              .onClick(() => {
-                this.questionChoice = choice;
-                this.questionCustom = '';
-              })
-            }, (choice: string) => choice)
-          }
-          .width('100%')
-          .margin({ top: 8 })
-        }
-        TextInput({ text: this.questionCustom, placeholder: Copy.tr('输入你的答案') })
-          .fontSize(Metrics.processSize)
-          .fontColor(this.pal().sessionPrimary)
-          .placeholderColor(this.pal().inputPlaceholder)
-          .height(44)
-          .backgroundColor(this.pal().sessionSelector)
-          .borderRadius(12)
-          .margin({ top: 8 })
-          .id('chat.pending.' + request.id + '.custom')
-          .onChange((value: string) => {
-            this.questionCustom = value;
-            if (value.length > 0) {
-              this.questionChoice = '';
-            }
-          })
-        Row() {
-          PillButton({
-            label: Copy.tr('提交回答'),
-            dark: this.dark,
-            compact: true,
-            disabled: this.questionChoice.length === 0 && this.questionCustom.length === 0,
-            buttonId: 'chat.pending.' + request.id + '.submit',
-            onTap: () => {
-              this.submitQuestion(request);
-            }
-          })
-        }
-        .width('100%')
-        .justifyContent(FlexAlign.End)
-        .margin({ top: 8 })
-      } else {
-        Row() {
+      Row() {
           if (request.choices.length >= 2) {
             PillButton({
               label: request.choices[0],
@@ -1047,7 +1439,6 @@ export struct ChatView {
         .width('100%')
         .justifyContent(FlexAlign.End)
         .margin({ top: 12 })
-      }
     }
     .width('100%')
     .padding(Metrics.cardPadding)
@@ -1830,7 +2221,11 @@ export struct ChatView {
         }
         this.Transcript()
         this.PendingArea()
-        this.ComposerDock()
+        if (this.hasQuestionPending()) {
+          this.QuestionDock()
+        } else {
+          this.ComposerDock()
+        }
       }
       .width('100%')
       .height('100%')

@@ -9,6 +9,7 @@ export struct NativeIcon {
   @Prop dark: boolean = false;
   @Prop iconSize: number = 20;
   @Prop muted: boolean = false;
+  @Prop inkRole: 'default' | 'secondary' = 'default';
 
   private assetBase(): string {
     switch (this.symbol) {
@@ -87,7 +88,8 @@ export struct NativeIcon {
     if (base === 'STOP' || base === 'MINUS') {
       return '';
     }
-    return 'icons/' + base + (this.dark ? '-dark.svg' : '-light.svg');
+    return 'icons/' + base + (this.inkRole === 'secondary' ? '-secondary' : '') +
+      (this.dark ? '-dark.svg' : '-light.svg');
   }
 
   build() {

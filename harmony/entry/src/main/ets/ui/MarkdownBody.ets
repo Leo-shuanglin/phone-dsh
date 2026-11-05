@@ -4,15 +4,16 @@ import { ImageLoadControl } from '../model/ImageLoadControl';
 //
 // Mirrors the canonical Android MarkdownBody.kt / iOS NativeMarkdownBody.swift:
 // paragraphs, headings, lists, quotes, rules, fenced code, GFM tables, and the
-// DSH TeX extensions. Raw HTML stays literal text; remote images are never
-// fetched. Math is parsed and laid out by the Rust RaTeX 0.1.15 renderer and
+// DSH TeX extensions. Raw HTML stays literal text. Image sources use the
+// bounded native resource loader. Math is parsed and laid out by the Rust RaTeX 0.1.15 renderer and
 // drawn as native ImageKit SVG (outlined glyph paths, no WebView). Parse
 // failures keep the source on screen and state the failure; there is no fake
 // formula or rendered-looking fallback.
 
-import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { common, Want } from '@kit.AbilityKit';
 import { Palette, Metrics, Copy } from './Palette';
+import { NativeCodeBlock } from './NativeCodeBlock';
 import { MarkdownImage } from './MarkdownImage';
 import { ImageBytes } from '../model/Contracts';
 import {
@@ -43,6 +44,318 @@ import {
   parseMarkdownOrPlain
 } from '../model/MarkdownModel';
 
+// Android `MarkdownTable` picks cards when the minimum grid width no longer
+// fits the measured row. Body cells use 16/10 insets, compact cells 8/4; card
+// geometry mirrors `MarkdownTableCards`.
+const TABLE_COLUMN_MIN_WIDTH: number = 96;
+const TABLE_COLUMN_MAX_WIDTH: number = 320;
+const TABLE_CELL_INSET_H: number = 16;
+const TABLE_CELL_INSET_V: number = 10;
+const TABLE_COMPACT_CELL_INSET_H: number = 8;
+const TABLE_COMPACT_CELL_INSET_V: number = 4;
+const TABLE_CARD_GAP: number = 8;
+const TABLE_CARD_RADIUS: number = 12;
+const TABLE_CARD_INSET: number = 12;
+const TABLE_FIELD_GAP: number = 10;
+const TABLE_LABEL_VALUE_GAP: number = 2;
+
+/**
+ * One GFM table. The component measures its own available width so a table
+ * nested in a list or quote uses the real row width, not a viewport guess.
+ * Above the minimum grid width it draws the aligned grid; below it draws the
+ * per-row header/value cards from Android's `MarkdownTableCards`.
+ */
+@Component
+struct MarkdownTableBody {
+  @Prop block: MarkdownTableBlock = new MarkdownTableBlock([], [], []);
+  @Prop dark: boolean = false;
+  @Prop variant: MarkdownVariant = MarkdownVariant.Normal;
+  @Prop bodyFontSize: number = 0;
+  @Prop codeFontSize: number = 0;
+  onOpenTarget: (target: MarkdownLinkTarget) => void = () => {};
+  @State private availableWidth: number = 0;
+
+  private pal(): Palette {
+    return new Palette(this.dark);
+  }
+
+  private compact(): boolean {
+    return this.variant === MarkdownVariant.Compact;
+  }
+
+  private bodySize(): number {
+    if (this.compact()) {
+      return Metrics.secondarySize;
+    }
+    return this.bodyFontSize > 0 ? this.bodyFontSize : Metrics.bodySize;
+  }
+
+  private bodyLine(): number {
+    if (this.compact()) {
+      return 18;
+    }
+    return this.bodySize() + 8;
+  }
+
+  private codeSize(): number {
+    return this.codeFontSize > 0 ? this.codeFontSize : Metrics.listItemSize;
+  }
+
+  private columns(): number {
+    let columns: number = this.block.header.length;
+    for (let i: number = 0; i < this.block.rows.length; i++) {
+      if (this.block.rows[i].length > columns) {
+        columns = this.block.rows[i].length;
+      }
+    }
+    return columns;
+  }
+
+  private indexes(columns: number): number[] {
+    const out: number[] = [];
+    for (let i: number = 0; i < columns; i++) {
+      out.push(i);
+    }
+    return out;
+  }
+
+  private cellAt(cells: MarkdownInline[][], index: number): MarkdownInline[] {
+    if (index < cells.length) {
+      return cells[index];
+    }
+    return [];
+  }
+
+  private paddedCells(cells: MarkdownInline[][], columns: number): MarkdownInline[][] {
+    const out: MarkdownInline[][] = [];
+    for (let i: number = 0; i < columns; i++) {
+      out.push(this.cellAt(cells, i));
+    }
+    return out;
+  }
+
+  private paddedRows(): MarkdownInline[][][] {
+    const out: MarkdownInline[][][] = [];
+    const columns: number = this.columns();
+    for (let i: number = 0; i < this.block.rows.length; i++) {
+      out.push(this.paddedCells(this.block.rows[i], columns));
+    }
+    return out;
+  }
+
+  private alignAt(alignments: (MarkdownTableAlign | null)[], index: number): TextAlign {
+    if (index >= alignments.length) {
+      return TextAlign.Start;
+    }
+    const align: MarkdownTableAlign | null = alignments[index];
+    if (align === MarkdownTableAlign.Center) {
+      return TextAlign.Center;
+    }
+    if (align === MarkdownTableAlign.Right) {
+      return TextAlign.End;
+    }
+    return TextAlign.Start;
+  }
+
+  private cellInsetH(): number {
+    return this.compact() ? TABLE_COMPACT_CELL_INSET_H : TABLE_CELL_INSET_H;
+  }
+
+  private cellInsetV(): number {
+    return this.compact() ? TABLE_COMPACT_CELL_INSET_V : TABLE_CELL_INSET_V;
+  }
+
+  private showGrid(): boolean {
+    return this.availableWidth > 0 &&
+      this.columns() * TABLE_COLUMN_MIN_WIDTH <= this.availableWidth;
+  }
+
+  private openRun(run: MarkdownRun): void {
+    if (run.style.target !== null) {
+      this.onOpenTarget(run.style.target);
+    }
+  }
+
+  @Builder
+  InlineMathText(inlines: MarkdownInline[], fontSize: number, color: string, lineHeight: number, baseWeight: number | FontWeight, align: TextAlign) {
+    Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Center }) {
+      ForEach(inlineMathSegments(inlines), (segment: InlineMathSegment) => {
+        if (segment.math) {
+          MathFormula({
+            latex: segment.text,
+            fontSize: fontSize,
+            color: color,
+            displayMode: false
+          })
+        } else {
+          Text(segment.text)
+            .fontSize(segment.style.code ? this.codeSize() :
+              (segment.style.footnote ? Math.max(fontSize - 4, 9) : fontSize))
+            .fontColor(segment.style.link ? this.pal().sessionAccent :
+              (segment.style.footnote ? this.pal().sessionAccent : color))
+            .fontWeight(segment.style.bold ? 600 : baseWeight)
+            .fontStyle(segment.style.italic ? FontStyle.Italic : FontStyle.Normal)
+            .decoration({
+              type: segment.style.link ? TextDecorationType.Underline :
+                (segment.style.strike ? TextDecorationType.LineThrough : TextDecorationType.None),
+              color: segment.style.link ? this.pal().sessionAccent : color
+            })
+            .lineHeight(lineHeight)
+            .textAlign(align)
+            .onClick(() => {
+              if (segment.style.link && segment.style.target !== null) {
+                this.onOpenTarget(segment.style.target);
+              }
+            })
+        }
+      }, (segment: InlineMathSegment, index: number) => index.toString() + JSON.stringify(segment))
+    }
+    .width('100%')
+  }
+
+  @Builder
+  InlineText(inlines: MarkdownInline[], fontSize: number, color: string, lineHeight: number, baseWeight: number | FontWeight, align: TextAlign) {
+    if (inlines.length === 0) {
+      Text('')
+        .fontSize(fontSize)
+        .fontColor(color)
+        .width('100%')
+    } else if (hasInlineMath(inlines)) {
+      this.InlineMathText(inlines, fontSize, color, lineHeight, baseWeight, align)
+    } else {
+      Text() {
+        ForEach(flattenInlines(inlines), (run: MarkdownRun) => {
+          Span(run.text)
+            .fontSize(run.style.code ? this.codeSize() :
+              (run.style.footnote ? Math.max(fontSize - 4, 9) : fontSize))
+            .fontColor(run.style.link ? this.pal().sessionAccent :
+              (run.style.footnote ? this.pal().sessionAccent : color))
+            .fontWeight(run.style.bold ? 600 : baseWeight)
+            .fontStyle(run.style.italic ? FontStyle.Italic : FontStyle.Normal)
+            .decoration({
+              type: run.style.link ? TextDecorationType.Underline :
+                (run.style.strike ? TextDecorationType.LineThrough : TextDecorationType.None),
+              color: run.style.link ? this.pal().sessionAccent : color
+            })
+            .textBackgroundStyle({
+              color: run.style.code ? this.pal().sessionInlineCode : '#00000000',
+              radius: 3
+            })
+            .onClick(() => {
+              if (run.style.link) {
+                this.openRun(run);
+              }
+            })
+        })
+      }
+      .fontSize(fontSize)
+      .fontColor(color)
+      .lineHeight(lineHeight)
+      .width('100%')
+      .textAlign(align)
+    }
+  }
+
+  @Builder
+  GridRowView(cells: MarkdownInline[][], alignments: (MarkdownTableAlign | null)[], header: boolean, columns: number) {
+    Row() {
+      ForEach(this.paddedCells(cells, columns), (cell: MarkdownInline[], index: number) => {
+        Column() {
+          this.InlineText(
+            cell,
+            this.bodySize(),
+            this.pal().textPrimary,
+            this.bodyLine(),
+            header ? 600 : FontWeight.Normal,
+            this.alignAt(alignments, index)
+          )
+        }
+        .layoutWeight(1)
+        .constraintSize({ minWidth: TABLE_COLUMN_MIN_WIDTH, maxWidth: TABLE_COLUMN_MAX_WIDTH })
+        .padding({
+          left: this.cellInsetH(),
+          right: this.cellInsetH(),
+          top: this.cellInsetV(),
+          bottom: this.cellInsetV()
+        })
+        .border({
+          width: { bottom: Metrics.hairline },
+          color: this.pal().borderList
+        })
+      }, (cell: MarkdownInline[], index: number) => index.toString() + JSON.stringify(cell))
+    }
+    .width('100%')
+    .backgroundColor(header ? this.pal().sessionSelector : '#00000000')
+    .alignItems(VerticalAlign.Top)
+  }
+
+  @Builder
+  GridView() {
+    Column() {
+      this.GridRowView(this.block.header, this.block.alignments, true, this.columns())
+      ForEach(this.paddedRows(), (row: MarkdownInline[][], index: number) => {
+        this.GridRowView(row, this.block.alignments, false, this.columns())
+      }, (row: MarkdownInline[][], index: number) => index.toString() + JSON.stringify(row))
+    }
+    .width('100%')
+  }
+
+  @Builder
+  CardsView() {
+    Column({ space: TABLE_CARD_GAP }) {
+      ForEach(this.block.rows, (cells: MarkdownInline[][], rowIndex: number) => {
+        Column({ space: TABLE_FIELD_GAP }) {
+          ForEach(this.indexes(this.columns()), (column: number) => {
+            Column({ space: TABLE_LABEL_VALUE_GAP }) {
+              this.InlineText(
+                this.cellAt(this.block.header, column),
+                Metrics.captionSize,
+                this.pal().sessionSecondary,
+                Metrics.captionSize + 6,
+                FontWeight.Medium,
+                TextAlign.Start
+              )
+              this.InlineText(
+                this.cellAt(cells, column),
+                this.bodySize(),
+                this.pal().textPrimary,
+                this.bodyLine(),
+                FontWeight.Normal,
+                TextAlign.Start
+              )
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+          }, (column: number, index: number) => index.toString())
+        }
+        .width('100%')
+        .padding(TABLE_CARD_INSET)
+        .backgroundColor(this.pal().sessionSelector)
+        .borderRadius(TABLE_CARD_RADIUS)
+        .alignItems(HorizontalAlign.Start)
+      }, (cells: MarkdownInline[][], index: number) => index.toString() + JSON.stringify(cells))
+    }
+    .width('100%')
+  }
+
+  build() {
+    Column() {
+      if (this.showGrid()) {
+        this.GridView()
+      } else {
+        this.CardsView()
+      }
+    }
+    .width('100%')
+    .onAreaChange((oldValue: Area, newValue: Area) => {
+      const width: number = newValue.width as number;
+      if (width !== this.availableWidth) {
+        this.availableWidth = width;
+      }
+    })
+  }
+}
+
 /**
  * Renders one answer body.
  *
@@ -67,7 +380,6 @@ export struct MarkdownBody {
   // component decodes the bytes with ImageKit and owns the PixelMap.
   loadImage?: (source: string, control?: ImageLoadControl) => Promise<ImageBytes>;
   @State private blocks: MarkdownBlock[] = [];
-  @State private copiedCode: string = '';
   @State private linkFailure: boolean = false;
 
   aboutToAppear(): void {
@@ -103,10 +415,6 @@ export struct MarkdownBody {
     return this.codeFontSize > 0 ? this.codeFontSize : Metrics.listItemSize;
   }
 
-  private codeLine(): number {
-    return this.codeSize() + 6;
-  }
-
   private bodyColor(): string {
     return this.compact() ? this.pal().textTertiary : this.pal().textPrimary;
   }
@@ -129,38 +437,6 @@ export struct MarkdownBody {
       return base + 1;
     }
     return base;
-  }
-
-  private tableColumns(block: MarkdownTableBlock): number {
-    let columns: number = block.header.length;
-    for (let i: number = 0; i < block.rows.length; i++) {
-      if (block.rows[i].length > columns) {
-        columns = block.rows[i].length;
-      }
-    }
-    return columns;
-  }
-
-  private paddedCells(cells: MarkdownInline[][], columns: number): MarkdownInline[][] {
-    const out: MarkdownInline[][] = [];
-    for (let i: number = 0; i < columns; i++) {
-      out.push(i < cells.length ? cells[i] : []);
-    }
-    return out;
-  }
-
-  private alignAt(alignments: (MarkdownTableAlign | null)[], index: number): TextAlign {
-    if (index >= alignments.length) {
-      return TextAlign.Start;
-    }
-    const align: MarkdownTableAlign | null = alignments[index];
-    if (align === MarkdownTableAlign.Center) {
-      return TextAlign.Center;
-    }
-    if (align === MarkdownTableAlign.Right) {
-      return TextAlign.End;
-    }
-    return TextAlign.Start;
   }
 
   private openRun(run: MarkdownRun): void {
@@ -200,20 +476,6 @@ export struct MarkdownBody {
     });
   }
 
-  private copyCode(body: string): void {
-    const data: pasteboard.PasteData =
-      pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, body);
-    pasteboard.getSystemPasteboard().setData(data).then(() => {
-      this.copiedCode = body;
-      setTimeout(() => {
-        if (this.copiedCode === body) {
-          this.copiedCode = '';
-        }
-      }, 1500);
-    }).catch((error: BusinessError) => {
-      this.copiedCode = '';
-    });
-  }
 
   @Builder
   InlineMathText(inlines: MarkdownInline[], fontSize: number, color: string, lineHeight: number, baseBold: boolean, align: TextAlign) {
@@ -232,7 +494,7 @@ export struct MarkdownBody {
               (segment.style.footnote ? Math.max(fontSize - 4, 9) : fontSize))
             .fontColor(segment.style.link ? this.pal().sessionAccent :
               (segment.style.footnote ? this.pal().sessionAccent : color))
-            .fontWeight(segment.style.bold ? FontWeight.Medium :
+            .fontWeight(segment.style.bold ? 600 :
               (baseBold ? FontWeight.Bold : FontWeight.Normal))
             .fontStyle(segment.style.italic ? FontStyle.Italic : FontStyle.Normal)
             .decoration({
@@ -248,7 +510,7 @@ export struct MarkdownBody {
               }
             })
         }
-      }, (segment: InlineMathSegment, index: number) => index.toString())
+      }, (segment: InlineMathSegment, index: number) => index.toString() + JSON.stringify(segment))
     }
     .width('100%')
   }
@@ -270,7 +532,7 @@ export struct MarkdownBody {
               (run.style.footnote ? Math.max(fontSize - 4, 9) : fontSize))
             .fontColor(run.style.link ? this.pal().sessionAccent :
               (run.style.footnote ? this.pal().sessionAccent : color))
-            .fontWeight(run.style.bold ? FontWeight.Medium :
+            .fontWeight(run.style.bold ? 600 :
               (baseBold ? FontWeight.Bold : FontWeight.Normal))
             .fontStyle(run.style.italic ? FontStyle.Italic : FontStyle.Normal)
             .decoration({
@@ -323,41 +585,7 @@ export struct MarkdownBody {
 
   @Builder
   CodeView(block: MarkdownCodeBlock) {
-    Column() {
-      Row() {
-        Text(block.language.length > 0 ? block.language : Copy.tr('代码'))
-          .fontSize(Metrics.captionSize)
-          .fontColor(this.pal().textSubtle)
-        Blank()
-        Text(this.copiedCode === block.body ? Copy.tr('已复制') : Copy.tr('复制代码'))
-          .fontSize(Metrics.captionSize)
-          .fontColor(this.copiedCode === block.body ? this.pal().sessionSuccess : this.pal().sessionAccent)
-          .onClick(() => {
-            this.copyCode(block.body);
-          })
-          .accessibilityText(block.language.length > 0 ?
-            Copy.fill('{0} 代码，复制', [block.language]) : Copy.tr('代码，复制'))
-      }
-      .width('100%')
-      .margin({ bottom: 6 })
-
-      Scroll() {
-        Text(block.body)
-          .fontSize(this.codeSize())
-          .fontColor(this.pal().textPrimary)
-          .fontFamily('monospace')
-          .lineHeight(this.codeLine())
-          .textAlign(TextAlign.Start)
-      }
-      .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Off)
-      .width('100%')
-    }
-    .width('100%')
-    .padding(12)
-    .backgroundColor(this.pal().sessionCode)
-    .borderRadius(10)
-    .alignItems(HorizontalAlign.Start)
+    NativeCodeBlock({ language: block.language, body: block.body, dark: this.dark })
   }
 
   @Builder
@@ -388,52 +616,18 @@ export struct MarkdownBody {
   }
 
   @Builder
-  TableRowView(cells: MarkdownInline[][], alignments: (MarkdownTableAlign | null)[], header: boolean) {
-    Row() {
-      ForEach(cells, (cell: MarkdownInline[], index: number) => {
-        Column() {
-          this.InlineText(
-            cell,
-            this.compact() ? Metrics.secondarySize : Metrics.listItemSize,
-            this.pal().textPrimary,
-            this.compact() ? 18 : Metrics.listItemLine,
-            header,
-            this.alignAt(alignments, index)
-          )
-        }
-        .layoutWeight(1)
-        .padding({ left: 8, right: 8, top: 8, bottom: 8 })
-        .border({
-          width: { bottom: Metrics.hairline },
-          color: this.pal().borderList
-        })
-      }, (cell: MarkdownInline[], index: number) => index.toString())
-    }
-    .width('100%')
-    .backgroundColor(header ? this.pal().sessionSelector : '#00000000')
-    .alignItems(VerticalAlign.Top)
-  }
-
-  @Builder
   TableView(block: MarkdownTableBlock) {
-    Column() {
-      this.TableRowView(this.paddedCells(block.header, this.tableColumns(block)), block.alignments, true)
-      ForEach(this.paddedRows(block), (row: MarkdownInline[][]) => {
-        this.TableRowView(row, block.alignments, false)
-      }, (row: MarkdownInline[][], index: number) => index.toString())
-    }
+    MarkdownTableBody({
+      block: block,
+      dark: this.dark,
+      variant: this.variant,
+      bodyFontSize: this.bodyFontSize,
+      codeFontSize: this.codeFontSize,
+      onOpenTarget: (target: MarkdownLinkTarget): void => {
+        this.openTarget(target);
+      }
+    })
     .width('100%')
-    .borderRadius(8)
-    .clip(true)
-  }
-
-  private paddedRows(block: MarkdownTableBlock): MarkdownInline[][][] {
-    const out: MarkdownInline[][][] = [];
-    const columns: number = this.tableColumns(block);
-    for (let i: number = 0; i < block.rows.length; i++) {
-      out.push(this.paddedCells(block.rows[i], columns));
-    }
-    return out;
   }
 
   @Builder
@@ -490,11 +684,11 @@ export struct MarkdownBody {
           .alignItems(VerticalAlign.Top)
           ForEach(item.children, (child: MarkdownBlock, childIndex: number) => {
             this.BlockView(child)
-          }, (child: MarkdownBlock, childIndex: number) => childIndex.toString())
+          }, (child: MarkdownBlock, childIndex: number) => childIndex.toString() + JSON.stringify(child))
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)
-      }, (item: MarkdownListItem, index: number) => index.toString())
+      }, (item: MarkdownListItem, index: number) => index.toString() + JSON.stringify(item))
     }
     .width('100%')
     .padding({ left: 16 })
@@ -531,7 +725,7 @@ export struct MarkdownBody {
     Column({ space: this.compact() ? 4 : Metrics.blockGap }) {
       ForEach(this.blocks, (block: MarkdownBlock, index: number) => {
         this.BlockView(block)
-      }, (block: MarkdownBlock, index: number) => index.toString())
+      }, (block: MarkdownBlock, index: number) => index.toString() + JSON.stringify(block))
       if (this.linkFailure) {
         Text(Copy.tr('链接打开失败'))
           .fontSize(Metrics.captionSize)

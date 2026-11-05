@@ -80,7 +80,10 @@ async function call(method, args) {
     streams.get(args.streamId)?.abort()
     return { closed: true }
   }
-  if (method.startsWith('$')) return await workerCommand(method, args || {})
+  if (['$diagnose', '$writeFile', '$readFile', '$listFiles', '$openBinaryRead',
+    '$readBinaryChunk', '$closeBinaryRead', '$command'].includes(method)) {
+    return await workerCommand(method, args || {})
+  }
   return await rpc(method, args || {})
 }
 globalThis.__PDSH_NATIVE_CALL__ = frame => {

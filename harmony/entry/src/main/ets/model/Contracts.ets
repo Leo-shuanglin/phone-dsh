@@ -6,6 +6,7 @@ import {
   SessionPermissionOption
 } from './SessionControls';
 import { ComposerCommand } from './ComposerInput';
+import { PendingQuestion } from './QuestionAnswers';
 import {
   ProviderModelRecord,
   ProviderProfileRecord
@@ -18,7 +19,7 @@ import {
   TurnOutcome
 } from './ChatMetrics';
 
-export { ProviderModelRecord, ProviderProfileRecord };
+export { ProviderModelRecord, ProviderProfileRecord, PendingQuestion };
 export enum Page {
   Chat = 'Chat',
   Sessions = 'Sessions',
@@ -241,6 +242,9 @@ export class PendingRequest {
   title: string = '';
   detail: string = '';
   choices: string[] = [];
+  // Exact DSH question projection for a real user-questions request. Permission
+  // cards leave this empty; a question card owns the composer seat.
+  questions: PendingQuestion[] = [];
 }
 export class ShellSnapshot {
   revision: number = 0;
@@ -366,6 +370,8 @@ export interface ShellActions {
   exportSession(): Promise<void>;
   runCommand(command: string): Promise<void>;
   answerRequest(id: string, answer: string): Promise<void>;
+  /** Hides one visible pending prompt without answering or cancelling it. */
+  dismissPending(id: string): Promise<void>;
   setItemEnabled(id: string, enabled: boolean): Promise<void>;
   saveItem(id: string, value: string): Promise<void>;
   deleteItem(id: string): Promise<void>;

@@ -12,6 +12,21 @@ export class LocaleText {
   static readonly EN: string = 'en';
 
   private static readonly EN_BY_ZH: Record<string, string> = {
+    "关闭自动换行": "Disable wrapping",
+    "自动换行": "Wrap lines",
+    "关闭换行": "Disable wrapping",
+    "开启换行": "Enable wrapping",
+    "展开全部 {0} 行": "Expand all {0} lines",
+    "问题请求无效：{0}": "Invalid question request: {0}",
+    "请先完成这道问题。": "Complete this question first.",
+    "放弃整组问题": "Dismiss all questions",
+    "自定义回答": "Custom answer",
+    "上一题": "Previous",
+    "下一题": "Next",
+    "跳过": "Skip",
+    "正在提交…": "Submitting\u2026",
+    "这个问题没有可回答的选项。": "This question has no answer options.",
+    "推荐": "Recommended",
     "模拟运行视图退出": "Simulate renderer exit",
     "正在读取已测量的写入…": "Loading measured writes…",
     "产物测量失败：宿主无法读取本会话的写入记录。": "Artifact measurement failed. This session’s write records could not be read.",
