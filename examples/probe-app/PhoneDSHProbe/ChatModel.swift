@@ -1013,10 +1013,6 @@ final class ChatModel {
             modelName = ""
             appendStatus("Model service settings are invalid; booting without a model route: \(error.localizedDescription)")
         }
-        // The same independent-search plan the Web surface uses: independent
-        // mode adds its exact gateway host rule and wraps only the search
-        // paths with the dedicated Keychain; follow-model is limited to the
-        // official DeepSeek Messages endpoint the shipped provider supports.
         var launchPlan = ModelProviderLaunchPlan(allowedModelHosts: allowedModelHosts,
                                                  credentialProvider: credentialProvider,
                                                  environment: environment)
@@ -1056,6 +1052,7 @@ final class ChatModel {
             egressAuthorizer: mcpPolicy,
             drainDeadline: ChatHostConfiguration.defaultDrainDeadline,
             helloTimeout: ChatHostConfiguration.defaultHelloTimeout)
+        configuration.officialDeepSeekWebCredentialProvider = searchPlan.officialDeepSeekWebCredentialProvider
         // One line states what the host actually enforces. The Worker's
         // published manifest can lag behind a rebuilt bundle; this is the
         // number the write path uses.

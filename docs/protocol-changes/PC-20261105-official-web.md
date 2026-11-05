@@ -6,7 +6,7 @@ contracts: [P05, P09, P16, P18, P20]
 status: implemented
 breaking: false
 base: 6c040fe1fc56c0d263293faaf208105a5e8fc315
-contract_revision: 01b003e3bbbd702ff5419957810bad0e4972c473
+contract_revision: 3f349c2229be2e1bc01559b4309af33832c3b4f1
 ```
 
 The Android and Harmony hosts do not supply a search provider. With the new launch,
@@ -62,3 +62,23 @@ Android product shell follow-up:
 | Revision | Change |
 | --- | --- |
 | `01b003e3` | Froze the scoped bearer fallback and Android process row identity after reproducing both defects in the product shell. |
+
+
+### iOS follow-model parity
+
+Contract revision `3f349c22` extends the same official web grant to iOS.
+The model settings capture the selected Keychain account and create a scoped
+provider only when the official profile has a readable key. The app publishes
+the existing Search/Fetch provider variables. The gateway checks the exact
+HTTPS POST target before choosing that provider, strips caller credentials,
+refuses redirects, and handles the response as sensitive.
+
+The saved model and independent-search documents retain their existing formats.
+The Worker already supports the Search/Fetch provider pair. The older iOS app
+continues to read the same preferences after rollback and selects its previous
+Messages search behavior. The Swift host and gateway rebuild together.
+
+The shared gateway request fixture covers positive paths and invalid methods,
+origins, queries, fragments and aliases. iOS gateway tests also cover a missing
+Bearer at dispatch. App launch regressions cover official follow-model settings
+and the independent key-clear path.

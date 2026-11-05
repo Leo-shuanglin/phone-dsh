@@ -214,6 +214,7 @@ final class GatewaySessionCoordinator: NSObject, URLSessionDataDelegate, URLSess
     @unchecked Sendable {
     private let rules: [GatewayHostRule]
     private let egressAuthorizer: (any EgressHostAuthorizing)?
+    private let refusesOfficialWebRedirects: Bool
     private let lock = NSLock()
     private var attempts: [Int: UpstreamAttempt] = [:]
     private var credentialRedirects: [Int: GatewayCredentialRedirect] = [:]
@@ -223,9 +224,11 @@ final class GatewaySessionCoordinator: NSObject, URLSessionDataDelegate, URLSess
     let delegateQueue: OperationQueue
 
     init(allowedHosts: [GatewayHostRule],
-         egressAuthorizer: (any EgressHostAuthorizing)? = nil) {
+         egressAuthorizer: (any EgressHostAuthorizing)? = nil,
+         refusesOfficialWebRedirects: Bool = false) {
         self.rules = allowedHosts
         self.egressAuthorizer = egressAuthorizer
+        self.refusesOfficialWebRedirects = refusesOfficialWebRedirects
         let queue = OperationQueue()
         queue.name = "phone-dsh.phone-gateway.session"
         queue.maxConcurrentOperationCount = 1
@@ -359,6 +362,11 @@ final class GatewaySessionCoordinator: NSObject, URLSessionDataDelegate, URLSess
                     willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest,
                     completionHandler: @escaping (URLRequest?) -> Void) {
+        if refusesOfficialWebRedirects, let original = task.originalRequest?.url,
+           OfficialDeepSeekWebRoute.admits(method: task.originalRequest?.httpMethod ?? "", url: original) {
+            completionHandler(nil)
+            return
+        }
         // Never follow a redirect outside the allow-list. A request carrying a
         // host credential may only follow a redirect whose scheme, host, port
         // and normalized path remain the same credential scope; URLSession

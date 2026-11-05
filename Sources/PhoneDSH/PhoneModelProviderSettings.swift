@@ -846,6 +846,32 @@ public final class PhoneModelProviderSettings {
                                                modelEndpoint: endpoint)
     }
 
+    public static let officialDeepSeekWebBaseURL = "https://api.deepseek.com/v1/tools"
+
+    public static func supportsOfficialDeepSeekWebTools(_ profile: ProviderProfile?) -> Bool {
+        guard let profile, let url = URLComponents(string: profile.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme?.lowercased() == "https", url.host?.lowercased() == "api.deepseek.com",
+              (url.port ?? 443) == 443, url.user == nil, url.password == nil,
+              url.percentEncodedQuery == nil, url.percentEncodedFragment == nil else { return false }
+        let path = url.percentEncodedPath
+        let base = path.hasSuffix("/") ? String(path.dropLast()) : path
+        return ["", "/v1", "/anthropic", "/anthropic/v1"].contains(base)
+    }
+
+    /// The gateway selects this provider only for an exact official Search/Fetch POST.
+    public func makeOfficialDeepSeekWebCredentialProvider(for profile: ProviderProfile) throws -> (any CredentialProvider)? {
+        guard Self.supportsOfficialDeepSeekWebTools(profile),
+              let key = try secrets.secret(for: profile.credentialRef), !key.isEmpty else { return nil }
+        return PhoneWebSearchCredentialRouter(
+            modelProvider: StaticCredentialProvider([:]),
+            searchHost: "api.deepseek.com",
+            searchScheme: "https",
+            searchPort: 443,
+            operationPaths: ["/v1/tools/search", "/v1/tools/fetch"],
+            credentialRef: profile.credentialRef,
+            secretStore: secrets)
+    }
+
     /// Non-secret Worker environment entries for the selected profile.
     ///
     /// `PDSH_MODEL_PROVIDER_JSON` contains ids, display names, endpoints and

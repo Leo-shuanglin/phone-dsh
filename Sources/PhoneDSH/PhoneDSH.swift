@@ -193,6 +193,8 @@ public struct PhoneDSHConfiguration: Equatable, Sendable {
     /// Credential provider for the model gateway and the remote DSH handoff
     /// Bearer (never exposed to the Worker).
     public let credentialProvider: any CredentialProvider
+    /// Scoped host credential for the official DeepSeek web API in follow-model mode.
+    public var officialDeepSeekWebCredentialProvider: (any CredentialProvider)? = nil
     /// Additional exact-origin/path egress admission applied by the gateway
     /// after its static host union. The App supplies the MCP access policy;
     /// `nil` keeps the previous host-only behavior.
@@ -371,6 +373,8 @@ public struct PhoneDSHConfiguration: Equatable, Sendable {
             && lhs.helloTimeout == rhs.helloTimeout
             && lhs.turnInactivityTimeout == rhs.turnInactivityTimeout
             && lhs.credentialProviderIdentity == rhs.credentialProviderIdentity
+            && lhs.officialDeepSeekWebCredentialProvider.map(Self.identity(of:))
+                == rhs.officialDeepSeekWebCredentialProvider.map(Self.identity(of:))
             && lhs.execProviderIdentity == rhs.execProviderIdentity
             && lhs.egressAuthorizerIdentity == rhs.egressAuthorizerIdentity
     }

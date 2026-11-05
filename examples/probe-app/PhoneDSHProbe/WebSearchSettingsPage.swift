@@ -290,17 +290,17 @@ struct WebSearchSettingsPage: View {
     }
 
     private var followsModelSearch: Bool {
-        WebSearchHostConfiguration.modelServiceSupportsMessagesSearch(selectedProfile)
+        PhoneModelProviderSettings.supportsOfficialDeepSeekWebTools(selectedProfile)
     }
 
     private var followModelSupportText: String {
-        guard let selectedProfile else {
+        guard selectedProfile != nil else {
             return "还没有设置模型服务。要么先去「模型服务」配一个,要么在这一页自己填。"
         }
         if followsModelSearch {
-            return "现在这个模型服务自带搜索,可以直接用它。"
+            return "网页搜索和抓取会使用这个官方 DeepSeek 模型服务的密钥。"
         }
-        return "现在这个模型服务不带搜索。要么换一个,要么在这一页自己填。"
+        return "当前模型服务不支持沿用。你可以切换到独立 DeepSeek 搜索 API。"
     }
 
     private var restartHint: String {
@@ -310,7 +310,7 @@ struct WebSearchSettingsPage: View {
 
     private var footerSection: some View {
         Section {
-            Text("用模型服务自带的搜索时,抓网页这件事也归它管,这里不再单独设。")
+            Text("沿用模型服务时，网页搜索和抓取共用官方 DeepSeek 模型密钥。")
             Text("密钥只存在这台手机上,本地引擎拿到的只是一个占位。")
             Text("存好或删掉之后要重启本地引擎才生效;重启不会动你的文件夹和会话。")
         } header: {

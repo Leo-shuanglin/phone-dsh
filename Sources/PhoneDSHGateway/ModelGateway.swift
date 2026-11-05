@@ -64,6 +64,20 @@ public struct ModelGatewayBackoffPolicy: Equatable, Sendable {
     }
 }
 
+enum OfficialDeepSeekWebRoute {
+    private static let paths: Set<String> = ["/v1/tools/search", "/v1/tools/fetch"]
+
+    static func matchesScope(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && url.host?.lowercased() == "api.deepseek.com"
+            && (url.port ?? 443) == 443
+            && paths.contains(ModelGatewayCredentialRouting.normalizedPath(url))
+    }
+
+    static func admits(method: String, url: URL) -> Bool {
+        method == "POST" && paths.contains { url.absoluteString == "https://api.deepseek.com" + $0 }
+    }
+}
+
 /// Model gateway configuration.
 public struct ModelGatewayConfiguration: Equatable, Sendable {
     /// Response log cap of PLAN §2.3.
@@ -428,6 +442,7 @@ public actor ModelGateway {
     public nonisolated let configuration: ModelGatewayConfiguration
 
     private nonisolated let credentialProvider: any CredentialProvider
+    private nonisolated let officialDeepSeekWebCredentialProvider: (any CredentialProvider)?
     private nonisolated let egressAuthorizer: (any EgressHostAuthorizing)?
     private nonisolated let responseLog: (any ResponseLogging)?
     private nonisolated let responseOutcomeHandler: (@Sendable (GatewayResponseReceipt) -> Void)?
@@ -456,9 +471,11 @@ public actor ModelGateway {
                 responseLog: (any ResponseLogging)? = nil,
                 responseOutcomeHandler: (@Sendable (GatewayResponseReceipt) -> Void)? = nil,
                 clock: any GatewayClock = SystemGatewayClock(),
-                egressAuthorizer: (any EgressHostAuthorizing)? = nil) {
+                egressAuthorizer: (any EgressHostAuthorizing)? = nil,
+                officialDeepSeekWebCredentialProvider: (any CredentialProvider)? = nil) {
         self.configuration = configuration
         self.credentialProvider = credentialProvider
+        self.officialDeepSeekWebCredentialProvider = officialDeepSeekWebCredentialProvider
         self.responseLog = responseLog
         self.responseOutcomeHandler = responseOutcomeHandler
         self.clock = clock
@@ -466,7 +483,8 @@ public actor ModelGateway {
         let rules = configuration.allowedUpstreamHosts.compactMap(GatewayHostRule.init(rawValue:))
         self.hostRules = rules
         let coordinator = GatewaySessionCoordinator(allowedHosts: rules,
-                                                    egressAuthorizer: egressAuthorizer)
+                                                    egressAuthorizer: egressAuthorizer,
+                                                    refusesOfficialWebRedirects: officialDeepSeekWebCredentialProvider != nil)
         self.coordinator = coordinator
         self.session = coordinator.makeSession(timeout: configuration.upstreamRequestTimeout)
     }
@@ -586,6 +604,13 @@ public actor ModelGateway {
             return
         }
 
+        let webProvider = OfficialDeepSeekWebRoute.matchesScope(url)
+            ? officialDeepSeekWebCredentialProvider : nil
+        if webProvider != nil && !OfficialDeepSeekWebRoute.admits(method: method, url: url) {
+            downstream.finish(throwing: ModelGatewayError.invalidRequest("invalid official web tool request"))
+            return
+        }
+
         let key = ResponseLog.cacheKey(method: method,
                                        url: url,
                                        headers: request.headers,
@@ -607,7 +632,7 @@ public actor ModelGateway {
             break
         }
 
-        if replayOpen, let log = responseLog, let replay = await log.replay(key: key) {
+        if webProvider == nil, replayOpen, let log = responseLog, let replay = await log.replay(key: key) {
             metricsStore.recordReplayHit()
             emitResponseReceipt(GatewayResponseReceipt(key: key,
                                                        status: replay.status,
@@ -637,7 +662,7 @@ public actor ModelGateway {
         let requestID = UUID().uuidString
         var attemptNumber = 0
         let maximumAttempts = max(1, configuration.backoff.maximumAttempts)
-        let requestMayRetry = Self.isReplaySafeRequest(
+        let requestMayRetry = webProvider == nil && Self.isReplaySafeRequest(
             method: method, url: url, replaySafeModelEndpoints: configuration.replaySafeModelEndpoints)
         var logSequence: UInt64 = 0
         // The per-request egress authorizer is the host's exact-URL MCP grant:
@@ -650,8 +675,12 @@ public actor ModelGateway {
             attemptNumber += 1
             let credential: Credential
             do {
-                credential = try await credentialProvider.credential(
+                credential = try await (webProvider ?? credentialProvider).credential(
                     for: ModelGatewayCredentialRouting.scope(for: url))
+                if webProvider != nil && (credential.kind != .bearer || credential.value.isEmpty) {
+                    downstream.finish(throwing: ModelGatewayError.credentialUnavailable)
+                    return
+                }
             } catch {
                 downstream.finish(throwing: ModelGatewayError.credentialUnavailable)
                 return
@@ -668,10 +697,11 @@ public actor ModelGateway {
             // (including the credential part of a standard Authorization
             // scheme) are redacted; JSON structure and the JSON-RPC id are
             // preserved. This is intentionally not a full pass-through.
-            let sensitive = Self.isSensitiveMCPResponse(
+            let sensitive = webProvider != nil || Self.isSensitiveMCPResponse(
                 request, credential: credential, admittedByMCPGrant: admittedByMCPGrant)
             let redactedValues = Self.credentialSecretValues(credential)
-            let upstreamRequest = makeURLRequest(request, method: method, url: url, credential: credential)
+            let upstreamRequest = makeURLRequest(request, method: method, url: url,
+                                                 credential: credential, officialWeb: webProvider != nil)
             metricsStore.addRequestBytes(request.body.count)
             let carriesHostCredential = Self.credentialCarriesSecret(credential)
             let attempt = coordinator.begin(
@@ -1004,7 +1034,8 @@ public actor ModelGateway {
     private nonisolated func makeURLRequest(_ request: GatewayRequest,
                                             method: String,
                                             url: URL,
-                                            credential: Credential) -> URLRequest {
+                                            credential: Credential,
+                                            officialWeb: Bool) -> URLRequest {
         var upstream = URLRequest(url: url)
         upstream.httpMethod = method
         upstream.timeoutInterval = configuration.upstreamRequestTimeout
@@ -1017,7 +1048,8 @@ public actor ModelGateway {
             // A host-managed header's Worker value is a non-secret placeholder.
             // The host credential router injects the real, scoped value (or
             // nothing at all); the placeholder must never reach the server.
-            if value == Self.hostManagedHeaderPlaceholder { continue }
+            if value == Self.hostManagedHeaderPlaceholder
+                || (officialWeb && Self.alternateAPIKeyHeaders.contains(lowercased)) { continue }
             upstream.setValue(value, forHTTPHeaderField: name)
         }
         // The worker's Authorization (plain or `X-PDSH-Upstream-Authorization`)
@@ -1043,6 +1075,8 @@ public actor ModelGateway {
         // a loopback Referer. They authenticate this origin, not the upstream.
         "cookie", "cookie2", "referer", "referrer",
     ]
+
+    private static let alternateAPIKeyHeaders: Set<String> = ["x-api-key", "api-key", "x-dsh-auth-token"]
 
     /// True when the Worker supplied a credential the gateway replaces. Plain
     /// `Authorization` is the loopback bridge token/Worker header;
