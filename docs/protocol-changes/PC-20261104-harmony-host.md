@@ -148,3 +148,11 @@ ShellActions 新增 `updateQueueItem(workerSessionId, itemId, action, replacemen
 pendingTurns 可保留为私有回合组与产物范围记账，不能作为队列展示；忙时 steer 不增加预期 turn，成功移除自己提交的待执行项只按匹配的 requestId 退役一次。保持真实 turn/start、turn/end 与取消事件语义，不猜测旧进程仍活着；已有会话切换/停止时清除可见队列并重新读取。旧磁盘数据不变，同 HAP 两端同时升级。
 
 实现者独占 `model/QueueModel.ets`、`model/Contracts.ets`、`host/HostService.ets`、`ui/ChatView.ets`、`tests/queue-model.test.mjs`。保留现有多题、locale、RichText、RCP、WAL/安全防线。协调者运行现有 Worker 实测：长 bash 回合中排入三条、按 durable id 移除中间项、编辑另一个、观察实际工具/消息记录与最终空队列；验证忙时 steer 不产生幽灵运行态。不可仅凭模型复述或前端计数算通过。
+
+## android-parity-6 控件布局修复
+
+Protocol impact: P09。校准后截图确认 Android CodeBlock 对语言标签使用 `weight(fill=false)` 又加一个带权重 Spacer，导致换行/复制控件停在中部。共享参考 `Components.swift` 的 `DSSCodeBlock` 用一个 Spacer 将控件推向尾部。修正 Android 权重归属，保留语言文本截断、按钮尺寸和右内距 12。鸿蒙端保持尾部对齐；原始 Android 截图保留。
+
+英文设置长权限摘要曾占尽横向空间，使标题按单字换行并产生巨大空白。两端的设置导航行应保留可见标题，右侧值限内行宽的一半，单行省略，不改实际值或无障碍文本。此处是本地 UI 测量约束，不增加共享 token、持久化字段或远端协议。实际 Compose 回归须覆盖尾部复制控件和长值标题；最终验收另用同密度模拟器截图。
+
+实现者独占 Android `CodeBlock.kt`、`SettingsPage.kt` 和对应渲染测试，以及 Harmony `ShellSupport.ets` 的 NavRow 值约束。协调者合并、构建及原图对照。SDK SVG `fillColor` 实测破坏 `fill=none` 的线框，代码卡片改用既有图标生成器从 `colors.sessionSecondary` 派生的同路径 ink 变体，旧默认图标不改。
