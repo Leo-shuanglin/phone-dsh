@@ -166,3 +166,15 @@ Protocol impact: P09; P12: none — 既有 renderMath 输入、SVG/width/height/
 校准截图同一窄表卡片背景高度为 Harmony 602px / Android 510px。差异来自首尾固定行高；保持角色行高在行间，避免给单行标签/值强加整段 leading。API20 使用实测默认字体自然高度计算间距，`lineSpacing(...,{onlyBetweenLines:true})`；不增加手调偏移。正文角色行高沿 Android `UiType.applyPreferences` 的 16/24 比例和下限，标题使用既有固定字号，行内代码 normal 为 code role+1、compact 为13。系统字形仍按各平台真实字体。原消息复制完整源码；选区 TeX 复制与长公式还要单独验收，不能推断通过。
 
 实现者独占 `ui/NativeInlineText.ets`、`ui/MathFormula.ets` 中现有解码器复用；协调者负责 MarkdownBody/表格消费、FontRole 样式和真实设备验证。有效分式/矩阵、无效 TeX、长段落跨行、链接、放大字体、重排后旧结果清理是验收用例。同 HAP 同次升级，不改 Worker、schema 或旧数据。
+
+## android-parity-8 Android 排队后的会话监听
+
+Base: `42d4dbf748e73a52877b9d82df15c8f521c7d932`. Protocol impact: P06; P09; P14: none — 保持现有 mux 与 DSH RPC 形状；P03: none — 只按现有格式持久化真实事件，无新日志字段或兼容分支。
+
+在 Android API35 实际排入三条后，第一条被 Worker 取走，首轮结尾后界面显示空闲，余下两条留在旧队列投影。Android `ChatTurnRunner.oneTurn` 收到首个 `turn/end` 就关闭 mux，而固定 Worker `ReactLoopAgent.turn` 会继续读取 inbox。相同 follow 应接收各排队回合的原始事件，不重发 prompt。
+
+以固定 DSH `session/projections` 的 `kind:sequenced`、`asOfSeq`、`values.turnBoundary.{openTurnStartSeq,lastTurn}` 和 `values.inbox['next-turn'/'next-step']` 为权威。只在终点已被该投影覆盖、最后 turn 等于所见终点、没有打开的 turn 且两个 lane 已读空时关闭。若 Worker 领先或有待处理输入，继续同一订阅；未知、过期、缺字段或迁移态不是空。保留正常长工具的静默窗口；回合之间有独立的有限等待，无法确认则走已有失败通道。取消仍中止订阅和通知同一 Worker。最终关闭和本地忙时提交同在 UI dispatcher，存在未返回的 busy prompt 时不得关闭；关闭后输入留在草稿。
+
+用户排队消息以真实 `user/message` 及 seq 投影。按 Worker `source.rpcId` 去掉已有首条乐观消息的同一回执；禁止按文本去重。保留现有消息大小限制和已支持文本部件。
+
+旧/新 App 都与同一固定 Worker 互通，Worker/schema/WAL 和旧数据不改；旧 App 的只读历史依然可读。旧 App 仍有首轮关闭缺陷。实现范围为 Android `ChatTurnRunner.kt`、`ProbeEngineViewModel.kt`、`ChatSurface.kt` 及其现有 JVM 测试。验证以真实 HostChannel 的两个有序 turn、非空及过期投影和实际模拟器队列为准；鸿蒙继续使用当前实现，不改其 Worker 端。
