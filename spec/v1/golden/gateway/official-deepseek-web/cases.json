@@ -8,7 +8,7 @@
     {"url":"https://api.deepseek.com:8443/v1","supported":false},
     {"url":"http://api.deepseek.com/v1","supported":false},
     {"url":"https://api.deepseek.com.example.invalid/v1","supported":false},
-    {"url":"https://user@api.deepseek.com/v1","supported":false},
+    {"url":"https://user\u0040api.deepseek.com/v1","supported":false},
     {"url":"https://api.deepseek.com/v1?model=x","supported":false},
     {"url":"https://api.deepseek.com/v1#fragment","supported":false},
     {"url":"https://api.deepseek.com/v1/../v1","supported":false}
