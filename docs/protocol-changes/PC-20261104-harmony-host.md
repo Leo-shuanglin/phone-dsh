@@ -104,3 +104,11 @@ Base 为 `c5aec33824f468f76ac324df5d116fe7a56c564f`。Protocol impact: P06; P09;
 新增本地 `dismissPending(id)` 只隐藏卡片，不能发送允许、拒绝或 `$events/result`。问题占用 composer seat，权限审批留在卡片区域。切换会话/停引擎清理可见的旧 pending，底层取消仅按既有事件或 runtime 生命周期处理。此处不宣称 timed/continued 问题已完成，相关能力必须另按实际 projection/RPC 验收。
 
 同 HAP 的 UI/host 同次升级，不混用新旧接口。持久化格式、旧会话数据和回滚均不受影响。实现者独占 `model/Contracts.ets`、`model/QuestionAnswers.ets`、`host/HostService.ets`、`ui/ChatView.ets` 与对应纯测试。不得修改模型代理、VFS、wire、WAL、其他 UI、规范或 DSH。协调者执行编译和真实 ask_user_question 多题回合验收，保留未测试项。
+
+### android-parity-2b 分发修正
+
+Protocol impact: P14; P04; P06: none — 不改 DSH 事件或答案内容。真实模拟器回合确认 `$events/result` 被 `method.startsWith('$')` 误分发为本地 VFS 命令，Worker 返回 `Unsupported native Worker method $events/result`，导致答案无法送达。
+
+页面适配器只将 product-worker.mjs 实际提供的八个私有命令 `$diagnose/$writeFile/$readFile/$listFiles/$openBinaryRead/$readBinaryChunk/$closeBinaryRead/$command` 送入本地消息通道；既有 `$follow/$events/$close` 保持其专用流处理。其他 DSH 方法按既有 RPC envelope 经 WorkerTunnel 传递，包括 `$events/result`。不新增方法、消息字段或错误语义。producer/consumer 仍在同 HAP 配对，旧磁盘数据不变。
+
+回归必须执行真实 engine.mjs 的 dispatcher，分别验证 `$events/result` 的 `/api/$events/result` 路由、普通 DSH RPC、全部真实本地命令，以及非法路径拒绝。不得仅比较源码字符串或手写第二个 dispatcher。
