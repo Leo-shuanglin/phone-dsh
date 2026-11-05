@@ -81,6 +81,63 @@ test('the Worker host route installs while node:https is unresolvable', async ()
   }
 })
 
+test('a cookie-authenticated Worker routes official web tools with its launch bearer', async t => {
+  const keys = [
+    'PDSH_CHANNEL_TOKEN', 'PDSH_EXEC_BRIDGE_TOKEN', 'PDSH_CHANNEL_ORIGIN',
+    'PDSH_DSH_LAUNCH_TOKEN', 'PDSH_WEB_SEARCH_PROVIDER', 'DEEPSEEK_SEARCH_API_BASE_URL',
+  ] as const
+  const previous = keys.map(key => [key, process.env[key]] as const)
+  const channel = Object.getOwnPropertyDescriptor(globalThis, '__PDSH_CHANNEL__')
+  const origin = 'http://127.0.0.1:23456'
+  const base = 'https://api.deepseek.com/v1/tools'
+  const token = 'cookie-launch-fixture'
+  delete process.env.PDSH_CHANNEL_TOKEN
+  delete process.env.PDSH_EXEC_BRIDGE_TOKEN
+  process.env.PDSH_CHANNEL_ORIGIN = origin
+  process.env.PDSH_DSH_LAUNCH_TOKEN = token
+  process.env.PDSH_WEB_SEARCH_PROVIDER = 'deepseek-search-api'
+  process.env.DEEPSEEK_SEARCH_API_BASE_URL = base
+  Object.defineProperty(globalThis, '__PDSH_CHANNEL__', { configurable: true, value: {} })
+
+  const calls: Request[] = []
+  const platformFetch: typeof fetch = async (input, init) => {
+    calls.push(new Request(input, init))
+    return new Response('ok')
+  }
+  t.mock.method(globalThis, 'fetch', platformFetch)
+  try {
+    const { installNodeFetch } = await import('../llm-bridge/src/install.ts')
+    const restore = installNodeFetch()
+    try {
+      for (const operation of ['search', 'fetch']) {
+        await fetch(`${base}/${operation}`, { method: 'POST', body: '{}' })
+        const request = calls.at(-1)
+        assert.equal(request?.url, origin + '/v1/http')
+        assert.equal(request?.headers.get('authorization'), `Bearer ${token}`)
+        assert.equal(request?.headers.get('x-pdsh-target-url'), `${base}/${operation}`)
+        assert.equal(request?.headers.get('x-pdsh-target-method'), 'POST')
+      }
+
+      const model = origin + '/v1/messages'
+      await fetch(model, { method: 'POST', body: '{}' })
+      assert.equal(calls.at(-1)?.url, model)
+      assert.equal(calls.at(-1)?.headers.get('authorization'), null)
+    } finally {
+      restore()
+    }
+
+    delete process.env.PDSH_DSH_LAUNCH_TOKEN
+    assert.throws(() => installNodeFetch(), /official web tools need the host gateway/)
+  } finally {
+    if (channel === undefined) Reflect.deleteProperty(globalThis, '__PDSH_CHANNEL__')
+    else Object.defineProperty(globalThis, '__PDSH_CHANNEL__', channel)
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
 // --- Response-delivery deadline (G2-FIX-1) --------------------------------
 //
 // The host gateway can receive a complete model response while the last bytes

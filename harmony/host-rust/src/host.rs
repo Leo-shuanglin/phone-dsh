@@ -63,6 +63,20 @@ const MAX_MODEL_LAUNCH_BYTES: u64 = 256 * 1024;
 const MODEL_PROVIDER_ENV: &str = "PDSH_MODEL_PROVIDER_JSON";
 const MODEL_NAME_ENV: &str = "PDSH_MODEL_NAME";
 
+// The official DeepSeek Search/Fetch grant is host-private: it is published to
+// the Worker only when `HostService` froze `officialWebTools: true` into the
+// launch document from an eligible boot model base and a readable model key.
+// The Worker gets a placeholder, never the key; `/v1/http` injection and route
+// admission stay in the host edge.
+const WEB_SEARCH_PROVIDER_ENV: &str = "PDSH_WEB_SEARCH_PROVIDER";
+const WEB_FETCH_PROVIDER_ENV: &str = "PDSH_WEB_FETCH_PROVIDER";
+const WEB_SEARCH_BASE_ENV: &str = "DEEPSEEK_SEARCH_API_BASE_URL";
+const WEB_SEARCH_KEY_ENV: &str = "DEEPSEEK_SEARCH_API_KEY";
+const WEB_SEARCH_PROVIDER_ID: &str = "deepseek-search-api";
+const WEB_FETCH_PROVIDER_ID: &str = "deepseek-fetch-api";
+const WEB_SEARCH_BASE: &str = "https://api.deepseek.com/v1/tools";
+const WEB_SEARCH_KEY_PLACEHOLDER: &str = "phone-host-injects-key";
+
 /// One public model definition. Optional fields mirror
 /// `plugins/phone-model-config` version 1 exactly.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +107,9 @@ pub struct ModelLaunchProvider {
 pub struct ModelLaunch {
     pub selected_id: String,
     pub providers: Vec<ModelLaunchProvider>,
+    /// Host-private root grant. Absent, non-boolean or false all mean disabled;
+    /// it never appears in `document_json`.
+    pub official_web_tools: bool,
 }
 
 impl ModelLaunch {
@@ -320,6 +337,10 @@ pub fn parse_model_launch(text: &str) -> Option<ModelLaunch> {
         return None;
     }
     let selected_id = non_empty_string(row.get("selectedId"))?;
+    let official_web_tools = row
+        .get("officialWebTools")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let entries = row.get("providers")?.as_array()?;
     if entries.is_empty() {
         return None;
@@ -341,6 +362,7 @@ pub fn parse_model_launch(text: &str) -> Option<ModelLaunch> {
     Some(ModelLaunch {
         selected_id,
         providers,
+        official_web_tools,
     })
 }
 
@@ -666,6 +688,15 @@ impl Host {
                 MODEL_PROVIDER_ENV.to_owned(),
                 json!(launch.document_json()),
             );
+            if launch.official_web_tools {
+                env.insert(WEB_SEARCH_PROVIDER_ENV.to_owned(), json!(WEB_SEARCH_PROVIDER_ID));
+                env.insert(WEB_FETCH_PROVIDER_ENV.to_owned(), json!(WEB_FETCH_PROVIDER_ID));
+                env.insert(WEB_SEARCH_BASE_ENV.to_owned(), json!(WEB_SEARCH_BASE));
+                env.insert(
+                    WEB_SEARCH_KEY_ENV.to_owned(),
+                    json!(WEB_SEARCH_KEY_PLACEHOLDER),
+                );
+            }
         }
         json!({
             "imageURL": format!("/assets/image.tar.gz?token={token}"),

@@ -4,7 +4,7 @@
 
 import Foundation
 import XCTest
-import PhoneDSHGateway
+@testable import PhoneDSHGateway
 import PhoneDSHAgentCore
 
 final class ModelGatewayTests: XCTestCase {
@@ -260,6 +260,49 @@ final class ModelGatewayTests: XCTestCase {
         let error = try await expectGatewayFailure(gateway.handle(makeRequest(port: server.port)))
         XCTAssertEqual(error as? ModelGatewayError, .credentialUnavailable)
         XCTAssertEqual(server.requestCount, 0)
+    }
+
+    func testOfficialWebRouteMatchesSharedRequestCases() throws {
+        struct Cases: Decodable {
+            struct Request: Decodable {
+                var method: String
+                var url: URL
+                var allowed: Bool
+            }
+            var requests: [Request]
+        }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = root.appendingPathComponent("spec/v1/golden/gateway/official-deepseek-web/cases.json")
+        let cases = try JSONDecoder().decode(Cases.self, from: Data(contentsOf: fixture))
+        for request in cases.requests {
+            XCTAssertEqual(OfficialDeepSeekWebRoute.admits(method: request.method, url: request.url),
+                           request.allowed, "\(request.method) \(request.url)")
+        }
+    }
+
+    func testOfficialWebRouteRejectsWrongMethodAliasesAndMissingBearerBeforeDispatch() async throws {
+        let model = StaticCredentialProvider([
+            CredentialScope(service: "api.deepseek.com"): Credential(kind: .apiKey(header: "x-api-key"),
+                                                                       value: "model-fixture")
+        ])
+        let gateway = ModelGateway(
+            configuration: ModelGatewayConfiguration(allowedUpstreamHosts: ["https://api.deepseek.com"]),
+            credentialProvider: model,
+            officialDeepSeekWebCredentialProvider: StaticCredentialProvider([:]))
+        addTeardownBlock { await gateway.shutdown() }
+        for (method, address) in [
+            ("GET", "https://api.deepseek.com/v1/tools/search"),
+            ("POST", "https://api.deepseek.com/v1/tools/fetch?unexpected=1"),
+            ("POST", "https://api.deepseek.com/v1/tools/%73earch"),
+        ] {
+            let error = try await expectGatewayFailure(
+                gateway.handle(GatewayRequest(method: method, url: try XCTUnwrap(URL(string: address)))))
+            XCTAssertEqual(error as? ModelGatewayError, .invalidRequest("invalid official web tool request"))
+        }
+        let url = try XCTUnwrap(URL(string: "https://api.deepseek.com/v1/tools/fetch"))
+        let error = try await expectGatewayFailure(gateway.handle(GatewayRequest(method: "POST", url: url)))
+        XCTAssertEqual(error as? ModelGatewayError, .credentialUnavailable)
     }
 
     /// spec/exec-bridge-v1 §6 relays a harness `Authorization` as

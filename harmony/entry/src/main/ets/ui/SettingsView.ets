@@ -1207,9 +1207,7 @@ export struct WebSearchView {
   }
 
   private readonlyReason(): string {
-    return Copy.tr('只读：独立搜索服务的密钥要由宿主在出网时注入 /search、/fetch 两条路径；')
-      + '本宿主的出网代理只认模型服务的端点，没有搜索凭证路由，启动时也只放行一个精确 origin。'
-      + '写这份配置引擎用不上，所以本页不提供保存。';
+    return Copy.tr('选择官方 DeepSeek 模型服务并保存密钥后，网页搜索和抓取会自动启用。');
   }
 
   build() {
@@ -1233,7 +1231,12 @@ export struct WebSearchView {
         Column() {
           SectionLabel({ label: Copy.tr('网页搜索'), dark: this.dark })
           Column() {
-            InfoRow({ label: Copy.tr('网页搜索'), value: Copy.unknown, dark: this.dark, showDivider: false })
+            InfoRow({
+              label: Copy.tr('网页搜索'),
+              value: Copy.tr('跟随官方模型服务（自动）'),
+              dark: this.dark,
+              showDivider: false
+            })
           }
           .backgroundColor(this.pal().surface)
           .borderRadius(Metrics.settingsCardRadius)
@@ -1252,14 +1255,24 @@ export struct WebSearchView {
 
           SectionLabel({ label: Copy.tr('用哪一份搜索'), dark: this.dark })
           Column() {
-            InfoRow({ label: Copy.tr('搜索后端'), value: Copy.unknown, dark: this.dark, showDivider: true })
-            InfoRow({ label: Copy.tr('地址'), value: Copy.unknown, dark: this.dark, showDivider: true })
-            InfoRow({ label: Copy.tr('密钥状态'), value: Copy.unknown, dark: this.dark, showDivider: false })
+            InfoRow({
+              label: Copy.tr('搜索后端'),
+              value: Copy.tr('DeepSeek 官方 Search / Fetch API'),
+              dark: this.dark,
+              showDivider: true
+            })
+            InfoRow({ label: Copy.tr('地址'), value: 'https://api.deepseek.com/v1/tools', dark: this.dark, showDivider: true })
+            InfoRow({
+              label: Copy.tr('密钥状态'),
+              value: Copy.tr('与模型服务同一把（只读）'),
+              dark: this.dark,
+              showDivider: false
+            })
           }
           .backgroundColor(this.pal().surface)
           .borderRadius(Metrics.settingsCardRadius)
           .margin({ left: 16, right: 16 })
-          Text(Copy.tr('宿主没有报告搜索后端的读取结果，本页不假设任何地址或密钥状态；也不提供开关或保存。'))
+          Text(Copy.tr('当前引擎在启动时读取模型服务配置。'))
             .fontSize(Metrics.captionSize)
             .fontColor(this.pal().textSubtle)
             .lineHeight(17)
@@ -1267,7 +1280,7 @@ export struct WebSearchView {
 
           SectionLabel({ label: Copy.tr('什么时候生效'), dark: this.dark })
           Column() {
-            Text(Copy.tr('存好或改动搜索设置后，需要重启本地引擎才生效；重启不会动文件夹和会话。'))
+            Text(Copy.tr('保存或更换模型密钥后，需要重启本地引擎才生效；重启不会动文件夹和会话。'))
               .fontSize(Metrics.processSize)
               .fontColor(this.pal().textSecondary)
               .lineHeight(20)
@@ -1298,7 +1311,7 @@ export struct WebSearchView {
           .margin({ left: 16, right: 16 })
 
           SectionLabel({ label: Copy.tr('还要知道'), dark: this.dark })
-          Text(Copy.tr('用模型服务自带的搜索时，抓网页这件事也归它管，这里不再单独设。密钥只存在这台手机上，本地引擎拿到的只是一个占位。'))
+          Text(Copy.tr('搜索和抓取共用模型密钥。你只需要在「模型服务」保存一次。'))
             .fontSize(Metrics.captionSize)
             .fontColor(this.pal().textSubtle)
             .lineHeight(17)

@@ -480,15 +480,18 @@ export class LocaleText {
     '密钥只存在这台手机上；配置、日志、网页里都没有它。':
       'The key exists only on this phone; it appears nowhere in configuration, logs, or the web UI.',
     '用哪一份搜索': 'Which search to use',
-    '宿主没有报告搜索后端的读取结果，本页不假设任何地址或密钥状态；也不提供开关或保存。':
-      'The host did not report the search backend read result; this page assumes no address or key state, and offers no toggle or save.',
+    '跟随官方模型服务（自动）': 'Follows the official model service (automatic)',
+    'DeepSeek 官方 Search / Fetch API': 'Official DeepSeek Search / Fetch API',
+    '与模型服务同一把（只读）': 'Same key as the model service (read only)',
+    '当前引擎在启动时读取模型服务配置。':
+      'The engine reads your model settings at startup.',
     '什么时候生效': 'When it takes effect',
-    '存好或改动搜索设置后，需要重启本地引擎才生效；重启不会动文件夹和会话。':
-      'After saving or changing search settings, restart the local engine for them to take effect; restarting does not touch folders or sessions.',
+    '保存或更换模型密钥后，需要重启本地引擎才生效；重启不会动文件夹和会话。':
+      'After saving or replacing the model key, restart the local engine for it to take effect; restarting does not touch folders or sessions.',
     '停止本地引擎': 'Stop local engine',
     '还要知道': 'Also good to know',
-    '用模型服务自带的搜索时，抓网页这件事也归它管，这里不再单独设。密钥只存在这台手机上，本地引擎拿到的只是一个占位。':
-      'When using the model service\'s built-in search, fetching web pages is handled there and is not configured separately here. The key exists only on this phone; the local engine only receives a placeholder.',
+    '搜索和抓取共用模型密钥。你只需要在「模型服务」保存一次。':
+      'Search and fetch share your model key. Save it once under Model Services.',
     'MCP 服务器': 'MCP servers',
     '服务器': 'Server',
     '读取不到 MCP 服务器列表': 'Cannot load the MCP server list',
@@ -544,12 +547,13 @@ export class LocaleText {
     '启动记录里的模型服务地址不是可用的 https 地址；模型请求会被拒绝。':
       'The model service address recorded at startup is not a usable https address; model requests are denied.',
     '放行的模型路径': 'Admitted model paths',
-    '仅模型协议路径': 'Model protocol paths only',
-    '路径范围由当前模型服务的基地址和 HostHttpProxy 的模型协议表决定；不在其中时拒绝，不改道、不跟随重定向。':
-      'The path scope comes from the active model service base URL and HostHttpProxy\'s model-protocol table; anything else is refused, never rerouted or followed.',
+    '模型协议路径 + 官方工具路径': 'Model protocol paths + official tool paths',
+    '路径范围由当前模型服务的基地址和 HostHttpProxy 的模型协议表决定；官方 DeepSeek 模型服务在启动放行时另加 /v1/tools/search 与 /v1/tools/fetch 两条 POST。其余路径拒绝，不改道、不跟随重定向。':
+      'The path scope comes from the active model service base URL and HostHttpProxy\'s model-protocol table; an eligible official DeepSeek service adds only POST /v1/tools/search and /v1/tools/fetch at boot. Anything else is refused, never rerouted or followed.',
     '其他 Worker 出网': 'Other Worker egress',
-    '没有通用白名单、搜索凭证路由或 MCP 出网授权；Worker 不能把宿主密钥带到其他主机。':
-      'There is no general allowlist, search credential route, or MCP egress grant; the Worker cannot take host credentials to another host.',
+    '除官方工具外默认拒绝': 'Denied by default except the official tools',
+    '没有通用白名单或 MCP 出网授权；官方 Search/Fetch 仅按上述精确路径复用模型密钥，Worker 不能把宿主密钥带到其他主机。':
+      'There is no general allowlist or MCP egress grant; official Search/Fetch reuses the model key only on the exact paths above. The Worker cannot take host credentials to another host.',
     '传输与密钥': 'Transport and key',
     '仅 HTTPS；宿主逐请求注入': 'HTTPS only; host injects per request',
     '只接受 https；宿主每次模型请求从该服务的 AssetStore 别名读取密钥并注入；请求方自带的凭证头会被丢弃，重定向会被拒绝。':
@@ -880,12 +884,8 @@ export class LocaleText {
       'Saving writes this device. The service address and model are applied the next time the local engine starts. The key is read from this service\'s AssetStore alias on each request: after saving a new key, later requests to the same service use it.',
     '保存后会写入本机配置；服务地址与模型会在下次启动主机时生效。密钥按这个服务的 AssetStore 别名在每次请求时读取。':
       'Saving writes this device. The service address and model take effect the next time the host starts. The key is read from this service\'s AssetStore alias on every request.',
-    '只读：独立搜索服务的密钥要由宿主在出网时注入 /search、/fetch 两条路径；':
-      'Read-only: a separate search service key must be injected by the host on the /search and /fetch paths;',
-    '本宿主的出网代理只认模型服务的端点，没有搜索凭证路由，启动时也只放行一个精确 origin。':
-      'this host\'s egress proxy recognizes only the model service endpoint, has no search credential route, and allows exactly one origin at startup.',
-    '写这份配置引擎用不上，所以本页不提供保存。':
-      'Writing this configuration would not help the engine, so this page offers no save.',
+    '选择官方 DeepSeek 模型服务并保存密钥后，网页搜索和抓取会自动启用。':
+      'Web search and fetch turn on automatically when you select the official DeepSeek model service and save its key.',
     '只读：MCP 注册表在 Worker 的 /dsh/home/mcp.json，改写要走宿主的 phone/mcpUpsert 工具；':
       'Read-only: the MCP registry lives in the Worker\'s /dsh/home/mcp.json; changes go through the host\'s phone/mcpUpsert tool;',
     '本宿主没有注册该工具，所以不会在这里保存或删除服务器。':

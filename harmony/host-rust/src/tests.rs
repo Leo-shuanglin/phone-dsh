@@ -1352,14 +1352,17 @@ fn model_launch_projection_is_allowlisted() {
           "model": "alt-1"
         }
       ],
+      "officialWebTools": true,
       "PDSH_EVIL_ENV": "1"
     }"#;
     let launch = crate::host::parse_model_launch(document).expect("valid launch document");
     assert_eq!(launch.selected_model(), Some("deepseek-flash"));
+    assert!(launch.official_web_tools);
     let projected = launch.document_json();
     assert!(!projected.contains("sk-should-not-survive"));
     assert!(!projected.contains("credentialRef"));
     assert!(!projected.contains("encoder"));
+    assert!(!projected.contains("officialWebTools"));
     assert!(!projected.contains("PDSH_EVIL_ENV"));
     let parsed: Value = serde_json::from_str(&projected).expect("projected JSON");
     assert_eq!(parsed["version"], 1);
@@ -1426,6 +1429,100 @@ fn boot_config_adds_only_validated_model_projection() {
         "https://api.deepseek.com/anthropic"
     );
     host.stop();
+}
+
+const OFFICIAL_LAUNCH_BASE: &str = r#"{
+  "version": 1,
+  "selectedId": "deepseek",
+  "providers": [{
+    "id": "deepseek",
+    "displayName": "DeepSeek",
+    "baseURL": "https://api.deepseek.com/anthropic",
+    "model": "deepseek-flash",
+    "apiKey": "sk-official-secret"
+  }]
+}"#;
+
+fn official_launch_document(flag: Option<Value>) -> String {
+    let mut document: Value =
+        serde_json::from_str(OFFICIAL_LAUNCH_BASE).expect("launch base document");
+    if let Some(flag) = flag {
+        document
+            .as_object_mut()
+            .expect("launch document object")
+            .insert("officialWebTools".to_owned(), flag);
+    }
+    document.to_string()
+}
+
+#[test]
+fn model_launch_official_web_tools_is_host_private_and_fail_closed() {
+    // The root grant is host-private: absent, false, a non-boolean or null all
+    // leave it disabled, and none of them ever reaches the Worker projection.
+    for (flag, expected) in [
+        (None, false),
+        (Some(serde_json::json!(false)), false),
+        (Some(serde_json::json!("true")), false),
+        (Some(serde_json::json!(1)), false),
+        (Some(Value::Null), false),
+        (Some(serde_json::json!(true)), true),
+    ] {
+        let document = official_launch_document(flag);
+        let launch = crate::host::parse_model_launch(&document)
+            .unwrap_or_else(|| panic!("rejected launch document: {document}"));
+        assert_eq!(launch.official_web_tools, expected, "flag case {document}");
+        let projected = launch.document_json();
+        assert!(
+            !projected.contains("officialWebTools"),
+            "projection leaked the host-private flag: {projected}"
+        );
+        assert!(!projected.contains("sk-official-secret"));
+    }
+}
+
+#[test]
+fn boot_config_publishes_official_web_env_only_for_frozen_grant() {
+    let _serial = test_lock();
+    for (label, flag, enabled) in [
+        ("official-web-absent", None, false),
+        ("official-web-false", Some(serde_json::json!(false)), false),
+        ("official-web-invalid", Some(serde_json::json!("true")), false),
+        ("official-web-true", Some(serde_json::json!(true)), true),
+    ] {
+        let temp = TempDir::new(label);
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        let assets = make_assets(temp.path());
+        fs::write(
+            root.join(crate::host::MODEL_LAUNCH_FILE),
+            official_launch_document(flag),
+        )
+        .expect("launch file");
+        let host = Host::start(&root, &assets).expect("start host");
+        let config = host.boot_config();
+        let env = &config["xl"]["env"];
+        if enabled {
+            assert_eq!(env["PDSH_WEB_SEARCH_PROVIDER"], "deepseek-search-api");
+            assert_eq!(env["PDSH_WEB_FETCH_PROVIDER"], "deepseek-fetch-api");
+            assert_eq!(
+                env["DEEPSEEK_SEARCH_API_BASE_URL"],
+                "https://api.deepseek.com/v1/tools"
+            );
+            assert_eq!(env["DEEPSEEK_SEARCH_API_KEY"], "phone-host-injects-key");
+            let projection = env["PDSH_MODEL_PROVIDER_JSON"]
+                .as_str()
+                .expect("projection string");
+            assert!(!projection.contains("officialWebTools"));
+            assert!(!projection.contains("sk-official-secret"));
+            assert!(!config.to_string().contains("sk-official-secret"));
+        } else {
+            assert!(env.get("PDSH_WEB_SEARCH_PROVIDER").is_none());
+            assert!(env.get("PDSH_WEB_FETCH_PROVIDER").is_none());
+            assert!(env.get("DEEPSEEK_SEARCH_API_BASE_URL").is_none());
+            assert!(env.get("DEEPSEEK_SEARCH_API_KEY").is_none());
+        }
+        host.stop();
+    }
 }
 
 // ------------------------------------------------- workspace artifact facts

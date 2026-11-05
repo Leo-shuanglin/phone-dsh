@@ -63,7 +63,7 @@ classes: `credential-injection`, `header-strip`, `redirect-scope`, `egress-class
   stays and the host map supplies the real value (`ModelGateway.swift:1010`, `:1028`).
 - **The Worker never holds the key.** Injection happens inside `makeURLRequest` in the host
   process; no vector may put a host value into the Worker request. Vectors: `gw-cred-001` (key
-  injected), `gw-cred-002` (forged caller value overridden and counted), `gw-cred-003` (MCP map).
+  injected), `gw-cred-002` (forged caller value overridden and counted), `gw-cred-003` (MCP map). See [official DeepSeek web tools](gateway-official-web.md) for the Android and Harmony credential scope.
 
 ## 3. Header stripping — `header-strip`
 

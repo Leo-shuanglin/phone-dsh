@@ -1338,6 +1338,19 @@ export function loadWorkerHomePatch(appBoot, file = WORKER_PROFILE_PATCH, checko
       rows.push(...presetRows)
     }
   }
+
+  const hostWebToolConfig = findRow(rows, 'tool-web')?.config
+  for (const preset of flattenRows(rows)) {
+    if (preset.name !== '@deepseek-ai/dsh-agent-preset') continue
+    for (const tool of flattenRows(preset.config?.plugins)) {
+      if (tool.name !== '@deepseek-ai/dsh-tool-web') continue
+      tool.config = {
+        ...tool.config,
+        search: tool.config?.search === false ? false : hostWebToolConfig?.search ?? false,
+        fetch: tool.config?.fetch === false ? false : hostWebToolConfig?.fetch ?? false,
+      }
+    }
+  }
   return rows
 }
 

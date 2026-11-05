@@ -1758,7 +1758,7 @@ private fun turnAwareRows(
             }
         }
         groupedProcesses += ChatRow.ProcessGroup(
-            id = "process/$key/${processEntries.first().id.substringAfterLast('/')}",
+            id = "process/$key/${processEntries.first().id}",
             turnID = key,
             entries = processEntries.toList(),
             categories = categories,

@@ -100,6 +100,11 @@ public enum PhoneDSHWorkerEnvironment {
     /// Worker entry only states it in the capability manifest so the agent
     /// knows what `curl` can reach; the gateway enforces the list.
     public static let egressAllow = "PDSH_EGRESS_ALLOW"
+    // Search uses the existing PDSH_WEB_SEARCH_PROVIDER / PDSH_WEB_FETCH_PROVIDER
+    // launch pair. The official Search/Fetch API also receives
+    // DEEPSEEK_SEARCH_API_BASE_URL and a non-secret DEEPSEEK_SEARCH_API_KEY
+    // placeholder. A host publishes the pair only when its request route and
+    // saved credential are available. The Worker keeps using /v1/http.
 }
 
 /// Configuration of the App-process DSH host.
@@ -188,6 +193,8 @@ public struct PhoneDSHConfiguration: Equatable, Sendable {
     /// Credential provider for the model gateway and the remote DSH handoff
     /// Bearer (never exposed to the Worker).
     public let credentialProvider: any CredentialProvider
+    /// Scoped host credential for the official DeepSeek web API in follow-model mode.
+    public var officialDeepSeekWebCredentialProvider: (any CredentialProvider)? = nil
     /// Additional exact-origin/path egress admission applied by the gateway
     /// after its static host union. The App supplies the MCP access policy;
     /// `nil` keeps the previous host-only behavior.
@@ -366,6 +373,8 @@ public struct PhoneDSHConfiguration: Equatable, Sendable {
             && lhs.helloTimeout == rhs.helloTimeout
             && lhs.turnInactivityTimeout == rhs.turnInactivityTimeout
             && lhs.credentialProviderIdentity == rhs.credentialProviderIdentity
+            && lhs.officialDeepSeekWebCredentialProvider.map(Self.identity(of:))
+                == rhs.officialDeepSeekWebCredentialProvider.map(Self.identity(of:))
             && lhs.execProviderIdentity == rhs.execProviderIdentity
             && lhs.egressAuthorizerIdentity == rhs.egressAuthorizerIdentity
     }

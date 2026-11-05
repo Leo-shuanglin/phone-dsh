@@ -425,8 +425,14 @@ function publicProvider(source: ProviderProfileRecord): Record<string, Object> {
  * provider's `model` is also duplicated to `PDSH_MODEL_NAME`; the selected
  * profile's `baseURL` stays in this document while model traffic continues to
  * use the native loopback origin.
+ *
+ * `officialWebTools` is a host-private root grant, never part of the public
+ * provider rows. It is present only when the host froze the official
+ * Search/Fetch capability on for this start (eligible model base plus a live,
+ * readable model key); absent or false therefore means disabled to the reader.
  */
-export function providerLaunchDocument(state: ProviderProfilesState): string {
+export function providerLaunchDocument(state: ProviderProfilesState,
+  officialWebTools?: boolean): string {
   const selected: ProviderProfileRecord | null = selectedProviderProfile(state);
   if (selected === null) {
     return '';
@@ -439,6 +445,9 @@ export function providerLaunchDocument(state: ProviderProfilesState): string {
   root['version'] = PROVIDER_LAUNCH_VERSION;
   root['selectedId'] = selected.id;
   root['providers'] = providers;
+  if (officialWebTools === true) {
+    root['officialWebTools'] = true;
+  }
   return JSON.stringify(root);
 }
 

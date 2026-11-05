@@ -36,8 +36,10 @@ final class WebSearchHostConfigurationSimTests: XCTestCase {
 
     // MARK: - Follow-model selection
 
-    func testFollowModelRequiresTheExactOfficialMessagesEndpoint() {
+    func testFollowModelRequiresAnOfficialDeepSeekBase() {
         let accepted = [
+            "https://api.deepseek.com",
+            "https://api.deepseek.com/v1",
             "https://api.deepseek.com/anthropic",
             "https://api.deepseek.com/anthropic/",
             "https://api.deepseek.com/anthropic/v1",
@@ -47,12 +49,14 @@ final class WebSearchHostConfigurationSimTests: XCTestCase {
         ]
         for baseURL in accepted {
             XCTAssertTrue(
-                WebSearchHostConfiguration.modelServiceSupportsMessagesSearch(profile(baseURL)),
-                "expected official Messages endpoint: \(baseURL)")
+                PhoneModelProviderSettings.supportsOfficialDeepSeekWebTools(profile(baseURL)),
+                "expected official DeepSeek endpoint: \(baseURL)")
         }
 
         let rejected = [
-            "https://api.deepseek.com/v1",
+            "https://api.deepseek.com/v2",
+            "https://api.deepseek.com/v1?query=1",
+            "https://api.deepseek.com/v1/../v1",
             "https://api.deepseek.com/anthropic/v1/messages",
             "https://chat.deepseek.com/anthropic",
             "https://search.deepseek.com/anthropic",
@@ -63,38 +67,64 @@ final class WebSearchHostConfigurationSimTests: XCTestCase {
         ]
         for baseURL in rejected {
             XCTAssertFalse(
-                WebSearchHostConfiguration.modelServiceSupportsMessagesSearch(profile(baseURL)),
-                "arbitrary subdomain, OpenAI-compatible path or non-official protocol must not follow: \(baseURL)")
+                PhoneModelProviderSettings.supportsOfficialDeepSeekWebTools(profile(baseURL)),
+                "unofficial or unsupported endpoint must not follow: \(baseURL)")
         }
-        XCTAssertFalse(WebSearchHostConfiguration.modelServiceSupportsMessagesSearch(nil))
+        XCTAssertFalse(PhoneModelProviderSettings.supportsOfficialDeepSeekWebTools(nil))
     }
 
-    func testSupportedFollowModelPublishesOnlyTheOfficialProviderAndKeepsTheModelHost() throws {
+    func testFollowModelSharesTheStoredKeyForBothOfficialTools() async throws {
+        let selected = profile("https://api.deepseek.com/v1")
+        let modelSettings = PhoneModelProviderSettings(defaults: defaults, secretStore: secrets, environment: [:])
+        let key = "fixture-model-key"
+        try secrets.setSecret(key, for: selected.credentialRef)
         var plan = ModelProviderLaunchPlan(
             allowedModelHosts: ["https://api.deepseek.com"],
-            credentialProvider: modelProvider(),
+            credentialProvider: modelProvider(modelValue: key),
             environment: [WebSearchHostConfiguration.modelSearchBaseEnvironmentKey:
-                            "https://api.deepseek.com/anthropic/v1",
-                          PhoneWebSearchSettings.workerFetchProviderKey: "stale-fetch-provider"])
+                            "https://api.deepseek.com/anthropic/v1"])
 
         let resolved = WebSearchHostConfiguration.apply(
-            to: &plan,
-            modelProfile: profile("https://api.deepseek.com/anthropic"),
-            settings: settings)
+            to: &plan, modelProfile: selected, settings: settings, modelSettings: modelSettings)
 
-        XCTAssertEqual(resolved.mode, PhoneWebSearchMode.followModel)
+        XCTAssertEqual(resolved.mode, .followModel)
         XCTAssertTrue(resolved.followsModelSearch)
         XCTAssertNil(resolved.warning)
-        XCTAssertEqual(plan.allowedModelHosts, Set(["https://api.deepseek.com"]))
-        XCTAssertEqual(plan.environment[PhoneWebSearchSettings.workerProviderKey],
-                       "deepseek-official")
+        XCTAssertEqual(plan.allowedModelHosts, ["https://api.deepseek.com"])
+        XCTAssertEqual(plan.environment[PhoneWebSearchSettings.workerProviderKey], "deepseek-search-api")
+        XCTAssertEqual(plan.environment[PhoneWebSearchSettings.workerFetchProviderKey], "deepseek-fetch-api")
+        XCTAssertEqual(plan.environment[PhoneWebSearchSettings.workerBaseURLKey], "https://api.deepseek.com/v1/tools")
+        XCTAssertNil(plan.environment[WebSearchHostConfiguration.modelSearchBaseEnvironmentKey])
+        XCTAssertFalse(plan.environment.values.contains(key))
+
+        let web = try XCTUnwrap(resolved.officialDeepSeekWebCredentialProvider)
+        for path in ["/v1/tools/search", "/v1/tools/fetch"] {
+            let credential = try await web.credential(
+                for: CredentialScope(service: "api.deepseek.com", audience: path, scheme: "https"))
+            XCTAssertEqual(credential.kind, .bearer)
+            XCTAssertEqual(credential.value, key)
+        }
+        let model = try await plan.credentialProvider.credential(
+            for: CredentialScope(service: "api.deepseek.com", audience: "/v1/chat/completions", scheme: "https"))
+        XCTAssertEqual(model.kind, .apiKey(header: "x-api-key"))
+        XCTAssertEqual(model.value, key)
+    }
+
+    func testOfficialFollowModelWithoutReadableKeyPublishesNeitherTool() {
+        let selected = profile("https://api.deepseek.com/anthropic")
+        let modelSettings = PhoneModelProviderSettings(defaults: defaults, secretStore: secrets, environment: [:])
+        var plan = ModelProviderLaunchPlan(credentialProvider: modelProvider())
+        let resolved = WebSearchHostConfiguration.apply(
+            to: &plan, modelProfile: selected, settings: settings, modelSettings: modelSettings)
+        XCTAssertEqual(resolved.mode, .followModel)
+        XCTAssertFalse(resolved.followsModelSearch)
+        XCTAssertNil(resolved.officialDeepSeekWebCredentialProvider)
+        XCTAssertNil(plan.environment[PhoneWebSearchSettings.workerProviderKey])
         XCTAssertNil(plan.environment[PhoneWebSearchSettings.workerFetchProviderKey])
-        XCTAssertEqual(plan.environment[WebSearchHostConfiguration.modelSearchBaseEnvironmentKey],
-                       "https://api.deepseek.com/anthropic/v1")
     }
 
     func testUnsupportedFollowModelPublishesNoProviderAndExplainsTheFix() throws {
-        for baseURL in ["https://api.deepseek.com/v1",
+        for baseURL in ["https://api.deepseek.com/v2",
                         "https://chat.deepseek.com/anthropic"] {
             var plan = ModelProviderLaunchPlan(
                 allowedModelHosts: ["https://api.deepseek.com"],
@@ -118,7 +148,6 @@ final class WebSearchHostConfigurationSimTests: XCTestCase {
                          baseURL)
             let warning = try XCTUnwrap(resolved.warning, baseURL)
             XCTAssertTrue(warning.contains("独立 DeepSeek 搜索 API"), warning)
-            XCTAssertTrue(warning.contains("api.deepseek.com/anthropic"), warning)
         }
     }
 
@@ -199,6 +228,38 @@ final class WebSearchHostConfigurationSimTests: XCTestCase {
                 return XCTFail("expected the model provider's unauthorized error, got \(error)")
             }
         }
+    }
+
+    func testClearingIndependentKeyStopsAdvertisingSearchAndFetchAtNextStart() async throws {
+        let searchBase = "https://search.example/v1/tools"
+        _ = try settings.save(mode: .searchAPI, baseURL: searchBase, apiKey: "fixture-search-key")
+        let model = modelProvider(modelHost: "api.deepseek.com", modelValue: "fixture-model-key",
+                                  allowedAudience: "/anthropic/v1/messages")
+        let modelProfile = profile("https://api.deepseek.com/anthropic")
+        var configured = ModelProviderLaunchPlan(credentialProvider: model)
+        WebSearchHostConfiguration.apply(to: &configured, modelProfile: modelProfile, settings: settings)
+        XCTAssertEqual(configured.environment[PhoneWebSearchSettings.workerProviderKey], "deepseek-search-api")
+        XCTAssertEqual(configured.environment[PhoneWebSearchSettings.workerFetchProviderKey], "deepseek-fetch-api")
+
+        _ = try settings.clearAPIKey()
+        XCTAssertEqual(try settings.load().configuration.baseURL, searchBase)
+        var restarted = ModelProviderLaunchPlan(
+            allowedModelHosts: ["https://api.deepseek.com"],
+            credentialProvider: model,
+            environment: configured.environment
+        )
+        let resolved = WebSearchHostConfiguration.apply(
+            to: &restarted, modelProfile: modelProfile, settings: settings)
+
+        XCTAssertEqual(resolved.mode, .searchAPI)
+        XCTAssertEqual(restarted.allowedModelHosts, ["https://api.deepseek.com"])
+        XCTAssertNil(restarted.environment[PhoneWebSearchSettings.workerProviderKey])
+        XCTAssertNil(restarted.environment[PhoneWebSearchSettings.workerFetchProviderKey])
+        XCTAssertNil(restarted.environment[PhoneWebSearchSettings.workerBaseURLKey])
+        XCTAssertNil(restarted.environment[PhoneWebSearchSettings.workerAPIKeyEnv])
+        let modelCredential = try await restarted.credentialProvider.credential(
+            for: CredentialScope(service: "api.deepseek.com", audience: "/anthropic/v1/messages"))
+        XCTAssertEqual(modelCredential.value, "fixture-model-key")
     }
 
     // MARK: - Corrupt document

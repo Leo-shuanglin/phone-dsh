@@ -13,7 +13,8 @@ import {
   NativeModelOrigin,
   parseNativeModelOrigin,
   providerModelPathAdmitted,
-  resolveNativeModelAlias
+  resolveNativeModelAlias,
+  resolveOfficialWebToolTarget
 } from './HostModelAlias';
 import {
   asRecord,
@@ -31,6 +32,8 @@ export class ModelRouteConfig {
   baseUrl: string = '';
   model: string = '';
   encoder: string = 'deepseek';
+  /** Frozen at boot: the official Search/Fetch grant is on for this run only. */
+  officialWebTools: boolean = false;
 }
 
 export class ProviderProbeResult {
@@ -61,6 +64,8 @@ class HttpExchange {
   pending: ArrayBuffer[] = [];
   chunkCount: number = 0;
   keyBytes: Uint8Array = new Uint8Array(0);
+  keyEchoTail: Uint8Array = new Uint8Array(0);
+  officialWeb: boolean = false;
   method: string = 'POST';
 }
 
@@ -464,7 +469,10 @@ export class HostHttpProxy {
       this.fail(id, 403, 'host_not_allowed');
       return;
     }
-    if (!providerModelPathAdmitted(this.route.baseUrl, parsed.path)) {
+    const officialTarget: string = this.route.officialWebTools
+      ? resolveOfficialWebToolTarget(this.route.baseUrl, method, target)
+      : '';
+    if (officialTarget.length === 0 && !providerModelPathAdmitted(this.route.baseUrl, parsed.path)) {
       this.fail(id, 403, 'redirect_scope_mismatch');
       return;
     }
@@ -490,10 +498,17 @@ export class HostHttpProxy {
       return;
     }
     const outbound = sanitizedRequest(incoming);
-    injectCredential(outbound, key, this.route.encoder);
+    if (officialTarget.length > 0) {
+      outbound['authorization'] = `Bearer ${key}`;
+    } else {
+      injectCredential(outbound, key, this.route.encoder);
+    }
     outbound['accept-encoding'] = 'identity';
-    const finalTarget = `https://${hostPort(parsed)}${parsed.path}${parsed.query.length > 0 ? '?' + parsed.query : ''}`;
-    this.openExchange(id, method, finalTarget, outbound, toArrayBuffer(bodyBytes), encodeUtf8(key));
+    const finalTarget = officialTarget.length > 0
+      ? officialTarget
+      : `https://${hostPort(parsed)}${parsed.path}${parsed.query.length > 0 ? '?' + parsed.query : ''}`;
+    this.openExchange(id, method, finalTarget, outbound, toArrayBuffer(bodyBytes), encodeUtf8(key),
+      officialTarget.length > 0);
   }
 
   async testProvider(): Promise<ProviderProbeResult> {
@@ -606,12 +621,13 @@ export class HostHttpProxy {
   }
 
   private openExchange(id: number, method: string, target: string, headers: Record<string, string>,
-    body: ArrayBuffer, keyBytes: Uint8Array): void {
+    body: ArrayBuffer, keyBytes: Uint8Array, officialWeb: boolean): void {
     hilog.info(0x1A21, 'PDSHGateway', 'upstream start id=%{public}d', id);
     const exchange = new HttpExchange();
     exchange.id = id;
     exchange.method = method;
     exchange.keyBytes = keyBytes;
+    exchange.officialWeb = officialWeb;
     this.exchanges.set(id, exchange);
     const events: rcp.HttpEventsHandler = {
       onStatusCodeReceive: (code: number): void => {
@@ -689,7 +705,7 @@ export class HostHttpProxy {
     if (exchange.state.finished) {
       return;
     }
-    if (containsSecret(chunk, exchange.keyBytes)) {
+    if (this.echoesKey(exchange, chunk)) {
       this.failExchange(exchange, 502, 'upstream_echoed_credential');
       return;
     }
@@ -709,6 +725,18 @@ export class HostHttpProxy {
       return;
     }
     this.sendChunk(exchange, copy);
+  }
+
+  private echoesKey(exchange: HttpExchange, chunk: ArrayBuffer): boolean {
+    const overlap = exchange.keyBytes.byteLength - 1;
+    if (!exchange.officialWeb || overlap < 1) {
+      return containsSecret(chunk, exchange.keyBytes);
+    }
+    const window = new Uint8Array(exchange.keyEchoTail.byteLength + chunk.byteLength);
+    window.set(exchange.keyEchoTail);
+    window.set(new Uint8Array(chunk), exchange.keyEchoTail.byteLength);
+    exchange.keyEchoTail = window.slice(-overlap);
+    return containsSecret(toArrayBuffer(window), exchange.keyBytes);
   }
 
   private onDataEnd(exchange: HttpExchange): void {

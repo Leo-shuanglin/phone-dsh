@@ -69,11 +69,14 @@ import com.phonedsh.engine.createDemoEngine
 import com.phonedsh.engine.info
 import com.phonedsh.gateway.AllowListEgressPolicy
 import com.phonedsh.gateway.CredentialScope
+import com.phonedsh.gateway.CredentialUnavailableException
 import com.phonedsh.gateway.GatewayCredential
 import com.phonedsh.gateway.GatewayCredentialProvider
 import com.phonedsh.gateway.GatewayHttpEgress
 import com.phonedsh.gateway.GatewaySession
 import com.phonedsh.gateway.HttpUrlConnectionGatewayTransport
+import com.phonedsh.gateway.ModelKeySource
+import com.phonedsh.gateway.OfficialDeepSeekWebToolsEgress
 import com.phonedsh.hostevents.HostEvent
 import com.phonedsh.hostevents.HostEventKind
 import com.phonedsh.log.MutationBody
@@ -992,8 +995,28 @@ class ProbeEngineViewModel private constructor(application: Application) : Andro
         )
     }
 
+    private val diagnosticHttpEgress = gateway?.let { GatewayHttpEgress(it) }
+
+    private val officialWebSearchLaunch = OfficialWebSearchLaunch.resolve(
+        baseUrl = launchConfig.deepseekBaseUrl,
+        proxyRequested = modelProxy != null,
+        credentialAccount = launchConfig.credentialAccount,
+        keyState = launchConfig.credentialAccount?.let { ApiKeyStore.activeState(it) },
+    )
+
+    private val officialWebSearch = officialWebSearchLaunch?.let { launch ->
+        OfficialDeepSeekWebToolsEgress(
+            keys = ModelKeySource {
+                val store = ApiKeyStore.active() ?: throw CredentialUnavailableException()
+                store.readKey(launch.credentialAccount)
+            },
+            transport = HttpUrlConnectionGatewayTransport(),
+            fallback = diagnosticHttpEgress,
+        )
+    }
+
     /** The `/v1/http` policy the engine serves; `null` keeps the route at 503. */
-    private val httpEgress: LoopbackHttpEgress? = gateway?.let { GatewayHttpEgress(it) }
+    private val httpEgress: LoopbackHttpEgress? = officialWebSearch ?: diagnosticHttpEgress
 
     /**
      * What this launch can honestly say about model traffic (P27).
@@ -1044,6 +1067,7 @@ class ProbeEngineViewModel private constructor(application: Application) : Andro
         )
         val env = if (hostEnv == null) JSONObject() else JSONObject(hostEnv)
         for ((name, value) in modelRoute.workerEnvironment()) env.put(name, value)
+        for ((name, value) in officialWebSearchLaunch?.environment.orEmpty()) env.put(name, value)
         mapOf("env" to env.toString())
     }
 
@@ -1623,6 +1647,7 @@ class ProbeEngineViewModel private constructor(application: Application) : Andro
         // is null until then, and the page renders 未知 — never "supported".
         webViewKernel = engine.kernelReport(),
         egressGrant = launchConfig.egressGrant(),
+        officialWebSearchEnabled = officialWebSearch != null,
         batteryExemption = batteryExemption,
         background = HostBackground.readings(getApplication(), backgroundDeclaration),
         // The one workspace this app owns is `workspaceRoot`; its files page reads

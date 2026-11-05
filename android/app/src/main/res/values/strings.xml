@@ -22,7 +22,7 @@
   `com.phonedsh.app.SIGNING_NOTICE` / `.SIGNING_MODE` <meta-data>, injected as
   manifest placeholders so resource shrinking cannot drop them.
 
-  `android:label` is the literal "PDSH" in AndroidManifest.xml: a brand name is
+  `android:label` is the literal "Phone DSH" in AndroidManifest.xml: a brand name is
   not translated, and a literal label is what `dumpsys package` prints back as
   `nonLocalizedLabel`.
 -->

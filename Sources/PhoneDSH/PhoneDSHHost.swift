@@ -3133,7 +3133,8 @@ public actor PhoneDSHHost: PhoneDSHHosting {
                 // ordered event sequence; the gateway never exposes a body.
                 eventBus.send(.gatewayResponse(receipt))
             },
-                                       egressAuthorizer: configuration.egressAuthorizer)
+                                       egressAuthorizer: configuration.egressAuthorizer,
+                                       officialDeepSeekWebCredentialProvider: configuration.officialDeepSeekWebCredentialProvider)
             let coordinator = PhoneDSHChannelCoordinator(eventBus: eventBus)
             // D15: build the facade handoff owner over this exact live log,
             // fence authority and controller. A host without a configured

@@ -77,6 +77,7 @@ public extension PhoneDSHConfiguration {
         updated.loopback = loopback
         updated.log = log
         updated.gateway = gateway
+        updated.officialDeepSeekWebCredentialProvider = officialDeepSeekWebCredentialProvider
         updated.engine = engine
         updated.accelerators = provider
         return updated

@@ -163,6 +163,17 @@ assert.equal(publicRow.models[0].maxTokens, 8192);
 assert.equal(publicRow.models[0].textInput, true);
 assert.equal(publicRow.models[0].imageInput, false);
 
+// The official Search/Fetch grant is an optional host-private root flag: it is
+// omitted when disabled, present only as `true`, and never copied into a
+// public provider row. The Rust reader treats absent/false/invalid as disabled.
+assert.equal('officialWebTools' in json, false);
+const granted = JSON.parse(providerLaunchDocument(state, true));
+assert.equal(granted.officialWebTools, true);
+assert.equal('officialWebTools' in granted.providers[0], false);
+assert.equal('officialWebTools' in granted.providers[1], false);
+assert.equal('officialWebTools' in JSON.parse(providerLaunchDocument(state, false)), false);
+assert.equal('officialWebTools' in JSON.parse(providerLaunchDocument(state, 'true')), false);
+
 // Optional (zero/empty) model fields are omitted rather than invented.
 const plain = new ProviderProfileRecord();
 plain.id = 'plain';
