@@ -2,19 +2,19 @@
 
 # BotDock / 四入口底部导航（target）
 
-契约：P09。实现路径：`examples/probe-app/PhoneDSHProbe/BotDock/**`。视觉参考为用户指定的 TonoAI `ios/TonoAI/App/MainTabs.swift` 与 `Resources/Assets.xcassets/Icons/ic-tab-*.svg`，颜色、字号和语义仍只使用 phoneDSH `tokens.json`，不引入 TonoAI 品牌、色板或依赖。
+契约：P09。实现路径：`examples/probe-app/PhoneDSHProbe/BotDock/**`。图标视觉仅以用户指定的 TonoAI main `2c18fd848bffaeef88feae237cc4b88457f9fb57` 为参考：`MainTabs.swift`、`Primitives/Quiet.swift` 的 `LineIcon`、`Resources/Assets.xcassets/Icons/ic-tab-*.svg`，以及该提交 `ServiceCatalogFallback` 由填充图标改为线性图标的风格。颜色、字号和语义仍只使用 phoneDSH `tokens.json`，不引入 TonoAI 品牌、色板或依赖，也不搬入三环日记、引导或其他页面。
 
 ## 1. 结构与几何
 
 - 顺序固定为 Chat（Personal Agent）、DSH、发现、个人。Chat 是最左侧独立主入口，另外三项位于同一浮动胶囊；不改变现有 DSH 高级工作台或四入口行为。
 - 常规屏左右外边距 16，主入口与胶囊间距 10，胶囊最小高度 60；底部间距使用 safe area。窄屏优先压缩胶囊内可用宽，不能裁切图标或将命中区降到 44pt 以下。
-- Chat 显示 22pt 图标和 `tabLabel` 标签；选中时使用 `primaryButton` / `primaryButtonInk`，未选中时使用 `surface` / `textPrimary`。另外三项使用 22pt 图标、`tabLabel` 标签，选中为 `textPrimary` + semibold，未选中为 `textTertiary` + regular。
+- Chat 使用 64×64 独立圆形主入口和 24pt 线性图标，不显示文字标签但必须有 VoiceOver label；选中时使用 `primaryButton` / `primaryButtonInk`，未选中时使用 `surface` / `textPrimary`。另外三项使用 22pt 图标、`tabLabel` 标签，选中为 `textPrimary` + semibold，未选中为 `textTertiary` + regular。
 - 胶囊使用系统材质和 `sessionBorderL2` 发丝描边；iOS 版本不支持新材质时使用系统 material + `surface` 的兼容呈现。不能增加发光、渐变、重投影或第二套色值。
 
 ## 2. 图标契约
 
-- 四个图标在同一 24×24 网格中用 SwiftUI 矢量路径绘制，基准 stroke 1.75、round cap/join，显示尺寸 22；不得混用不同视觉重量的 SF Symbol、emoji、位图缩放或品牌图标。
-- Chat：圆角对话气泡与三个点；DSH：圆角终端框、`>` 和 `_`；发现：四个等大的圆角方格；个人：圆形头部和肩部轮廓。路径只描述通用功能，不使用 TonoAI 的品牌标志。
+- 四个图标在同一 24×24 网格中用 SwiftUI 矢量路径绘制，基准 stroke 1.75、round cap/join；Chat 显示 24，其余显示 22。不得混用不同视觉重量的 SF Symbol、emoji、位图缩放或品牌图标。
+- Chat：与该版本 `ic-tab-chat` 一致的简洁圆角对话气泡，不自行添加填充、三个点或多余装饰；DSH：圆角终端框、`>` 和 `_`；发现：与该版本 `ic-tab-services` 一致的四个等大圆角方格；个人：圆形头部和肩部轮廓。路径只描述通用功能，不使用 TonoAI 的品牌标志。
 - 图标本体可小于 44，但按钮命中区域至少 44×44。按下有轻微、同角色的背景/透明度反馈；选中不只靠颜色，还由字重、主入口反色和 accessibility selected trait 区分。
 
 ## 3. 行为与可访问性
