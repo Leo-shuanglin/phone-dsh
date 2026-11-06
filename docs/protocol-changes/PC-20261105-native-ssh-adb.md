@@ -5,10 +5,10 @@
 ```yaml
 change: PC-20261105-native-ssh-adb
 contracts: [P01, P03, P05, P09, P12, P13, P16, P17, P18, P20]
-status: frozen
+status: implemented
 breaking: false
 base: 07585efb
-contract_revision: spec/v1/channel.md+exec.md+native-mcp.md@PC-20261105-native-ssh-adb
+contract_revision: 7eff4567
 ```
 
 ## 1. Identification and roles
@@ -62,3 +62,4 @@ Self-check: no second wire envelope, frame type, error namespace, or version neg
 | Revision | Owner | Reason | Notified ends |
 | --- | --- | --- | --- |
 | PC-20261105-native-ssh-adb | Coordinator / contract owner | Freeze imported SSH/SCP and Android ADB contracts against launsion `main`; preserves the existing channel and exec envelopes. | Swift host, TypeScript Worker, Android device integration |
+| 7eff4567 | Coordinator / integrator | Implemented the frozen contract in the import branch; hardware and runtime verification remain unrun. | Same affected ends |
