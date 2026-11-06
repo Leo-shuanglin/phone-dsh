@@ -93,6 +93,8 @@ public actor BotAuditLog: BotAuditRecording {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     }
 
+    nonisolated var domainStore: SQLiteDomainStore? { eventLog as? SQLiteDomainStore }
+
     @discardableResult
     public func append(_ record: BotAuditRecord) async -> Bool {
         do {

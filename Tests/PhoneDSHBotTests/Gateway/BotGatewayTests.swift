@@ -153,32 +153,33 @@ final class BotGatewayTests: XCTestCase {
         let clock = BotTestClock(1_000)
         let registry = BotAttributionRegistry(now: { clock.now() })
         let arguments = BotJSONValue.object(["same": .bool(true)])
-        _ = try await registry.register(sessionId: "s1", callId: "c1", name: "A",
+        _ = try await registry.register(sessionId: "s1", incarnation: "i1", callId: "c1", name: "A",
                                         arguments: arguments, runtimeId: "r1")
         do {
-            _ = try await registry.register(sessionId: "s1", callId: "c2", name: "A",
+            _ = try await registry.register(sessionId: "s1", incarnation: "i1", callId: "c2", name: "A",
                                             arguments: arguments, runtimeId: "r1")
             XCTFail("duplicate live registration must fail")
         } catch {
             XCTAssertEqual(error as? BotAttributionError, .duplicate)
         }
-        _ = try await registry.register(sessionId: "s2", callId: "c2", name: "B",
+        _ = try await registry.register(sessionId: "s2", incarnation: "i2", callId: "c2", name: "B",
                                         arguments: arguments, runtimeId: "r1")
         try await assertNil(try await registry.claimByDigest(arguments: arguments, runtimeId: "r1"))
         await assertEqual(await registry.pendingCount(runtimeId: "r1"), 2)
         let first = try await unwrap(await registry.claim(sessionId: "s1", name: "A",
                                                           arguments: arguments, runtimeId: "r1"))
         XCTAssertEqual(first.callId, "c1")
+        XCTAssertEqual(first.incarnation, "i1")
         try await assertNotNil(try await registry.claimByDigest(arguments: arguments, runtimeId: "r1"))
 
-        _ = try await registry.register(sessionId: "s3", callId: "c3", name: "A",
+        _ = try await registry.register(sessionId: "s3", incarnation: "i3", callId: "c3", name: "A",
                                         arguments: arguments, runtimeId: "r2")
-        _ = try await registry.register(sessionId: "s4", callId: "c4", name: "A",
+        _ = try await registry.register(sessionId: "s4", incarnation: "i4", callId: "c4", name: "A",
                                         arguments: arguments, runtimeId: "r3")
         try await assertNotNil(try await registry.claimByDigest(arguments: arguments, runtimeId: "r2"))
         try await assertNotNil(try await registry.claimByDigest(arguments: arguments, runtimeId: "r3"))
 
-        let expiring = try await registry.register(sessionId: "s5", callId: "c5", name: "A",
+        let expiring = try await registry.register(sessionId: "s5", incarnation: "i5", callId: "c5", name: "A",
                                                    arguments: .object(["expiry": .bool(true)]), runtimeId: "r4")
         clock.advance(30_000)
         try await assertNil(try await registry.claimByDigest(argsDigest: expiring.argsDigest, runtimeId: "r4"))

@@ -18,14 +18,17 @@ public struct BotGatewayPrincipal: Codable, Sendable, Equatable {
     public let kind: BotSessionKind
     public let capabilities: [String]
     public let expiresAt: Int64
+    public let incarnation: String
 
-    public init(botId: String, sessionId: String, kind: BotSessionKind,
-                capabilities: [String] = [], expiresAt: Int64) {
+    init(botId: String, sessionId: String, kind: BotSessionKind,
+         capabilities: [String] = [], expiresAt: Int64,
+         incarnation: String = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()) {
         self.botId = botId
         self.sessionId = sessionId
         self.kind = kind
         self.capabilities = capabilities
         self.expiresAt = expiresAt
+        self.incarnation = incarnation
     }
 }
 
@@ -58,6 +61,7 @@ public actor BotTokenRegistry {
     private let defaultTTLMilliseconds: Int64
     private let maximumTokens: Int
     private var records: [String: Record] = [:]
+    private var currentIncarnations: [String: String] = [:]
 
     public init(now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000) },
                 defaultTTLMilliseconds: Int64 = BotTokenRegistry.defaultTTLMilliseconds,
@@ -72,6 +76,16 @@ public actor BotTokenRegistry {
     public var count: Int {
         prune()
         return records.count
+    }
+
+    func issueSession(botId: String, sessionId: String, kind: BotSessionKind,
+                      capabilities: [String] = [], expiresAt: Int64? = nil,
+                      ttlMilliseconds: Int64? = nil) throws -> BotIssuedToken {
+        let validSessionId = try Self.identifier(sessionId, name: "sessionId")
+        _ = revokeSession(validSessionId)
+        return try issue(botId: botId, sessionId: validSessionId, kind: kind,
+                         capabilities: capabilities, expiresAt: expiresAt,
+                         ttlMilliseconds: ttlMilliseconds)
     }
 
     @discardableResult
@@ -97,11 +111,13 @@ public actor BotTokenRegistry {
         guard records.count < maximumTokens else { throw BotTokenRegistryError.registryFull }
 
         let token = "dshg_" + Self.randomURLSafeString(byteCount: 32)
+        let incarnation = Self.randomHexString(byteCount: 16)
         let principal = BotGatewayPrincipal(botId: validBotId, sessionId: validSessionId,
                                             kind: kind, capabilities: validCapabilities,
-                                            expiresAt: expiry)
+                                            expiresAt: expiry, incarnation: incarnation)
         let id = Self.randomHexString(byteCount: 16)
         records[id] = Record(id: id, digest: Self.digest(token), principal: principal)
+        currentIncarnations[validSessionId] = incarnation
         return BotIssuedToken(token: token, principal: principal)
     }
 
@@ -114,7 +130,7 @@ public actor BotTokenRegistry {
         }
         guard let match else { return nil }
         guard match.principal.expiresAt > now() else {
-            records.removeValue(forKey: match.id)
+            remove(match)
             return nil
         }
         return match.principal
@@ -131,20 +147,18 @@ public actor BotTokenRegistry {
 
     public func lookupSession(_ sessionId: String) -> BotGatewayPrincipal? {
         let target = sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !target.isEmpty else { return nil }
-        let timestamp = now()
-        var match: Record?
-        for record in records.values {
-            guard record.principal.sessionId == target else { continue }
-            guard record.principal.expiresAt > timestamp else {
-                records.removeValue(forKey: record.id)
-                continue
-            }
-            if match == nil || record.principal.expiresAt > match!.principal.expiresAt {
-                match = record
-            }
+        guard !target.isEmpty, let incarnation = currentIncarnations[target] else { return nil }
+        guard let match = records.values.first(where: {
+            $0.principal.sessionId == target && $0.principal.incarnation == incarnation
+        }) else {
+            currentIncarnations.removeValue(forKey: target)
+            return nil
         }
-        return match?.principal
+        guard match.principal.expiresAt > now() else {
+            remove(match)
+            return nil
+        }
+        return match.principal
     }
 
     @discardableResult
@@ -156,7 +170,8 @@ public actor BotTokenRegistry {
             match = record
         }
         guard let match else { return false }
-        return records.removeValue(forKey: match.id) != nil
+        remove(match)
+        return true
     }
 
     @discardableResult
@@ -179,7 +194,7 @@ public actor BotTokenRegistry {
         }
         guard let current else { return nil }
         guard current.principal.expiresAt > now() else {
-            records.removeValue(forKey: current.id)
+            remove(current)
             return nil
         }
         let replacement = try issue(botId: current.principal.botId,
@@ -198,10 +213,17 @@ public actor BotTokenRegistry {
         return revokeWhere { $0.principal.expiresAt <= timestamp }
     }
 
+    private func remove(_ record: Record) {
+        records.removeValue(forKey: record.id)
+        if currentIncarnations[record.principal.sessionId] == record.principal.incarnation {
+            currentIncarnations.removeValue(forKey: record.principal.sessionId)
+        }
+    }
+
     private func revokeWhere(_ predicate: (Record) -> Bool) -> Int {
-        let ids = records.values.filter(predicate).map(\.id)
-        for id in ids { records.removeValue(forKey: id) }
-        return ids.count
+        let removed = records.values.filter(predicate)
+        for record in removed { remove(record) }
+        return removed.count
     }
 
     private static func identifier(_ value: String, name: String) throws -> String {

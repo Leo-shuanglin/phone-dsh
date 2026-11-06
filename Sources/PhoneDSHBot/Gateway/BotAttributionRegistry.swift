@@ -6,6 +6,7 @@ import PhoneDSHAgentCore
 public struct BotAttribution: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public let sessionId: String
+    public let incarnation: String
     public let callId: String
     public let name: String
     public let argsDigest: String
@@ -13,10 +14,11 @@ public struct BotAttribution: Codable, Sendable, Equatable, Identifiable {
     public let createdAt: Int64
     public let expiresAt: Int64
 
-    public init(id: String, sessionId: String, callId: String, name: String,
+    public init(id: String, sessionId: String, incarnation: String, callId: String, name: String,
                 argsDigest: String, runtimeId: String?, createdAt: Int64, expiresAt: Int64) {
         self.id = id
         self.sessionId = sessionId
+        self.incarnation = incarnation
         self.callId = callId
         self.name = name
         self.argsDigest = argsDigest
@@ -57,11 +59,12 @@ public actor BotAttributionRegistry {
     }
 
     @discardableResult
-    public func register(sessionId: String, callId: String, name: String,
+    public func register(sessionId: String, incarnation: String, callId: String, name: String,
                          arguments: BotJSONValue = .object([:]), argsDigest: String? = nil,
                          runtimeId: String? = nil, expiresAt: Int64? = nil,
                          ttlMilliseconds: Int64? = nil) throws -> BotAttribution {
         let session = try Self.identifier(sessionId, name: "sessionId")
+        let generation = try Self.identifier(incarnation, name: "incarnation")
         let call = try Self.identifier(callId, name: "callId")
         let toolName = try Self.identifier(name, name: "name")
         let runtime = try Self.optionalIdentifier(runtimeId, name: "runtimeId")
@@ -81,15 +84,16 @@ public actor BotAttributionRegistry {
         guard expiry > timestamp else { throw BotAttributionError.invalidInput("expiresAt") }
         prune()
         if entries.values.contains(where: {
-            $0.sessionId == session && $0.argsDigest == digest
+            $0.sessionId == session && $0.incarnation == generation && $0.argsDigest == digest
                 && $0.name == toolName && $0.runtimeId == runtime
         }) {
             throw BotAttributionError.duplicate
         }
         guard entries.count < maximumEntries else { throw BotAttributionError.full }
         let entry = BotAttribution(id: Self.randomHexString(byteCount: 16), sessionId: session,
-                                   callId: call, name: toolName, argsDigest: digest,
-                                   runtimeId: runtime, createdAt: timestamp, expiresAt: expiry)
+                                   incarnation: generation, callId: call, name: toolName,
+                                   argsDigest: digest, runtimeId: runtime,
+                                   createdAt: timestamp, expiresAt: expiry)
         entries[entry.id] = entry
         return entry
     }
@@ -130,6 +134,20 @@ public actor BotAttributionRegistry {
     @discardableResult
     public func cancel(id: String) -> Bool {
         entries.removeValue(forKey: id) != nil
+    }
+
+    func revokeStale(sessionId: String, currentIncarnation: String) -> Int {
+        let ids = entries.values.filter {
+            $0.sessionId == sessionId && $0.incarnation != currentIncarnation
+        }.map(\.id)
+        for id in ids { entries.removeValue(forKey: id) }
+        return ids.count
+    }
+
+    func revokeSession(_ sessionId: String) -> Int {
+        let ids = entries.values.filter { $0.sessionId == sessionId }.map(\.id)
+        for id in ids { entries.removeValue(forKey: id) }
+        return ids.count
     }
 
     public func pendingCount(runtimeId: String? = nil) -> Int {
