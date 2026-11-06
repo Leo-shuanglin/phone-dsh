@@ -47,4 +47,6 @@ public enum BotMemoryFactStoreError: Error, Sendable, Equatable {
     case duplicateFactID(String)
     case erasedFactID(String)
     case factNotFound(String)
+    case invalidOperation(String)
+    case corrupted(String)
 }
