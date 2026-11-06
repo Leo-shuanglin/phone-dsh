@@ -134,6 +134,8 @@ targets:
       - package: PhoneDSH
         product: PhoneDSHAgentCore
       - package: PhoneDSH
+        product: PhoneDSHBot
+      - package: PhoneDSH
         product: PhoneDSHController
       # WebHostConfiguration assembles the linked PDSHShellProvider and its
       # runnable accelerator set for the production Web surface and the E2E.

@@ -81,7 +81,8 @@ public enum BotToolEffectClassifier {
                               language: BotToolLanguage = .zh) -> BotToolEffect {
         let args = object(arguments)
         let isMcp = name.hasPrefix("mcp__")
-        let bareName = name.hasPrefix(prefix) ? String(name.dropFirst(prefix.count)) : name
+        let bareName = name.hasPrefix(prefix) ? String(name.dropFirst(prefix.count))
+            : name.hasPrefix("mcp__phone__") ? String(name.dropFirst("mcp__phone__".count)) : name
         if let labels = uiLabels[bareName] {
             return BotToolEffect(tool: bareName, operation: "ui.\(bareName)", resource: "*",
                                  mutability: .read, policy: .auto,
@@ -90,6 +91,8 @@ public enum BotToolEffectClassifier {
                                  ui: true, isMcp: isMcp)
         }
         switch bareName {
+        case "bluetooth.scan", "network.browse":
+            return BotDeviceToolProvider.discoveryEffect(for: bareName)
         case "UpdateMemory":
             return memoryEffect(args, forceForget: false, language: language, isMcp: isMcp)
         case "ForgetMemory":

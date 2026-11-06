@@ -15,9 +15,18 @@ targets:
     deploymentTarget: '17.0'
     sources:
       - path: Sources
+      - path: ../../../../examples/probe-app/Bundle/worker
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: PhoneDSH
         product: PhoneDSHBot
+      - package: PhoneDSH
+        product: PhoneDSH
+      - package: PhoneDSH
+        product: PhoneDSHEngine
+      - package: PhoneDSH
+        product: PhoneDSHHarness
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
@@ -29,14 +38,27 @@ targets:
     platform: iOS
     deploymentTarget: '17.0'
     sources:
+      - path: Tests
       - path: ../../../../Tests/PhoneDSHBotTests/MCP/BotConversationE2ETests.swift
       - path: ../../../../Tests/PhoneDSHBotTests/MCP/BotDSHRemoteRuntimeTests.swift
       - path: ../../../../Tests/PhoneDSHBotTests/MCP/BotRemoteTestSupport.swift
       - path: ../../../../Tests/PhoneDSHBotTests/MCP/BotMCPTestSupport.swift
+      - path: ../../../../examples/probe-app/PhoneDSHProbe/Bot/BotProductionServices.swift
+      - path: ../../../../examples/probe-app/PhoneDSHProbe/Bot/BotRuntimeComposition.swift
+      - path: ../../../../examples/probe-app/PhoneDSHProbe/Bot/BotRuntimeEffects.swift
+      - path: ../../../../examples/probe-app/PhoneDSHProbe/Bot/BotRuntimePresentation.swift
     dependencies:
       - target: BotE2EApp
       - package: PhoneDSH
         product: PhoneDSHBot
+      - package: PhoneDSH
+        product: PhoneDSH
+      - package: PhoneDSH
+        product: PhoneDSHEngine
+      - package: PhoneDSH
+        product: PhoneDSHHarness
+      - package: PhoneDSH
+        product: PhoneDSHAgentCore
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true

@@ -515,6 +515,8 @@ final class ChatModel {
     private(set) var keepingAlive = false
 
     private var host: PhoneDSHHost?
+    private var botLaunch: BotRuntimeComposition.Launch?
+    private var phoneCapabilityBridge: PhoneCapabilityBridge?
     private let keepAlive = SilentAudioKeepAlive()
     private var backgroundHeartbeat: Task<Void, Never>?
     /// Harness events handled so far; the background heartbeat logs the delta
@@ -919,6 +921,35 @@ final class ChatModel {
         let egressHosts: Set<String>
     }
 
+    private func prepareBotRuntime() async -> Bool {
+        if botLaunch != nil { return true }
+        do {
+            botLaunch = try await BotRuntimeComposition.prepare(environment: .live())
+            return true
+        } catch {
+            reportError("Bot 启动失败：\(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func attachBotRuntime(to host: PhoneDSHHost) async {
+        guard let composition = botLaunch?.composition else { return }
+        if composition.deviceBinding == nil, let bridge = phoneCapabilityBridge {
+            composition.deviceBinding = try? await BotDeviceProviderBinding(
+                domain: composition.environment.domain, runtime: composition.runtime, bridge: bridge,
+                onWake: { _ in
+                    Task { @MainActor [weak composition] in
+                        try? await composition?.deviceBinding?.ingress.deliverAvailable()
+                    }
+                })
+        }
+        do {
+            try await composition.start(host: host)
+        } catch {
+            reportError("Bot 大脑连接失败：\(error.localizedDescription)")
+        }
+    }
+
     /// Boots the host and adopts the persisted session. Launching and sending
     /// may acknowledge one persisted `Failed` controller per process.
     func start(autoRecover: Bool = false) async {
@@ -929,6 +960,7 @@ final class ChatModel {
         }
         busy = true
         defer { busy = false }
+        guard await prepareBotRuntime() else { return }
         guard let launch = makeHostLaunch() else { return }
         // Show the last conversation from disk immediately; the engine boots
         // in the background and replaces it when the host history arrives.
@@ -1034,6 +1066,15 @@ final class ChatModel {
         PhoneMCPAccessSettings.shared.reconcile(materializedHome: materializedHome)
         let mcpPolicy = MCPHostConfiguration.apply(to: &launchPlan,
                                                    settings: .shared)
+        if let endpoint = botLaunch?.composition.server.url {
+            do {
+                try mcpPolicy.grantBotRuntimeEndpoint(
+                    endpoint, token: botLaunch?.composition.server.token)
+            } catch {
+                reportError("Bot MCP 出口配置失败：\(error.localizedDescription)")
+                return nil
+            }
+        }
         mcpAccessPolicy = mcpPolicy
         allowedModelHosts = launchPlan.allowedModelHosts
         credentialProvider = launchPlan.credentialProvider
@@ -1074,9 +1115,11 @@ final class ChatModel {
         // injected PhoneToolBridge (there is no MCP bridge in this host yet),
         // so `channelAcceleratorNames` keeps them out of the host HELLO and the
         // EXEC_REQ whitelist instead of advertising commands that would exit 69.
+        let capabilityBridge = PhoneCapabilityBridge()
+        phoneCapabilityBridge = capabilityBridge
         let toolBridge = CompositePhoneToolBridge(
             office: OfficeToolBridge(presenter: OfficePresenter()),
-            phone: PhoneCapabilityBridge())
+            phone: capabilityBridge)
         let shell = PDSHShellProvider(materializedWorkspace: materializedWorkspace,
                                       materializedHome: materializedHome,
                                       toolBridge: toolBridge)
@@ -1097,7 +1140,7 @@ final class ChatModel {
         configuration.acceleratorNames = shell.channelAcceleratorNames + ["ssh", "scp", "adb"]
         configuration.nativeMCP = ADBMCPServer.shared
         configuration.engine.bootTimeout = ChatHostConfiguration.defaultBootTimeout
-        configuration.engine.environment = environment
+        configuration.engine.environment = environment.merging(botLaunch?.workerEnvironment ?? [:]) { _, new in new }
         let anchor = self.anchor
         let host = PhoneDSHHost(configuration: configuration, engineFactory: { configuration in
             await anchor.makeEngine(configuration)
@@ -1155,6 +1198,7 @@ final class ChatModel {
         // Build the replacement first: `makeHostLaunch` can refuse (bundle
         // missing, anchor not in a window) and clearing the reset state before
         // that would drop the only path back to a working engine.
+        guard await prepareBotRuntime() else { return }
         guard let launch = makeHostLaunch() else { return }
         failedHost = nil
         engineNeedsReset = false
@@ -1201,6 +1245,7 @@ final class ChatModel {
                                   selectedProfile: ProviderProfile?,
                                   egressHosts: Set<String>) async {
         host = newHost
+        await attachBotRuntime(to: newHost)
         failedHost = nil
         engineNeedsReset = false
         startedAt = Date()

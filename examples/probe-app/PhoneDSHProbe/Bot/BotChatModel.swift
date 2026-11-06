@@ -148,18 +148,18 @@ final class BotChatModel: ObservableObject {
         Task { await perform(action, key: "chat:\(localID)", localRowID: localID) }
     }
 
-    func answer(row: BotUIRow, optionID: String? = nil, customText: String? = nil) {
+    func answer(row: BotUIRow, optionID: String) {
         let key = "card:\(row.id)"
         guard actionStates[key] == nil || actionStates[key].map({ if case .failed = $0 { return true }; return false }) == true,
-              !mutedCardIDs.contains(row.id) else { return }
-        if let customText, customText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+              !mutedCardIDs.contains(row.id), !optionID.isEmpty else { return }
         actionStates[key] = .pending
         let action = BotUIUserAction.cardAnswer(nonce: UUID().uuidString, botID: row.botID,
-                                                cardID: row.id, optionID: optionID, customText: customText)
+                                                cardID: row.id, optionID: optionID)
         Task { await perform(action, key: key, localRowID: nil) }
     }
 
     func dismiss(row: BotUIRow) {
+        guard BotUICardContent.parse(row: row)?.kind == .question else { return }
         let key = "dismiss:\(row.id)"
         guard actionStates[key] == nil else { return }
         actionStates[key] = .pending
@@ -343,7 +343,7 @@ private extension BotUIUserAction {
 
     var cardID: String {
         switch self {
-        case .cardAnswer(_, _, let cardID, _, _), .cardDismiss(_, _, let cardID): cardID
+        case .cardAnswer(_, _, let cardID, _), .cardDismiss(_, _, let cardID): cardID
         default: ""
         }
     }

@@ -132,15 +132,9 @@ public struct BotExecutionAuthorizer: Sendable {
                                   source: source, argsDigest: normalizedDigest)
         }
         let writes = normalizedEffects.filter { $0.mutability != .read }
-        guard !writes.isEmpty else {
-            return await decision(true, "read-only", principal: resolvedPrincipal,
-                                  effects: normalizedEffects, readOnly: true,
-                                  source: source, argsDigest: normalizedDigest)
-        }
-
         var hits: [BotGrant] = []
         var hitIDs: Set<String> = []
-        for effect in writes where effect.policy == .ask {
+        for effect in normalizedEffects where effect.policy == .ask {
             guard let grant = await grants.find(botId: botId, sessionId: resolvedPrincipal.sessionId,
                                                 effect: effect) else {
                 return await decision(false, "missing-grant", principal: resolvedPrincipal,
@@ -163,7 +157,8 @@ public struct BotExecutionAuthorizer: Sendable {
         let auto = writes.contains { $0.policy == .auto }
         let reason = auto ? (hits.isEmpty ? "auto-policy" : "auto-policy; grant matched") : "grant matched"
         return await decision(true, reason, principal: resolvedPrincipal,
-                              effects: normalizedEffects, grants: hits, autoPolicy: auto,
+                              effects: normalizedEffects, grants: hits,
+                              readOnly: writes.isEmpty, autoPolicy: auto,
                               source: source, argsDigest: normalizedDigest)
     }
 

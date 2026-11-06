@@ -35,7 +35,6 @@ private struct BotChoiceCardView: View {
     let row: BotUIRow
     let card: BotUICardContent
     @ObservedObject var model: BotChatModel
-    @State private var draft = ""
     @State private var selectedID: String?
 
     private var isSteps: Bool { card.kind == .steps }
@@ -52,9 +51,8 @@ private struct BotChoiceCardView: View {
         muted || model.actionStates[key] == .pending || model.actionStates[key] == .accepted
     }
     private var canDismiss: Bool {
-        isSteps || card.body["dismissible"]?.bool != false
+        !isSteps && card.body["dismissible"]?.bool != false
     }
-    private var allowsCustom: Bool { card.body["allowCustom"]?.bool == true }
 
     var body: some View {
         BotCard(.conversation) {
@@ -144,29 +142,6 @@ private struct BotChoiceCardView: View {
                     }
                 }
 
-                if allowsCustom && !locked {
-                    HStack(spacing: 8) {
-                        TextField("其他答案…", text: $draft)
-                            .botBodyFont()
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 12)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .background(HomeSpec.surface, in: RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12)
-                                .strokeBorder(NativeParityTokens.borderL2, lineWidth: 0.5))
-                            .accessibilityIdentifier("bot.choice.custom")
-                        Button("送出") {
-                            let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                            selectedID = nil
-                            model.answer(row: row, customText: text)
-                            if !text.isEmpty { draft = "" }
-                        }
-                        .buttonStyle(BotSecondaryButtonStyle())
-                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .accessibilityIdentifier("bot.choice.custom.send")
-                    }
-                }
-
                 if model.actionStates[key] == .accepted {
                     Label("已送出", systemImage: "checkmark")
                         .botSecondaryFont()
@@ -181,12 +156,6 @@ private struct BotChoiceCardView: View {
                         .foregroundStyle(NativeParityTokens.error)
                 }
 
-                if isSteps && !locked {
-                    Button("先不用") { model.dismiss(row: row) }
-                        .buttonStyle(BotTextButtonStyle())
-                        .botHitTarget()
-                        .accessibilityIdentifier("bot.steps.dismiss")
-                }
             }
         }
         .accessibilityElement(children: .contain)

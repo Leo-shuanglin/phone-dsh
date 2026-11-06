@@ -39,7 +39,46 @@
       "errors": []
     }
   },
+  "validDeviceEvent": {
+    "schemaVersion": 1,
+    "type": "device.event",
+    "eventId": "dev:m1",
+    "time": 1760000000000,
+    "origin": {"kind": "local", "source": "device:lan:device-a"},
+    "traceId": "dev:m1",
+    "principal": {"botId": "main", "sessionId": "bot-main", "kind": "device", "capabilities": []},
+    "causationId": null,
+    "correlationId": "dev:m1",
+    "data": {
+      "envelope": {
+        "v": 1, "msg_id": "m1", "device_id": "device-a", "session_id": "transport-session",
+        "dir": "up", "kind": "text", "origin": "device", "audience": "phone",
+        "seq": 1, "ts_ms": 1760000000000, "text": "untrusted device message"
+      },
+      "transport": "lan"
+    },
+    "commitSeq": 1
+  },
   "invalid": [
+    {
+      "event": {
+        "schemaVersion": 1,
+        "type": "device.event",
+        "eventId": "dev:bad-transport",
+        "time": 1760000000000,
+        "origin": {"kind": "local", "source": "device:wifi:device-a"},
+        "traceId": "dev:bad-transport",
+        "principal": {"botId": "main", "sessionId": "bot-main", "kind": "device", "capabilities": []},
+        "causationId": null,
+        "correlationId": "dev:bad-transport",
+        "data": {"envelope": {"v": 1}, "transport": "lan"},
+        "commitSeq": 1
+      },
+      "validation": {
+        "valid": false,
+        "errors": [{"code": "INVALID_EVENT", "field": "origin.source", "message": "unknown local origin source"}]
+      }
+    },
     {
       "event": {
         "schemaVersion": 1,

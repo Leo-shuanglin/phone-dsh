@@ -19,7 +19,7 @@ public struct BotRemoteTurnResult: Sendable, Equatable {
     }
 }
 
-public actor BotDSHRemoteRuntime: BotTaskExecuting {
+public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
     private struct TaskState {
         var request: BotTaskRequest
         var record: BotTaskRecord
@@ -44,7 +44,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting {
         var cancelled: Bool
     }
 
-    private let transport: any DSHRemoteTransport
+    private var transport: any DSHRemoteTransport
     private let runtime: BotMCPRuntime
     private let botId: String
     private let model: String
@@ -84,6 +84,25 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting {
         await runtime.attachTaskExecutor(self)
     }
 
+    public func attachTransport(_ newTransport: any DSHRemoteTransport) async {
+        transport = newTransport
+        guard mainSessionId != nil else { return }
+        for (sessionId, coordinator) in coordinators {
+            do {
+                try await cancelTurn(sessionId: sessionId, includeQueued: true)
+            } catch {
+                coordinator.work.cancel()
+                if coordinators[sessionId]?.attemptId == coordinator.attemptId {
+                    coordinators.removeValue(forKey: sessionId)
+                }
+                await runtime.endTurn(sessionId: sessionId)
+            }
+        }
+        for queued in queuedTurns.values { queued.work.cancel() }
+        queuedTurns.removeAll()
+        sessions.removeAll()
+    }
+
     public func sendUserMessage(_ text: String) async throws -> BotRemoteTurnResult {
         let sessionId = try await ensureMainSession()
         let steer = canSteer(sessionId: sessionId)
@@ -108,9 +127,31 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting {
         }
     }
 
-    public func cancelMainTurn() async throws {
+    public func sendHiddenInteraction(_ text: String) async throws -> BotRemoteTurnResult {
         let sessionId = try await ensureMainSession()
+        return try await runTurn(sessionId: sessionId, kind: .chat, prompt: text, hidden: true)
+    }
+
+    public func stopMainTurn(turnID: String?) async throws {
+        let sessionId = try await ensureMainSession()
+        if let turnID, coordinators[sessionId] != nil,
+           await runtime.currentTurnID(sessionId: sessionId) != turnID {
+            throw BotMCPError.invalidRequest("stale_turn")
+        }
         try await cancelTurn(sessionId: sessionId)
+    }
+
+    public func stopTaskFromUser(taskID: String) async throws -> BotTaskRecord {
+        guard let state = taskStates[taskID] else { throw BotMCPError.invalidRequest("unknown_task") }
+        guard state.request.parent.principal.botId == botId,
+              state.request.parent.principal.kind == .chat else { throw BotMCPError.unauthorized }
+        let generation = state.generation + 1
+        taskStates[taskID]?.generation = generation
+        return try await performStop(taskId: taskID, generation: generation)
+    }
+
+    public func cancelMainTurn() async throws {
+        try await stopMainTurn(turnID: nil)
     }
 
     public func runRoutine(_ request: RoutineRunRequest) async -> RoutineExecutionResult {
@@ -296,6 +337,39 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting {
             return result
         }
     }
+
+    @discardableResult
+    public func startMainSession() async throws -> String {
+        try await ensureMainSession()
+    }
+
+    public func mainSessionIdentifier() -> String? { mainSessionId }
+
+    public func deliverDeviceMessages() async throws {
+        let sessionId = try await ensureMainSession()
+        let staged = try await wakeInbox?.stage(now: now(), kind: "device-event")
+        guard let stagedKey = staged?.key, let items = staged?.items, !items.isEmpty else { return }
+        do {
+            let prompt = HeldMessages.block(items: items)
+            _ = try await runTurn(sessionId: sessionId, kind: .chat, prompt: prompt, hidden: true, held: true)
+            _ = try await wakeInbox?.commit(stagedKey)
+        } catch {
+            _ = try await wakeInbox?.revert(stagedKey)
+            throw error
+        }
+    }
+
+    public func isAvailable() async -> Bool {
+        guard let mainSessionId else { return false }
+        return await validateRemoteSession(mainSessionId)
+    }
+
+    public func isMainTurnBusy() -> Bool {
+        guard let mainSessionId else { return false }
+        return coordinators[mainSessionId] != nil || queuedTurns[mainSessionId] != nil
+    }
+
+    public func watchdogMonitor() -> BotWatchdogMonitor { watchdog }
 
     private func ensureMainSession() async throws -> String {
         if let mainSessionId { return mainSessionId }

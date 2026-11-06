@@ -35,7 +35,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$SCENARIO" in
-  conversation-card-approval-routine-held|ledger) ;;
+  conversation-card-approval-routine-held|ledger|production-composition) ;;
   *) echo "bot-e2e: unsupported scenario $SCENARIO" >&2; exit 2 ;;
 esac
 mkdir -p "$OUT"
@@ -49,7 +49,7 @@ path, status, simulator, scenario, reason = sys.argv[1:]
 json.dump({
     "status": status,
     "scenario": scenario,
-    "scriptedUpstream": "PASS",
+    "scriptedUpstream": "$SCRIPTED_UPSTREAM",
     "simulator": simulator,
     "realModel": "NOT_RUN",
     "externalAccounts": "NOT_RUN",
@@ -78,10 +78,14 @@ fail() {
   exit 1
 }
 
+SCRIPTED_UPSTREAM=PASS
 if [ "$SCENARIO" = "ledger" ]; then
   SIMULATOR_TEST='BotDSHRemoteRuntimeTests/testRealTurnWritesEveryUsageFieldToSQLiteLedger'
   swift test --filter "$SIMULATOR_TEST" \
     > "$OUT/scripted-upstream.log" 2>&1 || fail "scripted ledger test failed; see $OUT/scripted-upstream.log"
+elif [ "$SCENARIO" = "production-composition" ]; then
+  SIMULATOR_TEST='BotCompositionE2ETests/testProductionCompositionUsesRealHostAndWorker'
+  SCRIPTED_UPSTREAM=NOT_RUN
 else
   SIMULATOR_TEST='BotConversationE2ETests/testConversationCardApprovalRoutineAndHeldDelivery'
   swift test --filter BotConversationE2ETests \

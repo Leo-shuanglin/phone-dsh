@@ -43,6 +43,7 @@ def rejects(instance, schema_name: str, where: str) -> None:
 
 def main() -> int:
     check(load("event-envelope.json")["valid"]["event"], "event-envelope.schema.json", "event")
+    check(load("event-envelope.json")["validDeviceEvent"], "event-envelope.schema.json", "device-event")
     for index, case in enumerate(load("event-envelope.json")["invalid"]):
         rejects(case["event"], "event-envelope.schema.json", f"event.invalid[{index}]")
 

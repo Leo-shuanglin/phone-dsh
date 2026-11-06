@@ -39,7 +39,7 @@ public struct BotEventEnvelopeCodec: Sendable {
         "effect.enqueued", "effect.attempted", "effect.acked", "effect.failed", "effect.dead_lettered",
         "effect.reconciliation_required", "effect.cancel_requested", "effect.canceled", "runtime.started",
         "runtime.exited", "proactive.considered", "ledger.usage_recorded", "watchdog.flagged",
-        "verification.reported",
+        "verification.reported", "device.event", "device.reply.staged",
     ]
 
     public static let ephemeralEventTypes: Set<String> = [
@@ -54,8 +54,13 @@ public struct BotEventEnvelopeCodec: Sendable {
     ]
 
     private static let principalKinds: Set<String> = [
-        "chat", "task", "routine", "team", "proactive", "watchdog", "ipc",
+        "chat", "task", "routine", "team", "proactive", "watchdog", "ipc", "device",
     ]
+
+    private static func isDeviceOrigin(_ source: String) -> Bool {
+        source.range(of: #"^device:(bluetooth|lan):[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$"#,
+                     options: .regularExpression) != nil
+    }
 
     public init() {}
 
@@ -94,7 +99,7 @@ public struct BotEventEnvelopeCodec: Sendable {
                 throw BotEventValidationError.invalid("origin", "DSH origin requires sessionId and non-negative seq")
             }
         case let .local(source):
-            guard localOriginSources.contains(source) else {
+            guard localOriginSources.contains(source) || isDeviceOrigin(source) else {
                 throw BotEventValidationError.invalid("origin.source", "unknown local origin source")
             }
         }

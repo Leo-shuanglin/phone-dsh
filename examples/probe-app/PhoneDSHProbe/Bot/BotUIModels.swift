@@ -183,20 +183,20 @@ enum BotUIApprovalDecision: String, Codable {
 
 enum BotUIUserAction: Codable, Equatable {
     case chat(nonce: String, botID: String, text: String)
-    case cardAnswer(nonce: String, botID: String, cardID: String, optionID: String?, customText: String?)
+    case cardAnswer(nonce: String, botID: String, cardID: String, optionID: String)
     case cardDismiss(nonce: String, botID: String, cardID: String)
     case approval(nonce: String, botID: String, approvalID: String,
                   decision: BotUIApprovalDecision, digest: String)
     case stopTask(nonce: String, botID: String, threadID: String)
 
     private enum Keys: String, CodingKey {
-        case nonce, botID, kind, text, cardID, optionID, customText
+        case nonce, botID, kind, text, cardID, optionID
         case approvalID, decision, digest, threadID
     }
 
     var nonce: String {
         switch self {
-        case .chat(let nonce, _, _), .cardAnswer(let nonce, _, _, _, _),
+        case .chat(let nonce, _, _), .cardAnswer(let nonce, _, _, _),
              .cardDismiss(let nonce, _, _), .approval(let nonce, _, _, _, _),
              .stopTask(let nonce, _, _): nonce
         }
@@ -204,7 +204,7 @@ enum BotUIUserAction: Codable, Equatable {
 
     var botID: String {
         switch self {
-        case .chat(_, let botID, _), .cardAnswer(_, let botID, _, _, _),
+        case .chat(_, let botID, _), .cardAnswer(_, let botID, _, _),
              .cardDismiss(_, let botID, _), .approval(_, let botID, _, _, _),
              .stopTask(_, let botID, _): botID
         }
@@ -220,8 +220,7 @@ enum BotUIUserAction: Codable, Equatable {
         case "cardAnswer":
             self = .cardAnswer(nonce: nonce, botID: botID,
                                cardID: try container.decode(String.self, forKey: .cardID),
-                               optionID: try container.decodeIfPresent(String.self, forKey: .optionID),
-                               customText: try container.decodeIfPresent(String.self, forKey: .customText))
+                               optionID: try container.decode(String.self, forKey: .optionID))
         case "cardDismiss":
             self = .cardDismiss(nonce: nonce, botID: botID,
                                 cardID: try container.decode(String.self, forKey: .cardID))
@@ -247,13 +246,12 @@ enum BotUIUserAction: Codable, Equatable {
             try container.encode(botID, forKey: .botID)
             try container.encode("chat", forKey: .kind)
             try container.encode(text, forKey: .text)
-        case .cardAnswer(let nonce, let botID, let cardID, let optionID, let customText):
+        case .cardAnswer(let nonce, let botID, let cardID, let optionID):
             try container.encode(nonce, forKey: .nonce)
             try container.encode(botID, forKey: .botID)
             try container.encode("cardAnswer", forKey: .kind)
             try container.encode(cardID, forKey: .cardID)
-            try container.encodeIfPresent(optionID, forKey: .optionID)
-            try container.encodeIfPresent(customText, forKey: .customText)
+            try container.encode(optionID, forKey: .optionID)
         case .cardDismiss(let nonce, let botID, let cardID):
             try container.encode(nonce, forKey: .nonce)
             try container.encode(botID, forKey: .botID)

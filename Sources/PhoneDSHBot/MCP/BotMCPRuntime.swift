@@ -70,6 +70,8 @@ public actor BotMCPRuntime {
         try await gateway.issueSession(botId: botId, sessionId: sessionId, kind: kind)
     }
 
+    public func currentTurnID(sessionId: String) -> String? { turnIDs[sessionId] }
+
     public func beginTurn(sessionId: String, hidden: Bool, held: Bool = false) {
         suppressingTextSessions.remove(sessionId)
         turnIDs.removeValue(forKey: sessionId)
@@ -95,7 +97,9 @@ public actor BotMCPRuntime {
                                  name: String, arguments: BotJSONValue,
                                  argsDigest: String? = nil) async throws -> BotAttribution {
         let bareName = bareToolName(name)
-        guard BotToolCatalog.isRegistered(bareName) || ["bash", "write", "edit"].contains(bareName) else {
+        guard BotToolCatalog.isRegistered(bareName)
+                || ["bash", "write", "edit", "phone"].contains(bareName)
+                || BotDeviceToolProvider.tools.contains(bareName) else {
             throw BotMCPError.unknownTool(name)
         }
         let attribution = try await gateway.registerToolCall(
