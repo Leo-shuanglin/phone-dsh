@@ -75,9 +75,9 @@ private struct BotRowOrder: Comparable {
     var index: Int
 
     static func < (lhs: BotRowOrder, rhs: BotRowOrder) -> Bool {
-        if lhs.time != rhs.time { return lhs.time < rhs.time }
         if lhs.source != rhs.source { return lhs.source < rhs.source }
         if lhs.sourceSeq != rhs.sourceSeq { return lhs.sourceSeq < rhs.sourceSeq }
+        if lhs.time != rhs.time { return lhs.time < rhs.time }
         return lhs.index < rhs.index
     }
 }
@@ -136,8 +136,10 @@ public struct BotSessionLogProjector: Sendable {
         var awaitingCard = false
         var toolNames: [String: String] = [:]
         var calls: [String: (name: String, rowID: String, body: BotRowBody)] = [:]
+        var seenEventIDs: Set<String> = []
 
         for (index, event) in events.enumerated() {
+            if let eventID = event.eventID, !seenEventIDs.insert(eventID).inserted { continue }
             let order = BotRowOrder(time: event.time, source: 0, sourceSeq: event.seq, index: index)
             if event.type == "turn/start" {
                 turn = intValue(event.data["turn"]) ?? turn
@@ -280,9 +282,10 @@ public struct BotSessionLogProjector: Sendable {
 
     private func projectUI(botID: String, events: [BotEvent]) -> [BotRowMutation] {
         var result: [BotRowMutation] = []
+        var seenEventIDs: Set<String> = []
         for (index, event) in events.sorted(by: stableUIEventOrder).enumerated() {
             guard event.principal.botId == nil || event.principal.botId == botID,
-                  let data = objectValue(event.data) else { continue }
+                  let data = objectValue(event.data), seenEventIDs.insert(event.eventId).inserted else { continue }
             let order = BotRowOrder(time: event.time, source: 1, sourceSeq: event.commitSeq ?? 0, index: index)
             if event.type == "transcript.row_deleted" {
                 let nested = objectValue(data["row"]) ?? [:]
@@ -479,29 +482,18 @@ public actor BotRowHistory {
     @discardableResult
     public func rebuild(botID: String, sessionID: String, sessionEvents: [BotDSHSessionEvent],
                         uiEvents: [BotEvent]) throws -> BotRowBatch {
-        let next = projector.project(botID: botID, sessionID: sessionID,
-                                     sessionEvents: sessionEvents, uiEvents: uiEvents)
-        if next.cursor < snapshot.cursor { throw BotRowProjectionError.cursorRegression }
-        if Array(next.changes.prefix(snapshot.changes.count)) != snapshot.changes {
-            throw BotRowProjectionError.inconsistentRebuild
-        }
-        snapshot = next
-        return watch(after: 0)
+        let projected = projector.project(botID: botID, sessionID: sessionID,
+                                          sessionEvents: sessionEvents, uiEvents: uiEvents)
+        snapshot = reconciled(projected)
+        return resetBatch()
     }
 
     public func replaceWithRebuiltCache(_ rebuilt: BotRowProjectionSnapshot) throws {
-        guard rebuilt.cursor >= snapshot.cursor else { throw BotRowProjectionError.cursorRegression }
-        guard Array(rebuilt.changes.prefix(snapshot.changes.count)) == snapshot.changes else {
-            throw BotRowProjectionError.inconsistentRebuild
-        }
-        snapshot = rebuilt
+        snapshot = reconciled(rebuilt)
     }
 
     public func watch(after cursor: Int) -> BotRowBatch {
-        if cursor <= 0 || cursor > snapshot.cursor {
-            return BotRowBatch(rows: snapshot.rows, deletes: snapshot.tombstones.sorted { $0.updatedSeq < $1.updatedSeq }.map(\.id),
-                               cursor: snapshot.cursor, reset: true)
-        }
+        if cursor <= 0 || cursor > snapshot.cursor { return resetBatch() }
         let selected = snapshot.changes.filter { $0.updatedSeq > cursor }
         var latest: [String: BotRowChange] = [:]
         for change in selected { latest[change.id] = change }
@@ -510,6 +502,56 @@ public actor BotRowHistory {
             if case .upsert(let row) = change { return row }
             return nil
         }, deletes: ordered.filter(\.isDelete).map(\.id), cursor: snapshot.cursor, reset: false)
+    }
+
+    private func reconciled(_ projected: BotRowProjectionSnapshot) -> BotRowProjectionSnapshot {
+        if snapshot.cursor == 0 && snapshot.rows.isEmpty && snapshot.tombstones.isEmpty && snapshot.changes.isEmpty {
+            return projected
+        }
+        var rows = Dictionary(uniqueKeysWithValues: snapshot.rows.map { ($0.id, $0) })
+        var tombstones = Dictionary(uniqueKeysWithValues: snapshot.tombstones.map { ($0.id, $0) })
+        var changes = snapshot.changes
+        var cursor = snapshot.cursor
+        let projectedRowIDs = Set(projected.rows.map(\.id))
+        let projectedTombstoneIDs = Set(projected.tombstones.map(\.id))
+
+        for candidate in projected.rows {
+            guard tombstones[candidate.id] == nil else { continue }
+            if let old = rows[candidate.id], sameContent(old, candidate) {
+                rows[candidate.id] = old
+                continue
+            }
+            cursor += 1
+            var inserted = candidate
+            inserted.updatedSeq = cursor
+            rows[candidate.id] = inserted
+            changes.append(.upsert(inserted))
+        }
+
+        for candidate in projected.tombstones where tombstones[candidate.id] == nil {
+            cursor += 1
+            var deleted = candidate
+            deleted.updatedSeq = cursor
+            rows.removeValue(forKey: candidate.id)
+            tombstones[candidate.id] = deleted
+            changes.append(.delete(id: candidate.id, updatedSeq: cursor))
+        }
+
+        for previous in snapshot.rows {
+            guard !projectedRowIDs.contains(previous.id), !projectedTombstoneIDs.contains(previous.id),
+                  tombstones[previous.id] == nil, rows.removeValue(forKey: previous.id) != nil else { continue }
+            cursor += 1
+            changes.append(.delete(id: previous.id, updatedSeq: cursor))
+        }
+        return BotRowProjectionSnapshot(rows: rows.values.sorted(by: rowOrder),
+                                        tombstones: tombstones.values.sorted(by: rowOrder),
+                                        cursor: cursor, changes: changes)
+    }
+
+    private func resetBatch() -> BotRowBatch {
+        BotRowBatch(rows: snapshot.rows,
+                    deletes: snapshot.tombstones.sorted { $0.updatedSeq < $1.updatedSeq }.map(\.id),
+                    cursor: snapshot.cursor, reset: true)
     }
 }
 

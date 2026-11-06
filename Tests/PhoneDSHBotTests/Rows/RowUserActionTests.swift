@@ -19,7 +19,7 @@ final class RowUserActionTests: XCTestCase {
         let actions = [
             BotUserAction(nonce: "chat", botID: "main", kind: .chat, text: "继续"),
             BotUserAction(nonce: "answer", botID: "main", kind: .cardAnswer, cardID: "card-1", optionID: "yes"),
-            BotUserAction(nonce: "custom", botID: "main", kind: .cardAnswer, cardID: "card-1", customText: "自定义"),
+            BotUserAction(nonce: "answer-secondary", botID: "main", kind: .cardAnswer, cardID: "card-1", optionID: "later"),
             BotUserAction(nonce: "dismiss", botID: "main", kind: .cardDismiss, cardID: "card-1"),
             BotUserAction(nonce: "approval", botID: "main", kind: .approval, approvalID: "approval-1",
                           decision: .allowOnce, digest: "digest-1"),
@@ -52,6 +52,10 @@ final class RowUserActionTests: XCTestCase {
         var answer = BotUserAction(nonce: "bad-answer", botID: "main", kind: .cardAnswer, cardID: "card-1")
         let rejected = try await dispatcher.dispatch(answer)
         XCTAssertEqual(rejected, .rejected(reason: "missing_card_answer"))
+        await assertNilAsync(try await store.eventID(botID: "main", nonce: "bad-answer"))
+        answer.optionID = ""
+        let emptyRejected = try await dispatcher.dispatch(answer)
+        XCTAssertEqual(emptyRejected, .rejected(reason: "missing_card_answer"))
         await assertNilAsync(try await store.eventID(botID: "main", nonce: "bad-answer"))
 
         answer.optionID = "yes"

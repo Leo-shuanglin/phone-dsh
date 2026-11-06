@@ -23,14 +23,13 @@ public struct BotUserAction: Codable, Sendable, Equatable {
     public var text: String?
     public var cardID: String?
     public var optionID: String?
-    public var customText: String?
     public var approvalID: String?
     public var decision: BotApprovalDecision?
     public var digest: String?
     public var threadID: String?
 
     public init(nonce: String, botID: String, kind: BotUserActionKind, text: String? = nil,
-                cardID: String? = nil, optionID: String? = nil, customText: String? = nil,
+                cardID: String? = nil, optionID: String? = nil,
                 approvalID: String? = nil, decision: BotApprovalDecision? = nil,
                 digest: String? = nil, threadID: String? = nil) {
         self.nonce = nonce
@@ -39,7 +38,6 @@ public struct BotUserAction: Codable, Sendable, Equatable {
         self.text = text
         self.cardID = cardID
         self.optionID = optionID
-        self.customText = customText
         self.approvalID = approvalID
         self.decision = decision
         self.digest = digest
@@ -181,7 +179,7 @@ enum BotUserActionValidation {
             guard action.text != nil else { return .rejected(reason: "missing_text") }
         case .cardAnswer:
             guard action.cardID?.isEmpty == false else { return .rejected(reason: "missing_card_id") }
-            guard action.optionID != nil || action.customText != nil else {
+            guard action.optionID?.isEmpty == false else {
                 return .rejected(reason: "missing_card_answer")
             }
         case .cardDismiss:
