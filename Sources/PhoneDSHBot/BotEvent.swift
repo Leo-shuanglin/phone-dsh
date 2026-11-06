@@ -8,6 +8,44 @@ public typealias BotJSONValue = JSONValue
 public enum BotEventOrigin: Codable, Sendable, Equatable {
     case dsh(sessionId: String, seq: Int)
     case local(source: String)
+
+    private enum CodingKeys: String, CodingKey { case kind, sessionId, seq, source }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(String.self, forKey: .kind)
+        switch kind {
+        case "dsh":
+            guard container.allKeys.allSatisfy({ [.kind, .sessionId, .seq].contains($0) }) else {
+                throw DecodingError.dataCorruptedError(forKey: .kind, in: container,
+                                                       debugDescription: "unknown DSH origin member")
+            }
+            self = .dsh(sessionId: try container.decode(String.self, forKey: .sessionId),
+                        seq: try container.decode(Int.self, forKey: .seq))
+        case "local":
+            guard container.allKeys.allSatisfy({ [.kind, .source].contains($0) }) else {
+                throw DecodingError.dataCorruptedError(forKey: .kind, in: container,
+                                                       debugDescription: "unknown local origin member")
+            }
+            self = .local(source: try container.decode(String.self, forKey: .source))
+        default:
+            throw DecodingError.dataCorruptedError(forKey: .kind, in: container,
+                                                   debugDescription: "unknown origin kind: \(kind)")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .dsh(sessionId, seq):
+            try container.encode("dsh", forKey: .kind)
+            try container.encode(sessionId, forKey: .sessionId)
+            try container.encode(seq, forKey: .seq)
+        case let .local(source):
+            try container.encode("local", forKey: .kind)
+            try container.encode(source, forKey: .source)
+        }
+    }
 }
 
 public struct BotPrincipal: Codable, Sendable, Equatable {

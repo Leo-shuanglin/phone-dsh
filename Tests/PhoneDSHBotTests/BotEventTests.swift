@@ -14,6 +14,35 @@ final class BotEventTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(BotEvent.self, from: data), event)
     }
 
+    func testFrozenEventGoldenUsesRealCodable() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let url = root.appendingPathComponent("spec/bot/v1/golden/event-envelope.json")
+        let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let valid = fixture["valid"] as! [String: Any]
+        let data = try JSONSerialization.data(withJSONObject: valid["event"] as! [String: Any])
+        let event = try JSONDecoder().decode(BotEvent.self, from: data)
+        XCTAssertEqual(event.eventId, "evt:routine-1")
+        XCTAssertEqual(event.origin, .local(source: "scheduler"))
+        XCTAssertEqual(event.commitSeq, 1)
+        XCTAssertEqual(try JSONDecoder().decode(BotEvent.self, from: JSONEncoder().encode(event)), event)
+    }
+
+    func testOriginRejectsUnknownKind() throws {
+        let data = Data("{\"kind\":\"future\",\"source\":\"scheduler\"}".utf8)
+        XCTAssertThrowsError(try JSONDecoder().decode(BotEventOrigin.self, from: data))
+    }
+
+    func testEffectCarriesFrozenRetryPolicy() throws {
+        let effect = BotEffect(effectKey: "effect-1", operation: "notify", canonicalResource: "row-1",
+                               argsDigest: "digest", logicalKey: "row-1", idempotent: true,
+                               retryPolicy: "network-idempotent")
+        XCTAssertEqual(effect.kind, "generic")
+        XCTAssertEqual(effect.target, "row-1")
+        XCTAssertEqual(effect.payloadDigest, "digest")
+        XCTAssertEqual(effect.maxAttempts, 5)
+    }
+
     func testUnimplementedStoreFailsClosed() async {
         let store = UnimplementedBotEventLog()
         let event = BotEvent(type: "ui.notice", eventId: "evt-2", time: 1,
