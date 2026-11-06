@@ -33,7 +33,7 @@ public actor RoutineScheduler {
     public init(botId: String, machine: RoutineMachine, inbox: WakeInbox,
                 sink: any RoutineResultSink, proactive: (any ProactiveConsidering)? = nil,
                 runner: @escaping Runner, cancelRunner: CancelRunner? = nil,
-                available: @escaping Availability = { _ in true },
+                available: @escaping Availability,
                 busy: @escaping Availability = { _ in false },
                 settings: @escaping @Sendable () -> ProactiveSettings = { ProactiveSettings() },
                 now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
@@ -104,7 +104,7 @@ public actor RoutineScheduler {
         for item in pending {
             await hold(item)
             if !item.proactiveHandled { await considerInterrupt(item) }
-            if let latest = try await machine.delivery(item.deliveryKey) {
+            if let latest = try await machine.delivery(item.deliveryKey, botId: botId) {
                 await deliver(latest, force: true)
             }
         }
@@ -209,7 +209,7 @@ public actor RoutineScheduler {
         ), !finished.ignored, let delivery = finished.delivery else { return }
         await hold(delivery)
         await considerInterrupt(delivery)
-        if let latest = try? await machine.delivery(delivery.deliveryKey) {
+        if let latest = try? await machine.delivery(delivery.deliveryKey, botId: botId) {
             await deliver(latest)
         }
     }
@@ -283,9 +283,10 @@ public actor RoutineScheduler {
                 runId: original.runId, deliveryKey: original.deliveryKey
             )
             _ = try await inbox.enqueue(item)
-            _ = try await machine.markHeld(key, delivered: true, now: nowProvider())
+            _ = try await machine.markHeld(key, botId: botId, delivered: true, now: nowProvider())
         } catch {
-            _ = try? await machine.markHeld(key, delivered: false, error: error.localizedDescription, now: nowProvider())
+            _ = try? await machine.markHeld(key, botId: botId, delivered: false,
+                                            error: error.localizedDescription, now: nowProvider())
         }
     }
 
@@ -314,7 +315,7 @@ public actor RoutineScheduler {
         )
         let decision = await proactive.consider(candidate)
         let notified = decision.mode == .on ? (decision.decision == .did ? "sent" : "skipped") : nil
-        _ = try? await machine.markNotification(original.deliveryKey, notified: notified,
+        _ = try? await machine.markNotification(original.deliveryKey, botId: botId, notified: notified,
                                                 reason: decision.reason, mode: decision.mode.rawValue,
                                                 now: nowProvider())
     }
@@ -322,15 +323,15 @@ public actor RoutineScheduler {
     private func deliver(_ original: RoutineDelivery, force: Bool = false) async {
         let now = nowProvider()
         do {
-            let claim = try await machine.claimDelivery(original.deliveryKey, leaseOwner: leaseOwner,
-                                                        now: now, force: force)
+            let claim = try await machine.claimDelivery(original.deliveryKey, botId: botId,
+                                                        leaseOwner: leaseOwner, now: now, force: force)
             guard claim.state == .claimed, let delivery = claim.delivery else { return }
             do {
                 _ = try await sink.deliver(RoutineAutomation(delivery: delivery))
-                _ = try await machine.completeDelivery(delivery.deliveryKey, now: nowProvider())
+                _ = try await machine.completeDelivery(delivery.deliveryKey, botId: botId, now: nowProvider())
             } catch {
-                _ = try await machine.failDelivery(delivery.deliveryKey, error: error.localizedDescription,
-                                                   now: nowProvider())
+                _ = try await machine.failDelivery(delivery.deliveryKey, botId: botId,
+                                                   error: error.localizedDescription, now: nowProvider())
             }
         } catch {
             return

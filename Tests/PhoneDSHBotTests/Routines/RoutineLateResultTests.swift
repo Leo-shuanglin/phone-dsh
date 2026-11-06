@@ -8,7 +8,7 @@ final class RoutineLateResultTests: XCTestCase {
     func testLateResultCannotOverwriteAttemptWithoutDeliveryLedger() async throws {
         let root = try wp6TempDirectory(self)
         let now = wp6Date(2026, 5, 12, 12)
-        let machine = wp6Machine(root: root)
+        let machine = try wp6Machine(root: root)
         _ = try await machine.create(botId: "bot-a", title: "Idempotent", prompt: "work",
                                      schedule: .interval(everyMinutes: 5), idempotent: true,
                                      now: now, id: "late")

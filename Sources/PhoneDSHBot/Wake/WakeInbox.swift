@@ -102,39 +102,89 @@ public struct WakeInboxDocument: Codable, Sendable, Equatable {
     }
 }
 
-public protocol WakeInboxStore: Sendable {
-    func read() throws -> WakeInboxDocument
-    func write(_ document: WakeInboxDocument) throws
+public struct WakeInboxMutation<Value: Sendable>: Sendable {
+    public var value: Value
+    public var persistSnapshot: Bool
+    public var eventType: String
+    public var eventId: String?
+
+    public init(value: Value, persistSnapshot: Bool = true,
+                eventType: String = "comm.inbound", eventId: String? = nil) {
+        self.value = value
+        self.persistSnapshot = persistSnapshot
+        self.eventType = eventType
+        self.eventId = eventId
+    }
 }
 
-public final class JSONWakeInboxStore: WakeInboxStore, @unchecked Sendable {
-    public let fileURL: URL
-    private let fileManager: FileManager
-    private let lock = NSLock()
+public protocol WakeInboxStore: Sendable {
+    func read() async throws -> WakeInboxDocument
+    func mutate<Value: Sendable>(
+        _ body: @escaping @Sendable (inout WakeInboxDocument) throws -> WakeInboxMutation<Value>
+    ) async throws -> Value
+}
 
-    public init(fileURL: URL, fileManager: FileManager = .default) {
-        self.fileURL = fileURL
-        self.fileManager = fileManager
+public struct SQLiteWakeInboxStore: WakeInboxStore, Sendable {
+    public let domainStore: SQLiteDomainStore
+    public let botId: String
+
+    public init(domainStore: SQLiteDomainStore, botId: String) {
+        self.domainStore = domainStore
+        self.botId = botId
     }
 
-    public func read() throws -> WakeInboxDocument {
-        try lock.withLock {
-            guard fileManager.fileExists(atPath: fileURL.path) else { return WakeInboxDocument() }
-            let data = try Data(contentsOf: fileURL)
-            if data.isEmpty { return WakeInboxDocument() }
-            let document = try JSONDecoder().decode(WakeInboxDocument.self, from: data)
-            guard document.version == 1 else { throw RoutineError.invalidHeldItem("unsupported wake inbox version: \(document.version)") }
-            return document
-        }
+    public func read() async throws -> WakeInboxDocument {
+        try await domainStore.wakeInboxDocument(botId: botId)
     }
 
-    public func write(_ document: WakeInboxDocument) throws {
-        try lock.withLock {
-            try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            try encoder.encode(document).write(to: fileURL, options: .atomic)
+    public func mutate<Value: Sendable>(
+        _ body: @escaping @Sendable (inout WakeInboxDocument) throws -> WakeInboxMutation<Value>
+    ) async throws -> Value {
+        try await domainStore.mutateWakeInbox(botId: botId, body)
+    }
+}
+
+extension SQLiteDomainStore {
+    func wakeInboxDocument(botId: String) throws -> WakeInboxDocument {
+        let rows = try database.query(
+            "SELECT payload FROM bot_events WHERE event_type IN ('comm.inbound', 'comm.outbound', 'comm.reply') ORDER BY commit_seq ASC")
+        let codec = BotEventEnvelopeCodec()
+        var document = WakeInboxDocument()
+        for row in rows {
+            guard let payload = row["payload"]?.blob else {
+                throw SQLiteDomainStoreError.corrupted("wake inbox snapshot has no payload")
+            }
+            let event = try codec.decode(payload)
+            if let snapshot = try DurableEventSnapshots.decode(WakeInboxDocument.self, from: event, botId: botId) {
+                guard snapshot.version == 1 else {
+                    throw SQLiteDomainStoreError.corrupted("unsupported wake inbox snapshot version: \(snapshot.version)")
+                }
+                document = snapshot
+            }
         }
+        return document
+    }
+
+    func mutateWakeInbox<Value: Sendable>(
+        botId: String,
+        _ body: @escaping @Sendable (inout WakeInboxDocument) throws -> WakeInboxMutation<Value>
+    ) async throws -> Value {
+        var document = try wakeInboxDocument(botId: botId)
+        let mutation = try body(&document)
+        guard mutation.persistSnapshot else { return mutation.value }
+        guard ["comm.inbound", "comm.outbound", "comm.reply"].contains(mutation.eventType) else {
+            throw SQLiteDomainStoreError.invalidTransition("invalid wake inbox snapshot event type: \(mutation.eventType)")
+        }
+        let eventId = mutation.eventId ?? "wake-inbox:\(botId):\(UUID().uuidString.lowercased())"
+        let event = BotEvent(
+            type: mutation.eventType, eventId: eventId, time: clock(), origin: .local(source: "comm-service"),
+            traceId: "trace:\(eventId)",
+            principal: BotPrincipal(botId: botId, sessionId: nil, kind: "chat"),
+            causationId: nil, correlationId: botId,
+            data: try DurableEventSnapshots.data(for: document, botId: botId)
+        )
+        _ = try await appendBatch([event])
+        return mutation.value
     }
 }
 
@@ -169,85 +219,95 @@ public actor WakeInbox {
         self.store = store
     }
 
-    public func items() throws -> [WakeInboxItem] {
-        try store.read().items
+    public func items() async throws -> [WakeInboxItem] {
+        try await store.read().items
     }
 
-    public func enqueue(_ item: WakeInboxItem) throws -> WakeInboxEnqueue {
-        var document = try store.read()
-        if let requestId = item.requestId,
-           let existing = document.items.first(where: { $0.requestId == requestId }) {
-            return WakeInboxEnqueue(ok: true, item: existing, duplicate: true)
+    public func enqueue(_ item: WakeInboxItem) async throws -> WakeInboxEnqueue {
+        try await store.mutate { document in
+            if let requestId = item.requestId,
+               let existing = document.items.first(where: { $0.requestId == requestId }) {
+                return WakeInboxMutation(value: WakeInboxEnqueue(ok: true, item: existing, duplicate: true),
+                                         persistSnapshot: false)
+            }
+            guard document.items.count < Self.maxItems else { throw RoutineError.heldInboxFull(Self.maxItems) }
+            var pending = item
+            pending.state = .pending
+            pending.stagedAt = nil
+            pending.stagedKey = nil
+            document.items.append(pending)
+            return WakeInboxMutation(value: WakeInboxEnqueue(ok: true, item: pending, duplicate: false),
+                                     eventId: "wake-inbox:enqueue:\(pending.id)")
         }
-        guard document.items.count < Self.maxItems else { throw RoutineError.heldInboxFull(Self.maxItems) }
-        var pending = item
-        pending.state = .pending
-        pending.stagedAt = nil
-        pending.stagedKey = nil
-        document.items.append(pending)
-        try store.write(document)
-        return WakeInboxEnqueue(ok: true, item: pending, duplicate: false)
     }
 
     public func stage(limit: Int = WakeInbox.maxStage, now: Int64,
-                      key: String? = nil, kind: String? = nil) throws -> WakeInboxStage {
-        var document = try store.read()
-        let count = min(Self.maxStage, max(0, limit))
-        let picked = document.items.filter { item in
-            item.state == .pending && (kind == nil || item.kind == kind)
-        }.sorted { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }.prefix(count)
-        guard !picked.isEmpty else { return WakeInboxStage(items: [], key: nil) }
-        let stagedKey = key ?? "staged-\(now)-\(UUID().uuidString)"
-        guard !stagedKey.isEmpty else { throw RoutineError.invalidHeldItem("stagedKey must not be empty") }
-        let ids = Set(picked.map(\.id))
-        for index in document.items.indices where ids.contains(document.items[index].id) {
-            document.items[index].state = .staged
-            document.items[index].stagedAt = now
-            document.items[index].stagedKey = stagedKey
+                      key: String? = nil, kind: String? = nil) async throws -> WakeInboxStage {
+        try await store.mutate { document in
+            let count = min(Self.maxStage, max(0, limit))
+            let picked = document.items.filter { item in
+                item.state == .pending && (kind == nil || item.kind == kind)
+            }.sorted { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }.prefix(count)
+            guard !picked.isEmpty else {
+                return WakeInboxMutation(value: WakeInboxStage(items: [], key: nil), persistSnapshot: false)
+            }
+            let stagedKey = key ?? "staged-\(now)-\(UUID().uuidString)"
+            guard !stagedKey.isEmpty else { throw RoutineError.invalidHeldItem("stagedKey must not be empty") }
+            let ids = Set(picked.map(\.id))
+            for index in document.items.indices where ids.contains(document.items[index].id) {
+                document.items[index].state = .staged
+                document.items[index].stagedAt = now
+                document.items[index].stagedKey = stagedKey
+            }
+            let staged = document.items.filter { ids.contains($0.id) }
+                .sorted { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
+            return WakeInboxMutation(value: WakeInboxStage(items: staged, key: stagedKey),
+                                     eventType: "comm.outbound", eventId: "wake-inbox:stage:\(stagedKey)")
         }
-        try store.write(document)
-        return WakeInboxStage(items: document.items.filter { ids.contains($0.id) }
-            .sorted { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }, key: stagedKey)
     }
 
     @discardableResult
-    public func commit(_ stagedKey: String?) throws -> Int {
+    public func commit(_ stagedKey: String?) async throws -> Int {
         guard let stagedKey, !stagedKey.isEmpty else { return 0 }
-        var document = try store.read()
-        let before = document.items.count
-        document.items.removeAll { $0.state == .staged && $0.stagedKey == stagedKey }
-        let removed = before - document.items.count
-        if removed > 0 { try store.write(document) }
-        return removed
+        return try await store.mutate { document in
+            let before = document.items.count
+            document.items.removeAll { $0.state == .staged && $0.stagedKey == stagedKey }
+            let removed = before - document.items.count
+            return WakeInboxMutation(value: removed, persistSnapshot: removed > 0,
+                                     eventType: "comm.reply", eventId: "wake-inbox:commit:\(stagedKey)")
+        }
     }
 
     @discardableResult
-    public func revert(_ stagedKey: String?) throws -> Int {
+    public func revert(_ stagedKey: String?) async throws -> Int {
         guard let stagedKey, !stagedKey.isEmpty else { return 0 }
-        var document = try store.read()
-        var reverted = 0
-        for index in document.items.indices where document.items[index].state == .staged && document.items[index].stagedKey == stagedKey {
-            document.items[index].state = .pending
-            document.items[index].stagedAt = nil
-            document.items[index].stagedKey = nil
-            reverted += 1
+        return try await store.mutate { document in
+            var reverted = 0
+            for index in document.items.indices where document.items[index].state == .staged && document.items[index].stagedKey == stagedKey {
+                document.items[index].state = .pending
+                document.items[index].stagedAt = nil
+                document.items[index].stagedKey = nil
+                reverted += 1
+            }
+            return WakeInboxMutation(value: reverted, persistSnapshot: reverted > 0,
+                                     eventType: "comm.reply", eventId: "wake-inbox:revert:\(stagedKey)")
         }
-        if reverted > 0 { try store.write(document) }
-        return reverted
     }
 
     @discardableResult
-    public func recover() throws -> Int {
-        var document = try store.read()
-        var recovered = 0
-        for index in document.items.indices where document.items[index].state == .staged {
-            document.items[index].state = .pending
-            document.items[index].stagedAt = nil
-            document.items[index].stagedKey = nil
-            recovered += 1
+    public func recover() async throws -> Int {
+        try await store.mutate { document in
+            var recovered = 0
+            for index in document.items.indices where document.items[index].state == .staged {
+                document.items[index].state = .pending
+                document.items[index].stagedAt = nil
+                document.items[index].stagedKey = nil
+                recovered += 1
+            }
+            return WakeInboxMutation(value: recovered, persistSnapshot: recovered > 0,
+                                     eventType: "comm.reply",
+                                     eventId: "wake-inbox:recover:\(UUID().uuidString.lowercased())")
         }
-        if recovered > 0 { try store.write(document) }
-        return recovered
     }
 }
 
