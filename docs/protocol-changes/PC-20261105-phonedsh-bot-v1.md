@@ -122,3 +122,18 @@ python3 spec/bot/v1/tools/validate_vectors.py
 | `784cd28e4be998477f4ab1d25bb7967d2cfa0a49` | contract owner / 主 Agent | WP2 CCR-2：冻结现有 phone App MCP 的 BotVolatileContext 请求/响应、发现名、scope、大小、迟到结果和错误语义；WP2 consumer、WP7 Swift producer。CCR-1 workspace/image 收录由协调者处理，不属于协议变更 | WP2 重新分派；WP7 按此实现 producer |
 | `0074475d322395f6cdb06caa42ea391a214bd0da` | contract owner / 主 Agent | 上游基线升级为 DSH Bot bf4075b；golden 除来源 SHA 无语义差异。补充 Bot 色彩、composer 活动行、简洁回复/next-step、真实鱼素材与 FishDirector 状态映射。用户已明确头像资产授权 | WP7/WP9 按新基线接线；其余 WP 无需变更 |
 | `3c7a6efaab5d95b71cbceb7b69d900f5e8665552` | contract owner / 主 Agent | 新增 FishDirector schema/golden 与纯 Swift 对拍实现；纳入真实 512px 头像资源及 BotFishAvatar。20 组向量、127 个 Bot 测试通过 | WP9 直接消费公共状态机和资产；WP7 提供真实事件 |
+
+## 7. WP7 CCR：durable user-action transaction
+
+接受 `Sources/PhoneDSHBot/MCP/CONTRACT_CHANGE_REQUEST.md` 报告的“handler 已执行、nonce 未持久化”崩溃窗口。P24/P25 的 JSON wire、`BotUserAction`、`BotActionResult` 和既有 golden 不变，不增加第二套 action envelope 或 result 别名。
+
+- **计划接口**：`BotUserActionPlanning.plan(_:trust:) -> BotUserActionPlanOutcome` 替代会产生副作用的旧 handler。outcome 是 `commit(BotUserActionPlan)`、`stale(reason)` 或 `rejected(reason)`；plan 只含一个 durable `BotEvent` 和零至多个 `BotEffect`。planner 只能验证、授权和生成计划，不得调用 DSH prompt、恢复审批 continuation、写卡片、访问网络或文件。
+- **事务接口**：`SQLiteDomainStore.performAndRecord(action:plan:) -> BotActionResult` 是唯一生产提交入口。它在同一 `BEGIN IMMEDIATE` 事务内检查 nonce、提交事件、effects/outbox 与 `(botID,nonce)→eventID`；成功返回 accepted，已有 nonce 返回原 eventID 的 duplicate。planner 的 stale/rejected 不消耗 nonce。
+- **dispatcher**：`BotUserActionDispatcher` 先查持久 nonce，再只对未消费动作生成计划，最后调用上述单一事务；进程内相同 key 共用同一 Task，已 accepted 的并发重放返回 duplicate。旧的“先 handler.perform、后 nonceStore.record”不得用于生产，也不得通过内存 nonce 或调整记录顺序规避。
+- **原子性边界**：崩溃发生在 commit 前，事件、effects 和 nonce 全部回滚；commit 后重放为 duplicate。不得宣称 DSH、网络、文件或其他进程外部副作用 exactly-once；它们由 outbox 的至少一次投递、inbox 去重及 needs-reconciliation 处理。
+- **SQLite v2**：只新增 nonce 表和索引，既有 v1 数据原地保留。旧 v1 App 回滚时明确拒绝 v2 库，不自动删库或降级。`user_version=2` 和迁移/崩溃测试属于 P23/P25 实现契约，JSON schema 无需改版本。
+- **验证**：真实 SQLite 覆盖 v1→v2、并发 duplicate、事件/effect/nonce 同事务、before-commit/after-handler 等崩溃点重开；拒绝和 stale 后允许修正重试。测试不能用 mock nonce 代替数据库，也不能把普通 reopen duplicate 当成崩溃证据。
+- **路径重分配**：一个新的后续工作包拥有 `Sources/PhoneDSHBot/{Store,Journal,Rows}/**` 及对应测试中的 transaction 改动；WP7 只接 `MCP/**` planner/host adapter，WP9 只改 UI caller/fixture，均不得复制 nonce 表或事务。
+- **兼容性**：UI、Worker、Swift host 同 App bundle 更新，P25 wire 不变；旧持久 Bot v1 数据可升级，旧 App 不能读取 v2，与上述回滚拒绝规则一致。
+
+验收命令：`swift test --filter PhoneDSHBotTests`；`python3 spec/bot/v1/tools/validate_vectors.py`；`bash scripts/ci/check.sh --only phone-spec,phone-p0-conformance,phone-cross-tree`。冻结提交的 SHA 在推送后通知 WP7/WP9 和 transaction 实现者。

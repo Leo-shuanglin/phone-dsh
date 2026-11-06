@@ -12,6 +12,7 @@
 - Swift 宿主常驻负责事件、授权、记忆、routine 调度、通知、账本和 Watchdog。WebContent 终止不能丢失 durable 数据。
 - Bot 事件写 SQLite，不使用 JSONL 作为权威存储。`commitSeq` 由 SQLite 在同一事务中分配，单调且无缺口；`eventId` 去重。P03 journal 是另一序号域，不得混用。
 - effects outbox 至少一次投递，包含 lease、去重、dead-letter 和 needs-reconciliation。接受、持久化和外部副作用完成是不同事实。
+- SQLite schema v2 增加 `bot_user_action_nonces(bot_id, nonce, event_id, created_commit_seq)`，主键为 `(bot_id, nonce)`，`event_id` 唯一并引用同库动作事件。v1 打开时原地迁移，已有事件和 effects 不变；v2 拒绝更未来版本。回滚到只支持 v1 的 App 会明确拒绝该库，不删除或静默降级。
 - 第一版不做回退引擎、回滚、import、多 Bot、Team、Box、CloudAgent、GenerateImage 或 macOS 本机工具。
 
 ## 2. 工具面
@@ -53,6 +54,8 @@ Row、RowBatch、UserAction 和 ActionResult 以对应 schema 为准。`body.typ
 
 - UI 只读行、只发用户动作；宿主盖 `owner_direct`，UI 不得自行设置信任级别。
 - `watch(after:)` 增量补齐，游标单调；墓碑重建不复活；nonce 幂等。
+- durable 用户动作采用 plan→commit，不允许先执行再记录 nonce。`BotUserActionPlanning.plan(_:trust:)` 只验证并返回 `commit(BotUserActionPlan)`、`stale` 或 `rejected`；plan 包含一个 durable 事件和零至多个 effects，不得提前产生任何外部副作用。`SQLiteDomainStore.performAndRecord(action:plan:)` 在一个 `BEGIN IMMEDIATE` 事务内提交事件、effects/outbox 和 nonce；commit 前崩溃全部回滚，commit 后重放返回原 eventID 的 duplicate。stale/rejected 不消耗 nonce。
+- `BotUserActionDispatcher` 负责持久 nonce 预查和相同 `(botID,nonce)` 的进程内 Task 合并，生产提交只能走上述事务。旧的 `handler.perform→nonceStore.record` 不得用于生产，不能通过内存 nonce 或调换记录顺序伪装 crash-safe。外部 DSH、文件、网络和审批 continuation 不属于 SQLite 事务，仍使用 outbox 至少一次、inbox 去重与对账，不宣称 exactly-once。
 - progress 使用相同 `cardKey` 原地更新同一行。
 - 流式文字只存在内存覆盖层，不写 durable 事件，手机每秒最多推送 10 次。
 - 运行中输入通过 steering 并入当前回合，不排队；停止只取消当前回合并丢弃迟到输出，不重启 runtime。
