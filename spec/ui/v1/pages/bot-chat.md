@@ -2,11 +2,11 @@
 
 # BotChatPage / Bot 卡片页面（target）
 
-契约：P09、P25。上游：dsh-bot `28437f5d975230766f3f40463fa090d643f63e7c` 的 `FEISHU-CARD-SYSTEM.md`、`CARD-UX-AUDIT.md`、`displayContract.js`、`cardPayloads.cjs`、卡片组件、Transcript 和 Composer。目标实现路径：`examples/probe-app/PhoneDSHProbe/Bot/**`；当前不声明已有页面或运行时证据。
+契约：P09、P25。上游：dsh-bot `bf4075b0a2e8092b04b726c59a7b085d5a37e6f6` 的 `FEISHU-CARD-SYSTEM.md`、`CARD-UX-AUDIT.md`、`displayContract.js`、`cardPayloads.cjs`、卡片组件、Transcript、Composer、ActivityLine 和 FishDirector。目标实现路径：`examples/probe-app/PhoneDSHProbe/Bot/**`；当前不声明已有页面或运行时证据。
 
 ## 1. 页面与 session
 
-- 首屏为单栏主 Bot 对话。顶栏包含静态头像占位、runtime-context 注入的 Bot 名（默认“大肥鱼”）和状态胶囊“跟进中 N · 需要你处理 M”。用户确认素材授权前不得复制鱼素材或 FishDirector 资源。
+- 首屏为单栏主 Bot 对话。顶栏使用 DSH Bot 的真实大肥鱼头像资产、runtime-context 注入的 Bot 名（默认“大肥鱼”）和状态胶囊“跟进中 N · 需要你处理 M”。素材授权已明确；使用 `public/assets/fish` 的 512×512 RGBA PNG/JSON，FishDirector 的纯状态机在 Swift 中按共享事件实现，不运行 JavaScript/Canvas。主 Bot 的皇冠身份由真实 principal 决定，不能按名称伪造。
 - 每个 Bot 只有一条连续主对话；无新建对话、对话列表、回滚和删除单条。向上滚动调用 `history(before:)`。
 - 运行中 composer 可用，消息走 steering；用户消息优先于 Task 并发。停止就地取消当前回合，丢弃迟到输出。
 - 后台 routine/Task 只投影卡片，不暴露过程 session。隐藏回合不显示用户行和模型散文。
@@ -43,6 +43,14 @@ question/steps 选项为整行可点，支持 recommended、自定义回答和�
 
 所有卡片先验证 `body.type`、`cardType` 和必需数据。未登记或数据不足时不渲染，不用空白卡或猜测默认值补齐。
 
-## 4. 验收
+## 4. 最新基线的表现与接线
 
-每种 P0 卡片在浅色和深色模拟器截图，逐项对照上游内容模型、空状态、超限、按钮层级和交互。覆盖窄屏、长标题、动态字体、44pt 命中区、卡片关闭/选择、重复点击、迟到结果和 progress 同 key 更新。模拟器结果不得写成真机结果。
+- Bot 色彩：用户气泡和推荐卡表面使用真实 Bot 色彩，但必须满足 phoneDSH 深浅色与对比度 token；不能把桌面任意色值直接用于正文或背景。推荐色不能掩盖文字层级或失败语义。
+- 活动行：composer 上方保留一条无头像的活动行，只在实际运行状态展示。状态来自当前 turn 的最新工具/流式事件，不生成消息行；流式正文出现时隐藏。按 `ActivityLine`/`liveActivity.js` 的状态和工具摘要规则实现，并处理取消与迟到结果。
+- 简洁回复：persona 与 runtime context 必须保留最新简洁回复预算和明确 next-step 文案，不允许为了显示卡片强凑选项；卡片是否提供由 Agent 根据真实下一步价值决定。
+- 头像状态：`turn_started → thinking`、`model.delta → speaking/thinking`、工具调用 → working、审批/Watchdog → alerting、成功 → celebrate、失败/拒绝 → sad、turn_end → idle 的优先级、one-shot TTL 和去重沿最新 FishDirector。状态只来自当前 Bot 的真实事件，不能由 UI 自报或虚构。
+- 头像资产采用真实 `expressions/*.png` 与 `manifest.json`，36/60/120pt 使用同一 anchor；深浅色不套用错误色相。P0 生命周期所需 idle/thinking/streaming/working/sleeping/alerting/listening/speaking/happy/sad 必须有资源；其他状态按实际事件接入。
+
+## 5. 验收
+
+每种 P0 卡片在浅色和深色模拟器截图，逐项对照上游内容模型、空状态、超限、按钮层级和交互。覆盖窄屏、长标题、动态字体、44pt 命中区、卡片关闭/选择、重复点击、迟到结果和 progress 同 key 更新。另需覆盖真实鱼头像的 idle/working/alerting/celebrate/sad、活动行显隐和推荐色对比度。模拟器结果不得写成真机结果。

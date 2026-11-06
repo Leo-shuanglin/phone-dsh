@@ -4,7 +4,7 @@
 
 状态：`target`。本目录冻结 P23 BotEventLog、P24 BotToolSurface、P25 BotRows 的共享语义；静态 schema/golden 通过不等于 Swift、Worker、模型或真机已经实现。
 
-唯一上游规格是 dsh-bot `28437f5d975230766f3f40463fa090d643f63e7c`，由 `dshbot-pin.json` 固定。除 Mac 专属和手机平台限制外，各子系统复用其语义。不得恢复 PR29 的 NativeToolLoop 主循环、Mandate、Ticket 或 MandateTokenStore。
+唯一上游规格是 dsh-bot `bf4075b0a2e8092b04b726c59a7b085d5a37e6f6`，由 `dshbot-pin.json` 固定。除 Mac 专属和手机平台限制外，各子系统复用其语义。不得恢复 PR29 的 NativeToolLoop 主循环、Mandate、Ticket 或 MandateTokenStore。
 
 ## 1. 架构与存储
 
@@ -74,7 +74,7 @@ Row、RowBatch、UserAction 和 ActionResult 以对应 schema 为准。`body.typ
 ```bash
 node spec/tools/bot/export-vectors.mjs \
   --checkout /tmp/phonedsh-bot-spec \
-  --sha 28437f5d975230766f3f40463fa090d643f63e7c \
+  --sha bf4075b0a2e8092b04b726c59a7b085d5a37e6f6 \
   --out spec/bot/v1
 python3 spec/bot/v1/tools/validate_vectors.py
 ```

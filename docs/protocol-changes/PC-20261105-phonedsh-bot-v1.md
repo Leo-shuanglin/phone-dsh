@@ -16,7 +16,7 @@ Protocol impact: P23; P24; P25; P12; P09; P13。
 
 ## 1. 识别与角色
 
-- 具体 trigger → 现况 → 期望：原 DSH 工作台没有统一 Bot 事件、工具、行和常驻宿主边界；PR29 的自建 Swift 主循环、Mandate/Ticket 不合并且不得恢复。现在以 dsh-bot `28437f5d975230766f3f40463fa090d643f63e7c` 为唯一上游，WKWebView Worker 中的 DSH session 作为大脑，Swift 宿主承担确定性常驻能力。
+- 具体 trigger → 现况 → 期望：原 DSH 工作台没有统一 Bot 事件、工具、行和常驻宿主边界；PR29 的自建 Swift 主循环、Mandate/Ticket 不合并且不得恢复。现在以 dsh-bot `bf4075b0a2e8092b04b726c59a7b085d5a37e6f6` 为唯一上游，WKWebView Worker 中的 DSH session 作为大脑，Swift 宿主承担确定性常驻能力。
 - 协调者兼 contract owner / reviewer-integrator：本 session 主 Agent。只有该角色修改 `spec/`、本变更单和共享 fixture，并审查同一集成 head 的合并后 diff。
 - 实现者：WP1–WP12 各自隔离 worktree/分支；只在下列独占路径工作。WP7、WP10、WP11、WP12 按依赖排队，不提前开工。
 - Owning spec：`spec/README.md` P23–P25、`spec/bot/v1/README.md`、同目录 schema/golden、`spec/ui/v1/pages/bot-{chat,info}.md`；P12 仍由 `Package.swift`/native ABI 规则所有，P09 仍由 `spec/ui/v1` 所有。
@@ -85,7 +85,7 @@ Protocol impact: P23; P24; P25; P12; P09; P13。
 ```bash
 node spec/tools/bot/export-vectors.mjs \
   --checkout /tmp/phonedsh-bot-spec \
-  --sha 28437f5d975230766f3f40463fa090d643f63e7c \
+  --sha bf4075b0a2e8092b04b726c59a7b085d5a37e6f6 \
   --out spec/bot/v1
 python3 spec/bot/v1/tools/validate_vectors.py
 ```
