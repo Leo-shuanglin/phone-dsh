@@ -103,10 +103,10 @@ python3 spec/bot/v1/tools/validate_vectors.py
 | 同一命令中的 `phone-cross-tree` | PASS，8/8 invariants、registry 25 contracts、84 tests |
 | 同一命令中的 `phone-modules` | PASS |
 | 同一命令中的 `phone-license` | PASS；补齐了 5 个基线文件 SPDX 位置/头部 |
-| 同一命令中的 `phone-p0-conformance` | FAIL（基线维护债）：token provenance 已修并通过 `ui_check.py`，但标准全量提取后仍有 chat 手工动作及 home-drawer 等旧页面契约 stale；未扩大修复范围，未标 PASS |
-| 同一命令中的 `phone-hygiene` | FAIL（基线既有扫描）：queueitemid.local、queueorigin.local、pdsh.about.app、第三方许可证公开域名、Ubuntu/Rust/Termux 公开下载域名和测试邮箱；没有新增 allowlist、删除 fixture 或跳过检查 |
+| 同一命令中的 `phone-p0-conformance` | PASS，page-structure 31 known / 0 new / 0 stale、105 tests。已按真实源码和标准提取器同步旧契约；31 项既有 iOS/Android 差异仍明确归 Lane F，未宣称两端一致 |
+| 同一命令中的 `phone-hygiene` | PASS。经用户授权，只为已核实的合成标识、保留测试邮箱和公开第三方主机添加精确匹配规则；未跳过扫描 |
 
-因此契约内容已经 frozen，但 WP0 的“全部 gate PASS”验收尚未满足。实现子 Agent 尚未启动；只有 WP0 阻断项关闭后才按依赖并行。没有把基线失败归因于本轮 Bot 文件，也没有将其写成通过。
+完整 WP0 命令最终结果：六项全部 PASS，`== CI GATE: PASS`。契约 frozen，可以按依赖并行启动 WP1、WP2、WP3、WP4、WP5、WP6、WP8、WP9；WP12 等 WP3，其他包继续按依赖排队。
 
 - 真机、WebContent 2 小时 spike、模型 E2E、通知实投、外部账号：NOT_RUN。
 - WP1 不通过时停止，由用户决定是否采用 Swift LLM 循环退路；不得暗中更换架构。

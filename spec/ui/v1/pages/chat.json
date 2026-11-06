@@ -1303,13 +1303,13 @@
       "writes": true,
       "destination": null,
       "condition": null,
-      "provenance": "ChatPage.swift:3616",
+      "provenance": "ChatPage.swift:3687",
       "anchor": "Button(\"提交回答\", systemImage: \"arrow.up\") { submitAnswers() }",
       "extraction": "manual",
       "specRequired": false,
       "specRef": null,
       "baselineReachable": true,
-      "note": "`QuestionCard` is a sibling view struct (ChatPage.swift:3573), outside the page struct the extractor walks; the card is rendered in ChatPage's pending-answer slot and Android implements the submit button."
+      "note": "`QuestionCard` is a sibling view struct, outside the page struct the extractor walks; the card is rendered in ChatPage's pending-answer slot and Android implements the submit button."
     },
     {
       "id": "打开会话列表",
@@ -1321,7 +1321,7 @@
       "writes": false,
       "destination": null,
       "condition": null,
-      "provenance": "ChatPage.swift:214",
+      "provenance": "ChatPage.swift:215",
       "anchor": ".accessibilityLabel(\"打开会话列表\")",
       "extraction": "manual",
       "specRequired": false,
