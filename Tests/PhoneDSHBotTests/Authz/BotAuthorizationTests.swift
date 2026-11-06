@@ -3,20 +3,20 @@
 import XCTest
 @testable import PhoneDSHBot
 
-private func assertTrue(_ expression: @autoclosure () async -> Bool) async {
-    let value = await expression()
+private func assertTrue(_ expression: @autoclosure () async throws -> Bool) async rethrows {
+    let value = try await expression()
     XCTAssertTrue(value)
 }
 
-private func assertFalse(_ expression: @autoclosure () async -> Bool) async {
-    let value = await expression()
+private func assertFalse(_ expression: @autoclosure () async throws -> Bool) async rethrows {
+    let value = try await expression()
     XCTAssertFalse(value)
 }
 
-private func assertEqual<T: Equatable>(_ lhs: @autoclosure () async -> T,
-                                       _ rhs: @autoclosure () async -> T) async {
-    let left = await lhs()
-    let right = await rhs()
+private func assertEqual<T: Equatable>(_ lhs: @autoclosure () async throws -> T,
+                                       _ rhs: @autoclosure () async throws -> T) async rethrows {
+    let left = try await lhs()
+    let right = try await rhs()
     XCTAssertEqual(left, right)
 }
 
@@ -84,7 +84,7 @@ final class BotAuthorizationTests: XCTestCase {
         let revoked = try await store.add(BotGrant(id: expiring.id, botId: "main", tool: effect.tool,
                                                   operation: effect.operation, resource: effect.resource,
                                                   scope: .until, decision: .allow))
-        await assertTrue(await store.revoke(id: revoked.id))
+        try await assertTrue(try await store.revoke(id: revoked.id))
         await assertFalse(await authorizer.authorizeExecution(principal: principal, effects: [effect]).allowed)
 
         _ = try await store.add(BotGrant(botId: "main", tool: effect.tool,
@@ -93,7 +93,7 @@ final class BotAuthorizationTests: XCTestCase {
         await assertTrue(await authorizer.authorizeExecution(principal: principal, effects: [effect]).allowed)
         let otherSession = BotExecutionPrincipal(botId: "main", sessionId: "s2")
         await assertFalse(await authorizer.authorizeExecution(principal: otherSession, effects: [effect]).allowed)
-        await assertEqual(await store.revokeSession("s1", botId: "main"), 1)
+        try await assertEqual(try await store.revokeSession("s1", botId: "main"), 1)
         await assertFalse(await authorizer.authorizeExecution(principal: principal, effects: [effect]).allowed)
     }
 
@@ -154,10 +154,9 @@ final class BotAuthorizationTests: XCTestCase {
             principal: principal, effects: [auto], source: "memory", argsDigest: digest)
         XCTAssertTrue(result.allowed)
         let events = try await eventStore.events(after: 0, limit: 10)
-        XCTAssertEqual(events.count, 1)
-        let event = try XCTUnwrap(events.first)
-        XCTAssertEqual(event.type, "effect.attempted")
-        XCTAssertEqual(event.commitSeq, 1)
+        XCTAssertEqual(events.map(\.type), [BotGrantSnapshot.eventType, "effect.attempted"])
+        let event = try XCTUnwrap(events.last)
+        XCTAssertEqual(event.commitSeq, 2)
         XCTAssertEqual(event.origin, .local(source: "effect-runner"))
         XCTAssertEqual(event.principal.kind, "chat")
         XCTAssertEqual(event.principal.sessionId, "s1")
@@ -186,23 +185,27 @@ final class BotAuthorizationTests: XCTestCase {
         _ = try await grants.add(BotGrant(id: "grant-once", botId: "main", tool: effect.tool,
                                          operation: effect.operation, resource: effect.resource,
                                          scope: .once, decision: .allow))
-        await assertTrue(await grants.consume(id: "grant-once"))
+        try await assertTrue(try await grants.consume(id: "grant-once"))
         _ = try await grants.add(BotGrant(id: "grant-until", botId: "main", tool: effect.tool,
                                          operation: effect.operation, resource: effect.resource,
                                          scope: .until, decision: .allow))
-        await assertTrue(await grants.revoke(id: "grant-until"))
+        try await assertTrue(try await grants.revoke(id: "grant-until"))
         try await eventStore.close()
 
         let reopened = try SQLiteDomainStore(fileURL: file, now: { 2_000 })
         let events = try await reopened.events(after: 0, limit: 10)
-        XCTAssertEqual(events.map(\.type),
+        let auditEvents = events.filter { $0.type.hasPrefix("grant.") }
+        XCTAssertEqual(auditEvents.map(\.type),
                        ["grant.added", "grant.consumed", "grant.added", "grant.revoked"])
-        XCTAssertEqual(events.map(\.commitSeq), [1, 2, 3, 4])
-        XCTAssertEqual(Set(events.map(\.eventId)).count, 4)
-        XCTAssertEqual(Set(events.map(\.traceId)).count, 4)
+        XCTAssertEqual(events.filter { $0.type == BotGrantSnapshot.eventType }.count, 5)
+        XCTAssertEqual(events.map(\.commitSeq), (1...9).map(Optional.some))
+        XCTAssertEqual(Set(events.map(\.eventId)).count, 9)
+        XCTAssertEqual(Set(events.map(\.traceId)).count, 9)
         for event in events {
             XCTAssertEqual(event.origin, .local(source: "ipc"))
             XCTAssertEqual(event.principal.kind, "ipc")
+        }
+        for event in auditEvents {
             let record = try JSONDecoder().decode(BotAuditRecord.self, from: event.data.encoded())
             XCTAssertEqual(record.event, event.type)
             XCTAssertEqual(record.grants.count, 1)

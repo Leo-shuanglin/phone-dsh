@@ -10,8 +10,11 @@ public struct BotResolvedToolCall: Sendable, Equatable {
     public let principal: BotGatewayPrincipal
     public let attribution: BotAttribution
 
-    public init(sessionId: String, callId: String, agentId: String,
-                principal: BotGatewayPrincipal, attribution: BotAttribution) {
+    public init?(sessionId: String, callId: String, agentId: String,
+                 principal: BotGatewayPrincipal, attribution: BotAttribution) {
+        guard sessionId == principal.sessionId, attribution.sessionId == principal.sessionId,
+              callId == attribution.callId, agentId == principal.botId,
+              attribution.incarnation == principal.incarnation else { return nil }
         self.sessionId = sessionId
         self.callId = callId
         self.agentId = agentId
@@ -45,22 +48,22 @@ public actor BotGateway {
     @discardableResult
     public func issueSession(botId: String, sessionId: String, kind: BotSessionKind,
                              capabilities: [String] = [], ttlMilliseconds: Int64? = nil) async throws -> BotGatewayPrincipal {
-        if let existing = await tokens.lookupSession(sessionId) {
-            if existing.botId == botId && existing.kind == kind { return existing }
-            await tokens.revokeSession(sessionId)
-        }
         let ttl = ttlMilliseconds ?? (kind == .chat ? Self.chatTTLMilliseconds : Self.ephemeralTTLMilliseconds)
-        return try await tokens.issue(botId: botId, sessionId: sessionId, kind: kind,
-                                      capabilities: capabilities, ttlMilliseconds: ttl).principal
+        let issued = try await tokens.issueSession(botId: botId, sessionId: sessionId, kind: kind,
+                                                   capabilities: capabilities, ttlMilliseconds: ttl)
+        await discardStaleAttributions(sessionId: issued.principal.sessionId)
+        return issued.principal
     }
 
     @discardableResult
     public func issueToken(botId: String, sessionId: String, kind: BotSessionKind,
                            capabilities: [String] = [], expiresAt: Int64? = nil,
                            ttlMilliseconds: Int64? = nil) async throws -> BotIssuedToken {
-        try await tokens.issue(botId: botId, sessionId: sessionId, kind: kind,
-                               capabilities: capabilities, expiresAt: expiresAt,
-                               ttlMilliseconds: ttlMilliseconds)
+        let issued = try await tokens.issue(botId: botId, sessionId: sessionId, kind: kind,
+                                            capabilities: capabilities, expiresAt: expiresAt,
+                                            ttlMilliseconds: ttlMilliseconds)
+        await discardStaleAttributions(sessionId: issued.principal.sessionId)
+        return issued
     }
 
     @discardableResult
@@ -68,8 +71,11 @@ public actor BotGateway {
                                  arguments: BotJSONValue = .object([:]), argsDigest: String? = nil,
                                  runtimeId: String, expiresAt: Int64? = nil,
                                  ttlMilliseconds: Int64? = nil) async throws -> BotAttribution {
-        guard await tokens.lookupSession(sessionId) != nil else { throw BotGatewayError.unknownSession }
-        return try await attribution.register(sessionId: sessionId, callId: callId, name: name,
+        guard let principal = await tokens.lookupSession(sessionId) else {
+            throw BotGatewayError.unknownSession
+        }
+        return try await attribution.register(sessionId: sessionId, incarnation: principal.incarnation,
+                                              callId: callId, name: name,
                                               arguments: arguments, argsDigest: argsDigest,
                                               runtimeId: runtimeId, expiresAt: expiresAt,
                                               ttlMilliseconds: ttlMilliseconds)
@@ -79,7 +85,8 @@ public actor BotGateway {
         guard !runtimeId.isEmpty, !argsDigest.isEmpty,
               let entry = try? await attribution.claimByDigest(argsDigest: argsDigest,
                                                                runtimeId: runtimeId),
-              let principal = await tokens.lookupSession(entry.sessionId) else { return nil }
+              let principal = await tokens.lookupSession(entry.sessionId),
+              entry.incarnation == principal.incarnation else { return nil }
         return BotResolvedToolCall(sessionId: entry.sessionId, callId: entry.callId,
                                    agentId: principal.botId, principal: principal,
                                    attribution: entry)
@@ -93,5 +100,15 @@ public actor BotGateway {
     @discardableResult
     public func cancelToolCall(id: String) async -> Bool {
         await attribution.cancel(id: id)
+    }
+
+    private func discardStaleAttributions(sessionId: String) async {
+        while let current = await tokens.lookupSession(sessionId) {
+            _ = await attribution.revokeStale(sessionId: sessionId,
+                                              currentIncarnation: current.incarnation)
+            let settled = await tokens.lookupSession(sessionId)
+            if settled?.incarnation == current.incarnation { return }
+        }
+        _ = await attribution.revokeSession(sessionId)
     }
 }

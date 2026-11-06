@@ -9,16 +9,16 @@ public enum BotExecutionPrincipalKind: String, Codable, Sendable {
     case unknown
 }
 
-public struct BotExecutionPrincipal: Codable, Sendable, Equatable {
+public struct BotExecutionPrincipal: Sendable, Equatable {
     public let botId: String?
     public let sessionId: String?
     public let kind: BotExecutionPrincipalKind
     public let sessionKind: BotSessionKind?
     public let certain: Bool
 
-    public init(botId: String?, sessionId: String? = nil,
-                kind: BotExecutionPrincipalKind = .model,
-                sessionKind: BotSessionKind? = nil, certain: Bool = true) {
+    init(botId: String?, sessionId: String? = nil,
+         kind: BotExecutionPrincipalKind = .model,
+         sessionKind: BotSessionKind? = nil, certain: Bool = true) {
         self.botId = botId
         self.sessionId = sessionId
         self.kind = kind
@@ -26,12 +26,12 @@ public struct BotExecutionPrincipal: Codable, Sendable, Equatable {
         self.certain = certain
     }
 
-    public init(gateway principal: BotGatewayPrincipal, certain: Bool = true) {
+    init(gateway principal: BotGatewayPrincipal, certain: Bool = true) {
         self.init(botId: principal.botId, sessionId: principal.sessionId, kind: .model,
                   sessionKind: principal.kind, certain: certain)
     }
 
-    public static func userUI(botId: String, sessionId: String? = nil) -> BotExecutionPrincipal {
+    static func userUI(botId: String, sessionId: String? = nil) -> BotExecutionPrincipal {
         BotExecutionPrincipal(botId: botId, sessionId: sessionId, kind: .userUI, certain: true)
     }
 }
@@ -73,6 +73,12 @@ public struct BotExecutionAuthorizer: Sendable {
                                    source: String = "execution", argsDigest: String? = nil,
                                    consumeOnce: Bool = true) async -> BotExecutionDecision {
         let resolvedPrincipal = principal ?? BotExecutionPrincipal(botId: nil, kind: .unknown, certain: false)
+        do {
+            try await grants.recover()
+        } catch {
+            return await decision(false, "grant-recovery-failed", principal: resolvedPrincipal,
+                                  effects: effects, source: source, argsDigest: nil)
+        }
         var normalizedDigest: String?
         if let argsDigest {
             guard let digest = try? BotArgumentsDigest.validated(argsDigest) else {
@@ -144,8 +150,13 @@ public struct BotExecutionAuthorizer: Sendable {
         }
         if consumeOnce {
             let onceIDs = hits.filter { $0.scope == .once }.map(\.id)
-            guard await grants.consumeOnceAtomically(ids: onceIDs) else {
-                return await decision(false, "once-grant-consumed", principal: resolvedPrincipal,
+            do {
+                guard try await grants.consumeOnceAtomically(ids: onceIDs) else {
+                    return await decision(false, "once-grant-consumed", principal: resolvedPrincipal,
+                                          effects: normalizedEffects, source: source, argsDigest: normalizedDigest)
+                }
+            } catch {
+                return await decision(false, "grant-persistence-failed", principal: resolvedPrincipal,
                                       effects: normalizedEffects, source: source, argsDigest: normalizedDigest)
             }
         }
