@@ -661,6 +661,9 @@
           "glob": "docs/design/device-*.md"
         },
         {
+          "glob": "docs/protocol-changes/PC-20261106-bot-device-ingress.md"
+        },
+        {
           "glob": "android/domain/src/main/kotlin/com/phonedsh/domain/{device,connector}/**"
         },
         {
@@ -674,10 +677,10 @@
         "android/domain/src/test/kotlin/com/phonedsh/domain/device/DeviceCapabilitiesSchemaTest.kt"
       ],
       "source": {
-        "authority": "host/v1 的 envelope／caps／receipt schema；[adapter draft](../docs/design/device-adapter-contract-draft.md)（`draft`）",
+        "authority": "host/v1 的 envelope／caps／receipt schema；[adapter draft](../docs/design/device-adapter-contract-draft.md)（`draft`）；[device ingress](../docs/protocol-changes/PC-20261106-bot-device-ingress.md)",
         "ends": "Kotlin `android/domain/.../{device,connector}`；Swift `examples/probe-app/ProbeKit/Devices`",
         "evidence": "Kotlin `DeviceCapabilitiesSchemaTest`；第三方傳輸與端到端回執不由 schema 保證",
-        "triggers": "`spec/host/v1/schema/device-*`、`spec/host/v1/golden/device-*`、`docs/design/device-*.md`、`android/domain/src/main/kotlin/com/phonedsh/domain/{device,connector}/**`、`examples/probe-app/ProbeKit/Devices/**`"
+        "triggers": "`spec/host/v1/schema/device-*`、`spec/host/v1/golden/device-*`、`docs/design/device-*.md`、`docs/protocol-changes/PC-20261106-bot-device-ingress.md`、`android/domain/src/main/kotlin/com/phonedsh/domain/{device,connector}/**`、`examples/probe-app/ProbeKit/Devices/**`"
       }
     },
     {

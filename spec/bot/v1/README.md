@@ -55,6 +55,10 @@ routine、cron、run-attempt、安静时段、silent/held/interrupt、held inbox
 
 主动提醒规则链只用于 interrupt。iOS 通知深链为 `phonedsh://bot/<botID>/row/<rowID>`。推送中继不在本轮，只保留 WakeSignalSource 接口。
 
+### 4.1 设备 ingress
+
+设备消息先落 SQLite，再进入 held inbox。`device.event` 使用 `eventId/traceId/correlationId = "dev:" + msg_id`，`origin = device:<transport>:<device_id>`；principal 的 session 是个人 Agent 唯一连续主对话，kind 为 device，所有文本均不可信。每个 Bot 不为设备另建主 session，既有 DSH 设备管理路径不变。held kind 为 `device-event`，requestId 同样为 `dev:msg_id`，可选 `deviceID/transport/deviceSeq` 保存来源。重复 msg_id 去重，冲突 payload 拒绝，乱序按设备 seq 补齐，崩溃后从 durable event 恢复。WebContent 不可用时 pending/staged，恢复后只补一次。蓝牙/LAN 原始扫描不能作为稳定身份或唤醒依据，工具仍走执行点再授权和全局 PhoneCapabilityGate。完整映射以 `docs/protocol-changes/PC-20261106-bot-device-ingress.md` 为准。
+
 ## 5. 行与交互
 
 Row、RowBatch、UserAction 和 ActionResult 以对应 schema 为准。`body.type` 为 `text`、`widget`、`attachment`、`approval`、`automation`、`notice`、`deleted`；`widget.cardType` 为 `question`、`steps`、`task`、`document`、`progress`、`checklist`、`link`、`table`、`callout`、`info`、`payload`、`library`。attachment、approval、automation 和 notice 使用独立 body 类型，不伪装成 widget。

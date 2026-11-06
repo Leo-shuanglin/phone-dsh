@@ -58,6 +58,20 @@
     },
     "committed": {
       "removed": 1
+    },
+    "device": {
+      "id": "dev:ble-1",
+      "kind": "device-event",
+      "text": "客厅灯已离线",
+      "requestId": "dev:ble-1",
+      "createdAt": 1760000001000,
+      "fromAgentId": "living-room-light",
+      "fromAgentName": "客厅灯",
+      "threadId": "device:living-room-light",
+      "deviceID": "living-room-light",
+      "transport": "bluetooth",
+      "deviceSeq": 7,
+      "state": "pending"
     }
   },
   "invalid": [

@@ -5,7 +5,10 @@
   "required": ["id", "kind", "text", "requestId", "createdAt", "state"],
   "properties": {
     "id": {"type": "string", "minLength": 1},
-    "kind": {"enum": ["agent-held", "subagent-result", "routine-result"]},
+    "kind": {"enum": ["agent-held", "subagent-result", "routine-result", "device-event"]},
+    "deviceID": {"type": "string", "minLength": 1},
+    "transport": {"enum": ["bluetooth", "lan"]},
+    "deviceSeq": {"type": "integer", "minimum": 0},
     "fromAgentId": {"type": ["string", "null"]},
     "fromAgentName": {"type": "string"},
     "title": {"type": ["string", "null"]},
