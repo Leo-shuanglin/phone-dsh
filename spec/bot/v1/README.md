@@ -67,6 +67,8 @@ Row、RowBatch、UserAction 和 ActionResult 以对应 schema 为准。`body.typ
 - 流式文字只存在内存覆盖层，不写 durable 事件，手机每秒最多推送 10 次。
 - 运行中输入通过 steering 并入当前回合，不排队；停止只取消当前回合并丢弃迟到输出，不重启 runtime。
 - 隐藏回合只显示卡片；question/steps 成功后宿主抑制模型收尾文字。
+- question/steps 只有 2–4 个真实选项，无“其他”或卡内输入；`cardAnswer` 仅含 `cardID + optionID`，选项值作为普通 `chat` 新消息，自由文本不经过卡片。推荐取第一个合法 recommended/primary，其余 primary 归一为 default，danger 不推荐。仅 question 可关闭，且 dismiss 只做本地隐藏，不写模型可见事件或触发新回合；steps 不提供关闭动作。
+- 所有消息卡片与同一 assistant 回复气泡共享列宽，不得超过该气泡；question/steps 内距 12、选项视觉高 44、间距 4，其他卡片同样按内容紧凑排列。超过 4 个步骤/条目默认折叠，详细规则以 `spec/ui/v1/pages/bot-chat.md` 为准。
 - 第一版不提供新建对话、对话列表、回滚或删除单条。现有 DSH 多 session 工作台保留为独立高级入口。
 
 ## 6. 观测与成本

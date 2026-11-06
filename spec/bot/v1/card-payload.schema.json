@@ -30,7 +30,7 @@
               "content": {"type": "string"}, "size": {"type": "string"},
               "annotationCount": {"type": "integer", "minimum": 0}, "docCount": {"type": "integer", "minimum": 0},
               "percent": {"type": "integer", "minimum": 0, "maximum": 100},
-              "library": {"type": "boolean"}, "allowCustom": {"type": "boolean"},
+              "library": {"type": "boolean"},
               "parseHeadings": {"type": "boolean"}, "docCountKnown": {"type": "boolean"},
               "interactive": {"type": "boolean"},
               "toc": {"type": "array"}, "annotations": {"type": "array"}, "comments": {"type": "array"},

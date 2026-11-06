@@ -10,7 +10,6 @@
     "text": {"type": "string"},
     "cardID": {"type": "string"},
     "optionID": {"type": "string"},
-    "customText": {"type": "string"},
     "approvalID": {"type": "string"},
     "decision": {"enum": ["allowOnce", "always", "deny"]},
     "digest": {"type": "string"},
@@ -22,11 +21,10 @@
       "properties": {"kind": {"const": "chat"}}
     },
     {
-      "required": ["cardID"],
+      "required": ["cardID", "optionID"],
       "properties": {
         "kind": {"const": "cardAnswer"},
-        "optionID": {"type": "string"},
-        "customText": {"type": "string"}
+        "optionID": {"type": "string", "minLength": 1}
       }
     },
     {

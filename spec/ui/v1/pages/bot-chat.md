@@ -15,23 +15,25 @@
 
 ## 2. 手机尺寸换算
 
-结构、内容模型、空状态、超限处理和交互照 DSH Bot；视觉值只取 phoneDSH `tokens.json`，不复制桌面 CSS 色值或新增第二套 token。
+结构、内容模型、空状态、超限处理和交互照 DSH Bot；视觉值只取 phoneDSH `tokens.json`，不复制桌面 CSS 色值或新增第二套 token。用户最新明确要求：所有消息卡片必须比此前紧凑，不能呈现为全宽大窗口。
 
 | DSH Bot 桌面语义 | phoneDSH 手机规则 |
 | --- | --- |
-| 卡片宽 `min(100%,560px,100%-82px)` | 使用内容列全部可用宽：屏宽减左右 `geometry.cardOuterMarginH`；不设 560pt 上限，不重复扣除外边距 |
+| 卡片宽 `min(100%,560px,100%-82px)` | 与同一 assistant 回复气泡共享唯一 `BotMessageColumn`。卡片宽度不得超过该回复气泡；使用同一左右 `geometry.cardOuterMarginH` 和最大宽度，不额外增加 16pt 外边距，不使用全屏/居中模态窗口 |
 | 产出卡 r22 | `radius.bubble`（24） |
 | 工作卡 r18 | `radius.listCard`（18） |
 | 行内提示 r14 | `radius.card`（12） |
-| 卡片内距 16、密集 14 | `geometry.cardPadding`（14）；外边距使用 `geometry.cardOuterMarginH/V` |
-| 标题 15/500 | `typography.pageTitle`，保持标题层级，不另造字号 |
-| 正文 14/20 | `typography.process`；主要回答正文仍用 `typography.body` |
+| 卡片内距 16、密集 14 | 工作卡使用 `geometry.cardPadding`（14）；question/steps 使用 12pt 紧凑内距；外边距只能来自共享回复列，不重复扣除 |
+| 标题 15/500 | `typography.process` 同级的 15pt semibold，不使用更大的页面标题 |
+| 正文 14/20 | `NativeParityTokens.bodySize`（14）及紧凑行高；主要回答正文仍用 `typography.body` |
 | 密集/辅助 13、备注 12 | `typography.secondary` / `typography.caption` |
 | 主、次、文字三按钮层级 | `colors.primaryButton` + `colors.primaryButtonInk`、`colors.sessionSelector` + `colors.sessionPrimary`、透明底 + `colors.sessionSecondary`；触控目标至少 44pt，主要操作按手机视觉动线置于上方 |
 | 成功/进行中/警告/失败/失效 | `colors.sessionSuccess` / `colors.sessionAccent` / `colors.sessionWarning` / `colors.sessionDanger` / `colors.sessionTertiary`；每卡最多两个语义色 |
 | 描边和表面 | `colors.sessionBorderL1/L2`、`colors.surface` / `colors.sessionSelector`；浅色和深色必须使用同一角色 |
 
-桌面 32px 按钮、28px 密集行、40px 选项行在手机上统一提升到至少 44pt 的可点击区域；视觉图标可以更小，但命中区域不得缩小。长内容优先局部展开和滚动，不把整页卡死；超限行数、字段长度和省略策略沿上游卡片规格。
+桌面 32px 按钮、28px 密集行、40px 选项行在手机上统一提升到至少 44pt 的可点击区域；视觉图标可以更小，但命中区域不得缩小。question/steps 的选项视觉行高为 44 而非 52，行间 4，选项默认透明，不为每项再套一层厚底卡；recommended 才使用轻 tint、细边和推荐徽标。关闭图形可以紧凑，但命中区仍为 44。
+
+所有卡片高度由实际内容决定，不设置大面积固定高度或用空白撑开。超过 4 个步骤/条目默认折叠，长文档在卡片内局部展开；预览是用户主动打开后的独立行为，不能在 transcript 中直接弹出大窗口。notice 使用行内紧凑提示，Task/routine、审批、progress、checklist、link、attachment、document 与 question/steps 都受同一回复列宽约束。
 
 ## 3. 卡片清单
 
@@ -39,7 +41,7 @@ P0 第一版必须实现：question、steps（含 recommended）、task、attach
 
 P1 仅登记为 target：table、callout、info、payload、library。第一版不渲染、不注册工具、不进 persona。canvas、product、gift、Bot 间通讯行不实现。
 
-question/steps 选项为整行可点，支持 recommended、自定义回答和关闭；审批为拒绝/允许一次/总是允许三选项加 alwaysScope，拒绝使用中性文字按钮，禁止把否定语义染红。checklist 本地勾选和回传行为沿上游；link 仅打开 HTTP/HTTPS 且经系统安全外部打开策略。
+question/steps 选项为整行可点并支持 recommended；**没有“其他”选项、卡内输入框或自定义答案提交控件**。仅 question 支持本地关闭，steps 不提供关闭按钮。用户需要自由回答时直接在 composer 输入，作为普通 `chat` 消息，而不是 `cardAnswer.customText`。审批为拒绝/允许一次/总是允许三选项加 alwaysScope，拒绝使用中性文字按钮，禁止把否定语义染红。checklist 本地勾选和回传行为沿上游；link 仅打开 HTTP/HTTPS 且经系统安全外部打开策略。
 
 所有卡片先验证 `body.type`、`cardType` 和必需数据。未登记或数据不足时不渲染，不用空白卡或猜测默认值补齐。
 

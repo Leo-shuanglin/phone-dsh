@@ -155,8 +155,21 @@ python3 spec/bot/v1/tools/validate_vectors.py
 
 ## 9. BotDock 视觉组件分工
 
-用户要求底部图标参考桌面 TonoAI，而不是继续直接使用系统 TabView 的默认外观。新增 `spec/ui/v1/pages/bot-dock.md` 作为 P09 组件契约：统一 24pt 网格、1.75 圆角线宽、独立 Chat 主入口和三选项浮动胶囊，使用 phoneDSH token，覆盖深浅色、窄屏、动态字体、44pt 命中区及 Reduce Motion。
+用户要求底部图标参考桌面参考 App，而不是继续直接使用系统 TabView 的默认外观。新增 `spec/ui/v1/pages/bot-dock.md` 作为 P09 组件契约：统一 24pt 网格、1.75 圆角线宽、独立 Chat 主入口和三选项浮动胶囊，使用 phoneDSH token，覆盖深浅色、窄屏、动态字体、44pt 命中区及 Reduce Motion。
 
 - 新增独立工作包，独占 `examples/probe-app/PhoneDSHProbe/BotDock/**`、`Tests/PhoneDSHTests/BotDock/**` 和 `scripts/ci/bot-dock/**`；不得改 WP9 正在使用的 `Bot/**`、RootView、project.yml 或 `scripts/ci/bot-ui/**`。
 - WP9 继续原有生产接线。组件 PR 合入后，由集成者在一个独立后续改动中替换 RootView 系统 TabView，并重新执行四入口和深浅色截图；组件预览不算最终集成验收。
 - 不新增颜色 token、外部依赖或品牌资产；图标以通用 SwiftUI 矢量路径实现。
+
+## 10. 选择卡片行为与手机紧凑尺寸
+
+§9 的独立 BotDock 工作包已按用户要求停止，不在本轮继续实现。用户随后单独要求对齐所有消息卡片的样式与手机尺寸，因此本修订只恢复卡片本身的紧凑呈现，不恢复底栏或其他视觉工作。
+
+- question/steps 没有“其他”选项、卡内输入框或自定义答案提交。`cardAnswer` 只接受 `cardID + optionID`，选项的 `value ?? label` 作为普通新聊天消息；自由文本只能走普通 `chat`。P25 target schema 直接删除 `customText`，不保留别名；此前未发布该 target，不宣称旧版兼容。
+- 仅 question 支持 dismiss，且只隐藏本地卡片，不产生模型可见消息、审批拒绝或额外模型回合；steps 不提供关闭动作。同一回合不得反复弹回。选项选择不是 approval，也不触发独立 approval grant。
+- 工具输入为 2–4 个选项；无有价值下一步时不调用工具，禁止空卡或凑选项。对象字段只含 `label/value/style/recommended/description`，steps 另允许字符串简写。推荐归一以第一个合法推荐胜出，其余 primary 降为 default，danger 不推荐；这与上游运行时一致，不把多推荐直接抛成工具错误。
+- 所有消息卡片与同一 assistant 回复气泡共享唯一 `BotMessageColumn`，宽度不得超过该气泡，不额外增加外边距，不使用 transcript 内全屏/居中模态。question/steps 内距 12、选项视觉高 44、间距 4、默认透明；recommended 才使用轻 tint、细边和徽标。其他工作/产出/审批/Task/routine/notice 卡同样受此列宽与紧凑内容约束。
+- 高度按内容，超过 4 个步骤/条目默认折叠；预览只能由用户主动打开。44pt 命中区、深浅色、动态字体与 Reduce Motion 保持，不通过放大卡片换取触控面积。
+- 新增紧凑卡片实现工作包，只修改原 WP9 的 `Bot/Bot{CardView,WorkCardView,UIComponents,ChatPage,UIModels,Fixtures}.swift` 及 `scripts/ci/bot-ui/**` 中必要场景，禁止改 BotDock、RootView 或其他页面。必须实际测量卡片与回复气泡宽度，不能用 fixture 存在代替尺寸验收。
+
+验收：shared schema/golden、PhoneDSHBotTests、三项 contract gate，以及真实模拟器的全部 P0 卡片浅/深截图、宽度断言、无自定义输入、recommended、选中/关闭与折叠交互。
