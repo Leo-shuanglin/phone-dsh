@@ -137,3 +137,16 @@ python3 spec/bot/v1/tools/validate_vectors.py
 - **兼容性**：UI、Worker、Swift host 同 App bundle 更新，P25 wire 不变；旧持久 Bot v1 数据可升级，旧 App 不能读取 v2，与上述回滚拒绝规则一致。
 
 验收命令：`swift test --filter PhoneDSHBotTests`；`python3 spec/bot/v1/tools/validate_vectors.py`；`bash scripts/ci/check.sh --only phone-spec,phone-p0-conformance,phone-cross-tree`。冻结提交的 SHA 在推送后通知 WP7/WP9 和 transaction 实现者。
+
+## 8. 集成审查 CCR：Grant 恢复与 session incarnation
+
+核心审查证明仅有内存 Grant 会在重启后丢失 standing deny，进而让 auto 写操作错误放行。冻结以下最小修订，不改变 P24 的工具 schema、Grant 匹配规则、deny 优先或审批结果：
+
+- 在现有 BotEvent/SQLite 中增加 `authz.grant_snapshot` 持久投影，保存完整当前 Grant 集合。其 `canonicalResource` 等匹配字段与上游 `grantEventData` 同义；这是恢复授权所需的状态投影，不是放宽“审计只存摘要”。继续使用 §7 的 SQLite v2，不新增平行数据库、grant wire envelope 或 schema v3。
+- 生产启动必须先 replay 最后一份完整快照并验证全部 Grant，再开放执行；恢复失败 fail-closed。add/extend/consume/revoke 持久化成功后才公开新状态；once 不得因 actor 重入或崩溃复活。standing deny、session/until allow 的既有 TTL 和 scope 不变。
+- Gateway principal 增加宿主生成的随机 `incarnation`， attribution 注册保存该代次，解析与当前代次不一致即拒绝。重启可重新发行 token，不要求恢复 Bearer token；持久 token 仍只有摘要。旧工具调用不能因 session 重签而继承新身份。
+- `BotExecutionPrincipal` 的已验证构造收敛到 PhoneDSHBot 模块，MCP 输入不能自报 `userUI/certain/trust`；Memory 的真实 turn source 由 WP5 修复，不由本修订新增参数。
+- WP4 后续修复独占 `Sources/PhoneDSHBot/{Authz,Gateway}/**` 及对应测试；不得改 Store/Journal/Rows，以免与 §7 transaction 工作包冲突。WP7 只能传入已解析的 principal 和宿主重新推导的 effects。
+- 验证包括冷重启 standing deny + auto 仍拒绝、session/until 恢复、once 不复活、revoke 不回滚、损坏快照 fail-closed、并发 consume、旧 incarnation/撤销 token 拒绝，以及伪造 userUI 的负向测试。
+
+验收沿用 §7 命令；WP7/WP9 合入时以此修订为准。
