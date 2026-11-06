@@ -846,3 +846,8 @@
     # Native Files folder import into the existing session workspace.
     - id: phone-directory-import
       name: '@phone-dsh/dsh-phone-directory-import'
+
+    - id: dshbot-steering
+      name: '@phone-dsh/dsh-bot-runtime/steering'
+    - id: dshbot-volatile-context
+      name: '@phone-dsh/dsh-bot-runtime/volatile-context'
