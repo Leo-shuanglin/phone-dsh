@@ -9,7 +9,7 @@ status: frozen
 breaking: false
 version_decision: Bot schemaVersion=1；Swift 宿主与 Worker 同一 App bundle 配对升级；不改变 P01/P15 wire 或生命周期版本。
 base: 07585efb2a71daa2e05f55c83abcfb4a2cb39f4d
-contract_revision: 784cd28e4be998477f4ab1d25bb7967d2cfa0a49
+contract_revision: 0074475d322395f6cdb06caa42ea391a214bd0da
 ```
 
 Protocol impact: P23; P24; P25; P12; P09; P13。
@@ -120,3 +120,4 @@ python3 spec/bot/v1/tools/validate_vectors.py
 | `b5192c4a3eedd94ac4878bc0270684f7854ac273` | contract owner / 主 Agent | 初始冻结；纳入连续单 session、P0/P1 卡片、复用总表、WP12 观测与成本；同步最新 origin/main `07585efb`。无 CCR | 所有 WP |
 | `65e062856c7e87f2f2b649b96383ae84259b2d65` | contract owner / 主 Agent | WP3 CCR-1：BotEventOrigin 改为冻结的 kind=dsh/local 显式 Codable，拒绝未知 kind/member。CCR-2：BotEffect 增加 kind/target/payloadDigest/retryPolicy/maxAttempts，保留源兼容默认值并支持 network-idempotent 五次尝试。schema/golden 不变，真实 Codable 回归通过 | WP3 重新分派；WP4/WP5/WP6/WP8 集成时同步该修订 |
 | `784cd28e4be998477f4ab1d25bb7967d2cfa0a49` | contract owner / 主 Agent | WP2 CCR-2：冻结现有 phone App MCP 的 BotVolatileContext 请求/响应、发现名、scope、大小、迟到结果和错误语义；WP2 consumer、WP7 Swift producer。CCR-1 workspace/image 收录由协调者处理，不属于协议变更 | WP2 重新分派；WP7 按此实现 producer |
+| `0074475d322395f6cdb06caa42ea391a214bd0da` | contract owner / 主 Agent | 上游基线升级为 DSH Bot bf4075b；golden 除来源 SHA 无语义差异。补充 Bot 色彩、composer 活动行、简洁回复/next-step、真实鱼素材与 FishDirector 状态映射。用户已明确头像资产授权 | WP7/WP9 按新基线接线；其余 WP 无需变更 |
