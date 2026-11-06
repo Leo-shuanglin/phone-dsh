@@ -152,3 +152,11 @@ python3 spec/bot/v1/tools/validate_vectors.py
 - 验证包括冷重启 standing deny + auto 仍拒绝、session/until 恢复、once 不复活、revoke 不回滚、损坏快照 fail-closed、并发 consume、旧 incarnation/撤销 token 拒绝，以及伪造 userUI 的负向测试。
 
 验收沿用 §7 命令；WP7/WP9 合入时以此修订为准。
+
+## 9. BotDock 视觉组件分工
+
+用户要求底部图标参考桌面 TonoAI，而不是继续直接使用系统 TabView 的默认外观。新增 `spec/ui/v1/pages/bot-dock.md` 作为 P09 组件契约：统一 24pt 网格、1.75 圆角线宽、独立 Chat 主入口和三选项浮动胶囊，使用 phoneDSH token，覆盖深浅色、窄屏、动态字体、44pt 命中区及 Reduce Motion。
+
+- 新增独立工作包，独占 `examples/probe-app/PhoneDSHProbe/BotDock/**`、`Tests/PhoneDSHTests/BotDock/**` 和 `scripts/ci/bot-dock/**`；不得改 WP9 正在使用的 `Bot/**`、RootView、project.yml 或 `scripts/ci/bot-ui/**`。
+- WP9 继续原有生产接线。组件 PR 合入后，由集成者在一个独立后续改动中替换 RootView 系统 TabView，并重新执行四入口和深浅色截图；组件预览不算最终集成验收。
+- 不新增颜色 token、外部依赖或品牌资产；图标以通用 SwiftUI 矢量路径实现。
