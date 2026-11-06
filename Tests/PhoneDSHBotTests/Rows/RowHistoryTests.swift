@@ -75,34 +75,53 @@ final class RowHistoryTests: XCTestCase {
                                           sessionEvents: initialSession, uiEvents: initialUI)
         let initial = await reconnected.watch(after: 0)
         XCTAssertTrue(initial.reset)
-        _ = try await reconnected.rebuild(botID: "main", sessionID: "main",
-                                          sessionEvents: allSession, uiEvents: allUI)
+        let reset = try await reconnected.rebuild(botID: "main", sessionID: "main",
+                                                  sessionEvents: allSession, uiEvents: allUI)
         let delta = await reconnected.watch(after: initial.cursor)
         XCTAssertFalse(delta.reset)
-        XCTAssertEqual(delta.cursor, uninterrupted.cursor)
+        XCTAssertEqual(delta.cursor, reset.cursor)
+        XCTAssertGreaterThan(delta.cursor, initial.cursor)
         XCTAssertEqual(delta.rows.map(\.id), ["e-ui-evt-progress-1"])
         XCTAssertEqual(delta.deletes, [assistant.idDescription])
 
         var merged = Dictionary(uniqueKeysWithValues: initial.rows.map { ($0.id, $0) })
         for id in delta.deletes { merged.removeValue(forKey: id) }
         for row in delta.rows { merged[row.id] = row }
-        XCTAssertEqual(RowTestSupport.sorted(Array(merged.values)), uninterrupted.rows)
+        let mergedRows = RowTestSupport.sorted(Array(merged.values))
+        XCTAssertEqual(mergedRows.map { $0.replacing(updatedSeq: 0) },
+                       uninterrupted.rows.map { $0.replacing(updatedSeq: 0) })
+        XCTAssertEqual(reset.rows, mergedRows)
 
         let noFurtherChanges = await reconnected.watch(after: delta.cursor)
         XCTAssertEqual(noFurtherChanges, BotRowBatch(rows: [], deletes: [], cursor: delta.cursor, reset: false))
     }
 
-    func testLateSourceThatRewritesCursorHistoryFailsClosed() async {
+    func testLateSourceAppendsChangeAndSecondRebuildIsStable() async throws {
         let first = RowTestSupport.dshText(seq: 1, time: 2_000, role: "user", text: "后发生")
         let late = RowTestSupport.dshText(seq: 2, time: 1_000, role: "assistant", text: "迟到")
         let history = BotRowHistory()
-        do {
-            _ = try await history.rebuild(botID: "main", sessionID: "main", sessionEvents: [first], uiEvents: [])
-            _ = try await history.rebuild(botID: "main", sessionID: "main", sessionEvents: [first, late], uiEvents: [])
-            XCTFail("a rebuild that rewrites prior updatedSeq values must fail closed")
-        } catch {
-            XCTAssertEqual(error as? BotRowProjectionError, .inconsistentRebuild)
-        }
+        _ = try await history.rebuild(botID: "main", sessionID: "main", sessionEvents: [first], uiEvents: [])
+        let initialCursor = await history.cursor()
+        let initialRows = await history.history()
+        let initialFirst = try XCTUnwrap(initialRows.first)
+
+        let reset = try await history.rebuild(botID: "main", sessionID: "main",
+                                              sessionEvents: [first, late], uiEvents: [])
+        XCTAssertTrue(reset.reset)
+        XCTAssertEqual(reset.cursor, initialCursor + 1)
+        XCTAssertEqual(reset.rows.map(\.id), ["e-main-2", "e-main-1"])
+        XCTAssertEqual(reset.rows.last?.updatedSeq, initialFirst.updatedSeq)
+        let delta = await history.watch(after: initialCursor)
+        XCTAssertFalse(delta.reset)
+        XCTAssertEqual(delta.cursor, reset.cursor)
+        XCTAssertEqual(delta.rows.map(\.id), ["e-main-2"])
+        XCTAssertEqual(delta.rows.first?.updatedSeq, initialCursor + 1)
+
+        let secondReset = try await history.rebuild(botID: "main", sessionID: "main",
+                                                    sessionEvents: [first, late], uiEvents: [])
+        let repeatedDelta = await history.watch(after: initialCursor)
+        XCTAssertEqual(secondReset, reset)
+        XCTAssertEqual(repeatedDelta, delta)
     }
 
     func testJSONLUsesRealSessionEventDecoder() throws {
