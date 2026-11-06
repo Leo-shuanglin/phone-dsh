@@ -170,6 +170,6 @@ python3 spec/bot/v1/tools/validate_vectors.py
 - 工具输入为 2–4 个选项；无有价值下一步时不调用工具，禁止空卡或凑选项。对象字段只含 `label/value/style/recommended/description`，steps 另允许字符串简写。推荐归一以第一个合法推荐胜出，其余 primary 降为 default，danger 不推荐；这与上游运行时一致，不把多推荐直接抛成工具错误。
 - 所有消息卡片与同一 assistant 回复气泡共享唯一 `BotMessageColumn`，宽度不得超过该气泡，不额外增加外边距，不使用 transcript 内全屏/居中模态。question/steps 内距 12、选项视觉高 44、间距 4、默认透明；recommended 才使用轻 tint、细边和徽标。其他工作/产出/审批/Task/routine/notice 卡同样受此列宽与紧凑内容约束。
 - 高度按内容，超过 4 个步骤/条目默认折叠；预览只能由用户主动打开。44pt 命中区、深浅色、动态字体与 Reduce Motion 保持，不通过放大卡片换取触控面积。
-- 新增紧凑卡片实现工作包，只修改原 WP9 的 `Bot/Bot{CardView,WorkCardView,UIComponents,ChatPage,UIModels,Fixtures}.swift` 及 `scripts/ci/bot-ui/**` 中必要场景，禁止改 BotDock、RootView 或其他页面。必须实际测量卡片与回复气泡宽度，不能用 fixture 存在代替尺寸验收。
+- 新增紧凑卡片实现工作包，只修改原 WP9 的 `Bot/Bot{CardView,WorkCardView,UIComponents,ChatPage,ChatModel,UIModels,Fixtures}.swift` 及 `scripts/ci/bot-ui/**` 中必要场景，禁止改 BotDock、RootView 或其他页面。必须实际测量卡片与回复气泡宽度，不能用 fixture 存在代替尺寸验收。
 
 验收：shared schema/golden、PhoneDSHBotTests、三项 contract gate，以及真实模拟器的全部 P0 卡片浅/深截图、宽度断言、无自定义输入、recommended、选中/关闭与折叠交互。
