@@ -81,6 +81,7 @@ public actor BotMCPHandler {
 
     public func approval(_ request: BotJSONValue) async -> BotJSONValue {
         guard case .object(let object) = request,
+              case .string(let sessionId)? = object["sessionId"], !sessionId.isEmpty,
               case .string(let callId)? = object["callId"],
               case .string(let name)? = object["tool"],
               case .string(let argsDigest)? = object["argsDigest"],
@@ -95,7 +96,7 @@ public actor BotMCPHandler {
             effects = rawEffects.compactMap(Self.effect)
         }
         return await runtime.approve(
-            runtimeId: runtimeId, callId: callId, name: name,
+            runtimeId: runtimeId, sessionId: sessionId, callId: callId, name: name,
             action: action, detail: detail, command: command,
             argsDigest: argsDigest, alwaysScope: alwaysScope,
             askAction: object["askAction"]?.stringValue ?? "tool-call",

@@ -101,6 +101,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
         for queued in queuedTurns.values { queued.work.cancel() }
         queuedTurns.removeAll()
         sessions.removeAll()
+        mainSessionId = nil
     }
 
     public func sendUserMessage(_ text: String) async throws -> BotRemoteTurnResult {
@@ -389,7 +390,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
 
     private func recoverOrCreateMainSession() async throws -> String {
         if let recovered = try await latestMainSessionEvent() {
-            if await validateRemoteSession(recovered) {
+            if await validateRemoteSession(recovered, attempts: 100) {
                 let principal = try await runtime.issueSession(botId: botId, sessionId: recovered, kind: .chat)
                 sessions[recovered] = principal
                 _ = try await runtime.eventWriter.append(
@@ -420,19 +421,28 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
         }
     }
 
-    private func validateRemoteSession(_ sessionId: String) async -> Bool {
-        do {
-            let page = try await transport.call("session/page", args: .object(["request": .object([
-                "address": .object(["kind": .string("session"), "sessionId": .string(sessionId)]),
-                "throughSeq": .number(-1), "maxMessages": .number(1),
-            ])]))
-            if let returned = page["sessionId"]?.stringValue ?? page["session"]?["sessionId"]?.stringValue {
-                return returned == sessionId
+    private func validateRemoteSession(_ sessionId: String, attempts: Int = 1) async -> Bool {
+        for attempt in 0..<max(1, attempts) {
+            do {
+                let page = try await transport.call("session/page", args: .object(["request": .object([
+                    "address": .object(["kind": .string("session"), "sessionId": .string(sessionId)]),
+                    "throughSeq": .number(-1), "maxMessages": .number(1),
+                ])]))
+                if let returned = page["sessionId"]?.stringValue ?? page["session"]?["sessionId"]?.stringValue {
+                    return returned == sessionId
+                }
+                return true
+            } catch let error as DSHRemoteError where error.code == "session/not-found" && attempt + 1 < attempts {
+                do {
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                } catch {
+                    return false
+                }
+            } catch {
+                return false
             }
-            return true
-        } catch {
-            return false
         }
+        return false
     }
 
     private func ensureRoutineSession(_ routineId: String) async throws -> String {
@@ -446,7 +456,10 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
     }
 
     private func createSession(kind: BotSessionKind) async throws -> String {
-        let created = try await transport.call("session/create", args: .object(["request": .object([:])]))
+        var fields: [String: BotJSONValue] = ["cwd": .string("/dsh/workspace")]
+        if kind == .chat { fields["sessionId"] = .string("gb-\(botId)") }
+        let request: BotJSONValue = .object(fields)
+        let created = try await transport.call("session/create", args: .object(["request": request]))
         guard let sessionId = created["sessionId"]?.stringValue, !sessionId.isEmpty else {
             throw BotMCPError.unavailable("session/create returned no sessionId")
         }

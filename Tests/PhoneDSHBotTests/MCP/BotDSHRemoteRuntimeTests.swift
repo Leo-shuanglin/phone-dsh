@@ -91,6 +91,45 @@ final class BotDSHRemoteRuntimeTests: XCTestCase {
         XCTAssertEqual(replacementTransport.createCount, 1)
     }
 
+    func testAttachTransportRevalidatesThePersistedMainSession() async throws {
+        let fixture = try makeBotMCPFixture()
+        defer { fixture.cleanup() }
+        let firstTransport = BotScriptedRemoteTransport(scripts: [
+            "gb-main": [[.turn(), .assistant("first"), .end()]],
+        ])
+        let remote = try await BotDSHRemoteRuntime(transport: firstTransport, runtime: fixture.runtime)
+        _ = try await remote.sendUserMessage("first")
+        let replacement = BotScriptedRemoteTransport(scripts: [
+            "gb-main": [[.turn(2), .assistant("resumed"), .end(turn: 2)]],
+        ])
+        await remote.attachTransport(replacement)
+        let pending = await remote.mainSessionIdentifier()
+        XCTAssertNil(pending)
+        let recovered = try await remote.startMainSession()
+        XCTAssertEqual(recovered, "gb-main")
+        XCTAssertEqual(replacement.createCount, 0)
+        let result = try await remote.sendUserMessage("resumed")
+        XCTAssertEqual(result.text, "resumed")
+    }
+
+    func testMainRecoveryWaitsForTheColdSessionBeforeCreatingAnother() async throws {
+        let fixture = try makeBotMCPFixture()
+        defer { fixture.cleanup() }
+        let firstTransport = BotScriptedRemoteTransport(scripts: [
+            "gb-main": [[.turn(), .assistant("first"), .end()]],
+        ])
+        let remote = try await BotDSHRemoteRuntime(transport: firstTransport, runtime: fixture.runtime)
+        _ = try await remote.sendUserMessage("first")
+        let replacement = BotScriptedRemoteTransport(scripts: [
+            "gb-main": [[.turn(2), .assistant("resumed"), .end(turn: 2)]],
+        ])
+        replacement.failPage("gb-main", times: 2)
+        await remote.attachTransport(replacement)
+        let recovered = try await remote.startMainSession()
+        XCTAssertEqual(recovered, "gb-main")
+        XCTAssertEqual(replacement.createCount, 0)
+    }
+
     func testQuestionSuppressesModelWrapUpAndSendToUser() async throws {
         let fixture = try makeBotMCPFixture()
         defer { fixture.cleanup() }

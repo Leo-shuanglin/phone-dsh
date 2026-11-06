@@ -30,7 +30,8 @@ public struct BotMCPCallResult: Codable, Sendable, Equatable {
     }
 
     public static func success(_ value: BotJSONValue, text: String? = nil) -> Self {
-        Self(structuredContent: value, text: text)
+        let visible = text ?? (try? value.encoded()).map { String(decoding: $0, as: UTF8.self) }
+        return Self(structuredContent: value, text: visible)
     }
 
     public static func failure(_ code: String, _ message: String) -> Self {

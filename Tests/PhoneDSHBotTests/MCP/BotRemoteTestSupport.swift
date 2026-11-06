@@ -84,7 +84,7 @@ final class BotScriptedRemoteTransport: DSHRemoteTransport, @unchecked Sendable 
     private let mainId: String
     private var nextCreateIndex = 0
     private var gates: [String: BotScriptedGate] = [:]
-    private var failingPages: Set<String> = []
+    private var failingPages: [String: Int] = [:]
 
     private(set) var prompts: [String: (sessionId: String, mode: String, text: String)] = [:]
     private(set) var promptHistory: [(sessionId: String, mode: String, text: String)] = []
@@ -116,8 +116,8 @@ final class BotScriptedRemoteTransport: DSHRemoteTransport, @unchecked Sendable 
         if let gate { Task { await gate.open() } }
     }
 
-    func failPage(_ sessionId: String) {
-        lock.withLock { failingPages.insert(sessionId) }
+    func failPage(_ sessionId: String, times: Int? = nil) {
+        lock.withLock { failingPages[sessionId] = times ?? -1 }
     }
 
     func call(_ endpoint: String, args: BotJSONValue) async throws -> BotJSONValue {
@@ -132,8 +132,14 @@ final class BotScriptedRemoteTransport: DSHRemoteTransport, @unchecked Sendable 
             return .object(["sessionId": .string(id)])
         case "session/page":
             let sessionId = args["request"]?["address"]?["sessionId"]?.stringValue ?? ""
-            let failed = lock.withLock { failingPages.contains(sessionId) }
-            if failed { throw BotMCPError.unavailable("session/page refused \(sessionId)") }
+            let failed = lock.withLock { () -> Bool in
+                guard let remaining = failingPages[sessionId], remaining != 0 else { return false }
+                if remaining > 0 { failingPages[sessionId] = remaining - 1 }
+                return true
+            }
+            if failed {
+                throw DSHRemoteError(code: "session/not-found", message: "session \"\(sessionId)\" not found")
+            }
             return .object(["sessionId": .string(sessionId)])
         case "session/prompt":
             let request = args["request"] ?? .null

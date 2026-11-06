@@ -102,10 +102,19 @@ public actor BotMCPRuntime {
                 || BotDeviceToolProvider.tools.contains(bareName) else {
             throw BotMCPError.unknownTool(name)
         }
+        let key = key(runtimeId, sessionId, callId)
+        let digest = try (argsDigest ?? BotArgumentsDigest.string(for: arguments))
+        if let existing = registrations[key] {
+            let principal = await gateway.tokens.lookupSession(sessionId)
+            if existing.sessionId == sessionId, existing.name == name, existing.argsDigest == digest,
+               let principal, principal.incarnation == existing.incarnation {
+                registrationArguments[key] = arguments
+                return existing
+            }
+        }
         let attribution = try await gateway.registerToolCall(
             sessionId: sessionId, callId: callId, name: name,
             arguments: arguments, argsDigest: argsDigest, runtimeId: runtimeId)
-        let key = key(runtimeId, callId)
         registrations[key] = attribution
         registrationArguments[key] = arguments
         return attribution
@@ -119,21 +128,26 @@ public actor BotMCPRuntime {
         return await gateway.cancelToolCall(id: id)
     }
 
-    public func identityForApproval(runtimeId: String, callId: String) async -> BotResolvedToolCall? {
-        guard let attribution = registrations[key(runtimeId, callId)],
-              let principal = await gateway.tokens.lookupSession(attribution.sessionId) else { return nil }
+    public func identityForApproval(runtimeId: String, sessionId: String? = nil,
+                                    callId: String) async -> BotResolvedToolCall? {
+        let matches = registrations.filter { key, attribution in
+            key.hasPrefix("\(runtimeId)\0") && attribution.callId == callId
+                && (sessionId == nil || attribution.sessionId == sessionId)
+        }
+        guard matches.count == 1, let attribution = matches.first?.value else { return nil }
+        guard let principal = await gateway.tokens.lookupSession(attribution.sessionId) else { return nil }
         return BotResolvedToolCall(
             sessionId: attribution.sessionId, callId: attribution.callId,
             agentId: principal.botId, principal: principal, attribution: attribution)
     }
 
-    public func approve(runtimeId: String, callId: String, name: String,
+    public func approve(runtimeId: String, sessionId: String? = nil, callId: String, name: String,
                         action: String, detail: String, command: String,
                         argsDigest: String, alwaysScope: String, askAction: String,
                         suppliedEffects: [BotToolEffect]? = nil) async -> BotApprovalOutcome {
-        guard let call = await identityForApproval(runtimeId: runtimeId, callId: callId),
+        guard let call = await identityForApproval(runtimeId: runtimeId, sessionId: sessionId, callId: callId),
               bareToolName(call.attribution.name) == bareToolName(name),
-              let arguments = registrationArguments[key(runtimeId, callId)] else {
+              let arguments = registrationArguments[key(runtimeId, call.sessionId, callId)] else {
             return BotApprovalOutcome(ok: false, allowed: false, message: "unattributed")
         }
         guard let suppliedDigest = try? BotArgumentsDigest.validated(argsDigest),
@@ -178,12 +192,13 @@ public actor BotMCPRuntime {
 
     public func execute(name: String, arguments: BotJSONValue,
                         context: BotMCPRequestContext) async -> BotMCPCallResult {
+        let name = name.hasPrefix("mcp__phone__") ? String(name.dropFirst("mcp__phone__".count)) : name
         guard BotToolCatalog.isRegistered(name) else { return .failure("unknown_tool", "Unknown tool: \(name)") }
         guard let call = await gateway.resolveToolCall(runtimeId: context.runtimeId, arguments: arguments) else {
             return .failure("unattributed", "The tool call could not be attributed to an active session")
         }
-        registrations.removeValue(forKey: key(context.runtimeId, call.callId))
-        registrationArguments.removeValue(forKey: key(context.runtimeId, call.callId))
+        registrations.removeValue(forKey: key(context.runtimeId, call.sessionId, call.callId))
+        registrationArguments.removeValue(forKey: key(context.runtimeId, call.sessionId, call.callId))
         do {
             if name == BotToolCatalog.volatileContextName {
                 let read = BotToolEffect(
@@ -474,7 +489,9 @@ public actor BotMCPRuntime {
         return name.components(separatedBy: "__").last ?? name
     }
 
-    private func key(_ runtimeId: String, _ callId: String) -> String { "\(runtimeId)\u{0}\(callId)" }
+    private func key(_ runtimeId: String, _ sessionId: String, _ callId: String) -> String {
+        "\(runtimeId)\u{0}\(sessionId)\u{0}\(callId)"
+    }
 
     private static func code(_ error: BotMCPError) -> String {
         switch error {

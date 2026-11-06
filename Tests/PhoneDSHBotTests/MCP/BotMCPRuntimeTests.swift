@@ -192,6 +192,42 @@ final class BotMCPRuntimeTests: XCTestCase {
         XCTAssertNotEqual(executed.isError, true)
     }
 
+    func testIdentityAndApprovalUseSessionScopedCallIDs() async throws {
+        let fixture = try makeBotMCPFixture()
+        defer { fixture.cleanup() }
+        _ = try await fixture.runtime.issueSession(botId: "main", sessionId: "parent", kind: .chat)
+        _ = try await fixture.runtime.issueSession(botId: "main", sessionId: "child", kind: .task)
+        let arguments: BotJSONValue = .object(["task_title": .string("same"), "prompt": .string("same")])
+        let first = try await fixture.runtime.registerIdentity(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: "parent",
+            callId: "shared", name: "mcp__phone__Task", arguments: arguments)
+        let second = try await fixture.runtime.registerIdentity(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: "child",
+            callId: "shared", name: "mcp__phone__Task", arguments: arguments)
+        XCTAssertNotEqual(first.id, second.id)
+        let parent = await fixture.runtime.identityForApproval(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: "parent", callId: "shared")
+        let child = await fixture.runtime.identityForApproval(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: "child", callId: "shared")
+        let ambiguous = await fixture.runtime.identityForApproval(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, callId: "shared")
+        XCTAssertEqual(parent?.sessionId, "parent")
+        XCTAssertEqual(child?.sessionId, "child")
+        XCTAssertNil(ambiguous)
+        let digest = try BotArgumentsDigest.string(for: arguments)
+        let outcome = await fixture.runtime.approve(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: "child", callId: "shared",
+            name: "mcp__phone__Task", action: "Delegate", detail: "test", command: "",
+            argsDigest: digest, alwaysScope: "until", askAction: "tool-call")
+        XCTAssertTrue(outcome.allowed)
+        let handler = BotMCPHandler(runtime: fixture.runtime)
+        let missingSession = await handler.approval(.object([
+            "callId": .string("shared"), "tool": .string("mcp__phone__Task"),
+            "argsDigest": .string(digest), "alwaysScope": .string("until"),
+        ]))
+        XCTAssertEqual(missingSession["ok"], .bool(false))
+    }
+
     func testApprovalTimeoutAndWebContentLossDenyWithoutGrant() async throws {
         let fixture = try makeBotMCPFixture()
         defer { fixture.cleanup() }

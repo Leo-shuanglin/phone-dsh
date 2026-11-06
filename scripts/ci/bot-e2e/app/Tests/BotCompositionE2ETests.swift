@@ -48,6 +48,7 @@ final class BotCompositionE2ETests: XCTestCase {
             "DEEPSEEK_BASE_URL": mockURL.absoluteString,
             "DEEPSEEK_API_KEY": "composition-test-placeholder",
             "DSH_TELEMETRY_DISABLED": "1",
+            "PDSH_LLM_DELIVERY_IDLE_TIMEOUT_MS": "5000",
         ]) { _, new in new }
         let app = try XCTUnwrap(UIApplication.shared.delegate as? AppDelegate)
         let engineHolder = BotCompositionEngineHolder()
@@ -82,31 +83,76 @@ final class BotCompositionE2ETests: XCTestCase {
         XCTAssertEqual(list.status, 200)
         XCTAssertNotNil(list.json["result"]?["tools"]?.arrayValue)
 
+        let volatileArguments: BotJSONValue = .object(["sessionId": .string(sessionID)])
         _ = try await launch.composition.runtime.registerIdentity(
             runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: sessionID,
-            callId: "volatile-context", name: BotToolCatalog.volatileContextName, arguments: .object([:]))
+            callId: "volatile-context", name: BotToolCatalog.volatileContextName, arguments: volatileArguments)
         let volatile = await launch.composition.handler.rpc(
             method: "tools/call",
             params: .object([
-                "name": .string(BotToolCatalog.volatileContextName), "arguments": .object([:]),
+                "name": .string(BotToolCatalog.volatileContextName), "arguments": volatileArguments,
             ]), id: .string("volatile-context"))
         XCTAssertEqual(volatile["result"]?["structuredContent"]?["schemaVersion"]?.intValue, 1)
         XCTAssertTrue(volatile["result"]?["structuredContent"]?["blocks"]?["persona"]?.stringValue?
             .contains("大肥鱼") == true)
 
+        let approvalArguments: BotJSONValue = .object(["command": .string("printf BOT_TOOL")])
+        let approvalRegistration = try await launch.composition.runtime.registerIdentity(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: sessionID,
+            callId: "approval-smoke", name: "bash", arguments: approvalArguments)
+        let approval = await launch.composition.runtime.approve(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, callId: approvalRegistration.callId,
+            name: "bash", action: "run command", detail: "fixture", command: "printf BOT_TOOL",
+            argsDigest: approvalRegistration.argsDigest, alwaysScope: "until", askAction: "run-command")
+        print("APPROVAL_E2E \(approval)")
+        XCTAssertTrue(approval.allowed)
+
+        _ = try await launch.composition.runtime.registerIdentity(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: sessionID,
+            callId: "direct-task-parent", name: "mcp__phone__Task", arguments: .object([:]))
+        let directParentIdentity = await launch.composition.runtime.identityForApproval(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, callId: "direct-task-parent")
+        let directParent = try XCTUnwrap(directParentIdentity)
+        mock.script = .generic(command: "printf TASK_TOOL", toolText: "TASK_TOOL", finalText: "BOT_TASK_OK")
+        let directTask = try await launch.composition.remote.start(request: BotTaskRequest(
+            parent: directParent, title: "独立 Task", prompt: "完成独立任务",
+            asynchronous: false, timeoutMs: 15_000))
+        print("DIRECT_TASK_E2E \(directTask)")
+        XCTAssertEqual(directTask.status, "completed", directTask.error ?? "no error")
+        XCTAssertTrue(directTask.result?.contains("BOT_TASK_OK") == true)
+
+        mock.scriptForRequest = { body in
+            guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+                  let messages = object["messages"] as? [[String: Any]],
+                  let prompt = messages.last(where: { message in
+                      guard message["role"] as? String == "user",
+                            let content = message["content"] as? [[String: Any]] else { return false }
+                      return content.first?["type"] as? String == "text"
+                  }), let content = prompt["content"] as? [[String: Any]] else { return nil }
+            return content.first?["text"] as? String == "完成委派"
+                ? .generic(command: "printf TASK_TOOL", toolText: "TASK_TOOL", finalText: "BOT_TASK_OK")
+                : nil
+        }
         mock.script = .sequence(
             tools: [MockModelToolCall(
-                name: "mcp__dshbot__Task",
+                name: "mcp__phone__Task",
                 arguments: .object(["task_title": .string("真实 Task"), "prompt": .string("完成委派")]))],
             finalText: "TASK_PARENT_DONE")
         let taskAction = BotUserAction(nonce: "composition-task", botID: "main", kind: .chat, text: "委派一个任务")
         let taskResult = try await rows.perform(taskAction)
         XCTAssertEqual(taskResult, .accepted(eventID: "action:composition-task"))
         let taskEvents = try await BotProductionEventReader.all(domain: store)
+        print("TASK_E2E result=\(taskResult); modelRequests=\(mock.requestCount); toolResults=\(taskEvents.filter { $0.type == "conversation.tool_result" }.map(\.data))")
+        XCTAssertEqual(taskEvents.filter { $0.type == "task.created" }.count, 1)
         let task = try XCTUnwrap(taskEvents.last(where: { $0.type == "task.created" }))
         let taskSessionID = try XCTUnwrap(task.data["sessionId"]?.stringValue)
         XCTAssertNotEqual(taskSessionID, sessionID)
         XCTAssertFalse(taskSessionID.isEmpty)
+        XCTAssertEqual(task.data["status"]?.stringValue, "completed")
+        XCTAssertTrue(task.data["result"]?.stringValue?.contains("BOT_TASK_OK") == true)
+        XCTAssertTrue(taskEvents.contains {
+            $0.type == "conversation.assistant_message" && $0.data["text"]?.stringValue?.contains("TASK_PARENT_DONE") == true
+        })
 
         mock.script = .generic(command: "printf BOT_TOOL", toolText: "BOT_TOOL", finalText: "BOT_ROUTINE_OK")
         let routine = try await launch.composition.runtime.routineMachine.create(
@@ -118,10 +164,11 @@ final class BotCompositionE2ETests: XCTestCase {
         await launch.composition.scheduler.waitForIdle()
         _ = try await launch.composition.outbox.runNext()
         let effects = try await store.effects()
-        XCTAssertTrue(effects.contains { $0.effect.kind == BotRoutineOutbox.kind && $0.state == .acked })
         let routineEvents = try await BotProductionEventReader.all(domain: store)
+        print("ROUTINE_E2E effects=\(effects.map { [$0.effect.kind, $0.state.rawValue] }); runs=\(routineEvents.filter { $0.type == "routine.run_finished" || $0.type == "conversation.automation_run" }.map(\.data))")
+        XCTAssertTrue(effects.contains { $0.effect.kind == BotRoutineOutbox.kind && $0.state == .acked })
         XCTAssertTrue(routineEvents.contains {
-            $0.type == "conversation.automation_run" && $0.data["text"]?.stringValue == "BOT_ROUTINE_OK"
+            $0.type == "conversation.automation_run" && $0.data["text"]?.stringValue?.contains("BOT_ROUTINE_OK") == true
         })
         await launch.composition.scheduler.stop()
         await launch.composition.outbox.stop()
@@ -131,7 +178,7 @@ final class BotCompositionE2ETests: XCTestCase {
         XCTAssertEqual(duplicate, .duplicate(eventID: "action:composition-chat"))
         XCTAssertEqual(mock.requestCount, requestCount)
 
-        try await engineHolder.engine?.restart(reason: .planned)
+        try await host.plannedRestart(reason: "bot-production-composition")
         let resumed = try await launch.composition.remote.sendUserMessage("重启后的继续对话")
         XCTAssertEqual(resumed.status, "completed")
         XCTAssertTrue(resumed.text.contains("BOT_ROUTINE_OK"))

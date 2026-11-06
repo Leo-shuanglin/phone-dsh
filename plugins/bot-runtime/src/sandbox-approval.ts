@@ -21,7 +21,7 @@ export interface SandboxApprovalRequest {
 export interface SandboxApprovalConfig {
   readonly approvalUrl?: string
   readonly bridgeToken?: string
-  readonly lookup?: (callId: string) => BotIdentityCall | undefined
+  readonly lookup?: (callId: string, sessionId?: string) => BotIdentityCall | undefined
   readonly request?: (payload: Record<string, unknown>, signal?: AbortSignal) => Promise<ApprovalOutcome>
 }
 
@@ -85,8 +85,9 @@ export function outcomeFromDecision(decision: ApprovalOutcome & { timedOut?: boo
 export async function answerSandboxApproval(req: SandboxApprovalRequest, config: SandboxApprovalConfig = {}): Promise<SandboxApprovalOutcome> {
   if (!req.agent?.id) return 'unavailable'
   if (req.signal?.aborted) return 'cancelled'
-  const identity = config.lookup?.(String(req.callId ?? '')) ?? (req.arguments === undefined ? undefined : {
-    name: String(req.toolName ?? 'bash'), arguments: req.arguments, argsDigest: argsDigest(req.arguments),
+  const identity = config.lookup?.(String(req.callId ?? ''), String(req.agent.id)) ?? (req.arguments === undefined ? undefined : {
+    sessionId: String(req.agent.id), name: String(req.toolName ?? 'bash'),
+    arguments: req.arguments, argsDigest: argsDigest(req.arguments),
   })
   if (!identity) return 'unavailable'
   try {
@@ -103,8 +104,8 @@ export async function answerSandboxApproval(req: SandboxApprovalRequest, config:
 }
 
 export default function dshbotSandboxApproval(ctx: Context, config: SandboxApprovalConfig = {}): void {
-  const registry = ctx.get('dshbotIdentityCalls') as { get(callId: string): BotIdentityCall | undefined } | undefined
-  const lookup = config.lookup ?? ((callId: string) => registry?.get(callId))
+  const registry = ctx.get('dshbotIdentityCalls') as { get(callId: string, sessionId?: string): BotIdentityCall | undefined } | undefined
+  const lookup = config.lookup ?? ((callId: string, sessionId?: string) => registry?.get(callId, sessionId))
   ctx.on('approval/request', (req: SandboxApprovalRequest) => answerSandboxApproval(req, { ...config, lookup }))
 }
 

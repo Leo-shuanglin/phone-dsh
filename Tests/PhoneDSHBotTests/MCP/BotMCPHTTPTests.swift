@@ -36,6 +36,8 @@ final class BotMCPHTTPTests: XCTestCase {
         XCTAssertTrue(blocks["automation"]?.stringValue?.contains("Morning") == true)
         XCTAssertTrue(blocks["memory"]?.stringValue?.contains("记忆") == true)
         XCTAssertEqual(response["result"]?["structuredContent"]?["sessionId"], .string("gb-main"))
+        XCTAssertTrue(response["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue?
+            .contains("\"sessionId\":\"gb-main\"") == true)
     }
 
     func testRealStreamableHTTPDiscoversOnlyP0AndExecutesClaimedCard() async throws {

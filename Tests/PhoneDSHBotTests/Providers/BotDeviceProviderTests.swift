@@ -259,6 +259,26 @@ final class BotDeviceProviderTests: XCTestCase {
         XCTAssertThrowsError(try BotDeviceEnvelope(data: data))
     }
 
+    func testNativeApprovalIdentityIsIdempotentAcrossRegistrationHooks() async throws {
+        let store = try SQLiteDomainStore(fileURL: try root().appendingPathComponent("domain.sqlite"), now: { 1_000 })
+        let runtime = BotMCPRuntime(store: store, now: { 1_000 })
+        _ = try await runtime.issueSession(botId: "main", sessionId: "bot-main", kind: .chat)
+        let arguments: BotJSONValue = .object(["command": .string("printf BOT_TOOL")])
+        let first = try await runtime.registerIdentity(
+            runtimeId: "phone-worker", sessionId: "bot-main", callId: "native-bash",
+            name: "bash", arguments: arguments)
+        let second = try await runtime.registerIdentity(
+            runtimeId: "phone-worker", sessionId: "bot-main", callId: "native-bash",
+            name: "bash", arguments: arguments)
+        XCTAssertEqual(first.id, second.id)
+        let outcome = await runtime.approve(
+            runtimeId: "phone-worker", callId: "native-bash", name: "bash",
+            action: "run command", detail: "fixture", command: "printf BOT_TOOL",
+            argsDigest: first.argsDigest, alwaysScope: "until", askAction: "run-command")
+        XCTAssertTrue(outcome.allowed)
+        try await store.close()
+    }
+
     func testReplyIsStableAcrossReopenAndUnknownOutcomeIsNotSuccess() async throws {
         let file = try root().appendingPathComponent("domain.sqlite")
         let store = try SQLiteDomainStore(fileURL: file, now: { 1_000 })

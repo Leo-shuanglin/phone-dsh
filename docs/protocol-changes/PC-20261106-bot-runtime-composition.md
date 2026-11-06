@@ -4,14 +4,14 @@
 
 ```yaml
 change: PC-20261106-bot-runtime-composition
-contracts: [P07, P09, P16, P18, P23, P24, P25]
+contracts: [P07, P09, P16, P18, P22, P23, P24, P25]
 status: frozen
 base: 293f191574c466fa670451235bb2a0c97471e7c1
-contract_revision: PC-20261106-bot-device-event-envelope@1 + PC-20261106-bot-runtime-composition@1
-version_decision: 复用既有 wire、Worker env、BotEvent v1、BotRows/UserAction；同 App bundle 配对升级，不新增公共协议版本。
+contract_revision: PC-20261106-bot-device-event-envelope@1 + PC-20261106-bot-runtime-composition@2
+version_decision: 复用既有 wire、Worker env、BotEvent v1、BotRows/UserAction；同 App bundle 配对升级，不新增公共协议版本。P22 仅增加脚本上游按请求选择测试脚本的钩子，不改变生产协议或 fixture schema。
 ```
 
-Protocol impact: P07; P09; P16; P18; P23; P24; P25。
+Protocol impact: P07; P09; P16; P18; P22; P23; P24; P25。
 
 ## 1. 单一组合根
 
@@ -19,8 +19,11 @@ Protocol impact: P07; P09; P16; P18; P23; P24; P25。
 - Host 通过既有 `MCPEgressPolicy` 仅允许实际 loopback origin 的 `/mcp`、`/identity/register`、`/identity/cancel`、`/approval`。Worker Authorization 由宿主移除后，宿主按内存中的精确路由注入 Bot MCP token；不写入用户设置或日志，不放宽其他出站地址。
 - 同一 App 只持有一个 Host/Worker、一个 SQLiteDomainStore、一个主 Bot session、一个 Task executor、一个 routine scheduler 和一个共享 effect runner。DSH 工作台仍走既有多 session 路径。
 - volatile provider 后绑定解决 Memory/Routine 依赖环；`BotDSHRemoteRuntime` 创建后接管 Task executor，不再以 Unimplemented executor 作为生产默认。主 session 创建/恢复后才连接 `BotProductionEnvironment`。
-- `attachTransport` 在 Host/Worker 恢复时终止旧回合、清理旧队列和身份代次；保留主对话 ID，旧 Worker 的输出不能进入新代次。
+- 原生 bash 与 MCP 工具都从实际 `tools/pre-execute` 上下文登记 session、callId 和参数摘要，审批后才消费身份。后续 execute 重复登记在同一 principal/incarnation 下幂等返回原记录，不允许改变名称、参数或代次；不从 approval 文本铸造授权。
+- Worker 身份互斥以 `runtimeId + sessionId + callId + argsDigest` 为键，宿主身份记录以 `runtimeId + sessionId + callId` 为键。不同 session 的相同参数和模型 call ID 可同时执行，不能因父 Task 等待子 Task 而死锁或覆盖审批。`/approval` 必须同时携带 sessionId 和 callId；缺失或不匹配时拒绝。修订 @2 不改变请求字段，只修复此前未落实的 session 绑定。
+- `attachTransport` 在 Host/Worker 恢复时终止旧回合、清理旧队列和身份代次；清除已验证的内存缓存，重新读取 SQLite 历史主会话并通过 `session/page` 验证再恢复，不把旧 Worker 的 session ID 当作新 Worker 已恢复的证明。主对话使用 DSH Bot 的 `gb-<botId>` 持久 session ID；Task 仍是独立后台 session。创建统一传 `/dsh/workspace`，与现有 DSH 工作台一致。`session/not-found` 的冷读在创建替代主会话前最多等待 5 秒，其他错误立即失败，不重放 prompt。
 - 未配置模型、Worker 启动失败、writer 不存在均明确报错，不回退到 Swift 主循环或虚假 planner。
+- 同一 session 内的重入工具执行继续拒绝；不同 session 的合法嵌套 Task 不因异步上下文继承而被误判。MCP 成功结果同时返回结构化内容和对应 JSON 文本，因为固定 DSH MCP 客户端只用文本块生成模型可见输出。
 
 ## 2. 动作与卡片
 
@@ -42,6 +45,17 @@ Protocol impact: P07; P09; P16; P18; P23; P24; P25。
 - `python3 spec/bot/v1/tools/validate_vectors.py`：真实 schema 与正反向 golden。
 - `bash scripts/ci/check.sh --only phone-spec,phone-p0-conformance,phone-cross-tree`：契约与登记。
 - `bash scripts/ci/check.sh --only phone-plugins,phone-image,phone-bundle-fresh,phone-no-dsh-patch,phone-compat,phone-license,phone-modules`：Worker/插件/模块/许可证。
-- `bash scripts/ci/bot-e2e/run.sh --simulator --scenario production-composition`：真实 PhoneDSHHost、WKWebView Worker、ChannelDSHTransport 与脚本上游；覆盖 chat、错误 token 401、volatile、真实 Task session、routine outbox、Worker 重启与 nonce 去重。不是 scripted transport，不是实际模型或外部账号。
+- `bash scripts/ci/bot-e2e/run.sh --simulator --scenario production-composition`：真实 PhoneDSHHost、WKWebView Worker、ChannelDSHTransport 与脚本上游；覆盖 chat、错误 token 401、volatile、父子 Task 及结果回传、routine outbox、`Host.plannedRestart` 与 nonce 去重。不是 scripted transport，不是直接 `engine.restart`，不是实际模型或外部账号。
 
 真机 WP1、真实模型、外部账号、系统通知实投和真实设备蓝牙/LAN 保持 NOT_RUN。PR 必须附实际结果，不把此前测试数量当成本轮通过。
+
+## 5. 本轮实际结果
+
+- `swift test --filter PhoneDSHBotTests`：PASS，212 tests / 0 failures。
+- `swift test --filter PhoneMCPAccessSettingsTests/testBotRuntimeEndpointRoutesTokenOnlyToExactLocalPaths`：PASS。
+- Bot 一致性向量、上述契约 gate、Worker/插件/镜像/公共检查：PASS；`npm run typecheck` 与插件测试在 gate 内通过。
+- 标准 `production-composition`：PASS，真实 Host/Worker + 脚本上游，覆盖父子 Task 结果、routine ack、`Host.plannedRestart`、重复 nonce；不是实际模型、外部账号或真机。
+- 正式 `PhoneDSHProbe` simulator build：BUILD SUCCEEDED。
+- `scripts/ci/smoke.sh`：FAIL，当前树首个模型回合在 240 秒超时；未把它归因为 main 基线，也不以此替代上述 Bot 场景。
+- 完整 `scripts/ci/sim.sh`：INCOMPLETE；此前依赖刷新多次网络错误，未获得完整通过证据。
+- 真机 WP1、真实模型、外部账号、真实设备蓝牙/LAN、系统通知实投：NOT_RUN。

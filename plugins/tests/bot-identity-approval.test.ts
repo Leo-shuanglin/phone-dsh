@@ -30,7 +30,7 @@ function registerProbe(ctx: Context, name = 'mcp__phone__ListRoutines'): void {
   }))
 }
 
-test('identity uses the pinned argument digest and cancels exactly one registration', async () => {
+test('pre-execute and execute share the pinned identity and cancel once', async () => {
   assert.equal(argsDigest({ secret: 'not-recorded' }), '9c58b105c0e3377b8052885445b4db03b3a2024b847396617dfd5152c05e9c06')
   assert.equal(argsDigest({ b: [1, true, null], a: { nested: '值' } }), argsDigest({ a: { nested: '值' }, b: [1, true, null] }))
   const ctx = await mount()
@@ -50,7 +50,8 @@ test('identity uses the pinned argument digest and cancels exactly one registrat
       arguments: { value: 1 }, signal: new AbortController().signal, agent: agent(),
     })
     assert.equal(result.isError, false)
-    assert.equal(registrations.length, 1)
+    assert.equal(registrations.length, 2)
+    assert.deepEqual(registrations[0], registrations[1])
     assert.equal(registrations[0]!.runtimeId, 'phone-worker')
     assert.equal(registrations[0]!.sessionId, 'gb-main')
     assert.equal(registrations[0]!.callId, 'call-1')
@@ -58,6 +59,67 @@ test('identity uses the pinned argument digest and cancels exactly one registrat
     assert.deepEqual(registrations[0]!.arguments, { value: 1 })
     assert.deepEqual(cancellations, ['registration-1'])
   } finally {
+    await ctx.fiber.dispose()
+  }
+})
+
+test('identical call IDs in independent sessions do not deadlock or overwrite identity', async () => {
+  const ctx = await mount()
+  const registrations: Record<string, unknown>[] = []
+  let parentDidStart!: () => void
+  const parentStarted = new Promise<void>(resolve => { parentDidStart = resolve })
+  let childDidStart!: () => void
+  const childStarted = new Promise<void>(resolve => { childDidStart = resolve })
+  let finish!: () => void
+  const gate = new Promise<void>(resolve => { finish = resolve })
+  try {
+    ctx.tools.register(defineTool({
+      name: 'mcp__phone__Task', description: 'probe', parameters: {},
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      execute: async (_args, exec) => {
+        if (exec.agent?.id === 'gb-parent') parentDidStart()
+        else childDidStart()
+        await gate
+        return exec.agent?.id === 'gb-parent' ? 'parent' : 'child'
+      },
+    }))
+    await ctx.plugin(dshbotIdentityBridge, {
+      request: async payload => {
+        registrations.push(payload)
+        return { ok: true, id: `${String(payload.sessionId)}-registration` }
+      },
+      cancel: async () => {},
+    })
+    const args = { prompt: 'same', task_title: 'same' }
+    const parent = ctx.tools.execute({
+      callId: ToolCallId('shared'), name: 'mcp__phone__Task', arguments: args,
+      signal: new AbortController().signal, agent: agent('gb-parent'),
+    })
+    await parentStarted
+    const child = ctx.tools.execute({
+      callId: ToolCallId('shared'), name: 'mcp__phone__Task', arguments: args,
+      signal: new AbortController().signal, agent: agent('gb-child'),
+    })
+    const childState = await Promise.race([
+      childStarted.then(() => 'started'),
+      new Promise<string>(resolve => { setTimeout(() => { resolve('waiting') }, 100) }),
+    ])
+    const identities = ctx.get('dshbotIdentityCalls') as {
+      get(callId: string, sessionId?: string): { sessionId: string } | undefined
+    }
+    const parentSession = identities.get('shared', 'gb-parent')?.sessionId
+    const childSession = identities.get('shared', 'gb-child')?.sessionId
+    finish()
+    await parent
+    await child
+    assert.equal(childState, 'started')
+    assert.equal(parentSession, 'gb-parent')
+    assert.equal(childSession, 'gb-child')
+    assert.equal(registrations.length, 4)
+    assert.deepEqual(new Set(registrations.map(registration => registration.sessionId)),
+      new Set(['gb-parent', 'gb-child']))
+  } finally {
+    finish()
     await ctx.fiber.dispose()
   }
 })

@@ -119,6 +119,7 @@ async function postJson(url: string, token: string, payload: Record<string, unkn
 }
 
 export interface BotIdentityCall {
+  readonly sessionId: string
   readonly name: string
   readonly arguments: Record<string, unknown>
   readonly argsDigest: string
@@ -135,37 +136,56 @@ export default function dshbotIdentityBridge(ctx: Context, config: IdentityBridg
     await postJson(cancelUrl, bridgeToken, { id }, options.timeoutMs, options.signal)
   })
   const mutex = createKeyedMutex()
-  const dispatchChain = new AsyncLocalStorage<boolean>()
+  const dispatchChain = new AsyncLocalStorage<string>()
   const calls = new Map<string, BotIdentityCall>()
+  const callKey = (sessionId: string, callId: string): string => `${sessionId}\0${callId}`
   ctx.provide('dshbotIdentityCalls', {
-    get(callId: string): BotIdentityCall | undefined { return calls.get(callId) },
+    get(callId: string, sessionId?: string): BotIdentityCall | undefined {
+      if (sessionId !== undefined) return calls.get(callKey(sessionId, callId))
+      const matches = [...calls.values()].filter(call => call.name !== '' && call.argsDigest !== ''
+        && calls.get(callKey(call.sessionId, callId)) === call)
+      return matches.length === 1 ? matches[0] : undefined
+    },
   })
 
-  ctx.on('tools/execute', async (exec: ToolExecution, next: () => Promise<any>) => {
-    if (dispatchChain.getStore()) throw new Error('[identity-bridge] re-entrant phone tool call is not allowed')
+  async function register(exec: ToolExecution) {
     const args = dispatchArguments(exec.arguments)
     const digest = argsDigest(args)
-    const release = await mutex.acquire(`${runtimeId}\0${digest}`, exec.signal)
-    let registrationId: string | undefined
-    let registeredCallId: string | undefined
+    const sessionId = String(exec.agent?.id ?? exec.agent?.session?.id ?? '')
+    const callId = String(exec.callId ?? '')
+    const release = await mutex.acquire(`${runtimeId}\0${sessionId}\0${callId}\0${digest}`, exec.signal)
     try {
-      const sessionId = String(exec.agent?.id ?? exec.agent?.session?.id ?? '')
-      const callId = String(exec.callId ?? '')
       if (!sessionId) throw new Error('[identity-bridge] tool execution has no session identity')
       if (!callId) throw new Error('[identity-bridge] tool execution has no callId')
       const registration = await send({
         runtimeId, sessionId, callId, name: exec.name, arguments: args, argsDigest: digest,
       }, { timeoutMs, signal: exec.signal })
-      registrationId = registration.id
-      registeredCallId = callId
-      calls.set(callId, { name: exec.name, arguments: args, argsDigest: digest })
-      return await dispatchChain.run(true, () => next())
-    } finally {
-      if (registeredCallId !== undefined) calls.delete(registeredCallId)
-      if (registrationId !== undefined) {
-        try { await cancel(registrationId, { timeoutMs, signal: exec.signal }) } catch {}
-      }
+      calls.set(callKey(sessionId, callId), { sessionId, name: exec.name, arguments: args, argsDigest: digest })
+      return { registration, release, sessionId }
+    } catch (error) {
       release()
+      throw error
+    }
+  }
+
+  ctx.on('tools/pre-execute', async (exec: ToolExecution, next: () => Promise<any>) => {
+    const registered = await register(exec)
+    registered.release()
+    return next()
+  })
+
+  ctx.on('tools/execute', async (exec: ToolExecution, next: () => Promise<any>) => {
+    const sessionId = String(exec.agent?.id ?? exec.agent?.session?.id ?? '')
+    if (dispatchChain.getStore() === sessionId) throw new Error('[identity-bridge] re-entrant phone tool call is not allowed')
+    const registered = await register(exec)
+    try {
+      return await dispatchChain.run(sessionId, () => next())
+    } finally {
+      calls.delete(callKey(registered.sessionId, String(exec.callId ?? '')))
+      if (registered.registration.id !== undefined) {
+        try { await cancel(registered.registration.id, { timeoutMs, signal: exec.signal }) } catch {}
+      }
+      registered.release()
     }
   })
 }
