@@ -47,6 +47,7 @@ def main() -> int:
         rejects(case["event"], "event-envelope.schema.json", f"event.invalid[{index}]")
 
     check(load("tool-catalog.json")["valid"], "tool-catalog.schema.json", "tool-catalog")
+    check(load("volatile-context.json")["valid"], "volatile-context.schema.json", "volatile-context")
     check(load("card-payload.json")["valid"], "card-payload.schema.json", "card-payload")
     for index, case in enumerate(load("card-payload.json")["invalid"]):
         if case["result"].get("ok") is not False:

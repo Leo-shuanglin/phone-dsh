@@ -21,6 +21,7 @@
     "row-protocol.json",
     "tool-catalog.json",
     "tool-effects.json",
+    "volatile-context.json",
     "wake-routine.json",
     "watchdog.json"
   ]

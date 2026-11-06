@@ -88,6 +88,25 @@ vector('tool-catalog', { p0: toolsFor(P0_TOOL_NAMES), p1: toolsFor(P1_TOOL_NAMES
     { name: 'show_product', reason: 'excluded_scope' },
     { name: 'show_gift', reason: 'excluded_scope' }]);
 
+vector('volatile-context', {
+  request: { sessionId: 'gb-main' },
+  response: {
+    schemaVersion: 1,
+    sessionId: 'gb-main',
+    revision: 3,
+    blocks: {
+      variant: '简洁直接',
+      persona: '你叫大肥鱼',
+      memory: '## 记忆\n\n- 我喜欢简短回答',
+      automation: '<automation_status>没有待处理例行任务</automation_status>',
+    },
+  },
+}, [
+  { request: { sessionId: '' }, reason: 'empty_session_id' },
+  { request: { sessionId: 'gb-other' }, reason: 'cross_session_read_denied' },
+  { error: { isError: true, message: 'context unavailable' }, reason: 'no_partial_or_stale_snapshot' },
+]);
+
 const cardInputs = [
   { tool: 'ask_user', args: { question: '继续吗？', options: [{ label: '继续', recommended: true }, { label: '停止' }] },
     card: { cardType: 'question', question: '继续吗？', options: [{ label: '继续', recommended: true }, { label: '停止' }] } },
