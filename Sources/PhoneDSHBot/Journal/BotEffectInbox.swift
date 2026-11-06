@@ -2,6 +2,12 @@
 
 import Foundation
 
+struct BotEffectInboxFlightKey: Hashable {
+    let receiver: String
+    let effectKey: String
+    let generation: Int
+}
+
 public actor SQLiteBotEffectInbox {
     private let store: SQLiteDomainStore
     private let receiver: String
@@ -23,13 +29,31 @@ public actor SQLiteBotEffectInbox {
 
     public func apply(
         _ lease: BotEffectLease,
-        executor: @Sendable (BotEffectLease) async throws -> String?
+        executor: @escaping @Sendable (BotEffectLease) async throws -> String?
     ) async throws -> BotEffectInboxResult {
-        if let existing = try await store.inboxEntry(receiver: receiver, effectKey: lease.effectKey),
+        try await store.applySharedInbox(
+            receiver: receiver, lease: lease, appliedAt: clock, executor: executor)
+    }
+}
+
+extension SQLiteDomainStore {
+    func applySharedInbox(
+        receiver: String,
+        lease: BotEffectLease,
+        appliedAt: @escaping @Sendable () -> Int64,
+        executor: @escaping @Sendable (BotEffectLease) async throws -> String?
+    ) async throws -> BotEffectInboxResult {
+        if let existing = try inboxEntry(receiver: receiver, effectKey: lease.effectKey),
            existing.generation >= lease.generation {
             return BotEffectInboxResult(deduped: true, resultRef: existing.resultRef, entry: existing)
         }
-        guard let record = try await store.effect(lease.effectKey) else {
+        let key = BotEffectInboxFlightKey(
+            receiver: receiver, effectKey: lease.effectKey, generation: lease.generation)
+        if let flight = inboxFlights[key] {
+            let entry = try await flight.value
+            return BotEffectInboxResult(deduped: true, resultRef: entry.resultRef, entry: entry)
+        }
+        guard let record = try effectRecord(forKey: lease.effectKey) else {
             throw SQLiteDomainStoreError.unknownEffect(lease.effectKey)
         }
         guard record.generation == lease.generation,
@@ -40,9 +64,15 @@ public actor SQLiteBotEffectInbox {
         guard record.state == .leased || record.state == .cancelRequested else {
             throw SQLiteDomainStoreError.invalidTransition("effect is not leased for inbox apply")
         }
-        let resultRef = try await executor(lease)
-        let entry = try await store.recordInbox(
-            receiver: receiver, lease: lease, appliedAt: clock(), resultRef: resultRef)
+
+        let flight = Task<BotEffectInboxEntry, Error> {
+            let resultRef = try await executor(lease)
+            return try self.recordInbox(
+                receiver: receiver, lease: lease, appliedAt: appliedAt(), resultRef: resultRef)
+        }
+        inboxFlights[key] = flight
+        defer { inboxFlights[key] = nil }
+        let entry = try await flight.value
         return BotEffectInboxResult(deduped: false, resultRef: entry.resultRef, entry: entry)
     }
 }

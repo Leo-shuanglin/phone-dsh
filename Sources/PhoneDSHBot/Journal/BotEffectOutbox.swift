@@ -123,12 +123,24 @@ extension SQLiteDomainStore: BotEffectOutbox {
                 """
                 SELECT * FROM bot_effects
                 WHERE ((state IN ('pending', 'failed') AND (not_before IS NULL OR not_before <= ?))
-                    OR (state = 'leased' AND lease_expires_at <= ?))
+                    OR (state IN ('leased', 'cancel_requested') AND lease_expires_at <= ?))
                 ORDER BY COALESCE(not_before, 0), enqueued_commit_seq, effect_key
                 """,
                 bindings: [.integer(now), .integer(now)])
             for row in rows {
                 let record = try decodeEffectRecord(row)
+                if record.state == .cancelRequested {
+                    let data: [String: BotJSONValue] = [
+                        "effectKey": .string(record.effectKey),
+                        "reason": .string("unknown-outcome"),
+                        "at": .number(Double(now)),
+                    ]
+                    _ = try insertDurableEvents([
+                        makeEffectEvent(type: "effect.reconciliation_required", data: data, at: now),
+                    ])
+                    try markReconciliationRow(record.effectKey, reason: "unknown-outcome", now: now)
+                    continue
+                }
                 if record.state == .leased {
                     if record.attempts >= record.effect.maxAttempts {
                         let data: [String: BotJSONValue] = [
