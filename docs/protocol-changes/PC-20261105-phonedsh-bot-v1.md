@@ -110,7 +110,7 @@ python3 spec/bot/v1/tools/validate_vectors.py
 
 - 真机、WebContent 2 小时 spike、模型 E2E、通知实投、外部账号：NOT_RUN。
 - WP1 不通过时停止，由用户决定是否采用 Swift LLM 循环退路；不得暗中更换架构。
-- 鱼素材/FishDirector 授权与格式未确认：UI 只用静态头像占位。
+- 鱼素材与 FishDirector 已获用户授权并完成契约和纯 Swift 对拍；生产 UI 的资源打包与真实事件状态接线由 WP9 验收，未运行前不得标 PASS。
 - Gmail/GitHub、污染隔离、推送中继、Space UI、多 Bot/Team、回滚/import 不在本轮。
 
 ## 6. 修订记录
