@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import ToolRuntime from '@deepseek-ai/dsh-tools'
 import dshbotVolatileContext, {
   collectVolatileBlocks,
   minutePrecision,
@@ -44,6 +45,7 @@ test('the real SystemPrompt registry refreshes an App-hosted snapshot before eve
   }
   try {
     await ctx.plugin(SystemPrompt, {})
+    await ctx.plugin(ToolRuntime, {})
     await ctx.plugin(dshbotVolatileContext, {
       now: () => new Date('2026-11-06T08:09:59.900Z'),
       lang: () => 'en' as const,
@@ -85,6 +87,7 @@ test('a failed or late snapshot never exposes stale memory', async () => {
   const started = new Promise<void>(resolve => { markStarted = resolve })
   try {
     await ctx.plugin(SystemPrompt, {})
+    await ctx.plugin(ToolRuntime, {})
     await ctx.plugin(dshbotVolatileContext, {
       lang: () => 'en' as const,
       source: async () => {

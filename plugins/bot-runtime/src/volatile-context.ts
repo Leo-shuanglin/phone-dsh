@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { AssembleContext } from '@deepseek-ai/dsh-system-prompt'
+import { createPhoneVolatileContextSource } from './volatile-mcp.ts'
 
 export const VOLATILE_BLOCK_ORDER = Object.freeze([
   'variant',
@@ -24,6 +25,7 @@ export interface VolatileSnapshot {
 export interface VolatileSourceRequest {
   readonly sessionId: string
   readonly signal?: AbortSignal
+  readonly agent?: Agent
 }
 
 export type VolatileContextSource = (request: VolatileSourceRequest) => Promise<VolatileSnapshot>
@@ -122,6 +124,7 @@ export function renderVolatileContext(
 export default function dshbotVolatileContext(ctx: Context, config: VolatileContextConfig = {}): void {
   const snapshots = new Map<string, VolatileSnapshot>()
   const revisions = new Map<string, number>()
+  const source = config.source ?? createPhoneVolatileContextSource(ctx)
   const now = config.now ?? (() => new Date())
   const lang = config.lang ?? (() => resolvePromptLang())
 
@@ -132,20 +135,24 @@ export default function dshbotVolatileContext(ctx: Context, config: VolatileCont
 
   const refresh = async (context: BotAssembleContext): Promise<void> => {
     const sessionId = sessionIdFor(context)
-    if (sessionId === '' || config.source === undefined) return
+    if (sessionId === '') return
+    snapshots.set(sessionId, EMPTY_SNAPSHOT)
     const revision = (revisions.get(sessionId) ?? 0) + 1
     revisions.set(sessionId, revision)
     let snapshot = EMPTY_SNAPSHOT
     try {
-      const candidate: unknown = await config.source({
+      const candidate: unknown = await source({
         sessionId,
         ...context.signal === undefined ? {} : { signal: context.signal },
+        ...context.agent === undefined ? {} : { agent: context.agent },
       })
       if (candidate !== null && typeof candidate === 'object' && !Array.isArray(candidate)) {
         snapshot = candidate as VolatileSnapshot
       }
     } catch {}
-    if (revisions.get(sessionId) === revision) snapshots.set(sessionId, snapshot)
+    if (revisions.get(sessionId) === revision && !context.signal?.aborted) {
+      snapshots.set(sessionId, snapshot)
+    }
   }
 
   ctx.on('agent/disposed', ({ agent }) => {
@@ -167,4 +174,4 @@ export default function dshbotVolatileContext(ctx: Context, config: VolatileCont
   })
 }
 
-dshbotVolatileContext.inject = ['systemPrompt']
+dshbotVolatileContext.inject = ['systemPrompt', 'tools']
