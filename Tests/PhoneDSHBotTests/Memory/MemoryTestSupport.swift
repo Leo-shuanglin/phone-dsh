@@ -6,18 +6,22 @@ import Foundation
 actor InMemoryBotMemoryFactStore: BotMemoryFactStore {
     private var records: [BotMemoryFact]
     private var erased: [String: [String: BotMemoryTombstone]] = [:]
+    private let yields: Bool
 
-    init(facts: [BotMemoryFact] = []) {
+    init(facts: [BotMemoryFact] = [], yields: Bool = false) {
         records = facts
+        self.yields = yields
     }
 
     func facts(scope: BotMemoryScope?) async throws -> [BotMemoryFact] {
+        if yields { await Task.yield() }
         guard let scope else { return records }
         return records.filter { $0.scope == scope }
     }
 
     @discardableResult
     func append(_ fact: BotMemoryFact) async throws -> BotMemoryFact {
+        if yields { await Task.yield() }
         if records.contains(where: { $0.factID == fact.factID }) {
             throw BotMemoryFactStoreError.duplicateFactID(fact.factID)
         }
@@ -136,6 +140,12 @@ struct MemoryRecallExpected: Decodable {
 struct MemoryRecallGolden: Decodable {
     let valid: [MemoryRecallExpected]
     let invalid: [MemoryRecallExpected]
+}
+
+extension BotMemory {
+    func writeForTest(_ request: BotMemoryWriteRequest) async throws -> BotMemoryWriteResult {
+        try await write(request, context: BotMemoryWriteContext(source: request.source))
+    }
 }
 
 func makeMemoryFact(

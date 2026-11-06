@@ -63,6 +63,14 @@ public struct BotMemorySource: Codable, Sendable, Equatable {
     }
 }
 
+public struct BotMemoryWriteContext: Sendable {
+    public let source: BotMemorySource
+
+    init(source: BotMemorySource) {
+        self.source = source
+    }
+}
+
 public struct BotMemorySourceState: Sendable, Equatable {
     public private(set) var kind: BotMemorySourceKind
 

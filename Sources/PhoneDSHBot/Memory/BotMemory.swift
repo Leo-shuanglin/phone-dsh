@@ -149,6 +149,7 @@ public actor BotMemory {
     private let botID: String
     private let language: BotMemoryPromptLanguage
     private let now: @Sendable () -> Int64
+    private let writeMutex = BotMemoryAsyncMutex()
 
     public init(
         store: any BotMemoryFactStore,
@@ -198,8 +199,26 @@ public actor BotMemory {
     }
 
     public func write(_ request: BotMemoryWriteRequest) async throws -> BotMemoryWriteResult {
-        if request.source.kind != .userTurn && (request.scope == .user || request.tier == .profile) {
-            let kind = request.source.kind.rawValue
+        var downgraded = request.source
+        downgraded.kind = .agentMessage
+        return try await write(request, context: BotMemoryWriteContext(source: downgraded))
+    }
+
+    public func write(
+        _ request: BotMemoryWriteRequest,
+        context: BotMemoryWriteContext
+    ) async throws -> BotMemoryWriteResult {
+        try await writeMutex.withLock {
+            try await performWrite(request, source: context.source)
+        }
+    }
+
+    private func performWrite(
+        _ request: BotMemoryWriteRequest,
+        source verifiedSource: BotMemorySource
+    ) async throws -> BotMemoryWriteResult {
+        if verifiedSource.kind != .userTurn && (request.scope == .user || request.tier == .profile) {
+            let kind = verifiedSource.kind.rawValue
             return BotMemoryWriteResult(
                 ok: false,
                 code: "memory-source-boundary",
@@ -254,7 +273,7 @@ public actor BotMemory {
             )
         }
         let factID = try await uniqueFactID(existing: allFacts)
-        var source = request.source
+        var source = verifiedSource
         source.sessionID = trimmed(source.sessionID)
         source.turnID = trimmed(source.turnID)
         source.role = trimmed(source.role)?.lowercased()
