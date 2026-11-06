@@ -4,6 +4,17 @@ import XCTest
 @testable import PhoneDSHBot
 
 final class RowProtocolGoldenTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("phonedsh-bot-golden-actions-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    override func tearDownWithError() throws {
+        if let directory { try? FileManager.default.removeItem(at: directory) }
+    }
+
     func testSharedRowProtocolCodableVectors() throws {
         let fixture = try RowTestSupport.golden("row-protocol")
         let valid = try RowTestSupport.object(fixture["valid"], in: "row-protocol.valid")
@@ -34,10 +45,10 @@ final class RowProtocolGoldenTests: XCTestCase {
         let invalid = try RowTestSupport.array(fixture["invalid"], in: "row-protocol.invalid")
         let action = try RowTestSupport.decode(BotUserAction.self, valid["action"])
         let expectedAccepted = try RowTestSupport.decode(BotActionResult.self, valid["result"])
-        let store = RowNonceStoreDouble()
-        let handler = RowActionHandlerDouble()
-        if case .accepted(let eventID) = expectedAccepted { await handler.setDefaultEventID(eventID) }
-        let dispatcher = BotUserActionDispatcher(nonceStore: store, handler: handler)
+        let store = try makeStore()
+        let planner = RowActionPlannerDouble()
+        if case .accepted(let eventID) = expectedAccepted { await planner.setDefaultEventID(eventID) }
+        let dispatcher = BotUserActionDispatcher(store: store, planner: planner)
 
         let accepted = try await dispatcher.dispatch(action)
         XCTAssertEqual(accepted, expectedAccepted)
@@ -57,23 +68,26 @@ final class RowProtocolGoldenTests: XCTestCase {
         XCTAssertEqual(stale, expectedStale)
         try RowTestSupport.assertEncoded(stale, equals: staleVector["result"] as Any)
 
-        let actions = await handler.actions
+        let actions = await planner.actions
         XCTAssertEqual(actions, [action])
-        let trusts = await handler.trusts
+        let trusts = await planner.trusts
         XCTAssertEqual(trusts.map(\.rawValue), [BotUserActionTrust.ownerDirect.rawValue])
 
-        let replacementDispatcher = BotUserActionDispatcher(nonceStore: store, handler: handler)
+        try await store.close()
+        let reopened = try SQLiteDomainStore(fileURL: store.fileURL, now: { 2_000 })
+        let replacementDispatcher = BotUserActionDispatcher(store: reopened, planner: planner)
         let persistedDuplicate = try await replacementDispatcher.dispatch(action)
         XCTAssertEqual(persistedDuplicate, expectedDuplicate)
-        let persistedActions = await handler.actions
+        let persistedActions = await planner.actions
         XCTAssertEqual(persistedActions.count, 1)
+        try await reopened.close()
     }
 
     func testConcurrentDuplicateNonceOnlyCallsHostOnce() async throws {
-        let store = RowNonceStoreDouble()
-        let handler = RowActionHandlerDouble()
-        await handler.setDefaultEventID("evt-concurrent")
-        let dispatcher = BotUserActionDispatcher(nonceStore: store, handler: handler)
+        let store = try makeStore()
+        let planner = RowActionPlannerDouble()
+        await planner.setDefaultEventID("evt-concurrent")
+        let dispatcher = BotUserActionDispatcher(store: store, planner: planner)
         let action = BotUserAction(nonce: "same-nonce", botID: "main", kind: .chat, text: "继续")
 
         async let first = dispatcher.dispatch(action)
@@ -82,7 +96,12 @@ final class RowProtocolGoldenTests: XCTestCase {
         let results = try await [first, second, third]
         XCTAssertEqual(results.filter { $0 == .accepted(eventID: "evt-concurrent") }.count, 1)
         XCTAssertEqual(results.filter { $0 == .duplicate(eventID: "evt-concurrent") }.count, 2)
-        let actions = await handler.actions
+        let actions = await planner.actions
         XCTAssertEqual(actions.count, 1)
+        try await store.close()
+    }
+
+    private func makeStore() throws -> SQLiteDomainStore {
+        try SQLiteDomainStore(fileURL: directory.appendingPathComponent("domain.sqlite"), now: { 1_000 })
     }
 }

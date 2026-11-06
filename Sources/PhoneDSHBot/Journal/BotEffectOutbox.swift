@@ -54,38 +54,42 @@ private let reconciliationReasons: Set<String> = ["unknown-outcome", "generation
 extension SQLiteDomainStore: BotEffectOutbox {
     @discardableResult
     public func enqueue(_ effect: BotEffect) async throws -> String {
-        try validateEffect(effect)
-        return try withTransaction {
-            let existing = try effectRecord(forKey: effect.effectKey)
-            if let existing, effect.generation <= existing.generation {
-                return existing.effectKey
-            }
-            let now = clock()
-            let notBefore = effect.notBefore ?? now
-            let data = effectData(effect, notBefore: notBefore)
-            let sequence = try insertDurableEvents([
-                makeEffectEvent(type: "effect.enqueued", data: data, at: now),
-            ])[0]
-            try database.execute(
-                """
-                INSERT OR REPLACE INTO bot_effects(
-                    effect_key, kind, operation, target, canonical_resource, args_digest, payload_digest,
-                    logical_key, idempotent, retry_policy, max_attempts, generation, not_before, state,
-                    attempt, attempts, enqueued_commit_seq, lease_owner, lease_expires_at, started_at,
-                    last_error, error_class, result_ref, applied_at, reconciliation_reason, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                bindings: [
-                    .text(effect.effectKey), .text(effect.kind), .text(effect.operation), .text(effect.target),
-                    .text(effect.canonicalResource), .text(effect.argsDigest), .text(effect.payloadDigest),
-                    .text(effect.logicalKey), .integer(effect.idempotent ? 1 : 0), .text(effect.retryPolicy),
-                    .integer(Int64(effect.maxAttempts)), .integer(Int64(effect.generation)), .integer(notBefore),
-                    .text(BotEffectState.pending.rawValue), .integer(0), .integer(0), .integer(Int64(sequence)),
-                    .null, .null, .null, .null, .null, .null, .null, .null, .integer(now),
-                ])
-            try checkCrashPoint("effect-enqueued")
-            return effect.effectKey
+        try withTransaction {
+            try enqueueEffectInTransaction(effect)
         }
+    }
+
+    func enqueueEffectInTransaction(_ effect: BotEffect) throws -> String {
+        try validateEffect(effect)
+        let existing = try effectRecord(forKey: effect.effectKey)
+        if let existing, effect.generation <= existing.generation {
+            return existing.effectKey
+        }
+        let now = clock()
+        let notBefore = effect.notBefore ?? now
+        let data = effectData(effect, notBefore: notBefore)
+        let sequence = try insertDurableEvents([
+            makeEffectEvent(type: "effect.enqueued", data: data, at: now),
+        ])[0]
+        try database.execute(
+            """
+            INSERT OR REPLACE INTO bot_effects(
+                effect_key, kind, operation, target, canonical_resource, args_digest, payload_digest,
+                logical_key, idempotent, retry_policy, max_attempts, generation, not_before, state,
+                attempt, attempts, enqueued_commit_seq, lease_owner, lease_expires_at, started_at,
+                last_error, error_class, result_ref, applied_at, reconciliation_reason, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(effect.effectKey), .text(effect.kind), .text(effect.operation), .text(effect.target),
+                .text(effect.canonicalResource), .text(effect.argsDigest), .text(effect.payloadDigest),
+                .text(effect.logicalKey), .integer(effect.idempotent ? 1 : 0), .text(effect.retryPolicy),
+                .integer(Int64(effect.maxAttempts)), .integer(Int64(effect.generation)), .integer(notBefore),
+                .text(BotEffectState.pending.rawValue), .integer(0), .integer(0), .integer(Int64(sequence)),
+                .null, .null, .null, .null, .null, .null, .null, .null, .integer(now),
+            ])
+        try checkCrashPoint("effect-enqueued")
+        return effect.effectKey
     }
 
     public func effect(_ effectKey: String) throws -> BotEffectRecord? {
