@@ -50,3 +50,41 @@ public enum BotMemoryFactStoreError: Error, Sendable, Equatable {
     case invalidOperation(String)
     case corrupted(String)
 }
+
+final class BotMemoryAsyncMutex: @unchecked Sendable {
+    private let lock = NSLock()
+    private var acquired = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func withLock<T>(_ operation: () async throws -> T) async rethrows -> T {
+        await acquire()
+        defer { release() }
+        return try await operation()
+    }
+
+    private func acquire() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if !acquired {
+                acquired = true
+                lock.unlock()
+                continuation.resume()
+                return
+            }
+            waiters.append(continuation)
+            lock.unlock()
+        }
+    }
+
+    private func release() {
+        lock.lock()
+        guard !waiters.isEmpty else {
+            acquired = false
+            lock.unlock()
+            return
+        }
+        let next = waiters.removeFirst()
+        lock.unlock()
+        next.resume()
+    }
+}

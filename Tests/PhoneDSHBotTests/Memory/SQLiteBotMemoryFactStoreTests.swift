@@ -44,9 +44,13 @@ final class SQLiteBotMemoryFactStoreTests: XCTestCase {
         let second = makeMemoryFact("fact-user", "共享事實", scope: .user)
         try await store.append(first)
         try await store.append(second)
+        let duplicate = try await store.append(first)
+        XCTAssertEqual(duplicate, first)
+        var conflicting = first
+        conflicting.text = "同 ID 不同內容"
         do {
-            try await store.append(first)
-            XCTFail("duplicate active fact id must fail")
+            try await store.append(conflicting)
+            XCTFail("conflicting active fact id must fail")
         } catch {
             XCTAssertEqual(error as? BotMemoryFactStoreError, .duplicateFactID(first.factID))
         }
@@ -230,6 +234,174 @@ final class SQLiteBotMemoryFactStoreTests: XCTestCase {
         try await finalDomain.close()
     }
 
+    func testConcurrentStoresRejectSameFactIDWithDifferentPayloadWithoutOverwrite() async throws {
+        let file = directory.appendingPathComponent("domain.sqlite")
+        let domain = try SQLiteDomainStore(fileURL: file, now: { 100 })
+        let firstStore = SQLiteBotMemoryFactStore(eventLog: domain, now: { 101 })
+        let secondStore = SQLiteBotMemoryFactStore(eventLog: domain, now: { 102 })
+        let first = makeMemoryFact("shared-fact", "第一個 payload")
+        let second = makeMemoryFact("shared-fact", "第二個 payload")
+        let outcomes = await withTaskGroup(
+            of: Result<BotMemoryFact, BotMemoryFactStoreError>.self
+        ) { group in
+            for (store, fact) in [(firstStore, first), (secondStore, second)] {
+                group.addTask {
+                    do {
+                        return .success(try await store.append(fact))
+                    } catch let error as BotMemoryFactStoreError {
+                        return .failure(error)
+                    } catch {
+                        return .failure(.invalidOperation(String(describing: error)))
+                    }
+                }
+            }
+            var outcomes: [Result<BotMemoryFact, BotMemoryFactStoreError>] = []
+            for await outcome in group { outcomes.append(outcome) }
+            return outcomes
+        }
+        let written = outcomes.compactMap { try? $0.get() }
+        let failures = outcomes.compactMap { outcome -> BotMemoryFactStoreError? in
+            guard case .failure(let error) = outcome else { return nil }
+            return error
+        }
+        XCTAssertEqual(written.count, 1)
+        XCTAssertEqual(failures, [.duplicateFactID("shared-fact")])
+        let live = try await firstStore.facts()
+        XCTAssertEqual(live, written)
+        let events = try await domain.events(after: 0, limit: 10)
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events[0].eventId.hasPrefix("evt-memory-write-"), true)
+        try await domain.close()
+
+        let reopened = try SQLiteDomainStore(fileURL: file)
+        let replayed = SQLiteBotMemoryFactStore(eventLog: reopened)
+        let persisted = try await replayed.facts()
+        XCTAssertEqual(persisted, written)
+        do {
+            var conflicting = persisted[0]
+            conflicting.text = "重開後仍不得覆蓋"
+            try await replayed.append(conflicting)
+            XCTFail("a conflicting payload must remain rejected after reopen")
+        } catch {
+            XCTAssertEqual(error as? BotMemoryFactStoreError, .duplicateFactID("shared-fact"))
+        }
+        let afterConflict = try await replayed.facts()
+        XCTAssertEqual(afterConflict, written)
+        try await reopened.close()
+    }
+
+    func testConcurrentStoresDeduplicateRemoveWithoutDuplicateEvents() async throws {
+        let file = directory.appendingPathComponent("domain.sqlite")
+        let domain = try SQLiteDomainStore(fileURL: file, now: { 100 })
+        let firstStore = SQLiteBotMemoryFactStore(eventLog: domain, now: { 5000 })
+        let secondStore = SQLiteBotMemoryFactStore(eventLog: domain, now: { 5000 })
+        let fact = makeMemoryFact("remove-shared", "只刪除一次")
+        try await firstStore.append(fact)
+        _ = try await withThrowingTaskGroup(of: BotMemoryRemoval.self) { group in
+            for store in [firstStore, secondStore] {
+                group.addTask {
+                    try await store.remove(factIDs: [fact.factID], scope: .agent, tombstone: nil)
+                }
+            }
+            var removals: [BotMemoryRemoval] = []
+            for try await removal in group { removals.append(removal) }
+            return removals
+        }
+        let live = try await firstStore.facts()
+        XCTAssertTrue(live.isEmpty)
+        let events = try await domain.events(after: 0, limit: 10)
+        XCTAssertEqual(events.filter { $0.type == "memory.written" }.count, 1)
+        XCTAssertEqual(events.filter { $0.type == "memory.forgotten" }.count, 1)
+        try await domain.close()
+
+        let reopened = try SQLiteDomainStore(fileURL: file)
+        let replayed = SQLiteBotMemoryFactStore(eventLog: reopened)
+        let persisted = try await replayed.facts()
+        XCTAssertTrue(persisted.isEmpty)
+        try await reopened.close()
+    }
+
+    func testConcurrentTouchesDeduplicateAndNeverRegressLastUsedAfterReopen() async throws {
+        let file = directory.appendingPathComponent("domain.sqlite")
+        let domain = try SQLiteDomainStore(fileURL: file)
+        let firstStore = SQLiteBotMemoryFactStore(eventLog: domain)
+        let secondStore = SQLiteBotMemoryFactStore(eventLog: domain)
+        let fact = makeMemoryFact("touch-shared", "並發觸碰")
+        try await firstStore.append(fact)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for store in [firstStore, secondStore] {
+                group.addTask { try await store.touch(factIDs: [fact.factID], lastUsedMS: 100) }
+            }
+            for try await _ in group {}
+        }
+        var head = try await domain.headCommitSeq()
+        XCTAssertEqual(head, 2)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for (store, timestamp) in [(firstStore, Int64(200)), (secondStore, Int64(150))] {
+                group.addTask { try await store.touch(factIDs: [fact.factID], lastUsedMS: timestamp) }
+            }
+            for try await _ in group {}
+        }
+        head = try await domain.headCommitSeq()
+        XCTAssertEqual(head, 4)
+        var expected = fact
+        expected.lastUsedMS = 200
+        let live = try await firstStore.facts()
+        XCTAssertEqual(live, [expected])
+        try await domain.close()
+
+        let reopened = try SQLiteDomainStore(fileURL: file)
+        let replayed = SQLiteBotMemoryFactStore(eventLog: reopened)
+        let persisted = try await replayed.facts()
+        XCTAssertEqual(persisted, [expected])
+        try await reopened.close()
+    }
+
+    func testReplayIgnoresPriorGenerationTouchAfterForgetAndReinsert() async throws {
+        let sourceDomain = try SQLiteDomainStore(fileURL: directory.appendingPathComponent("source.sqlite"))
+        let sourceStore = SQLiteBotMemoryFactStore(eventLog: sourceDomain)
+        let fact = makeMemoryFact("generation-fact", "代次隔離")
+        try await sourceStore.append(fact)
+        try await sourceStore.touch(factIDs: [fact.factID], lastUsedMS: 9000)
+        let sourceEvents = try await sourceDomain.events(after: 0, limit: 10)
+        let staleTouch = try XCTUnwrap(sourceEvents.last { $0.eventId.hasPrefix("evt-memory-touch-") })
+        try await sourceDomain.close()
+
+        let file = directory.appendingPathComponent("domain.sqlite")
+        let domain = try SQLiteDomainStore(fileURL: file)
+        let store = SQLiteBotMemoryFactStore(eventLog: domain)
+        try await store.append(fact)
+        _ = try await store.remove(factIDs: [fact.factID], scope: .agent, tombstone: nil)
+        try await store.append(fact)
+        let replayCandidate = BotEvent(
+            schemaVersion: staleTouch.schemaVersion,
+            type: staleTouch.type,
+            eventId: staleTouch.eventId,
+            time: staleTouch.time,
+            origin: staleTouch.origin,
+            traceId: staleTouch.traceId,
+            principal: staleTouch.principal,
+            causationId: staleTouch.causationId,
+            correlationId: staleTouch.correlationId,
+            turnId: staleTouch.turnId,
+            runId: staleTouch.runId,
+            attempt: staleTouch.attempt,
+            ignorable: staleTouch.ignorable,
+            data: staleTouch.data
+        )
+        try await domain.append(replayCandidate)
+        let live = try await store.facts()
+        XCTAssertEqual(live, [fact])
+        try await domain.close()
+
+        let reopened = try SQLiteDomainStore(fileURL: file)
+        let replayed = SQLiteBotMemoryFactStore(eventLog: reopened)
+        let persisted = try await replayed.facts()
+        XCTAssertEqual(persisted, [fact])
+        try await reopened.close()
+    }
+
     func testBotMemoryUsesSQLiteStoreEndToEnd() async throws {
         let file = directory.appendingPathComponent("domain.sqlite")
         let domain = try SQLiteDomainStore(fileURL: file)
@@ -240,7 +412,7 @@ final class SQLiteBotMemoryFactStoreTests: XCTestCase {
             botID: "main",
             now: { MemoryTestFixtures.now }
         )
-        let written = try await memory.write(BotMemoryWriteRequest(
+        let written = try await memory.writeForTest(BotMemoryWriteRequest(
             text: "第一行\r\n第二行",
             tier: .profile,
             source: BotMemorySource(kind: .userTurn)
