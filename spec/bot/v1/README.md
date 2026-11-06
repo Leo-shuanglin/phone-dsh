@@ -67,7 +67,13 @@ Row、RowBatch、UserAction 和 ActionResult 以对应 schema 为准。`body.typ
 - compaction、pruner、spill 的 default/conservative 参数逐值复用 `CONTEXT_PROFILES`。未知 profile 回退 default，不新增环境变量。
 - contextLint 对最近 session 做确定性检查；冻结重放和 rubric 不在第一版。
 
-## 7. 一致性向量
+## 7. 大肥鱼与表现状态
+
+素材来自上游 `public/assets/fish`，使用 512×512 RGBA PNG 和 manifest，不使用占位图。`fish-director.schema.json` 冻结真实事件到表现状态的映射、优先级、one-shot TTL、去重和生命周期恢复；Swift 只实现确定性状态机，不引入 JavaScript/Canvas runtime。
+
+头像只能消费当前 Bot 的真实 BotEvent。审批和 Watchdog 进入 alerting，成功进入 celebrate，失败或拒绝进入 sad，回合结束恢复 idle。皇冠身份由真实 principal 决定，不能根据名称、颜色或发型推断。任何 UI 都不能自行申报运行状态。
+
+## 8. 一致性向量
 
 从仓库根运行：
 

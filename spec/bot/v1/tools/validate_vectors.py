@@ -55,6 +55,7 @@ def main() -> int:
     check(load("llm-ledger.json")["valid"], "llm-ledger.schema.json", "llm-ledger")
     check(load("model-purpose-policy.json")["valid"], "model-purpose-policy.schema.json", "model-purpose-policy")
     check(load("watchdog.json")["valid"], "watchdog.schema.json", "watchdog")
+    check(load("fish-director.json")["valid"], "fish-director.schema.json", "fish-director")
     check(load("context-profiles.json")["valid"], "context-profiles.schema.json", "context-profiles")
     check(load("context-lint.json")["valid"], "context-lint.schema.json", "context-lint")
     check_many(load("tool-effects.json")["valid"], "tool-effects.schema.json", "tool-effects")

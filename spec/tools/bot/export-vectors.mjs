@@ -321,6 +321,37 @@ vector('wake-routine', {
   { kind: 'quiet_at_noon', value: quiet.isRoutineQuietTime(new Date(2026, 10, 5, 12, 0).getTime(), { quietStart: '23:00', quietEnd: '08:00' }) },
 ]);
 
+const director = await import(pathToFileURL(path.join(checkout, 'src/renderer/lib/fish/director.js')).href);
+let fishState = director.createDirectorState({ lifecycle: 'idle', now: 0 });
+const fishSteps = [];
+function fishStep(action, event) {
+  const result = action === 'reduce' ? director.reduce(fishState, event)
+    : action === 'expire' ? director.expireOneShot(fishState, event.time)
+      : director.setLifecycle(fishState, event.lifecycle, event.time);
+  fishState = result.directorState;
+  fishSteps.push({ action, event, expected: { directorState: fishState, command: result.command } });
+}
+fishStep('reduce', { type: 'turn.started', time: 100, data: { turn: 1, sessionId: 'gb-main' } });
+fishStep('reduce', { type: 'conversation.user_message', time: 200, data: { text: '继续' } });
+fishStep('reduce', { type: 'model.delta', time: 300, data: { channel: 'reasoning' } });
+fishStep('reduce', { type: 'conversation.tool_call', time: 400, data: { name: 'read' } });
+fishStep('reduce', { type: 'approval.requested', time: 500, data: { requestId: 'approval-1' } });
+fishStep('reduce', { type: 'model.delta', time: 600, data: { channel: 'text' } });
+fishStep('reduce', { type: 'approval.decided', time: 700, data: { resolution: 'once' } });
+fishStep('reduce', { type: 'task.settled', time: 800, data: { status: 'completed' } });
+fishStep('reduce', { type: 'memory.written', time: 900, data: { scope: 'agent' } });
+fishStep('reduce', { type: 'task.settled', time: 1000, data: { status: 'failed' } });
+fishStep('reduce', { type: 'task.settled', time: 1100, data: { status: 'completed' } });
+fishStep('reduce', { type: 'turn.ended', time: 3600, data: { status: 'completed' } });
+fishStep('reduce', { type: 'watchdog.flagged', time: 3700, data: { check: 'heartbeat' } });
+fishStep('reduce', { type: 'approval.decided', time: 3800, data: { resolution: 'deny' } });
+fishStep('expire', { time: 8000 });
+fishStep('lifecycle', { time: 8100, lifecycle: 'working' });
+fishStep('lifecycle', { time: 8200, lifecycle: 'idle' });
+vector('fish-director', { initial: { lifecycle: 'idle', now: 0 }, steps: fishSteps }, [
+  { event: { type: 'unknown.event', time: 1, data: {} }, expected: 'ignored_without_state_change' },
+]);
+
 const rowInputs = [
   { kind: 'message', role: 'user', text: '你好' },
   ...cardInputs.map((entry) => ({ kind: 'card', ...(entry.card || cardPayloads.buildCard(entry.tool, entry.args).card) })),

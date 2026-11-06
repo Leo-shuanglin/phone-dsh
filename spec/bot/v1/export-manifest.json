@@ -10,6 +10,7 @@
     "context-lint.json",
     "context-profiles.json",
     "event-envelope.json",
+    "fish-director.json",
     "held-inbox.json",
     "llm-ledger.json",
     "memory-fact.json",

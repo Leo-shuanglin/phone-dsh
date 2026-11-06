@@ -41,7 +41,7 @@ final class BotGoldenVectorTests: XCTestCase {
         let vector = try JSONDecoder().decode(ToolVector.self, from: golden("tool-effects"))
         XCTAssertEqual(vector.schemaVersion, 1)
         XCTAssertEqual(vector.vector, "tool-effects")
-        XCTAssertEqual(vector.source.checkout, "28437f5d975230766f3f40463fa090d643f63e7c")
+        XCTAssertEqual(vector.source.checkout, "bf4075b0a2e8092b04b726c59a7b085d5a37e6f6")
         XCTAssertEqual(vector.valid.count + vector.invalid.count, 23)
         for call in vector.valid + vector.invalid {
             let actual = BotToolEffectClassifier.effect(for: call.name, arguments: call.args, language: .zh)
@@ -62,7 +62,7 @@ final class BotGoldenVectorTests: XCTestCase {
         let vector = try JSONDecoder().decode(ApprovalVector.self, from: golden("approval-patterns"))
         XCTAssertEqual(vector.schemaVersion, 1)
         XCTAssertEqual(vector.vector, "approval-patterns")
-        XCTAssertEqual(vector.source.checkout, "28437f5d975230766f3f40463fa090d643f63e7c")
+        XCTAssertEqual(vector.source.checkout, "bf4075b0a2e8092b04b726c59a7b085d5a37e6f6")
         XCTAssertEqual(vector.valid.count + vector.invalid.count, 6)
         for call in vector.valid + vector.invalid {
             let actual = BotApprovalPatternAnalyzer.analyze(tool: call.tool, arguments: call.args,
