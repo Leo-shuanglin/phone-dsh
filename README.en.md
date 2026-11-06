@@ -177,6 +177,8 @@ bash scripts/ci/scenarios.sh --upstream real
 
 ## Android version
 
+The iPhone app can also connect to Android devices over LAN ADB and to configured remote hosts over SSH/SCP. See [Android ADB](docs/android-adb.md) and [SSH/SCP](docs/native-ssh.md).
+
 The Android version lives in [`android/`](android/README.md) and supports **Android 8.0 (API 26) and later**, with a native Kotlin and Jetpack Compose interface. It shares the DSH Worker, TypeScript plugins, Rust kernel and host/Worker contracts with iOS. The Worker runs in Android WebView; the native host owns loopback networking, the WAL, model gateway, credentials and lifecycle, with Rust capabilities exposed through JNI.
 
 The native interface includes session content, goal/task input, file browsing, model-provider configuration, the plugin inventory and settings, and continues to follow the iOS baseline. Developers can build the example APK or integrate the host through the `com.phonedsh:lib:0.1.0` AAR.

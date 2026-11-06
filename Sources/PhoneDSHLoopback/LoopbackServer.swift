@@ -63,6 +63,8 @@ public struct LoopbackRoutes: Sendable {
     public var execBridge: (any ExecBridgeHosting)?
     /// Base URL of the loopback MCP server; `/mcp*` is reverse-proxied there.
     public var mcpBaseURL: URL?
+    /// Optional native MCP implementation at `/mcp/native`.
+    public var nativeMCP: (any NativeMCPServing)?
     /// Executor for the read-only accelerators (`0x20 EXEC_REQ`).
     public var execProvider: (any ExecProvider)?
     public var workspaceLog: (any LoopbackWorkspaceLog)?
@@ -83,6 +85,7 @@ public struct LoopbackRoutes: Sendable {
                 httpEgress: (any HTTPEgress)? = nil,
                 execBridge: (any ExecBridgeHosting)? = nil,
                 mcpBaseURL: URL? = nil,
+                nativeMCP: (any NativeMCPServing)? = nil,
                 execProvider: (any ExecProvider)? = nil,
                 workspaceLog: (any LoopbackWorkspaceLog)? = nil,
                 journalLog: (any LoopbackJournalLog)? = nil,
@@ -96,6 +99,7 @@ public struct LoopbackRoutes: Sendable {
         self.httpEgress = httpEgress
         self.execBridge = execBridge
         self.mcpBaseURL = mcpBaseURL
+        self.nativeMCP = nativeMCP
         self.execProvider = execProvider
         self.workspaceLog = workspaceLog
         self.journalLog = journalLog
@@ -188,6 +192,7 @@ public actor LoopbackServer {
         listener?.stop()
         listener = nil
         endpointValue = nil
+        await routes.nativeMCP?.cancelPendingOperations()
         for connection in connections.values { await connection.cancel() }
         connections.removeAll()
         if generatedToken {
@@ -374,6 +379,15 @@ public actor LoopbackServer {
         if path == "/v1/http" || path.hasPrefix("/v1/http/") {
             return routeHTTPEgress(request)
         }
+        if path == "/mcp/native", let nativeMCP = routes.nativeMCP {
+            let method = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["method"] as? String
+            if method == "tools/call", await routes.admission() != .open {
+                return .json(503, code: "unavailable", message: "phone tool admission is closed")
+            }
+            let result = await nativeMCP.handle(LoopbackRequest(
+                method: request.method, path: path, headers: request.headers, body: request.body))
+            return .full(status: result.status, headers: ["Content-Type": "application/json"], body: result.body)
+        }
         if path.hasPrefix("/mcp") {
             return forwardMCP(request)
         }
@@ -492,7 +506,7 @@ public actor LoopbackServer {
             "fs": .boolean(false),
             "http_proxy": .boolean(routes.httpEgress != nil),
             "lifecycle": .boolean(true),
-            "mcp": .boolean(routes.mcpBaseURL != nil),
+            "mcp": .boolean(routes.mcpBaseURL != nil || routes.nativeMCP != nil),
         ]
         if let provider = routes.execProvider {
             let execCaps = provider.capabilities

@@ -87,6 +87,10 @@ targets:
         product: PhoneDSHWire
       - package: PhoneDSH
         product: PhoneDSHShell
+      - package: PhoneDSH
+        product: PhoneDSHSSH
+      - package: PhoneDSH
+        product: PhoneDSHADB
       - package: SwiftMarkdown
         product: Markdown
       - package: SwiftMath

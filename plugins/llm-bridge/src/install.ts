@@ -329,6 +329,15 @@ function hostRouteFetch(
     if (url.origin === proxyUrl.origin && url.pathname === proxyUrl.pathname) {
       return await underlying(input, init)
     }
+    // Native phone tools live on the same authenticated origin. Sending this
+    // endpoint through external egress would strip its launch token and ask
+    // the gateway to connect back to itself. Keep the tool journal identity.
+    if (url.origin === proxyUrl.origin && url.pathname === '/mcp/native') {
+      const headers = new Headers(request.headers)
+      const extra = extraHeaders(url, false)
+      if (extra !== undefined) for (const [name, value] of Object.entries(extra)) headers.set(name, value)
+      return await underlying(new Request(request, { headers }))
+    }
     if (!matches(url)) return await fallback(input, init)
     let method = request.method
     const headers = new Headers(request.headers)

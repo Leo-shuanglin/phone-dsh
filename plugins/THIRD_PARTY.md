@@ -84,3 +84,14 @@ and bundled full texts are recorded in [harmony/THIRD_PARTY.md](../harmony/THIRD
 The earlier diagnostic example preserves one Apache-2.0 Huawei DevEco lifecycle
 template with its copyright and full license in
 [examples/harmony-probe/THIRD_PARTY.md](../examples/harmony-probe/THIRD_PARTY.md).
+
+## Native SSH (Swift app, outside the Worker image)
+
+The optional `PhoneDSHSSH` product uses Citadel 0.11.1 (MIT), BigInt (MIT),
+Joannis/swift-nio-ssh (Apache-2.0), and Apple's swift-nio, swift-crypto,
+swift-asn1, swift-atomics, swift-collections, swift-log and swift-system
+(Apache-2.0, with the Swift Runtime Library exception where applicable).
+Exact revisions are pinned in the root `Package.resolved`. Its bundled CCitadelBcrypt code is ISC/BSD, and swift-crypto carries
+BoringSSL notices. These notices and the complete dependency license texts are
+shipped as `SSH-LICENSES.txt` in the app and available from Settings →
+Open-source licenses. No native source is vendored.

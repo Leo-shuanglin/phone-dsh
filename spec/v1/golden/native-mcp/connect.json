@@ -1,0 +1,30 @@
+{
+  "path": "/mcp/native",
+  "method": "POST",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "android_connect",
+      "arguments": {
+        "host": "192.0.2.2",
+        "port": 5556
+      }
+    }
+  },
+  "android_command": "getprop ro.product.model; getprop ro.build.version.release; wm size",
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "exitCode: 0\nfixture"
+        }
+      ],
+      "isError": false
+    }
+  }
+}

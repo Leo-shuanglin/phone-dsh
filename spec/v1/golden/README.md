@@ -4,6 +4,10 @@ These files are the interoperability oracle for the Swift and TypeScript codecs.
 is an independent example: `seq` and `mseq` values from different files are not one connection
 history and MUST NOT be replayed as a stream.
 
+`native-mcp/tap.json` and `native-mcp/package-management.json` are additive
+native MCP HTTP request/result goldens, consumed by `ADBMCPTests`; they are
+not binary channel frames.
+
 ## 1. Frame vector shape
 
 Every `golden/frames/<type-name>-<n>.json` is a JSON object with exactly these members:
@@ -61,6 +65,8 @@ schema exists. `EXEC_EVT` is one exec-bridge v1 NDJSON event object; `exec_id` i
 event, not a separate binary prefix.
 
 ## 4. Required variants
+
+- `exec-req-2.json` and `exec-req-3.json` cover optional native SSH command and SFTP download requests.
 
 - `hello-host-1.json` and `hello-worker-1.json` cover both HELLO variants.
 - `error-1.json` — a closing protocol ERROR; `error-2.json` — the non-closing `VFS_REFUSED`

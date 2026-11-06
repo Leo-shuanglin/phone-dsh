@@ -5,7 +5,7 @@
 import Foundation
 
 enum ToolCategory: String {
-    case read, write, edit, delete, move, search, execute, fetch, other
+    case read, write, edit, delete, move, search, execute, fetch, android, other
 
     /// 消息里那一行。兜底只写「做了个操作」,前面不加「调用工具 · 」。
     var rowTitle: String {
@@ -18,6 +18,7 @@ enum ToolCategory: String {
         case .search: return "搜索"
         case .execute: return "跑命令"
         case .fetch: return "打开网页"
+        case .android: return "操作 Android"
         case .other: return "做了个操作"
         }
     }
@@ -33,6 +34,7 @@ enum ToolCategory: String {
         case .search: return "要在文件夹里搜东西,可以吗?"
         case .execute: return "要跑一条命令,可以吗?"
         case .fetch: return "要打开一个网页,可以吗?"
+        case .android: return "要操作 Android 手机,可以吗?"
         case .other: return "要继续吗?"
         }
     }
@@ -42,6 +44,7 @@ enum ToolWording {
     /// 宿主只给工具名和参数,没有档位字段;按名字推一档,推不出就是 other。
     static func category(forToolName name: String) -> ToolCategory {
         let n = name.lowercased()
+        if n.hasPrefix("mcp__phone__android_") { return .android }
         func has(_ keys: [String]) -> Bool { keys.contains { n.contains($0) } }
 
         // 顺序有讲究:move/delete 里也可能带 file,先判更具体的。
@@ -85,6 +88,13 @@ enum ToolWording {
             let path = url.path
             return path.isEmpty || path == "/" ? url.host : "\(url.host ?? "")\(path)"
         case .other:
+            return nil
+        case .android:
+            if let text = value(["command", "packagename", "apkpath", "directory", "uri", "filter", "topic", "key", "text"]) { return text }
+            if let x = value(["x"]), let y = value(["y"]) {
+                if let endX = value(["endx"]), let endY = value(["endy"]) { return "(\(x), \(y)) → (\(endX), \(endY))" }
+                return "(\(x), \(y))"
+            }
             return nil
         }
     }

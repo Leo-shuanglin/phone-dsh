@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import PhoneDSHSSH
 // phone-dsh phone DSH — iOS probe app: interactive chat over the phone host.
 //
 // The Chat page boots the same `PhoneDSHHost` the scenario runner uses, opens
@@ -21,6 +22,7 @@ import struct PhoneDSHController.BudgetTable
 import struct PhoneDSHController.RestartPolicy
 import PhoneDSHEngine
 import PhoneDSHShell
+import PhoneDSHADB
 
 // MARK: - Settings persistence
 
@@ -935,6 +937,7 @@ final class ChatModel {
         appendStatus("Booting the host (Worker bundle + image)…")
         observeHost(launch.host)
         do {
+            try await ADBMCPServer.shared.setWorkspaceDirectory(materializedWorkspace)
             try await launch.host.start()
         } catch {
             Self.appendDiagnostic("host start failed: \(error)")
@@ -994,6 +997,9 @@ final class ChatModel {
             // The host gateway injects the real key; the Worker never holds it.
             "DEEPSEEK_API_KEY": "phone-host-injects-key",
             "DSH_TELEMETRY_DISABLED": "1",
+            // Caller bash timeouts still apply through its fused abort signal.
+            // The independent Worker backstop must allow 1 GiB transfers.
+            "PDSH_SHELL_TIMEOUT_MS": "3600000",
         ]
         do {
             let settings = PhoneModelProviderSettings.shared
@@ -1081,6 +1087,15 @@ final class ChatModel {
                 configuration.acceleratorNames = names
             }
         }
+        let sshProvider = SSHExecProvider(
+            workspace: materializedWorkspace, home: materializedHome, fallback: shell,
+            byteLimit: configuration.budgets.singleFileBytes,
+            connections: { await SSHSettingsStore.shared.list() },
+            resolve: { destination in try await SSHSettingsStore.shared.resolve(destination) })
+        configuration.execProvider = ADBExecProvider(workspace: materializedWorkspace, fallback: sshProvider,
+                                                      byteLimit: configuration.budgets.singleFileBytes)
+        configuration.acceleratorNames = shell.channelAcceleratorNames + ["ssh", "scp", "adb"]
+        configuration.nativeMCP = ADBMCPServer.shared
         configuration.engine.bootTimeout = ChatHostConfiguration.defaultBootTimeout
         configuration.engine.environment = environment
         let anchor = self.anchor
@@ -1147,6 +1162,7 @@ final class ChatModel {
         observeHost(launch.host)
         do {
             do {
+                try await ADBMCPServer.shared.setWorkspaceDirectory(materializedWorkspace)
                 try await launch.host.start()
             } catch {
                 let state = await launch.host.state
@@ -1796,7 +1812,15 @@ final class ChatModel {
                 appendStatus("Autostop requested by the launch environment; the send below must boot the engine")
             }
             if let prompt, !prompt.isEmpty {
-                let sent = await send(prompt)
+                var sent = false
+                // onAppear may still be booting the host/session. Wait for the
+                // chat transport before dispatching an unattended test prompt.
+                for _ in 0..<300 {
+                    if canSend { sent = await send(prompt); break }
+                    guard busy || isStarted else { break }
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+                if !sent { appendStatus("Autoprompt not sent: the chat session did not become ready") }
                 appendStatus("Autostart prompt delivered=\(sent) started=\(isStarted)")
             }
         }
