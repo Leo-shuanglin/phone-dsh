@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { canonicalStringify } from './canonical-json.ts'
+import { BOT_VOLATILE_CONTEXT_TOOL } from './volatile-mcp.ts'
 
 export const PHONE_TOOL_PREFIX = 'mcp__phone__'
 export const DEFAULT_IDENTITY_TIMEOUT_MS = 5_000
@@ -169,12 +170,14 @@ export default function dshbotIdentityBridge(ctx: Context, config: IdentityBridg
   }
 
   ctx.on('tools/pre-execute', async (exec: ToolExecution, next: () => Promise<any>) => {
+    if (!botRuntimeAvailable(ctx, exec)) return next()
     const registered = await register(exec)
     registered.release()
     return next()
   })
 
   ctx.on('tools/execute', async (exec: ToolExecution, next: () => Promise<any>) => {
+    if (!botRuntimeAvailable(ctx, exec)) return next()
     const sessionId = String(exec.agent?.id ?? exec.agent?.session?.id ?? '')
     if (dispatchChain.getStore() === sessionId) throw new Error('[identity-bridge] re-entrant phone tool call is not allowed')
     const registered = await register(exec)
@@ -188,6 +191,10 @@ export default function dshbotIdentityBridge(ctx: Context, config: IdentityBridg
       registered.release()
     }
   })
+}
+
+export function botRuntimeAvailable(ctx: Context, exec: Pick<ToolExecution, 'agent'>): boolean {
+  return ctx.tools.get(BOT_VOLATILE_CONTEXT_TOOL, exec.agent) !== undefined
 }
 
 dshbotIdentityBridge.inject = ['tools']

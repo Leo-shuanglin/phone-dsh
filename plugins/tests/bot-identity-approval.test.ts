@@ -13,10 +13,11 @@ function agent(id = 'gb-main'): Agent {
   return { id, session: { id } } as unknown as Agent
 }
 
-async function mount(): Promise<Context> {
+async function mount(withBot = true): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt, {})
   await ctx.plugin(ToolRuntime, {})
+  if (withBot) registerProbe(ctx, 'mcp__phone__BotVolatileContext')
   return ctx
 }
 
@@ -29,6 +30,30 @@ function registerProbe(ctx: Context, name = 'mcp__phone__ListRoutines'): void {
     execute: async () => 'ok',
   }))
 }
+
+test('ordinary DSH without Bot MCP never calls Bot identity or approval endpoints', async () => {
+  const ctx = await mount(false)
+  let calls = 0
+  try {
+    registerProbe(ctx, 'bash')
+    await ctx.plugin(dshbotIdentityBridge, {
+      request: async () => { calls += 1; return { ok: true, id: 'unexpected' } },
+      cancel: async () => {},
+    })
+    await ctx.plugin(dshbotApprovalGate, {
+      request: async () => { calls += 1; return { ok: true, allowed: true } },
+    })
+    const result = await ctx.tools.execute({
+      callId: ToolCallId('ordinary-bash'), name: 'bash',
+      arguments: { command: 'rm -rf /tmp/wp7-artifact' },
+      signal: new AbortController().signal, agent: agent(),
+    })
+    assert.equal(result.isError, false)
+    assert.equal(calls, 0)
+  } finally {
+    await ctx.fiber.dispose()
+  }
+})
 
 test('pre-execute and execute share the pinned identity and cancel once', async () => {
   assert.equal(argsDigest({ secret: 'not-recorded' }), '9c58b105c0e3377b8052885445b4db03b3a2024b847396617dfd5152c05e9c06')

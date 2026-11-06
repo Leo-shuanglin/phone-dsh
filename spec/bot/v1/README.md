@@ -35,6 +35,7 @@
 - variant/persona 各最多 12,000 字符，memory/automation 各最多 4,000 字符；总文本最多 24,000 字符。不得包含模型密钥、Bearer token 或无关 session 的内容。
 - 传输失败、标准 MCP `isError`、超时、非法响应或 session 不符都不得携带部分快照。consumer 必须丢弃本次结果并使用空快照，不能沿用可能陈旧的记忆；`AbortSignal` 只用于本地忽略迟到结果，网络超时仍由既有 App MCP mount 管理。
 - consumer 的本地 revision 防止旧请求覆盖新请求；producer revision 用于诊断，不作为跨进程持久游标。不得将静态工具发现当成宿主数据已接通。
+- 只有实际注册 `mcp__phone__BotVolatileContext` 的 Bot MCP 才启用 Bot 专用身份登记和 `/approval`。普通 DSH 工作台没有此能力时，`identity-bridge` 与 Bot 专用审批门禁直接继续原工具权限链，不要求 Bot identity 路由，也不得把 Bot 缺失当成允许 Bot 写入。
 
 ### 2.2 Grant 恢复与调用代次
 

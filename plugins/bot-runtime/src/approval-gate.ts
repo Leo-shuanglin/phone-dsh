@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { argsDigest, dispatchArguments, PHONE_TOOL_PREFIX } from './identity-bridge.ts'
+import { argsDigest, botRuntimeAvailable, dispatchArguments, PHONE_TOOL_PREFIX } from './identity-bridge.ts'
 
 export interface ApprovalEffect {
   tool: string
@@ -162,6 +162,7 @@ export default function dshbotApprovalGate(ctx: Context, config: ApprovalGateCon
   const send = config.request ?? ((payload: Record<string, unknown>, signal?: AbortSignal) => postApproval(url, token, payload, signal))
 
   ctx.on('tools/pre-execute', async (exec: { name: string; arguments?: unknown; agent?: Agent; callId?: string; signal?: AbortSignal }, next: () => Promise<any>) => {
+    if (!botRuntimeAvailable(ctx, exec)) return next()
     if (sensitiveRead(exec)) {
       return { kind: 'deny', reason: '[sensitive read] The operation targets protected credentials and was NOT executed.' }
     }
