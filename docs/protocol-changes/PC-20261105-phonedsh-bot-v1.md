@@ -9,7 +9,7 @@ status: frozen
 breaking: false
 version_decision: Bot schemaVersion=1；Swift 宿主与 Worker 同一 App bundle 配对升级；不改变 P01/P15 wire 或生命周期版本。
 base: 07585efb2a71daa2e05f55c83abcfb4a2cb39f4d
-contract_revision: 0074475d322395f6cdb06caa42ea391a214bd0da
+contract_revision: 3c7a6efaab5d95b71cbceb7b69d900f5e8665552
 ```
 
 Protocol impact: P23; P24; P25; P12; P09; P13。
@@ -96,9 +96,9 @@ python3 spec/bot/v1/tools/validate_vectors.py
 
 | 命令 | 结果 |
 | --- | --- |
-| 两次导出至独立临时目录并 `diff -qr`，再与提交的 golden/pin/manifest 比较 | PASS，19 组向量逐字节一致 |
+| 两次导出至独立临时目录并 `diff -qr`，再与提交的 golden/pin/manifest 比较 | PASS，20 组向量逐字节一致 |
 | `python3 spec/bot/v1/tools/validate_vectors.py` | PASS，schema、正例、反例 |
-| `swift test --filter PhoneDSHBotTests` | PASS，5 tests / 0 failures（含 CCR 后真实 golden Codable、origin 拒绝未知 kind、effects 重试策略）；仍不是 WP3 实现 |
+| `swift test --filter PhoneDSHBotTests` | PASS，127 tests / 0 failures（含 FishDirector 对拍；WP7 真实 E2E 尚未完成） |
 | 完整 WP0 命令中的 `phone-spec` | PASS，195 tests |
 | 同一命令中的 `phone-cross-tree` | PASS，8/8 invariants、registry 25 contracts、84 tests |
 | 同一命令中的 `phone-modules` | PASS |
@@ -121,3 +121,4 @@ python3 spec/bot/v1/tools/validate_vectors.py
 | `65e062856c7e87f2f2b649b96383ae84259b2d65` | contract owner / 主 Agent | WP3 CCR-1：BotEventOrigin 改为冻结的 kind=dsh/local 显式 Codable，拒绝未知 kind/member。CCR-2：BotEffect 增加 kind/target/payloadDigest/retryPolicy/maxAttempts，保留源兼容默认值并支持 network-idempotent 五次尝试。schema/golden 不变，真实 Codable 回归通过 | WP3 重新分派；WP4/WP5/WP6/WP8 集成时同步该修订 |
 | `784cd28e4be998477f4ab1d25bb7967d2cfa0a49` | contract owner / 主 Agent | WP2 CCR-2：冻结现有 phone App MCP 的 BotVolatileContext 请求/响应、发现名、scope、大小、迟到结果和错误语义；WP2 consumer、WP7 Swift producer。CCR-1 workspace/image 收录由协调者处理，不属于协议变更 | WP2 重新分派；WP7 按此实现 producer |
 | `0074475d322395f6cdb06caa42ea391a214bd0da` | contract owner / 主 Agent | 上游基线升级为 DSH Bot bf4075b；golden 除来源 SHA 无语义差异。补充 Bot 色彩、composer 活动行、简洁回复/next-step、真实鱼素材与 FishDirector 状态映射。用户已明确头像资产授权 | WP7/WP9 按新基线接线；其余 WP 无需变更 |
+| `3c7a6efaab5d95b71cbceb7b69d900f5e8665552` | contract owner / 主 Agent | 新增 FishDirector schema/golden 与纯 Swift 对拍实现；纳入真实 512px 头像资源及 BotFishAvatar。20 组向量、127 个 Bot 测试通过 | WP9 直接消费公共状态机和资产；WP7 提供真实事件 |
