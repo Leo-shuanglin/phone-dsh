@@ -73,8 +73,50 @@ function unclassifiedEffect(name: string, args: Record<string, unknown>): Approv
   }
 }
 
+function shellEffect(operation: string, resource: string, label: string, detail: string, mutability: ApprovalEffect['mutability'] = 'destructive'): ApprovalEffect {
+  return {
+    tool: 'bash', operation, resource, target: resource, mutability, policy: 'ask',
+    label, detail, ui: false, execution: null, known: true, isMcp: false,
+  }
+}
+
+function rmResource(command: string): string {
+  const tokens = command.split(/\s+/).filter(Boolean)
+  const index = tokens.indexOf('rm')
+  const operand = index < 0 ? undefined : tokens.slice(index + 1).find(token => !token.startsWith('-'))
+  return operand ?? command
+}
+
+function bashEffectsForApproval(args: Record<string, unknown>): ApprovalEffect[] {
+  const command = String(args.command ?? '')
+  if (!command) return []
+  if (/(?:^|[;&|]\s*)rm\s+(?:[^\s;&|]+\s+)*-/i.test(command) || command.startsWith('rm ')) {
+    const resource = rmResource(command)
+    return [shellEffect('rm-destructive', resource, 'Delete files or directories (rm)', `This command deletes files or directories: ${command}`)]
+  }
+  if (/(?:^|[;&|]\s*)git\s+reset\s+[^\n]*--hard/i.test(command)) {
+    return [shellEffect('git-destructive', command, 'Discard Git working-tree changes', `This command discards uncommitted changes: ${command}`)]
+  }
+  if (/(?:^|[;&|]\s*)find\s+[^\n]*(?:\s|^)-delete(?:\s|$)/i.test(command)) {
+    return [shellEffect('find-delete', command, 'Delete files with find -delete', `find -delete removes matching files: ${command}`)]
+  }
+  if (/(?:^|[;&|]\s*)curl\s+/i.test(command)
+    && /(?:\s|^)-X\s+POST(?:\s|$)|(?:\s|^)--request\s+POST(?:\s|$)|(?:\s|^)(?:-d|--data(?:-raw|-binary)?|-F|--form)(?:\s|=|$)/i.test(command)) {
+    return [shellEffect('curl-post', command, 'Send a network POST request', `This command sends a network write request: ${command}`)]
+  }
+  if (/(?:^|[;&|]\s*)(?:wget|nc|socat|telnet|ssh|sftp|ftp)(?:\s|$)/i.test(command)
+    || (/(?:^|[;&|]\s*)(?:scp|rsync)\s+/i.test(command) && command.includes(':'))
+    || (/(?:python3?|node|ruby|perl)(?:\s|$)/i.test(command)
+      && /urllib|requests\.|http\.client|http\/server|require\(['"](?:http|https|net|dns)['"]\)|Net::HTTP|TCPSocket|socket\.|fetch\(|https?:\/\//i.test(command))
+    || /(?:dig|nslookup)[^\n]*(?:\$\{|\$\()/i.test(command)) {
+    return [shellEffect('network-egress', command, 'Sends data off this machine', `This command sends data outside this machine: ${command}`, 'external-send')]
+  }
+  return []
+}
+
 export function phoneEffectsForApproval(name: string, args: Record<string, unknown>): ApprovalEffect[] {
   const bare = name.startsWith(PHONE_TOOL_PREFIX) ? name.slice(PHONE_TOOL_PREFIX.length) : name
+  if (bare === 'bash') return bashEffectsForApproval(args)
   if (bare === 'BotVolatileContext' || UI_TOOLS.has(bare) || AUTO_TOOLS.has(bare)) return []
   if (bare === 'UpdateMemory') {
     const action = String(args.action ?? 'write')
@@ -136,10 +178,12 @@ export default function dshbotApprovalGate(ctx: Context, config: ApprovalGateCon
       target: first?.target ?? exec.name,
       askAction: exec.name.startsWith('mcp__') ? 'tool-call' : 'run-command',
       callId: exec.callId ?? '',
+      argsDigest: argsDigest(args),
+      alwaysScope: effects.length > 0 && effects.every(effect => !effect.known) ? 'session' : 'until',
       pattern: first?.operation ?? 'structural',
       effects,
       grantSets: effects.map(effect => [effect.resource]),
-      deferConsumption: true,
+      deferConsumption: effects.length > 0 && effects.every(effect => effect.execution !== null),
     }
     const decision = await send(payload, exec.signal)
     if (decision.ok && decision.allowed) return next()

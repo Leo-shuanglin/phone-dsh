@@ -55,6 +55,7 @@ test('identity uses the pinned argument digest and cancels exactly one registrat
     assert.equal(registrations[0]!.sessionId, 'gb-main')
     assert.equal(registrations[0]!.callId, 'call-1')
     assert.equal(registrations[0]!.argsDigest, argsDigest({ value: 1 }))
+    assert.deepEqual(registrations[0]!.arguments, { value: 1 })
     assert.deepEqual(cancellations, ['registration-1'])
   } finally {
     await ctx.fiber.dispose()
@@ -107,9 +108,41 @@ test('approval gate forwards the full effect before allowing the real tool body'
     assert.equal(result.isError, false)
     assert.equal(payloads.length, 1)
     assert.equal(payloads[0]!.callId, 'forget-user')
+    assert.equal(payloads[0]!.argsDigest, argsDigest({ action: 'forget', scope: 'user', fact: 'private' }))
+    assert.equal(payloads[0]!.alwaysScope, 'until')
     assert.equal(payloads[0]!.deferConsumption, true)
     const effects = payloads[0]!.effects as { resource: string }[]
     assert.equal(effects[0]!.resource, 'memory:user&fact=private')
+  } finally {
+    await ctx.fiber.dispose()
+  }
+})
+
+test('structural bash approval carries recomputable effects and consumes at its own execution point', async () => {
+  const ctx = await mount()
+  const payloads: Record<string, unknown>[] = []
+  const args = { command: 'rm -rf /tmp/wp7-artifact' }
+  try {
+    registerProbe(ctx, 'bash')
+    await ctx.plugin(dshbotApprovalGate, {
+      request: async payload => {
+        payloads.push(payload)
+        return { ok: true, allowed: true }
+      },
+    })
+    const result = await ctx.tools.execute({
+      callId: ToolCallId('destructive'), name: 'bash', arguments: args,
+      signal: new AbortController().signal, agent: agent(),
+    })
+    assert.equal(result.isError, false)
+    assert.equal(payloads.length, 1)
+    assert.equal(payloads[0]!.command, args.command)
+    assert.equal(payloads[0]!.argsDigest, argsDigest(args))
+    assert.equal(payloads[0]!.alwaysScope, 'until')
+    assert.equal(payloads[0]!.deferConsumption, false)
+    const effects = payloads[0]!.effects as { operation: string; resource: string }[]
+    assert.deepEqual(effects.map(effect => effect.operation), ['rm-destructive'])
+    assert.equal(effects[0]!.resource, '/tmp/wp7-artifact')
   } finally {
     await ctx.fiber.dispose()
   }

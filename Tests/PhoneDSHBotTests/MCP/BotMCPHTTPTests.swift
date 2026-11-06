@@ -11,7 +11,7 @@ final class BotMCPHTTPTests: XCTestCase {
         let memory = BotMemory(
             store: SQLiteBotMemoryFactStore(eventLog: store, now: { 1_000 }),
             dataRoot: directory.path, botID: "main", now: { 1_000 })
-        let machine = RoutineMachine(store: JSONRoutineStore(fileURL: directory.appendingPathComponent("routines.json")))
+        let machine = RoutineMachine(store: SQLiteRoutineStore(domainStore: store))
         _ = try await machine.create(
             botId: "main", title: "Morning", prompt: "report", schedule: .interval(everyMinutes: 60), now: 1_000)
         let provider = BotDomainVolatileContextProvider(memory: memory, routines: machine, now: { 1_000 })

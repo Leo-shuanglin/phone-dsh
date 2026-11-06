@@ -118,6 +118,12 @@ async function postJson(url: string, token: string, payload: Record<string, unkn
   }
 }
 
+export interface BotIdentityCall {
+  readonly name: string
+  readonly arguments: Record<string, unknown>
+  readonly argsDigest: string
+}
+
 export default function dshbotIdentityBridge(ctx: Context, config: IdentityBridgeConfig = {}): void {
   const runtimeId = config.runtimeId ?? 'phone-worker'
   const bridgeUrl = config.bridgeUrl ?? identityRegisterUrl()
@@ -130,6 +136,10 @@ export default function dshbotIdentityBridge(ctx: Context, config: IdentityBridg
   })
   const mutex = createKeyedMutex()
   const dispatchChain = new AsyncLocalStorage<boolean>()
+  const calls = new Map<string, BotIdentityCall>()
+  ctx.provide('dshbotIdentityCalls', {
+    get(callId: string): BotIdentityCall | undefined { return calls.get(callId) },
+  })
 
   ctx.on('tools/execute', async (exec: ToolExecution, next: () => Promise<any>) => {
     if (dispatchChain.getStore()) throw new Error('[identity-bridge] re-entrant phone tool call is not allowed')
@@ -137,17 +147,21 @@ export default function dshbotIdentityBridge(ctx: Context, config: IdentityBridg
     const digest = argsDigest(args)
     const release = await mutex.acquire(`${runtimeId}\0${digest}`, exec.signal)
     let registrationId: string | undefined
+    let registeredCallId: string | undefined
     try {
       const sessionId = String(exec.agent?.id ?? exec.agent?.session?.id ?? '')
       const callId = String(exec.callId ?? '')
       if (!sessionId) throw new Error('[identity-bridge] tool execution has no session identity')
       if (!callId) throw new Error('[identity-bridge] tool execution has no callId')
       const registration = await send({
-        runtimeId, sessionId, callId, name: exec.name, argsDigest: digest,
+        runtimeId, sessionId, callId, name: exec.name, arguments: args, argsDigest: digest,
       }, { timeoutMs, signal: exec.signal })
       registrationId = registration.id
+      registeredCallId = callId
+      calls.set(callId, { name: exec.name, arguments: args, argsDigest: digest })
       return await dispatchChain.run(true, () => next())
     } finally {
+      if (registeredCallId !== undefined) calls.delete(registeredCallId)
       if (registrationId !== undefined) {
         try { await cancel(registrationId, { timeoutMs, signal: exec.signal }) } catch {}
       }

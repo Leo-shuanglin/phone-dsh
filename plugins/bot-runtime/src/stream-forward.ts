@@ -85,8 +85,6 @@ export default function dshbotStreamForward(ctx: Context, config: StreamForwardC
           eventType: frame.outcome?.eventType ?? null,
           seq: Number.isFinite(Number(frame.outcome?.seq)) ? Number(frame.outcome?.seq) : null,
         })
-        suppressing.delete(sessionId)
-        hidden.delete(sessionId)
         return
       }
       if (frame.type !== 'chunk' || frame.chunk?.type !== 'text-delta' || !frame.chunk.text) return
@@ -100,6 +98,13 @@ export default function dshbotStreamForward(ctx: Context, config: StreamForwardC
     } catch {}
   }
   ctx.on('agent/assistant-stream', listener, { global: true })
+  ctx.on('session/event', (session, event) => {
+    if (event.type !== 'turn/end') return
+    const sessionId = String(session.id ?? '')
+    if (!sessionId) return
+    suppressing.delete(sessionId)
+    hidden.delete(sessionId)
+  }, { global: true })
 }
 
 dshbotStreamForward.inject = ['dshbotStreamHub']

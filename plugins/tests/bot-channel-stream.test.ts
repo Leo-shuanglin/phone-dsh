@@ -133,3 +133,69 @@ test('question cards suppress trailing deltas and hidden prompts never steer int
     await ctx.fiber.dispose()
   }
 })
+
+test('question suppression clears at turn end rather than attempt end', async () => {
+  const ctx = new Context()
+  const hub = new BotStreamHub()
+  try {
+    await ctx.plugin(SystemPrompt, {})
+    await ctx.plugin(ToolRuntime, {})
+    registerBotStreamHub(ctx, hub)
+    await ctx.plugin(dshbotStreamForward, { hub })
+    const agent = { id: 'gb-main', session: { id: 'gb-main' } } as unknown as Agent
+    ctx.tools.register(defineTool({
+      name: 'mcp__phone__ask_user', description: 'card', parameters: {},
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      execute: async () => 'ok',
+    }))
+    await ctx.tools.execute({
+      callId: ToolCallId('question-turn'), name: 'mcp__phone__ask_user', arguments: {},
+      signal: new AbortController().signal, agent,
+    })
+    const frames = await driveAttemptsAcrossTurnEnd(ctx, agent, hub)
+    assert.deepEqual(frames, ['allowed after turn end'])
+  } finally {
+    hub.close()
+    await ctx.fiber.dispose()
+  }
+})
+
+test('hidden prompt suppression clears at turn end rather than attempt end', async () => {
+  const ctx = new Context()
+  const hub = new BotStreamHub()
+  try {
+    await ctx.plugin(SystemPrompt, {})
+    await ctx.plugin(ToolRuntime, {})
+    registerBotStreamHub(ctx, hub)
+    await ctx.plugin(dshbotStreamForward, { hub })
+    const agent = { id: 'gb-hidden', session: { id: 'gb-hidden' } } as unknown as Agent
+    ctx.emit('agent/inbox/inserted', { agent, message: userMessage('[SAND_HIDDEN_PROMPT] hidden') })
+    const frames = await driveAttemptsAcrossTurnEnd(ctx, agent, hub)
+    assert.deepEqual(frames, ['allowed after turn end'])
+  } finally {
+    hub.close()
+    await ctx.fiber.dispose()
+  }
+})
+
+async function driveAttemptsAcrossTurnEnd(ctx: Context, agent: Agent, hub: BotStreamHub): Promise<string[]> {
+  const frames: BotStreamFrame[] = []
+  const stream = hub.subscribe(String(agent.id))
+  const collecting = (async () => {
+    for await (const frame of stream) {
+      frames.push(frame)
+      if (frames.filter(entry => entry.type === 'end').length === 3) break
+    }
+  })()
+  const attempt = (id: string, text: string) => {
+    ctx.emit('agent/assistant-stream', { agent, frame: { type: 'start', revision: 1, turn: 1, step: 1, attemptId: LlmAttemptId(id) } })
+    ctx.emit('agent/assistant-stream', { agent, frame: { type: 'chunk', revision: 1, time: 1, attemptId: LlmAttemptId(id), index: 0, chunk: { type: 'text-delta', index: 0, text } } })
+    ctx.emit('agent/assistant-stream', { agent, frame: { type: 'end', revision: 1, index: 1, attemptId: LlmAttemptId(id), outcome: { kind: 'committed', eventType: 'assistant/message', seq: SessionSeq(1) } } })
+  }
+  attempt('attempt-1', 'blocked before first attempt end')
+  attempt('attempt-2', 'blocked before turn end')
+  ctx.emit('session/event', { id: agent.id } as never, { type: 'turn/end', data: { turn: 1 } } as never)
+  attempt('attempt-3', 'allowed after turn end')
+  await collecting
+  return frames.filter(frame => frame.type === 'text').map(frame => frame.text ?? '')
+}

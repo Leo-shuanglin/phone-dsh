@@ -38,8 +38,8 @@ final class BotConversationE2ETests: XCTestCase {
                 [.turn(2, time: 2_000), .assistant("held reply", time: 2_010), .end(turn: 2, time: 2_020)],
             ],
         ])
-        let inbox = WakeInbox(store: JSONWakeInboxStore(fileURL: fixture.directory.appendingPathComponent("held.json")))
-        let remote = BotDSHRemoteRuntime(
+        let inbox = WakeInbox(store: SQLiteWakeInboxStore(domainStore: fixture.store, botId: "main"))
+        let remote = try await BotDSHRemoteRuntime(
             transport: transport, runtime: fixture.runtime, wakeInbox: inbox, now: { clock.now() })
 
         let reply = try await remote.sendUserMessage("hello")
@@ -62,7 +62,9 @@ final class BotConversationE2ETests: XCTestCase {
             try await Task.sleep(nanoseconds: 1_000_000)
         }
         let id = try XCTUnwrap(approvalId)
-        _ = await fixture.runtime.approvals.resolve(approvalId: id, decision: .allowOnce)
+        let pendingDigest = await fixture.runtime.approvals.pendingDigest(approvalId: id)
+        let digest = try XCTUnwrap(pendingDigest)
+        _ = await fixture.runtime.approvals.resolve(approvalId: id, decision: .allowOnce, digest: digest)
         let approval = try await approvalTask.value
         XCTAssertEqual(approval.structuredContent?["allowed"], .bool(true))
 
@@ -71,23 +73,32 @@ final class BotConversationE2ETests: XCTestCase {
             "prompt": .string("Report the morning result"), "schedule": .string("@every 1m"),
         ]))
         let routineId = try XCTUnwrap(created.structuredContent?["id"]?.stringValue)
-        transport.queue(sessionId: "gb-main--routine-\(routineId)", events: [
-            .turn(), .assistant("Morning result"), .end(),
-        ])
+        transport.pause("gb-created-1")
         let sink = BotE2ESink()
-        let machine = RoutineMachine(store: JSONRoutineStore(
-            fileURL: fixture.directory.appendingPathComponent("routines.json")))
+        let machine = await fixture.runtime.routineMachine
         let scheduler = RoutineScheduler(
             botId: "main", machine: machine, inbox: inbox, sink: sink,
             runner: remote.runRoutine, cancelRunner: remote.cancelRoutine,
+            available: { _ in true },
             now: { clock.now() },
             sleep: { milliseconds in
                 try? await Task.sleep(nanoseconds: UInt64(milliseconds) * 1_000_000)
             })
+        transport.queue(sessionId: "gb-created-1", events: [
+            .turn(), .assistant("Morning result"), .end(),
+        ])
         clock.advance(60_000)
-        try await scheduler.tick()
+        let ticking = Task { try await scheduler.tick() }
+        for _ in 0..<200 {
+            if transport.createdIDs.contains("gb-created-1") { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let routineSession = try XCTUnwrap(transport.createdIDs.first { $0 == "gb-created-1" })
+        transport.resume(routineSession)
+        try await ticking.value
         let deliveries = await sink.deliveries
-        XCTAssertEqual(deliveries.count, 1)
+        let routine = try await machine.get(botId: "main", routineId: routineId)
+        XCTAssertEqual(deliveries.count, 1, String(describing: routine))
         let heldItems = try await inbox.items()
         XCTAssertEqual(heldItems.count, 1)
         XCTAssertEqual(heldItems.map(\.kind), ["routine-result"])
@@ -103,5 +114,7 @@ final class BotConversationE2ETests: XCTestCase {
         for type in ["card.presented", "approval.requested", "approval.decided", "routine.defined", "routine.run_finished"] {
             XCTAssertTrue(events.contains { $0.type == type }, "missing \(type)")
         }
+        XCTAssertTrue(events.contains { $0.principal.kind == "routine" })
+        XCTAssertNotNil(routineId)
     }
 }

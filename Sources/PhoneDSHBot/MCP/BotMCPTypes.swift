@@ -118,8 +118,8 @@ public actor EmptyBotVolatileContextProvider: BotVolatileContextProviding {
 
 public protocol BotTaskExecuting: Actor {
     func start(request: BotTaskRequest) async throws -> BotTaskRecord
-    func await(taskId: String, timeoutMs: Int) async throws -> BotTaskRecord
-    func stop(taskId: String) async throws -> BotTaskRecord
+    func await(taskId: String, timeoutMs: Int, parent: BotResolvedToolCall) async throws -> BotTaskRecord
+    func stop(taskId: String, parent: BotResolvedToolCall) async throws -> BotTaskRecord
 }
 
 public struct BotTaskRequest: Sendable, Equatable {
@@ -128,16 +128,14 @@ public struct BotTaskRequest: Sendable, Equatable {
     public let prompt: String
     public let asynchronous: Bool
     public let timeoutMs: Int
-    public let resumeTaskId: String?
 
     public init(parent: BotResolvedToolCall, title: String, prompt: String,
-                asynchronous: Bool, timeoutMs: Int, resumeTaskId: String? = nil) {
+                asynchronous: Bool, timeoutMs: Int) {
         self.parent = parent
         self.title = title
         self.prompt = prompt
         self.asynchronous = asynchronous
         self.timeoutMs = timeoutMs
-        self.resumeTaskId = resumeTaskId
     }
 }
 
@@ -180,10 +178,10 @@ public actor UnimplementedBotTaskExecutor: BotTaskExecuting {
     public func start(request: BotTaskRequest) async throws -> BotTaskRecord {
         throw BotMCPError.unavailable("Task execution is not configured")
     }
-    public func await(taskId: String, timeoutMs: Int) async throws -> BotTaskRecord {
+    public func await(taskId: String, timeoutMs: Int, parent: BotResolvedToolCall) async throws -> BotTaskRecord {
         throw BotMCPError.unavailable("Task execution is not configured")
     }
-    public func stop(taskId: String) async throws -> BotTaskRecord {
+    public func stop(taskId: String, parent: BotResolvedToolCall) async throws -> BotTaskRecord {
         throw BotMCPError.unavailable("Task execution is not configured")
     }
 }

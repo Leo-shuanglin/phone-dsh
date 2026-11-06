@@ -12,6 +12,7 @@ test('sandbox escalation reuses the structural approval card exactly once', asyn
     callId: 'sandbox-1',
     reason: 'escalate sandbox to danger-full-access: generated artifact required',
     toolName: 'bash',
+    arguments: { command: 'printf safe' },
   }, {
     request: async payload => {
       payloads.push(payload)
@@ -23,6 +24,9 @@ test('sandbox escalation reuses the structural approval card exactly once', asyn
   assert.equal(payloads[0]!.onceOnly, true)
   assert.equal(payloads[0]!.callId, 'sandbox-1')
   assert.equal(payloads[0]!.askAction, 'sandbox-escalation')
+  assert.equal(payloads[0]!.alwaysScope, 'none')
+  assert.equal(payloads[0]!.command, 'printf safe')
+  assert.equal(typeof payloads[0]!.argsDigest, 'string')
   assert.equal((payloads[0]!.effects as { resource: string }[])[0]!.resource,
     'escalate sandbox to danger-full-access: generated artifact required')
   assert.equal(outcomeFromDecision({ ok: true, allowed: false }), 'rejected')

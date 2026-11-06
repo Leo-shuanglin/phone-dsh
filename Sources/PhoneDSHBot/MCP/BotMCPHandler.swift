@@ -82,22 +82,29 @@ public actor BotMCPHandler {
     public func approval(_ request: BotJSONValue) async -> BotJSONValue {
         guard case .object(let object) = request,
               case .string(let callId)? = object["callId"],
-              case .string(let name)? = object["tool"] else {
+              case .string(let name)? = object["tool"],
+              case .string(let argsDigest)? = object["argsDigest"],
+              case .string(let alwaysScope)? = object["alwaysScope"] else {
             return BotApprovalOutcome(ok: false, allowed: false, message: "invalid approval request").jsonValue
         }
         let action = object["action"]?.stringValue ?? name
         let detail = object["detail"]?.stringValue ?? ""
+        let command = object["command"]?.stringValue ?? ""
         var effects: [BotToolEffect]?
         if case .array(let rawEffects)? = object["effects"] {
             effects = rawEffects.compactMap(Self.effect)
         }
         return await runtime.approve(
             runtimeId: runtimeId, callId: callId, name: name,
-            action: action, detail: detail, suppliedEffects: effects).jsonValue
+            action: action, detail: detail, command: command,
+            argsDigest: argsDigest, alwaysScope: alwaysScope,
+            askAction: object["askAction"]?.stringValue ?? "tool-call",
+            suppliedEffects: effects).jsonValue
     }
 
-    public func resolveApproval(approvalId: String, decision: BotApprovalDecision) async -> Bool {
-        await runtime.approvals.resolve(approvalId: approvalId, decision: decision)
+    public func resolveApproval(approvalId: String, decision: BotApprovalDecision,
+                                digest: String) async -> BotApprovalResolution {
+        await runtime.approvals.resolve(approvalId: approvalId, decision: decision, digest: digest)
     }
 
     private func result(_ id: BotJSONValue, _ value: BotJSONValue) -> BotJSONValue {

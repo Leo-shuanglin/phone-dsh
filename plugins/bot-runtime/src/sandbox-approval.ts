@@ -3,6 +3,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { approvalUrl, postApproval } from './approval-gate.ts'
 import type { ApprovalOutcome } from './approval-gate.ts'
+import { argsDigest } from './identity-bridge.ts'
+import type { BotIdentityCall } from './identity-bridge.ts'
 
 export type SandboxApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
 
@@ -13,11 +15,13 @@ export interface SandboxApprovalRequest {
   readonly reason?: string
   readonly displayReason?: { zh?: string; en?: string }
   readonly toolName?: string
+  readonly arguments?: Record<string, unknown>
 }
 
 export interface SandboxApprovalConfig {
   readonly approvalUrl?: string
   readonly bridgeToken?: string
+  readonly lookup?: (callId: string) => BotIdentityCall | undefined
   readonly request?: (payload: Record<string, unknown>, signal?: AbortSignal) => Promise<ApprovalOutcome>
 }
 
@@ -37,9 +41,10 @@ export function describeEscalation(req: SandboxApprovalRequest): { action: strin
   }
 }
 
-export function approvalPayload(req: SandboxApprovalRequest): Record<string, unknown> {
+export function approvalPayload(req: SandboxApprovalRequest, identity?: BotIdentityCall): Record<string, unknown> {
   const described = describeEscalation(req)
-  const tool = String(req.toolName ?? 'bash')
+  const tool = identity?.name ?? String(req.toolName ?? 'bash')
+  const args = identity?.arguments ?? req.arguments ?? {}
   return {
     source: 'structural',
     sessionId: req.agent?.id ? String(req.agent.id) : '',
@@ -47,7 +52,9 @@ export function approvalPayload(req: SandboxApprovalRequest): Record<string, unk
     tool,
     action: described.action,
     detail: described.detail,
-    command: '',
+    command: String(args.command ?? ''),
+    argsDigest: argsDigest(args),
+    alwaysScope: 'none',
     target: described.resource,
     askAction: 'sandbox-escalation',
     callId: req.callId ?? null,
@@ -78,6 +85,10 @@ export function outcomeFromDecision(decision: ApprovalOutcome & { timedOut?: boo
 export async function answerSandboxApproval(req: SandboxApprovalRequest, config: SandboxApprovalConfig = {}): Promise<SandboxApprovalOutcome> {
   if (!req.agent?.id) return 'unavailable'
   if (req.signal?.aborted) return 'cancelled'
+  const identity = config.lookup?.(String(req.callId ?? '')) ?? (req.arguments === undefined ? undefined : {
+    name: String(req.toolName ?? 'bash'), arguments: req.arguments, argsDigest: argsDigest(req.arguments),
+  })
+  if (!identity) return 'unavailable'
   try {
     const send = config.request ?? ((payload: Record<string, unknown>, signal?: AbortSignal) => postApproval(
       config.approvalUrl ?? approvalUrl(),
@@ -85,14 +96,16 @@ export async function answerSandboxApproval(req: SandboxApprovalRequest, config:
       payload,
       signal,
     ))
-    return outcomeFromDecision(await send(approvalPayload(req), req.signal))
+    return outcomeFromDecision(await send(approvalPayload(req, identity), req.signal))
   } catch {
     return 'unavailable'
   }
 }
 
 export default function dshbotSandboxApproval(ctx: Context, config: SandboxApprovalConfig = {}): void {
-  ctx.on('approval/request', (req: SandboxApprovalRequest) => answerSandboxApproval(req, config))
+  const registry = ctx.get('dshbotIdentityCalls') as { get(callId: string): BotIdentityCall | undefined } | undefined
+  const lookup = config.lookup ?? ((callId: string) => registry?.get(callId))
+  ctx.on('approval/request', (req: SandboxApprovalRequest) => answerSandboxApproval(req, { ...config, lookup }))
 }
 
 dshbotSandboxApproval.inject = ['approval']

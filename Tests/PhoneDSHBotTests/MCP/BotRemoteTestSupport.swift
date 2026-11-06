@@ -48,7 +48,7 @@ struct BotScriptedEvent {
         Self("tool/result", .object([
             "message": .object([
                 "toolCallId": .string(id), "isError": .bool(failed),
-                "content": .array([.object(["type": .string("text"), "text": .string("ok")])]),
+                "content": .array([.object(["type": .string("text"), "text": .string("已显示提问卡")])]),
             ]),
         ]), time: time)
     }
@@ -60,25 +60,81 @@ struct BotScriptedEvent {
     }
 }
 
+private actor BotScriptedGate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        opened = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+    }
+}
+
 final class BotScriptedRemoteTransport: DSHRemoteTransport, @unchecked Sendable {
+    private let lock = NSLock()
     private var scripts: [String: [[BotScriptedEvent]]]
     private let mainId: String
+    private var nextCreateIndex = 0
+    private var gates: [String: BotScriptedGate] = [:]
+    private var failingPages: Set<String> = []
+
     private(set) var prompts: [String: (sessionId: String, mode: String, text: String)] = [:]
+    private(set) var promptHistory: [(sessionId: String, mode: String, text: String)] = []
     private(set) var cancellations: [String] = []
+    private(set) var createdIDs: [String] = []
+    private(set) var openMuxCount = 0
 
     init(mainId: String = "gb-main", scripts: [String: [[BotScriptedEvent]]]) {
         self.mainId = mainId
         self.scripts = scripts
     }
 
+    var createCount: Int { lock.withLock { createdIDs.count } }
+
     func queue(sessionId: String, events: [BotScriptedEvent]) {
-        scripts[sessionId, default: []].append(events)
+        lock.withLock {
+            scripts[sessionId, default: []].append(events)
+        }
+    }
+
+    func pause(_ sessionId: String) {
+        lock.withLock {
+            if gates[sessionId] == nil { gates[sessionId] = BotScriptedGate() }
+        }
+    }
+
+    func resume(_ sessionId: String) {
+        let gate = lock.withLock { gates[sessionId] }
+        if let gate { Task { await gate.open() } }
+    }
+
+    func failPage(_ sessionId: String) {
+        lock.withLock { failingPages.insert(sessionId) }
     }
 
     func call(_ endpoint: String, args: BotJSONValue) async throws -> BotJSONValue {
         switch endpoint {
-        case "session/create": return .object(["sessionId": .string(mainId)])
-        case "session/page": return .object([:])
+        case "session/create":
+            let id = lock.withLock { () -> String in
+                defer { nextCreateIndex += 1 }
+                let id = nextCreateIndex == 0 ? mainId : "gb-created-\(nextCreateIndex)"
+                createdIDs.append(id)
+                return id
+            }
+            return .object(["sessionId": .string(id)])
+        case "session/page":
+            let sessionId = args["request"]?["address"]?["sessionId"]?.stringValue ?? ""
+            let failed = lock.withLock { failingPages.contains(sessionId) }
+            if failed { throw BotMCPError.unavailable("session/page refused \(sessionId)") }
+            return .object(["sessionId": .string(sessionId)])
         case "session/prompt":
             let request = args["request"] ?? .null
             let sessionId = request["sessionId"]?.stringValue ?? ""
@@ -86,21 +142,32 @@ final class BotScriptedRemoteTransport: DSHRemoteTransport, @unchecked Sendable 
             let text = (request["content"]?.arrayValue ?? []).compactMap {
                 $0["text"]?.stringValue
             }.joined()
-            prompts[sessionId] = (sessionId, mode, text)
+            lock.withLock {
+                prompts[sessionId] = (sessionId, mode, text)
+                promptHistory.append((sessionId, mode, text))
+            }
             return .object([:])
         case "session/cancel":
             let sessionId = args["request"]?["sessionId"]?.stringValue ?? ""
-            cancellations.append(sessionId)
+            lock.withLock { cancellations.append(sessionId) }
             return .object([:])
         default: return .object([:])
         }
     }
 
     func openMux() async throws -> any DSHMuxConnection {
-        BotScriptedMux(eventsForSession: { [weak self] sessionId in
-            guard let self, let events = self.scripts[sessionId], !events.isEmpty else { return [] }
-            return self.scripts[sessionId]!.removeFirst()
-        })
+        lock.withLock { openMuxCount += 1 }
+        return BotScriptedMux(
+            eventsForSession: { [weak self] sessionId in
+                guard let self else { return [] }
+                return self.lock.withLock {
+                    guard let events = self.scripts[sessionId], !events.isEmpty else { return [] }
+                    return self.scripts[sessionId]!.removeFirst()
+                }
+            },
+            gateForSession: { [weak self] sessionId in
+                self?.lock.withLock { self?.gates[sessionId] } ?? nil
+            })
     }
 
     func authenticationFailed() async {}
@@ -108,12 +175,17 @@ final class BotScriptedRemoteTransport: DSHRemoteTransport, @unchecked Sendable 
 
 private actor BotScriptedMux: DSHMuxConnection {
     private let eventsForSession: (String) -> [BotScriptedEvent]
+    private let gateForSession: (String) -> BotScriptedGate?
     private var events: [BotScriptedEvent] = []
     private var snapshotReturned = false
     private var index = 0
+    private var gate: BotScriptedGate?
+    private var gateWaited = false
 
-    init(eventsForSession: @escaping (String) -> [BotScriptedEvent]) {
+    init(eventsForSession: @escaping (String) -> [BotScriptedEvent],
+         gateForSession: @escaping (String) -> BotScriptedGate?) {
         self.eventsForSession = eventsForSession
+        self.gateForSession = gateForSession
     }
 
     func send(_ frame: BotJSONValue) async throws {
@@ -121,6 +193,7 @@ private actor BotScriptedMux: DSHMuxConnection {
         let address = frame["payload"]?["args"]?["request"]?["address"]
         let sessionId = address?["sessionId"]?.stringValue ?? ""
         events = eventsForSession(sessionId)
+        gate = gateForSession(sessionId)
     }
 
     func receive() async throws -> BotJSONValue? {
@@ -130,6 +203,10 @@ private actor BotScriptedMux: DSHMuxConnection {
                 "type": .string("item"), "streamId": .string("follow"),
                 "value": .object(["type": .string("snapshot"), "cursor": .number(0), "records": .array([])]),
             ])
+        }
+        if index == 1, !gateWaited, let gate {
+            gateWaited = true
+            await gate.wait()
         }
         guard index < events.count else { return nil }
         let event = events[index]

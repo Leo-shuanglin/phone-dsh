@@ -42,19 +42,26 @@ final class BotCardPayloadTests: XCTestCase {
         ]))
         XCTAssertEqual(first["card"]?["cardKey"], second["card"]?["cardKey"])
         XCTAssertEqual(second["card"]?["percent"], .number(100))
-        XCTAssertThrowsError(try BotCardPayloads.build(tool: "ask_user", arguments: .object([
+        let normalized = try BotCardPayloads.build(tool: "ask_user", arguments: .object([
             "question": .string("Choose"),
             "options": .array([
                 .object(["label": .string("A"), "recommended": .bool(true)]),
                 .object(["label": .string("B"), "style": .string("primary")]),
             ]),
-        ])))
-        XCTAssertThrowsError(try BotCardPayloads.build(tool: "show_next_steps", arguments: .object([
+        ]))
+        let options = try XCTUnwrap(normalized["card"]?["options"]?.arrayValue)
+        XCTAssertEqual(options[0]["recommended"], .bool(true))
+        XCTAssertNil(options[1]["recommended"])
+        XCTAssertEqual(options[1]["style"], .string("default"))
+        let danger = try BotCardPayloads.build(tool: "show_next_steps", arguments: .object([
             "steps": .array([
                 .object(["label": .string("A"), "style": .string("danger"), "recommended": .bool(true)]),
                 .string("B"),
             ]),
-        ])))
+        ]))
+        let steps = try XCTUnwrap(danger["card"]?["steps"]?.arrayValue)
+        XCTAssertNil(steps[0]["recommended"])
+        XCTAssertEqual(steps[0]["style"], .string("danger"))
     }
 
     func testCatalogRegistersExactlyP0AndVolatileContext() {

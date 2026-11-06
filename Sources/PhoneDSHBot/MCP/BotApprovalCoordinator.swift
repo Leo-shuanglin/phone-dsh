@@ -23,31 +23,46 @@ public struct BotApprovalOutcome: Codable, Sendable, Equatable {
     }
 }
 
+public enum BotApprovalResolution: Sendable, Equatable {
+    case resolved
+    case stale(reason: String)
+}
+
 public actor BotApprovalCoordinator {
     private struct Pending {
         let principal: BotGatewayPrincipal
         let effects: [BotToolEffect]
+        let digest: String
+        let command: String
+        let alwaysScope: String
+        let deferConsumption: Bool
         let continuation: CheckedContinuation<BotApprovalOutcome, Never>
+        var timeout: Task<Void, Never>?
     }
 
     private let grants: BotGrantStore
     private let authorizer: BotExecutionAuthorizer
     private let eventWriter: BotMCPEventWriter
     private let now: @Sendable () -> Int64
+    private let approvalTimeoutMs: Int64
     private var pending: [String: Pending] = [:]
 
     public init(grants: BotGrantStore, eventWriter: BotMCPEventWriter,
-                now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000) }) {
+                now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000) },
+                approvalTimeoutMs: Int64 = 300_000) {
         self.grants = grants
         authorizer = BotExecutionAuthorizer(grants: grants)
         self.eventWriter = eventWriter
         self.now = now
+        self.approvalTimeoutMs = max(1, approvalTimeoutMs)
     }
 
-    public func standingDecision(call: BotResolvedToolCall, effects: [BotToolEffect]) async -> BotApprovalOutcome? {
+    public func standingDecision(call: BotResolvedToolCall, effects: [BotToolEffect],
+                                 deferConsumption: Bool) async -> BotApprovalOutcome? {
         let decision = await authorizer.authorizeExecution(
             principal: BotExecutionPrincipal(gateway: call.principal), effects: effects,
-            source: "approval-standing", argsDigest: call.attribution.argsDigest, consumeOnce: false)
+            source: "approval-standing", argsDigest: call.attribution.argsDigest,
+            consumeOnce: !deferConsumption)
         if decision.allowed {
             return BotApprovalOutcome(ok: true, allowed: true, message: decision.reason)
         }
@@ -58,60 +73,103 @@ public actor BotApprovalCoordinator {
     }
 
     public func request(call: BotResolvedToolCall, effects: [BotToolEffect],
-                        action: String, detail: String) async -> BotApprovalOutcome {
-        if let standing = await standingDecision(call: call, effects: effects) { return standing }
+                        action: String, detail: String, command: String,
+                        alwaysScope: String) async -> BotApprovalOutcome {
+        let deferConsumption = effects.allSatisfy { $0.execution != nil }
+        if let standing = await standingDecision(
+            call: call, effects: effects, deferConsumption: deferConsumption) { return standing }
         let approvalId = "approval-\(UUID().uuidString.lowercased())"
         let principal = call.principal
+        let digest = call.attribution.argsDigest
         do {
             try await eventWriter.append(
                 type: "approval.requested", principal: principal,
                 data: .object([
                     "approvalID": .string(approvalId), "status": .string("pending"),
                     "action": .string(action), "detail": .string(detail),
+                    "digest": .string(digest), "command": .string(command),
+                    "alwaysScope": .string(alwaysScope),
+                    "deferConsumption": .bool(deferConsumption),
                     "effects": .array(effects.map(Self.effectJSON)),
                 ]))
         } catch {
             return BotApprovalOutcome(ok: false, allowed: false, message: "approval audit failed")
         }
-        let outcome = await withCheckedContinuation { continuation in
-            pending[approvalId] = Pending(principal: principal, effects: effects, continuation: continuation)
+        return await withCheckedContinuation { continuation in
+            pending[approvalId] = Pending(
+                principal: principal, effects: effects, digest: digest, command: command,
+                alwaysScope: alwaysScope, deferConsumption: deferConsumption,
+                continuation: continuation, timeout: nil)
+            let timeoutMs = approvalTimeoutMs
+            let timeout = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeoutMs) * 1_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.expire(approvalId: approvalId)
+            }
+            pending[approvalId]?.timeout = timeout
         }
-        return outcome
     }
 
     @discardableResult
-    public func resolve(approvalId: String, decision: BotApprovalDecision) async -> Bool {
-        guard let request = pending.removeValue(forKey: approvalId) else { return false }
-        let timestamp = now()
-        var allowed = false
+    public func resolve(approvalId: String, decision: BotApprovalDecision,
+                        digest: String) async -> BotApprovalResolution {
+        guard let request = pending[approvalId] else { return .stale(reason: "unknown_approval") }
+        guard let suppliedDigest = try? BotArgumentsDigest.validated(digest),
+              suppliedDigest == request.digest else { return .stale(reason: "digest_mismatch") }
+        pending.removeValue(forKey: approvalId)
+        request.timeout?.cancel()
+        var allowed = decision != .deny
+        var createdGrantIDs: [String] = []
+        var effectiveScope: BotGrantScope = .once
         do {
-            for effect in request.effects {
-                let scope: BotGrantScope = decision == .always && request.principal.kind == .chat ? .session : .once
-                _ = try await grants.add(BotGrant(
-                    botId: request.principal.botId, tool: effect.tool, operation: effect.operation,
-                    resource: effect.resource, scope: scope,
-                    sessionId: scope == .session ? request.principal.sessionId : nil,
-                    createdAt: timestamp, source: "approval-card",
-                    decision: decision == .deny ? .deny : .allow))
+            if allowed {
+                for effect in request.effects {
+                    switch decision {
+                    case .allowOnce:
+                        effectiveScope = .once
+                    case .always:
+                        switch request.alwaysScope {
+                        case "until": effectiveScope = .until
+                        case "session": effectiveScope = .session
+                        default: effectiveScope = .once
+                        }
+                    case .deny:
+                        effectiveScope = .once
+                    }
+                    let grant = try await grants.add(BotGrant(
+                        botId: request.principal.botId, tool: effect.tool, operation: effect.operation,
+                        resource: effect.resource, scope: effectiveScope,
+                        sessionId: request.principal.sessionId,
+                        createdAt: now(), source: "approval-card", decision: .allow))
+                    createdGrantIDs.append(grant.id)
+                }
+                if effectiveScope == .once, !request.deferConsumption {
+                    guard try await grants.consumeOnceAtomically(ids: createdGrantIDs) else {
+                        throw BotGrantError.invalidGrant
+                    }
+                }
             }
-            allowed = decision != .deny
             try await eventWriter.append(
                 type: "approval.decided", principal: request.principal,
                 data: .object([
                     "approvalID": .string(approvalId), "decision": .string(decision.rawValue),
                     "status": .string(allowed ? "allowed" : "denied"),
+                    "alwaysScope": .string(decision == .always ? request.alwaysScope : effectiveScope.rawValue),
                 ]))
         } catch {
             allowed = false
+            for id in createdGrantIDs { _ = try? await grants.revoke(id: id) }
         }
         request.continuation.resume(returning: BotApprovalOutcome(
-            ok: true, allowed: allowed, approvalId: approvalId,
+            ok: allowed, allowed: allowed, approvalId: approvalId,
             message: allowed ? "allowed" : "approval denied"))
-        return true
+        return .resolved
     }
 
+    @discardableResult
     public func cancel(approvalId: String) -> Bool {
         guard let request = pending.removeValue(forKey: approvalId) else { return false }
+        request.timeout?.cancel()
         request.continuation.resume(returning: BotApprovalOutcome(
             ok: false, allowed: false, approvalId: approvalId, message: "approval cancelled"))
         return true
@@ -121,12 +179,32 @@ public actor BotApprovalCoordinator {
         let requests = pending
         pending.removeAll()
         for (id, request) in requests {
+            request.timeout?.cancel()
             request.continuation.resume(returning: BotApprovalOutcome(
                 ok: false, allowed: false, approvalId: id, message: "approval unavailable"))
         }
     }
 
+    public func pendingDigest(approvalId: String) -> String? {
+        pending[approvalId]?.digest
+    }
+
     public var pendingIDs: [String] { pending.keys.sorted() }
+
+    private func expire(approvalId: String) async {
+        guard let request = pending.removeValue(forKey: approvalId) else { return }
+        request.timeout?.cancel()
+        do {
+            try await eventWriter.append(
+                type: "approval.decided", principal: request.principal,
+                data: .object([
+                    "approvalID": .string(approvalId), "decision": .string("deny"),
+                    "status": .string("denied"), "timedOut": .bool(true),
+                ]))
+        } catch {}
+        request.continuation.resume(returning: BotApprovalOutcome(
+            ok: false, allowed: false, approvalId: approvalId, message: "approval timed out"))
+    }
 
     private static func effectJSON(_ effect: BotToolEffect) -> BotJSONValue {
         .object([
@@ -135,6 +213,7 @@ public actor BotApprovalCoordinator {
             "mutability": .string(effect.mutability.rawValue), "policy": .string(effect.policy.rawValue),
             "label": .string(effect.label), "detail": .string(effect.detail),
             "ui": .bool(effect.ui), "known": .bool(effect.known), "isMcp": .bool(effect.isMcp),
+            "execution": effect.execution.map(BotJSONValue.string) ?? .null,
         ])
     }
 }

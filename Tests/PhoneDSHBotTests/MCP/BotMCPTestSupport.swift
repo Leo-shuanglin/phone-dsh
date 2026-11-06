@@ -66,7 +66,7 @@ actor StubBotTaskExecutor: BotTaskExecuting {
         return record
     }
 
-    func await(taskId: String, timeoutMs: Int) async throws -> BotTaskRecord {
+    func await(taskId: String, timeoutMs: Int, parent: BotResolvedToolCall) async throws -> BotTaskRecord {
         guard var record = records[taskId] else { throw BotMCPError.invalidRequest("unknown task") }
         if record.status == "running" {
             record = BotTaskRecord(
@@ -78,7 +78,7 @@ actor StubBotTaskExecutor: BotTaskExecuting {
         return record
     }
 
-    func stop(taskId: String) async throws -> BotTaskRecord {
+    func stop(taskId: String, parent: BotResolvedToolCall) async throws -> BotTaskRecord {
         guard let record = records[taskId] else { throw BotMCPError.invalidRequest("unknown task") }
         let stopped = BotTaskRecord(
             taskId: record.taskId, sessionId: record.sessionId,

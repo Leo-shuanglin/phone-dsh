@@ -28,15 +28,14 @@ public enum BotCardPayloads {
         let question = try requiredString(args, "question")
         let rawOptions = try requiredArray(args, "options")
         guard (2...4).contains(rawOptions.count) else { throw BotCardPayloadError.invalid("ask_user 需要 2–4 个 options。") }
-        let options = try rawOptions.enumerated().map { index, value -> BotJSONValue in
-            var option = try object(value, path: "options[\(index)]")
-            _ = try requiredString(option, "label")
-            try normalizeRecommendation(&option, path: "options[\(index)]")
-            return .object(option)
+        let options = try rawOptions.enumerated().compactMap { index, value -> BotJSONValue? in
+            let option = try normalizedChoice(value, path: "options[\(index)]")
+            return isSyntheticOther(option) ? nil : .object(option)
         }
-        try validateSingleRecommendation(options, path: "options")
+        guard (2...4).contains(options.count) else { throw BotCardPayloadError.invalid("ask_user 需要 2–4 个有效 options。") }
         var card: [String: BotJSONValue] = [
-            "cardType": .string("question"), "question": .string(question), "options": .array(options),
+            "cardType": .string("question"), "question": .string(question),
+            "options": .array(normalizeRecommendations(options)),
         ]
         if let help = try optionalString(args, "helpText") { card["helpText"] = .string(help) }
         return .object(card)
@@ -45,45 +44,57 @@ public enum BotCardPayloads {
     private static func steps(_ args: [String: BotJSONValue]) throws -> BotJSONValue {
         let rawSteps = try requiredArray(args, "steps")
         guard (2...4).contains(rawSteps.count) else { throw BotCardPayloadError.invalid("show_next_steps 需要 2–4 个 steps。") }
-        let steps = try rawSteps.enumerated().map { index, value -> BotJSONValue in
-            var step: [String: BotJSONValue]
-            if case .string(let label) = value {
-                guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    throw BotCardPayloadError.invalid("steps[\(index)] 不能为空。")
-                }
-                step = ["label": .string(label)]
-            } else {
-                step = try object(value, path: "steps[\(index)]")
-                _ = try requiredString(step, "label")
+        let steps = try rawSteps.enumerated().compactMap { index, value -> BotJSONValue? in
+            if case .string(let rawLabel) = value {
+                let label = rawLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !label.isEmpty else { throw BotCardPayloadError.invalid("steps[\(index)] 不能为空。") }
+                let step: [String: BotJSONValue] = ["label": .string(label)]
+                return isSyntheticOther(step) ? nil : .object(step)
             }
-            try normalizeRecommendation(&step, path: "steps[\(index)]")
-            return .object(step)
+            let step = try normalizedChoice(value, path: "steps[\(index)]")
+            return isSyntheticOther(step) ? nil : .object(step)
         }
-        try validateSingleRecommendation(steps, path: "steps")
-        return .object(["cardType": .string("steps"), "steps": .array(steps)])
+        guard (2...4).contains(steps.count) else { throw BotCardPayloadError.invalid("show_next_steps 需要 2–4 个有效 steps。") }
+        return .object(["cardType": .string("steps"), "steps": .array(normalizeRecommendations(steps))])
     }
 
-    private static func validateSingleRecommendation(_ values: [BotJSONValue], path: String) throws {
-        let count = values.filter { value in
-            guard case .object(let object) = value else { return false }
-            return bool(object["recommended"]) == true || string(object["style"]) == "primary"
-        }.count
-        guard count <= 1 else { throw BotCardPayloadError.invalid("\(path) 最多一个推荐项。") }
+    private static func normalizedChoice(_ value: BotJSONValue, path: String) throws -> [String: BotJSONValue] {
+        let raw = try object(value, path: path)
+        var normalized: [String: BotJSONValue] = ["label": .string(try requiredString(raw, "label"))]
+        if let value = try optionalString(raw, "value") { normalized["value"] = .string(value) }
+        if let description = try optionalString(raw, "description") { normalized["description"] = .string(description) }
+        if let rawStyle = raw["style"] {
+            guard case .string(let style) = rawStyle else { throw BotCardPayloadError.invalid("\(path).style 不合法。") }
+            let lowered = style.lowercased()
+            normalized["style"] = .string(["primary", "default", "danger"].contains(lowered) ? lowered : "default")
+        }
+        if bool(raw["recommended"]) == true { normalized["recommended"] = .bool(true) }
+        return normalized
     }
 
-    private static func normalizeRecommendation(_ object: inout [String: BotJSONValue], path: String) throws {
-        let style = string(object["style"]) ?? "default"
-        guard ["primary", "default", "danger"].contains(style) else {
-            throw BotCardPayloadError.invalid("\(path).style 不合法。")
+    private static func normalizeRecommendations(_ values: [BotJSONValue]) -> [BotJSONValue] {
+        let first = values.firstIndex { value in
+            guard case .object(let choice) = value else { return false }
+            return string(choice["style"]) != "danger"
+                && (bool(choice["recommended"]) == true || string(choice["style"]) == "primary")
         }
-        let recommended = bool(object["recommended"]) ?? (style == "primary")
-        if recommended {
-            guard style != "danger" else { throw BotCardPayloadError.invalid("\(path) 不能推荐 danger 选项。") }
-            object["recommended"] = .bool(true)
-        } else {
-            object.removeValue(forKey: "recommended")
+        return values.enumerated().map { index, value in
+            guard case .object(var choice) = value else { return value }
+            if index == first {
+                choice["recommended"] = .bool(true)
+            } else {
+                choice.removeValue(forKey: "recommended")
+                if string(choice["style"]) == "primary" { choice["style"] = .string("default") }
+            }
+            return .object(choice)
         }
-        if let raw = object["style"], case .string = raw {} else { object.removeValue(forKey: "style") }
+    }
+
+    private static func isSyntheticOther(_ choice: [String: BotJSONValue]) -> Bool {
+        guard let label = string(choice["label"])?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+        return ["其他", "其它", "other"].contains(label)
     }
 
     private static func attachment(_ args: [String: BotJSONValue]) throws -> BotJSONValue {

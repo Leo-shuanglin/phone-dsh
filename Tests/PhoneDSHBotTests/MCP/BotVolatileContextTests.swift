@@ -84,7 +84,7 @@ final class BotVolatileContextTests: XCTestCase {
             dataRoot: directory.path, botID: "main", now: { 1_000 })
         _ = try await memory.write(BotMemoryWriteRequest(
             text: "我喜欢简短回答", source: BotMemorySource(kind: .userTurn, sessionID: "gb-main")))
-        let machine = RoutineMachine(store: JSONRoutineStore(fileURL: directory.appendingPathComponent("routines.json")))
+        let machine = RoutineMachine(store: SQLiteRoutineStore(domainStore: store))
         _ = try await machine.create(
             botId: "main", title: "Morning", prompt: "report", schedule: .interval(everyMinutes: 60), now: 1_000)
         let provider = BotDomainVolatileContextProvider(

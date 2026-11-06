@@ -12,7 +12,7 @@ public actor BotMCPRuntime {
     public let eventWriter: BotMCPEventWriter
     public let approvals: BotApprovalCoordinator
     public let volatileContext: BotVolatileContextProducer
-    public let tasks: any BotTaskExecuting
+    public private(set) var tasks: any BotTaskExecuting
     public let memory: BotMemory
     public let routineMachine: RoutineMachine
 
@@ -23,6 +23,7 @@ public actor BotMCPRuntime {
     private var suppressingTextSessions: Set<String> = []
     private var hiddenTextSessions: Set<String> = []
     private var heldMessageSessions: Set<String> = []
+    private var turnIDs: [String: String] = [:]
 
     public init(
         store: SQLiteDomainStore,
@@ -38,7 +39,7 @@ public actor BotMCPRuntime {
         let gateway = gateway ?? BotGateway(now: now)
         self.gateway = gateway
         let audit = BotAuditLog(eventLog: store)
-        let grants = BotGrantStore(now: now, audit: audit)
+        let grants = BotGrantStore(domainStore: store, now: now, audit: audit)
         self.grants = grants
         authorizer = BotExecutionAuthorizer(grants: grants)
         eventWriter = BotMCPEventWriter(eventLog: store, now: now)
@@ -49,8 +50,7 @@ public actor BotMCPRuntime {
             store: SQLiteBotMemoryFactStore(eventLog: store, now: now),
             dataRoot: store.fileURL.deletingLastPathComponent().path,
             botID: "main", now: now)
-        routineMachine = RoutineMachine(store: routineStore ?? JSONRoutineStore(
-            fileURL: store.fileURL.deletingLastPathComponent().appendingPathComponent("routines.json")))
+        routineMachine = RoutineMachine(store: routineStore ?? SQLiteRoutineStore(domainStore: store))
         self.memorySource = memorySource ?? { call in
             switch call.principal.kind {
             case .chat: return .userTurn
@@ -61,6 +61,10 @@ public actor BotMCPRuntime {
         }
     }
 
+    public func attachTaskExecutor(_ executor: any BotTaskExecuting) {
+        tasks = executor
+    }
+
     @discardableResult
     public func issueSession(botId: String, sessionId: String, kind: BotSessionKind) async throws -> BotGatewayPrincipal {
         try await gateway.issueSession(botId: botId, sessionId: sessionId, kind: kind)
@@ -68,13 +72,19 @@ public actor BotMCPRuntime {
 
     public func beginTurn(sessionId: String, hidden: Bool, held: Bool = false) {
         suppressingTextSessions.remove(sessionId)
+        turnIDs.removeValue(forKey: sessionId)
         if hidden { hiddenTextSessions.insert(sessionId) } else { hiddenTextSessions.remove(sessionId) }
         if held { heldMessageSessions.insert(sessionId) } else { heldMessageSessions.remove(sessionId) }
+    }
+
+    public func updateTurn(sessionId: String, turnId: String) {
+        turnIDs[sessionId] = turnId
     }
 
     public func endTurn(sessionId: String) {
         hiddenTextSessions.remove(sessionId)
         heldMessageSessions.remove(sessionId)
+        turnIDs.removeValue(forKey: sessionId)
     }
 
     public func suppressText(sessionId: String) {
@@ -84,7 +94,8 @@ public actor BotMCPRuntime {
     public func registerIdentity(runtimeId: String, sessionId: String, callId: String,
                                  name: String, arguments: BotJSONValue,
                                  argsDigest: String? = nil) async throws -> BotAttribution {
-        guard BotToolCatalog.isRegistered(name) || ["bash", "write", "edit"].contains(name) else {
+        let bareName = bareToolName(name)
+        guard BotToolCatalog.isRegistered(bareName) || ["bash", "write", "edit"].contains(bareName) else {
             throw BotMCPError.unknownTool(name)
         }
         let attribution = try await gateway.registerToolCall(
@@ -113,16 +124,52 @@ public actor BotMCPRuntime {
     }
 
     public func approve(runtimeId: String, callId: String, name: String,
-                        action: String, detail: String,
+                        action: String, detail: String, command: String,
+                        argsDigest: String, alwaysScope: String, askAction: String,
                         suppliedEffects: [BotToolEffect]? = nil) async -> BotApprovalOutcome {
-        guard let call = await identityForApproval(runtimeId: runtimeId, callId: callId) else {
+        guard let call = await identityForApproval(runtimeId: runtimeId, callId: callId),
+              bareToolName(call.attribution.name) == bareToolName(name),
+              let arguments = registrationArguments[key(runtimeId, callId)] else {
             return BotApprovalOutcome(ok: false, allowed: false, message: "unattributed")
         }
-        let effects = suppliedEffects ?? registrationArguments[key(runtimeId, callId)].map {
-            effectsForApproval(name: name, arguments: $0)
-        } ?? []
+        guard let suppliedDigest = try? BotArgumentsDigest.validated(argsDigest),
+              suppliedDigest == call.attribution.argsDigest,
+              let registeredDigest = try? BotArgumentsDigest.string(for: arguments),
+              registeredDigest == suppliedDigest else {
+            return BotApprovalOutcome(ok: false, allowed: false, message: "stale:digest_mismatch")
+        }
+        let bareName = bareToolName(name)
+        if bareName == "bash", arguments["command"]?.stringValue != command {
+            return BotApprovalOutcome(ok: false, allowed: false, message: "stale:command_mismatch")
+        }
+        let effects: [BotToolEffect]
+        if askAction == "sandbox-escalation" {
+            guard bareName == "bash", alwaysScope == "none",
+                  let suppliedEffects, suppliedEffects.count == 1,
+                  suppliedEffects[0].operation == "sandbox-escalation",
+                  !BotResourceNormalizer.normalize(suppliedEffects[0].resource).isEmpty else {
+                return BotApprovalOutcome(ok: false, allowed: false, message: "stale:sandbox_effect")
+            }
+            effects = [BotToolEffect(
+                tool: "bash", operation: "sandbox-escalation",
+                resource: suppliedEffects[0].resource, target: suppliedEffects[0].target,
+                mutability: .write, policy: .ask, label: action, detail: detail)]
+        } else {
+            effects = effectsForApproval(
+                name: bareName,
+                arguments: bareName == "bash" ? .object(["command": .string(command)]) : arguments)
+        }
+        guard ["until", "session", "none"].contains(alwaysScope) else {
+            return BotApprovalOutcome(ok: false, allowed: false, message: "stale:always_scope")
+        }
+        let expectedScope = !effects.isEmpty && effects.allSatisfy { !$0.known } ? "session" : "until"
+        guard alwaysScope == expectedScope || alwaysScope == "none" else {
+            return BotApprovalOutcome(ok: false, allowed: false, message: "stale:always_scope")
+        }
         if effects.isEmpty { return BotApprovalOutcome(ok: true, allowed: true, message: "auto-policy") }
-        return await approvals.request(call: call, effects: effects, action: action, detail: detail)
+        return await approvals.request(
+            call: call, effects: effects, action: action, detail: detail,
+            command: command, alwaysScope: alwaysScope)
     }
 
     public func execute(name: String, arguments: BotJSONValue,
@@ -182,6 +229,10 @@ public actor BotMCPRuntime {
             _ = try await eventWriter.append(type: "card.presented", principal: call.principal, data: .object(fields))
             if name == "ask_user" || name == "show_next_steps" {
                 suppressingTextSessions.insert(call.sessionId)
+                let text = name == "ask_user"
+                    ? "已显示提问卡；回合应在此结束，等待用户选择。"
+                    : "已显示建议下一步卡片；回合应在此结束，等待用户选择。"
+                return .success(built, text: text)
             }
             return .success(built)
         }
@@ -189,8 +240,8 @@ public actor BotMCPRuntime {
         case "UpdateMemory": return try await updateMemory(arguments, call: call)
         case "RecallMemory": return try await recallMemory(arguments)
         case "Task": return try await startTask(arguments, call: call)
-        case "AwaitTask": return try await awaitTask(arguments)
-        case "StopSubagent": return try await stopTask(arguments)
+        case "AwaitTask": return try await awaitTask(arguments, call: call)
+        case "StopSubagent": return try await stopTask(arguments, call: call)
         case "UpdateRoutine": return try await updateRoutine(arguments, call: call)
         case "ListRoutines": return .success(try await BotRoutineTool.list(machine: routineMachine, principal: call.principal))
         case "RequestApproval": return try await requestApproval(arguments, call: call)
@@ -209,13 +260,16 @@ public actor BotMCPRuntime {
                 throw BotMCPError.invalidRequest("UpdateMemory write requires fact")
             }
             let tier = BotMemoryTier(rawValue: string(args["tier"]) ?? "log") ?? .log
-            let result = try await memory.write(BotMemoryWriteRequest(
+            let request = BotMemoryWriteRequest(
                 text: text, tier: tier, scope: scope, key: string(args["key"]),
                 source: BotMemorySource(
                     kind: hiddenTextSessions.contains(call.sessionId)
                         ? .hiddenWake
                         : heldMessageSessions.contains(call.sessionId) ? .agentMessage : memorySource(call),
-                    sessionID: call.sessionId, turnID: call.callId)))
+                    sessionID: call.principal.sessionId, turnID: turnIDs[call.sessionId],
+                    role: call.principal.kind.rawValue))
+            let result = try await memory.write(
+                request, context: BotMemoryWriteContext(source: request.source))
             return .success(.object([
                 "ok": .bool(result.ok), "fact_id": result.factID.map(BotJSONValue.string) ?? .null,
                 "duplicated": .bool(result.duplicated), "tier": .string(result.tier.rawValue),
@@ -253,16 +307,18 @@ public actor BotMCPRuntime {
             throw BotMCPError.invalidRequest("Task can only start from a chat or task session")
         }
         guard case .object(let args) = arguments else { throw BotMCPError.invalidRequest("arguments must be an object") }
+        guard args["task_id"] == nil, args["resume"] == nil else {
+            throw BotMCPError.invalidRequest("Task resume is not implemented")
+        }
         let title = firstNonEmpty(args["task_title"], args["description"]) ?? "Delegated task"
         guard let prompt = firstNonEmpty(args["prompt"], args["task_description"]), !prompt.isEmpty else {
             throw BotMCPError.invalidRequest("Task requires prompt or task_description")
         }
-        let resumeId = string(args["task_id"]) ?? (bool(args["resume"]) == true ? nil : string(args["resume"]))
         let timeout = try optionalInt(args["timeout_ms"]) ?? 180_000
         guard (1_000...300_000).contains(timeout) else { throw BotMCPError.invalidRequest("Task timeout_ms must be 1000…300000") }
         let request = BotTaskRequest(
             parent: call, title: title, prompt: prompt,
-            asynchronous: bool(args["async"]) ?? false, timeoutMs: timeout, resumeTaskId: resumeId)
+            asynchronous: bool(args["async"]) ?? false, timeoutMs: timeout)
         let record = try await tasks.start(request: request)
         _ = try await eventWriter.append(type: "task.created", principal: call.principal, data: record.jsonValue)
         let taskPrincipal = BotGatewayPrincipal(
@@ -270,34 +326,44 @@ public actor BotMCPRuntime {
             capabilities: call.principal.capabilities, expiresAt: call.principal.expiresAt)
         _ = try await eventWriter.append(type: "task.started", principal: taskPrincipal, data: record.jsonValue)
         if ["completed", "failed", "stopped"].contains(record.status) {
-            _ = try await eventWriter.append(type: "task.settled", principal: taskPrincipal, data: record.jsonValue)
+            _ = try await eventWriter.append(
+                type: "task.settled", principal: taskPrincipal, data: record.jsonValue,
+                eventId: "settled:\(record.taskId)")
         }
         return .success(record.jsonValue)
     }
 
-    private func awaitTask(_ arguments: BotJSONValue) async throws -> BotMCPCallResult {
+    private func awaitTask(_ arguments: BotJSONValue, call: BotResolvedToolCall) async throws -> BotMCPCallResult {
         guard case .object(let args) = arguments, let id = string(args["task_id"]), !id.isEmpty else {
             throw BotMCPError.invalidRequest("AwaitTask requires task_id")
         }
         let timeout = try optionalInt(args["timeout_ms"]) ?? 180_000
         guard (1_000...600_000).contains(timeout) else { throw BotMCPError.invalidRequest("AwaitTask timeout_ms must be 1000…600000") }
-        let record = try await tasks.await(taskId: id, timeoutMs: timeout)
+        let record = try await tasks.await(taskId: id, timeoutMs: timeout, parent: call)
         if ["completed", "failed", "stopped"].contains(record.status) {
-            let principal = BotGatewayPrincipal(botId: "main", sessionId: record.sessionId, kind: .task, expiresAt: Int64.max)
-            _ = try await eventWriter.append(type: "task.settled", principal: principal, data: record.jsonValue)
+            let principal = BotGatewayPrincipal(
+                botId: call.principal.botId, sessionId: record.sessionId, kind: .task, expiresAt: Int64.max)
+            _ = try await eventWriter.append(
+                type: "task.settled", principal: principal, data: record.jsonValue,
+                eventId: "settled:\(record.taskId)")
         }
         return .success(record.jsonValue)
     }
 
-    private func stopTask(_ arguments: BotJSONValue) async throws -> BotMCPCallResult {
+    private func stopTask(_ arguments: BotJSONValue, call: BotResolvedToolCall) async throws -> BotMCPCallResult {
         guard case .object(let args) = arguments else { throw BotMCPError.invalidRequest("arguments must be an object") }
         guard let id = firstNonEmpty(args["task_id"], args["id"]), !id.isEmpty else {
             throw BotMCPError.invalidRequest("StopSubagent requires task_id")
         }
-        let record = try await tasks.stop(taskId: id)
-        let principal = BotGatewayPrincipal(botId: "main", sessionId: record.sessionId, kind: .task, expiresAt: Int64.max)
-        _ = try await eventWriter.append(type: "task.stop_requested", principal: principal, data: record.jsonValue)
-        _ = try await eventWriter.append(type: "task.settled", principal: principal, data: record.jsonValue)
+        let record = try await tasks.stop(taskId: id, parent: call)
+        let principal = BotGatewayPrincipal(
+            botId: call.principal.botId, sessionId: record.sessionId, kind: .task, expiresAt: Int64.max)
+        _ = try await eventWriter.append(
+            type: "task.stop_requested", principal: principal, data: record.jsonValue,
+            eventId: "stop:\(record.taskId)")
+        _ = try await eventWriter.append(
+            type: "task.settled", principal: principal, data: record.jsonValue,
+            eventId: "settled:\(record.taskId)")
         return .success(record.jsonValue)
     }
 
@@ -319,12 +385,18 @@ public actor BotMCPRuntime {
             throw BotMCPError.invalidRequest("RequestApproval requires action")
         }
         let detail = string(args["detail"]) ?? ""
+        let command = string(args["command"]) ?? ""
         let resource = BotResourceNormalizer.normalize("action=\(action)")
-        let effect = BotToolEffect(
+        var effects = command.isEmpty ? [] : BotApprovalPatternAnalyzer.effects(
+            tool: "bash", arguments: .object(["command": .string(command)]), workspace: "/dsh/workspace")
+        effects.append(BotToolEffect(
             tool: "RequestApproval", operation: "approval.weak-action", resource: resource,
-            target: string(args["command"]) ?? resource, mutability: .destructive, policy: .ask,
-            label: action, detail: detail, known: false, isMcp: true)
-        let outcome = await approvals.request(call: call, effects: [effect], action: action, detail: detail)
+            target: command.isEmpty ? resource : command, mutability: .destructive, policy: .ask,
+            label: action, detail: detail, known: false, isMcp: true))
+        let alwaysScope = effects.contains(where: \.known) ? "until" : "session"
+        let outcome = await approvals.request(
+            call: call, effects: effects, action: action, detail: detail,
+            command: command, alwaysScope: alwaysScope)
         return .success(.object([
             "allowed": .bool(outcome.allowed), "decision": .string(outcome.allowed ? "allowed" : "denied"),
             "approvalId": outcome.approvalId.map(BotJSONValue.string) ?? .null,
@@ -391,6 +463,11 @@ public actor BotMCPRuntime {
             throw BotMCPError.invalidRequest("timeout/limit must be an integer")
         }
         return Int(number)
+    }
+
+    private func bareToolName(_ name: String) -> String {
+        guard name.hasPrefix("mcp__") else { return name }
+        return name.components(separatedBy: "__").last ?? name
     }
 
     private func key(_ runtimeId: String, _ callId: String) -> String { "\(runtimeId)\u{0}\(callId)" }

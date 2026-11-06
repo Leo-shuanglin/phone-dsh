@@ -70,7 +70,6 @@ public enum BotToolCatalog {
         tool("Task", "Delegate work to another DSH session in the same runtime; async tasks wake the parent with a hidden turn.", schema([
             "description": string(), "prompt": string(), "task_description": string(), "task_title": string(),
             "subagent_type": enumString(["executor"]), "async": bool(),
-            "resume": .object(["oneOf": .array([bool(), string()])]), "task_id": string(),
             "model": string(), "model_override": string(), "allowed_write_directories": array(string()),
             "max_mode_override": bool(), "default_expanded_while_running": bool(), "agent_id": string(),
             "attachments": array(string()), "mode": string(), "responding_to_message_ids": array(string()),
