@@ -509,7 +509,7 @@
       },
       "triggers": [
         {
-          "glob": "spec/v1/gateway-security.md"
+          "glob": "spec/v1/{gateway-security,native-mcp}.md"
         },
         {
           "glob": "spec/v1/gateway-official-web.md"
@@ -518,16 +518,19 @@
           "glob": "spec/v1/schema/gateway-vector.schema.json"
         },
         {
-          "glob": "spec/v1/golden/gateway/**"
+          "glob": "spec/v1/golden/{gateway,native-mcp}/**"
         },
         {
           "glob": "Sources/PhoneDSHGateway/**"
         },
         {
-          "glob": "Sources/PhoneDSHLoopback/{HTTPTransport,HTTPEgressFailure,StreamingForward,Loopback,Support}.swift"
+          "glob": "Sources/PhoneDSHLoopback/{HTTPTransport,HTTPEgressFailure,StreamingForward,Loopback,Support,NativeMCP}.swift"
         },
         {
           "glob": "Sources/PhoneDSHAgentCore/{Credentials,HTTPSupport,ProviderError}.swift"
+        },
+        {
+          "glob": "Sources/PhoneDSHADB/**"
         },
         {
           "glob": "plugins/llm-bridge/src/**"
@@ -559,10 +562,10 @@
         "Tests/PhoneDSHGatewayTests"
       ],
       "source": {
-        "authority": "[v1/gateway-security.md](v1/gateway-security.md)、[official DeepSeek web tools](v1/gateway-official-web.md)、[gateway schema](v1/schema/gateway-vector.schema.json)、[golden/gateway](v1/golden/gateway)",
-        "ends": "Swift [PhoneDSHGateway](../Sources/PhoneDSHGateway/)、Loopback 中的 HTTP 部分（`HTTPTransport`、`StreamingForward` 等；ChannelServer／WebSocket 屬 P01）；TS `plugins/llm-bridge`、`plugins/phone-mcp/src/{manager,schema}.ts`；Kotlin [android/net](../android/net/src/main/) ；HarmonyOS partial `harmony/entry/src/main/ets/host/HostHttpProxy.ets`, `harmony/entry/src/main/ets/host/HostModelAlias.ets`, `harmony/host-rust/src/http.rs`",
-        "evidence": "只有 Kotlin `GatewayVectorConformanceTest` 讀 golden；Swift `Tests/PhoneDSHGatewayTests` 不讀",
-        "triggers": "`spec/v1/gateway-security.md`、`spec/v1/gateway-official-web.md`、`spec/v1/schema/gateway-vector.schema.json`、`spec/v1/golden/gateway/**`、`Sources/PhoneDSHGateway/**`、`Sources/PhoneDSHLoopback/{HTTPTransport,HTTPEgressFailure,StreamingForward,Loopback,Support}.swift`、`Sources/PhoneDSHAgentCore/{Credentials,HTTPSupport,ProviderError}.swift`、`plugins/llm-bridge/src/**`、`plugins/phone-mcp/src/{manager,schema,protocol}.ts`、`plugins/worker-entry/src/model-route.ts`、`android/net/src/main/**` 、`harmony/entry/src/main/ets/host/HostHttpProxy.ets`、`harmony/entry/src/main/ets/host/HostModelAlias.ets`、`harmony/host-rust/src/http.rs`"
+        "authority": "[v1/gateway-security.md](v1/gateway-security.md)、[native MCP](v1/native-mcp.md)、[official DeepSeek web tools](v1/gateway-official-web.md)、[gateway schema](v1/schema/gateway-vector.schema.json)、[golden/gateway](v1/golden/gateway)",
+        "ends": "Swift [PhoneDSHGateway](../Sources/PhoneDSHGateway/)、Loopback HTTP（`HTTPTransport`、`StreamingForward`、`NativeMCP` 等；ChannelServer／WebSocket 屬 P01）；TS `plugins/llm-bridge`、`plugins/phone-mcp/src/{manager,schema}.ts`；Kotlin [android/net](../android/net/src/main/) ；HarmonyOS partial `harmony/entry/src/main/ets/host/HostHttpProxy.ets`, `harmony/entry/src/main/ets/host/HostModelAlias.ets`, `harmony/host-rust/src/http.rs`",
+        "evidence": "Native MCP 有 Swift `PhoneDSHADBTests`；gateway vectors 只有 Kotlin `GatewayVectorConformanceTest` 讀取；Swift `Tests/PhoneDSHGatewayTests` 不讀",
+        "triggers": "`spec/v1/{gateway-security,native-mcp}.md`、`spec/v1/gateway-official-web.md`、`spec/v1/schema/gateway-vector.schema.json`、`spec/v1/golden/{gateway,native-mcp}/**`、`Sources/PhoneDSHGateway/**`、`Sources/PhoneDSHLoopback/{HTTPTransport,HTTPEgressFailure,StreamingForward,Loopback,Support,NativeMCP}.swift`、`Sources/PhoneDSHAgentCore/{Credentials,HTTPSupport,ProviderError}.swift`、`Sources/PhoneDSHADB/**`、`plugins/llm-bridge/src/**`、`plugins/phone-mcp/src/{manager,schema,protocol}.ts`、`plugins/worker-entry/src/model-route.ts`、`android/net/src/main/**` 、`harmony/entry/src/main/ets/host/HostHttpProxy.ets`、`harmony/entry/src/main/ets/host/HostModelAlias.ets`、`harmony/host-rust/src/http.rs`"
       }
     },
     {
@@ -1083,6 +1086,12 @@
           "glob": "Sources/PhoneDSHEngine/{WebEngineConfiguration,WebEngineScripts}.swift"
         },
         {
+          "glob": "examples/probe-app/PhoneDSHProbe/ChatModel.swift"
+        },
+        {
+          "glob": "plugins/profile/phone.worker.cordis.patch.yml"
+        },
+        {
           "glob": "android/engine/src/main/kotlin/com/phonedsh/engine/WorkerEnvironment.kt"
         },
         {
@@ -1103,7 +1112,7 @@
         "authority": "Swift `PhoneDSHWorkerEnvironment`（[PhoneDSH.swift](../Sources/PhoneDSH/PhoneDSH.swift)）、`Sources/PhoneDSHEngine/WebEngineConfiguration.swift`",
         "ends": "Kotlin `android/engine/.../WorkerEnvironment.kt`；Worker **兩份**解析器 `plugins/worker-entry/www/boot.js`、`src/web-boot.ts`，及 `src/entry.ts` ；HarmonyOS partial `harmony/host-rust/src/host.rs`, `harmony/web/product-worker.mjs`",
         "evidence": "URL 參數、init 幀、`PDSH_*` 環境變數（D24）、`__PDSH_*` 全域變數。兩份解析器必須同改",
-        "triggers": "`Sources/PhoneDSH/PhoneDSH.swift`、`Sources/PhoneDSHEngine/{WebEngineConfiguration,WebEngineScripts}.swift`、`android/engine/src/main/kotlin/com/phonedsh/engine/WorkerEnvironment.kt`、`plugins/worker-entry/{www/boot.js,src/web-boot.ts,src/entry.ts}` 、`harmony/host-rust/src/host.rs`、`harmony/web/product-worker.mjs`"
+        "triggers": "`Sources/PhoneDSH/PhoneDSH.swift`、`Sources/PhoneDSHEngine/{WebEngineConfiguration,WebEngineScripts}.swift`、`examples/probe-app/PhoneDSHProbe/ChatModel.swift`（`PDSH_*` env）、`plugins/profile/phone.worker.cordis.patch.yml`、`android/engine/src/main/kotlin/com/phonedsh/engine/WorkerEnvironment.kt`、`plugins/worker-entry/{www/boot.js,src/web-boot.ts,src/entry.ts}` 、`harmony/host-rust/src/host.rs`、`harmony/web/product-worker.mjs`"
       }
     },
     {
@@ -1134,15 +1143,18 @@
         },
         {
           "glob": "Sources/PhoneDSHShell/PDSHShellTypes.swift"
+        },
+        {
+          "glob": "Sources/PhoneDSH{SSH,ADB}/**"
         }
       ],
       "status": [],
       "evidence": [],
       "source": {
-        "authority": "**權威缺失**：代碼引用的 `spec/exec-bridge-v1` 不在倉內（GAP-06）；現暫以 `plugins/exec-bridge/src/client.ts` 為準",
-        "ends": "Swift `LoopbackServer.swift`、`ExecBridgeHosting.swift`、`PhoneDSHGateway/ModelGateway.swift`",
-        "evidence": "`/v1/hello`、`/v1/exec*`、`/v1/fs*`、`/v1/lifecycle`，NDJSON",
-        "triggers": "`plugins/exec-bridge/src/{client,transport}.ts`、`Sources/PhoneDSHLoopback/LoopbackServer.swift`、`Sources/PhoneDSHAgentCore/ExecBridgeHosting.swift`、`Sources/PhoneDSHGateway/ModelGateway.swift`、`Sources/PhoneDSHShell/PDSHShellTypes.swift`"
+        "authority": "**權威缺失**：代碼引用的 `spec/exec-bridge-v1` 不在倉內（GAP-06）；現暫以 `plugins/exec-bridge/src/client.ts` 為準；`v1/exec.md` 登記 channel accelerator 的承載語義",
+        "ends": "Swift `LoopbackServer.swift`、`ExecBridgeHosting.swift`、`PhoneDSHGateway/ModelGateway.swift`、`PhoneDSHSSH`、`PhoneDSHADB`",
+        "evidence": "`/v1/hello`、`/v1/exec*`、`/v1/fs*`、`/v1/lifecycle`，NDJSON；SSH/SCP/ADB 經現有 EXEC bridge，不新增 envelope",
+        "triggers": "`plugins/exec-bridge/src/{client,transport}.ts`、`Sources/PhoneDSHLoopback/LoopbackServer.swift`、`Sources/PhoneDSHAgentCore/ExecBridgeHosting.swift`、`Sources/PhoneDSHGateway/ModelGateway.swift`、`Sources/PhoneDSHShell/PDSHShellTypes.swift`、`Sources/PhoneDSH{SSH,ADB}/**`"
       }
     },
     {
@@ -1182,6 +1194,9 @@
           "glob": "Sources/PhoneDSH/Phone*Settings.swift"
         },
         {
+          "glob": "Sources/PhoneDSH{SSH,ADB}/**"
+        },
+        {
           "glob": "Sources/PhoneDSHLog/MaterializedInvariant.swift"
         },
         {
@@ -1202,7 +1217,7 @@
         "authority": "`/dsh/home/capabilities.json`：`plugins/worker-entry/src/capabilities.ts`；`mcp.json`：`plugins/phone-mcp/src/schema.ts`（`MCP_CONFIG_VERSION`）；`PDSH_MODEL_PROVIDER_JSON`：`plugins/phone-model-config/src/model-config.ts` ；Harmony 私有设置 [HostPersistence.ets](../harmony/entry/src/main/ets/host/HostPersistence.ets)",
         "ends": "Swift `MaterializedInvariant.swift`、`ScenarioBudgets.swift`、`Sources/PhoneDSH/Phone*Settings.swift`；未查得 Kotlin 讀寫這三種設定的對應端 ；HarmonyOS partial `harmony/entry/src/main/ets/host/HostPersistence.ets`, `harmony/entry/src/main/ets/model/ProviderProfiles.ets`",
         "evidence": "讀寫兩端、舊資料、降級一起評估；UserDefaults key 名也是協議",
-        "triggers": "`plugins/worker-entry/src/capabilities.ts`、`plugins/shell-ext/src/contract.ts`、`plugins/phone-mcp/src/schema.ts`、`plugins/phone-model-config/src/model-config.ts`、`Sources/PhoneDSH/Phone*Settings.swift`、`Sources/PhoneDSHLog/MaterializedInvariant.swift`、`Sources/PhoneDSHScenario/ScenarioBudgets.swift` 、`harmony/entry/src/main/ets/host/HostPersistence.ets`、`harmony/entry/src/main/ets/model/ProviderProfiles.ets`"
+        "triggers": "`plugins/worker-entry/src/capabilities.ts`、`plugins/shell-ext/src/contract.ts`、`plugins/phone-mcp/src/schema.ts`、`plugins/phone-model-config/src/model-config.ts`、`Sources/PhoneDSH/Phone*Settings.swift`、`Sources/PhoneDSH{SSH,ADB}/**`、`Sources/PhoneDSHLog/MaterializedInvariant.swift`、`Sources/PhoneDSHScenario/ScenarioBudgets.swift` 、`harmony/entry/src/main/ets/host/HostPersistence.ets`、`harmony/entry/src/main/ets/model/ProviderProfiles.ets`"
       }
     },
     {

@@ -313,3 +313,26 @@ test('G2-FIX-82: the upstream bash executor deadline produces the tool-bash time
     await h.dispose()
   }
 })
+
+
+test('long phone backstop preserves the caller abort signal and releases the lane', { timeout: 15000 }, async () => {
+  const root = virtualRoot()
+  const h = await harness()
+  process.env.PDSH_SHELL = 'just-bash'
+  process.env.PDSH_VFS_ROOT = root
+  process.env.PDSH_SHELL_TIMEOUT_MS = '3600000'
+  const events: WorkerJobEvent[] = []
+  const off = h.runtime.jobs.onEvent(event => { events.push(event) })
+  const controller = new AbortController()
+  try {
+    const handle = h.subprocess.spawn(spec('/dsh/workspace', ['bash', '-c', 'echo started > long-started; sleep 100000'], { signal: controller.signal, graceMs: 100 }))
+    await waitForFile(join(root, 'dsh/workspace/long-started'))
+    assert.equal(events.find(event => event.type === 'job/registered')?.job.timeoutMs, 3600000)
+    controller.abort()
+    const outcome = await within(handle.done, 5000, 'caller cancellation with one-hour Worker backstop')
+    assert.ok(outcome.signal !== null || outcome.exitCode === 130)
+    assert.equal(settledJob(events)?.cause, 'cancel')
+    const next = h.subprocess.spawn(spec('/dsh/workspace', ['bash', '-c', 'echo done']))
+    assert.equal((await within(next.done, 5000, 'follow-up command')).exitCode, 0)
+  } finally { controller.abort(); off(); await h.dispose() }
+})

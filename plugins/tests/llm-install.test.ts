@@ -139,6 +139,41 @@ test('a cookie-authenticated Worker routes official web tools with its launch be
 })
 
 // --- Response-delivery deadline (G2-FIX-1) --------------------------------
+
+test('native MCP stays on the authenticated origin and keeps tool idempotency', async () => {
+  const key = Symbol.for('phone-dsh.dsh.tool-call-context')
+  const scope = globalThis as unknown as Record<symbol, unknown>
+  const previous = scope[key]
+  scope[key] = { getStore: () => ({ key: 'android-tap-once' }) }
+  const seen: Request[] = []
+  const fake = (async (input, init) => {
+    const request = new Request(input, init)
+    seen.push(request)
+    return new Response('{}', { headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    await withWorkerHostRoute(fake, 1000, async () => {
+      const controller = new AbortController()
+      await fetch('http://127.0.0.1:9/mcp/native', {
+        method: 'POST', headers: { authorization: 'Bearer launch-token' },
+        body: '{"method":"tools/call"}', signal: controller.signal,
+      })
+      assert.equal(seen[0]?.url, 'http://127.0.0.1:9/mcp/native')
+      assert.equal(seen[0]?.headers.get('authorization'), 'Bearer launch-token')
+      assert.equal(seen[0]?.headers.get('x-pdsh-idempotency-key'), 'android-tap-once')
+      assert.equal(seen[0]?.headers.has('x-pdsh-target-url'), false)
+      assert.equal(await seen[0]?.text(), '{"method":"tools/call"}')
+      controller.abort()
+      assert.equal(seen[0]?.signal.aborted, true)
+      await fetch('http://127.0.0.1:10/mcp/native', { method: 'POST', body: '{}' })
+      assert.equal(seen[1]?.url, 'http://127.0.0.1:9/v1/http')
+      assert.equal(seen[1]?.headers.get('x-pdsh-target-url'), 'http://127.0.0.1:10/mcp/native')
+    })
+  } finally {
+    if (previous === undefined) delete scope[key]
+    else scope[key] = previous
+  }
+})
 //
 // The host gateway can receive a complete model response while the last bytes
 // never reach the Worker's platform fetch (a frozen WebKit page, a broken

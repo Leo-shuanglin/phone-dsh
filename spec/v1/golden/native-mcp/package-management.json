@@ -1,0 +1,20 @@
+[
+  {
+    "request": {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"android_list_packages","arguments":{"kind":"third_party","filter":"com.example","userId":10}}},
+    "android_command": "pm list packages -f -i --user 10 -3 'com.example'",
+    "stdout": "package:/data/app/example/base.apk=com.example.app installer=com.android.vending\n",
+    "response": {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"exitCode: 0\npackage:/data/app/example/base.apk=com.example.app installer=com.android.vending\n"}],"isError":false}}
+  },
+  {
+    "request": {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"android_install_apk","arguments":{"source":"device","apkPath":"/data/local/tmp/example app.apk","allowTest":true}}},
+    "android_command": "pm install --user current -r -t '/data/local/tmp/example app.apk'",
+    "stdout": "Success\n",
+    "response": {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"exitCode: 0\nSuccess\n"}],"isError":false}}
+  },
+  {
+    "request": {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"android_uninstall_app","arguments":{"packageName":"com.example.app","keepData":true}}},
+    "android_command": "pm uninstall -k --user current 'com.example.app'",
+    "stdout": "Success\n",
+    "response": {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"exitCode: 0\nSuccess\n"}],"isError":false}}
+  }
+]

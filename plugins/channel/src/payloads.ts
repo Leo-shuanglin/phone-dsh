@@ -401,5 +401,5 @@ export const REQUIRED_HOST_CAPABILITIES: readonly string[] = Object.freeze([
 
 /** Commands that may travel as EXEC_REQ (exec.md §3). */
 export const ACCELERATOR_NAMES: readonly string[] = Object.freeze([
-  'rg', 'jaq', 'ts-parse', 'ts-query', 'phone', 'ctx',
+  'rg', 'jaq', 'ts-parse', 'ts-query', 'phone', 'ctx', 'ssh', 'scp',
 ])

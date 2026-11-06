@@ -46,6 +46,17 @@ userinfo-password@channel\.invalid
 user@api\.example\.com
 docs\.example\.org
 
+# Public OpenSSH protocol/release documentation.
+www\.openssh\.org
+
+# Public third-party license attributions, including upstream author contacts.
+examples/probe-app/PhoneDSHProbe/Resources/SSH-LICENSES\.txt:
+# Public Android setup and AOSP protocol references in the ADB integration docs.
+developer\.android\.com
+android\.googlesource\.com
+# Synthetic Android application ID in the package-management docs and vectors.
+^com\.example\.app$
+
 # legacy-project provenance: these design docs cite literal sibling-repository
 # paths as evidence, so the directory name must stay resolvable for reviewers
 docs/design/device-connector-2026-10-31\.md:.*xiaozhi-link

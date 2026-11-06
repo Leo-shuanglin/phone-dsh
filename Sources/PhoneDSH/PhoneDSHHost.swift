@@ -3356,6 +3356,7 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             httpEgress: PhoneDSHGatewayEgress(gateway: gateway),
             execBridge: nil,
             mcpBaseURL: configuration.mcpLoopbackURL,
+            nativeMCP: configuration.nativeMCP,
             execProvider: execProvider,
             workspaceLog: workspaceLog,
             journalLog: journalLog,
@@ -3453,6 +3454,10 @@ public actor PhoneDSHHost: PhoneDSHHosting {
             endpoint: endpoint,
             channelPath: engineConfiguration.channelPath,
             overrides: configuration.engine.environment)
+        if configuration.nativeMCP != nil {
+            environment["PDSH_PHONE_MCP_URL"] = endpoint.baseURL.appendingPathComponent("mcp/native").absoluteString
+            environment["PDSH_PHONE_MCP_TOKEN"] = endpoint.token
+        }
         // ENG-05 reads this to state the real per-file budget in the Worker's
         // capability manifest; an explicit App override still wins.
         if environment[PhoneDSHWorkerEnvironment.singleFileLimit] == nil {

@@ -202,6 +202,8 @@ bash scripts/ci/scenarios.sh --upstream real
 
 ## Android 版本
 
+iPhone 版也可在设置中配置 **Android ADB**，通过局域网直连 Android 设备；SSH/SCP 可连接已配置的远端主机。分别参见 [Android ADB](docs/android-adb.md) 与 [SSH/SCP](docs/native-ssh.md)。
+
 Android 版本位于 [`android/`](android/README.md)，支持 **Android 8.0（API 26）及以上**，使用 Kotlin 与 Jetpack Compose 构建原生界面。它与 iOS 共用 DSH Worker、TypeScript 插件、Rust 内核及宿主/Worker 契约；Worker 在 Android WebView 中运行，宿主负责回环网络、WAL、模型网关、凭据和生命周期，Rust 能力通过 JNI 接入。
 
 原生界面包含会话内容、目标/任务输入、文件浏览、模型服务配置、插件清单和设置等页面，持续跟进 iOS 基线。开发者可构建示例 APK，也可通过 `com.phonedsh:lib:0.1.0` AAR 集成宿主能力。

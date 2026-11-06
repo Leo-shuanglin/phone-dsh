@@ -130,8 +130,8 @@ export interface PhoneShellCaps {
   readonly factsSource: 'exec-bridge-hello' | 'channel-caps'
   /** The console executes Worker commands on this shell core. */
   readonly shell: 'just-bash'
-  /** The Host accelerator set is read-only by construction. */
-  readonly readOnlyAccelerators: true
+  /** Whether advertised host commands have only read effects (SSH/SCP may write remotely). */
+  readonly readOnlyAccelerators: boolean
   /** This surface is not a terminal: no PTY, no terminal emulation, no session protocol. */
   readonly terminal: false
   readonly pty: false

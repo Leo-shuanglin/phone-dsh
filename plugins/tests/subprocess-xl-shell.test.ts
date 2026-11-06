@@ -465,3 +465,25 @@ test('dispatch: command stderr follows the script redirection, not the captured 
     await h.dispose()
   }
 })
+
+test('dispatch: direct scp uses the VFS receiver rather than sending unparsed operands to the host', async () => {
+  const root = virtualRoot()
+  const h = await harness({ caps: ['accelerator:scp'], nextMseq: 49n, env: { PDSH_VFS_ROOT: root } })
+  try {
+    const handle = await toolCallStorage().run(
+      { sessionId: 's', callId: 'c', key: 'xl1-scp-direct', turnId: '1', stepId: '1', spawns: 0 },
+      () => h.subprocess.spawn(spec('/dsh/workspace', ['scp', 'demo:/remote', './result.bin'])),
+    )
+    await eventually(() => h.mock.framesOf(FrameType.EXEC_REQ).length === 1)
+    const request = jsonPayload(h.mock.framesOf(FrameType.EXEC_REQ)[0]!)
+    assert.deepEqual(request.argv, ['scp', '--pdsh-v1', 'download', 'file', 'demo', 'default', '/remote'])
+    assert.equal(request.requires_mseq, 48)
+    complete(h.mock, String(request.exec_id), [
+      { type: 'file', path: '', name: 'remote', size: 3 },
+      { type: 'data', data: 'AP+A' },
+      { type: 'end', path: '' },
+    ].map(record => JSON.stringify(record) + '\n').join(''))
+    assert.deepEqual(await handle.done, { exitCode: 0, signal: null })
+    assert.deepEqual(readFileSync(join(root, 'dsh/workspace/result.bin')), Buffer.from([0, 255, 128]))
+  } finally { await h.dispose() }
+})

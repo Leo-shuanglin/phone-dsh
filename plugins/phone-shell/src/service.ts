@@ -134,12 +134,14 @@ export function capsFromHello(
     factsSource: hostFacts ? 'exec-bridge-hello' : 'channel-caps',
     transportSupported,
     shell: 'just-bash',
-    readOnlyAccelerators: true,
+    readOnlyAccelerators: !accelerators.some(name => name === 'ssh' || name === 'scp'),
     terminal: false,
     pty: false,
     note: !transportSupported
       ? `the ${JSON.stringify(route) ?? String(route)} exec transport does not support the phone console; only the Worker channel/fetch transports can execute a command, so no host accelerator is offered here`
-      : linked
+      : accelerators.some(name => name === 'ssh' || name === 'scp')
+        ? 'Native SSH/SCP can modify remote servers; local materialized mounts remain read-only; Worker VFS owns local writes; no PTY'
+        : linked
         ? hostFacts
           ? 'read-only xz-shell accelerators plus Worker bash over the VFS; not a PTY'
           : 'read-only xz-shell accelerators from the host HELLO caps plus Worker bash over the VFS; host provider/mounts/limits are not published on this channel; not a PTY'

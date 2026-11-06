@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>UIFileSharingEnabled</key>
+    <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -134,7 +138,7 @@
 	     iOS local-network prompt. NWBrowser is used only for the explicit
 	     local-network test and browses the declared _pdsh._tcp service. -->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>用于连接你明确添加的局域网 MCP 服务器，以及仅在你点击测试时发现 _pdsh._tcp 服务。</string>
+	<string>用于连接你明确添加的局域网 MCP 服务器、Android ADB 手机和 SSH 主机，以及仅在你点击测试时发现 _pdsh._tcp 服务。</string>
 	<!-- The probe origin is plain HTTP on 127.0.0.1; NSAllowsLocalNetworking
 	     also permits a user-added plain-HTTP MCP endpoint on the local network.
 	     No arbitrary-loads or remote-HTTP exception is declared. -->

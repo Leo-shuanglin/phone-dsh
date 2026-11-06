@@ -52,6 +52,7 @@ import {
   DEFAULT_BASH_DEVIATIONS,
   PHONE_V1_LIMITS,
   TASK_EXECUTION_GUIDANCE,
+  RESPONSE_GUIDANCE,
   buildCapabilityManifest,
   publishCapabilityManifest,
   workerCommandSurface,
@@ -426,6 +427,7 @@ test('the phone section publishes only the tool the host really implements', () 
 test('the boot manifest carries generic task-execution guidance, not a scenario answer', () => {
   const manifest = buildCapabilityManifest(manifestInput())
   assert.ok(manifest.markdown.includes(TASK_EXECUTION_GUIDANCE), 'the rendered file contains the advice verbatim')
+  assert.ok(manifest.markdown.includes(RESPONSE_GUIDANCE))
   assert.ok(
     manifest.markdown.indexOf(TASK_EXECUTION_GUIDANCE) < manifest.markdown.indexOf('## Shell'),
     'the advice is published before the environment facts',
@@ -445,8 +447,8 @@ test('the boot manifest carries generic task-execution guidance, not a scenario 
   assert.doesNotMatch(TASK_EXECUTION_GUIDANCE, /scenario|G2-|F0[0-9]|budget|credential|NOT_RUN|\.md/iu)
 })
 
-test('the production manifest fits its byte budget with the advice and full Python/Bash facts', () => {
-  const surface = workerCommandSurface({ accelerators: ['rg'], toolbox: fakeToolbox() })
+test('the production manifest fits its byte budget with SSH/SCP/ADB, advice and full Python/Bash facts', () => {
+  const surface = workerCommandSurface({ accelerators: ['rg', 'ssh', 'scp', 'adb'], toolbox: fakeToolbox() })
   const manifest = buildCapabilityManifest(manifestInput({
     commands: surface.commands,
     accelerators: surface.accelerators,

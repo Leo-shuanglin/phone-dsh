@@ -25,6 +25,7 @@ SOURCE_ROOTS = [
     "plugins",
     "shell",
     "Sources/PhoneDSHAgentCore",
+    "Sources/PhoneDSHADB",
     "Sources/PhoneDSHWire",
     "Sources/PhoneDSHLog",
     "Sources/PhoneDSHLoopback",
@@ -53,6 +54,7 @@ SOURCE_ROOTS = [
 TEST_ROOTS = [
     "Tests/PhoneDSHWireTests",
     "Tests/PhoneDSHAgentCoreTests",
+    "Tests/PhoneDSHADBTests",
     "Tests/PhoneDSHLogTests",
     "Tests/PhoneDSHLoopbackTests",
     "Tests/PhoneDSHGatewayTests",

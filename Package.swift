@@ -30,6 +30,8 @@ let modules: [Module] = [
     // Dependency boundary: the agent/provider abstractions the host modules use
     // (exec provider, credentials, harness session, DSH remote client).
     Module(name: "PhoneDSHAgentCore"),
+    // Direct LAN ADB transport and native MCP Android tools (no adb executable).
+    Module(name: "PhoneDSHADB", dependencies: ["PhoneDSHLoopback", "PhoneDSHAgentCore"]),
     // Ordered-channel codec and golden vectors.
     Module(name: "PhoneDSHWire"),
     // WAL, epochs, materialized copy, overlay, recovery.
@@ -85,10 +87,21 @@ var targets: [Target] = modules.flatMap { m -> [Target] in
     return t
 }
 
+// Native SSH connections originate on the device. Remote file bytes return
+// through the Worker VFS; this provider never writes materialized mounts.
+products.append(.library(name: "PhoneDSHSSH", targets: ["PhoneDSHSSH"]))
+targets.append(.target(name: "PhoneDSHSSH", dependencies: [
+    "PhoneDSHAgentCore",
+    .product(name: "Citadel", package: "Citadel"),
+    .product(name: "NIO", package: "swift-nio"),
+    .product(name: "NIOSSH", package: "swift-nio-ssh"),
+]))
+targets.append(.testTarget(name: "PhoneDSHSSHTests", dependencies: ["PhoneDSHSSH"]))
+
 // macOS end-to-end smoke: real WKWebView, real packed Worker image, scripted model (scripts/ci/smoke.sh).
 targets.append(.testTarget(
     name: "PhoneDSHSmokeTests",
-    dependencies: [.target(name: "PhoneDSHHarness"), .target(name: "PhoneDSH"), .target(name: "PhoneDSHWire"), .target(name: "PhoneDSHLog"),
+    dependencies: [.target(name: "PhoneDSHSSH"), .target(name: "PhoneDSHADB"), .target(name: "PhoneDSHShell"), .target(name: "PhoneDSHHarness"), .target(name: "PhoneDSH"), .target(name: "PhoneDSHWire"), .target(name: "PhoneDSHLog"),
                    .target(name: "PhoneDSHEngine"), .target(name: "PhoneDSHController"), .target(name: "PhoneDSHAgentCore")]))
 // Phase 0 probes, JavaScriptCore/WKWebView benchmark, 100-file checkpoint, WAL kill matrix (scripts/ci/probes.sh).
 targets.append(.testTarget(
@@ -113,5 +126,10 @@ let package = Package(
     name: "PhoneDSH",
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: products,
+    dependencies: [
+        .package(url: "https://github.com/orlandos-nl/Citadel.git", exact: "0.11.1"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
+        .package(url: "https://github.com/Joannis/swift-nio-ssh.git", "0.3.4"..<"0.4.0"),
+    ],
     targets: targets
 )

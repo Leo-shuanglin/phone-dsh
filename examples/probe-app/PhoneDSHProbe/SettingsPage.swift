@@ -76,6 +76,11 @@ struct SettingsPage: View {
                 link(NativeText("手机权限", "Phone permissions"), icon: "hand.raised",
                      value: phonePermissionSummary) { PhonePermissionsPage(embedded: true) }
                 link(NativeText("网络访问", "Network access"), icon: "network") { EgressAllowListPage() }
+                link(NativeText("SSH 主机", "SSH hosts"), icon: "terminal",
+                     value: "\(SSHSettingsStore.shared.connections.count)") { SSHSettingsPage() }
+                link(NativeText("Android ADB", "Android ADB"), icon: "iphone.gen3") {
+                    AndroidADBSettingsPage()
+                }
             }
 
             Section(NativeText("对话", "Conversation")) {
@@ -426,7 +431,15 @@ private struct LicensesPage: View {
     var body: some View {
         List {
             LabeledContent("SwiftTerm", value: "MIT")
+            LabeledContent("Citadel / BigInt", value: "MIT")
             LabeledContent("swift-nio", value: "Apache 2.0")
+            NavigationLink("SSH 组件许可全文") {
+                ScrollView {
+                    Text((Bundle.main.url(forResource: "SSH-LICENSES", withExtension: "txt")
+                        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? "许可文件不可用")
+                        .font(.caption.monospaced()).padding().textSelection(.enabled)
+                }.navigationTitle("SSH 组件许可")
+            }
         }
         .homeGroupedList()
         .navigationTitle(NativeText("开源许可", "Open-source licenses"))

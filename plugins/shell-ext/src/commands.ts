@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+import { createAdbCommand } from './adb.ts'
+import { createScpCommand } from './scp.ts'
 /**
  * The Worker command table: just-bash built-ins plus the phone commands.
  *
@@ -159,7 +161,7 @@ export interface WorkerCommandOptions {
  */
 export const WORKER_SHELL_PROGRAMS: readonly string[] = Object.freeze([
   'git', 'rg', 'find', 'grep', 'stat', 'ls', 'rmdir', 'gzip', 'gunzip', 'zcat',
-  'tar', 'realpath', 'readlink', 'awk', 'cmp', 'cp', 'sort', 'du', 'od', 'jq',
+  'tar', 'realpath', 'readlink', 'awk', 'cmp', 'cp', 'sort', 'du', 'od', 'jq', 'scp', 'ssh', 'adb',
 ])
 
 /**
@@ -256,7 +258,9 @@ export function createWorkerCommands(options: WorkerCommandOptions = {}): Custom
     commands.push(trailerCommand(createGitCommand(options.git ?? { fs: new NodeGitFs(process.env.PDSH_VFS_ROOT ?? '') }), 'git'))
   }
   if (options.accelerators !== undefined && options.accelerators.names.length > 0) {
-    commands.push(...createAcceleratorCommands(options.accelerators))
+    commands.push(...createAcceleratorCommands({ names: options.accelerators.names.filter(name => name !== 'scp' && name !== 'adb'), exec: request => options.accelerators!.exec(request) }))
+    if (acceleratorNames.includes('adb')) commands.push(createAdbCommand(options.accelerators))
+    if (acceleratorNames.includes('scp')) commands.push(createScpCommand(options.accelerators))
   }
   if (options.curl !== false) commands.push(createCurlCommand(options.curl ?? {}))
   // The local environment is a host tool, not an accelerator: it is registered
