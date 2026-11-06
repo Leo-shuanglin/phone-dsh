@@ -111,47 +111,50 @@ enum RowTestSupport {
     }
 }
 
-actor RowNonceStoreDouble: BotUserActionNonceStore {
-    private struct Key: Hashable {
-        var botID: String
-        var nonce: String
-    }
-
-    private var values: [Key: String] = [:]
-
-    func eventID(botID: String, nonce: String) async throws -> String? {
-        values[Key(botID: botID, nonce: nonce)]
-    }
-
-    @discardableResult
-    func record(botID: String, nonce: String, eventID: String) async throws -> BotUserActionNonceRecord {
-        let key = Key(botID: botID, nonce: nonce)
-        if let existing = values[key] { return BotUserActionNonceRecord(eventID: existing, inserted: false) }
-        values[key] = eventID
-        return BotUserActionNonceRecord(eventID: eventID, inserted: true)
-    }
-}
-
-actor RowActionHandlerDouble: BotUserActionHandling {
+actor RowActionPlannerDouble: BotUserActionPlanning {
     private(set) var actions: [BotUserAction] = []
     private(set) var trusts: [BotUserActionTrust] = []
-    private var results: [String: BotActionResult] = [:]
+    private var outcomes: [String: BotUserActionPlanOutcome] = [:]
+    private var eventIDs: [String: String] = [:]
     var defaultEventID = "evt-2"
 
-    func setResult(_ result: BotActionResult, for nonce: String) {
-        results[nonce] = result
+    func setOutcome(_ outcome: BotUserActionPlanOutcome, for nonce: String) {
+        outcomes[nonce] = outcome
+    }
+
+    func clearOutcome(for nonce: String) {
+        outcomes.removeValue(forKey: nonce)
+    }
+
+    func setEventID(_ eventID: String, for nonce: String) {
+        eventIDs[nonce] = eventID
     }
 
     func setDefaultEventID(_ eventID: String) {
         defaultEventID = eventID
     }
 
-    func perform(_ action: BotUserAction, trust: BotUserActionTrust) async throws -> BotActionResult {
+    func plan(_ action: BotUserAction, trust: BotUserActionTrust) async throws -> BotUserActionPlanOutcome {
         actions.append(action)
         trusts.append(trust)
+        if let outcome = outcomes[action.nonce] { return outcome }
         if action.kind == .approval, action.digest != "digest-1" {
             return .stale(reason: "digest_mismatch")
         }
-        return results[action.nonce] ?? .accepted(eventID: defaultEventID)
+        let eventID = eventIDs[action.nonce] ?? defaultEventID
+        let type: String
+        switch action.kind {
+        case .chat: type = "conversation.user_message"
+        case .approval: type = "approval.decided"
+        case .stopTask: type = "task.stop_requested"
+        case .cardAnswer, .cardDismiss: type = "ui.system_event"
+        }
+        let event = BotEvent(
+            type: type, eventId: eventID, time: 1_000, origin: .local(source: "user"),
+            traceId: "trace-\(eventID)",
+            principal: BotPrincipal(botId: action.botID, sessionId: "main", kind: "chat"),
+            causationId: nil, correlationId: action.nonce,
+            data: .object(["nonce": .string(action.nonce), "kind": .string(action.kind.rawValue)]))
+        return .commit(BotUserActionPlan(event: event))
     }
 }

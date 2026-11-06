@@ -106,70 +106,75 @@ public enum BotActionResult: Codable, Sendable, Equatable {
 public typealias UserAction = BotUserAction
 public typealias ActionResult = BotActionResult
 
-public struct BotUserActionNonceRecord: Sendable, Equatable {
-    public var eventID: String
-    public var inserted: Bool
+public struct BotUserActionPlan: Sendable, Equatable {
+    public var event: BotEvent
+    public var effects: [BotEffect]
 
-    public init(eventID: String, inserted: Bool) {
-        self.eventID = eventID
-        self.inserted = inserted
+    public init(event: BotEvent, effects: [BotEffect] = []) {
+        self.event = event
+        self.effects = effects
     }
 }
 
-/// Implementations must make the nonce record durable and `record` atomic.
-public protocol BotUserActionNonceStore: Actor {
-    func eventID(botID: String, nonce: String) async throws -> String?
-    @discardableResult
-    func record(botID: String, nonce: String, eventID: String) async throws -> BotUserActionNonceRecord
+public enum BotUserActionPlanOutcome: Sendable, Equatable {
+    case commit(BotUserActionPlan)
+    case stale(reason: String)
+    case rejected(reason: String)
 }
 
 public enum BotUserActionTrust: String, Sendable {
     case ownerDirect = "owner_direct"
 }
 
-/// The host maps actions to durable events. Repeating an action must reuse its event identity.
-public protocol BotUserActionHandling: Actor {
-    func perform(_ action: BotUserAction, trust: BotUserActionTrust) async throws -> BotActionResult
+public protocol BotUserActionPlanning: Actor {
+    func plan(_ action: BotUserAction, trust: BotUserActionTrust) async throws -> BotUserActionPlanOutcome
 }
 
 public actor BotUserActionDispatcher {
-    private let nonceStore: any BotUserActionNonceStore
-    private let handler: any BotUserActionHandling
+    private let store: SQLiteDomainStore
+    private let planner: any BotUserActionPlanning
     private var inFlight: [String: Task<BotActionResult, Error>] = [:]
 
-    public init(nonceStore: any BotUserActionNonceStore, handler: any BotUserActionHandling) {
-        self.nonceStore = nonceStore
-        self.handler = handler
+    public init(store: SQLiteDomainStore, planner: any BotUserActionPlanning) {
+        self.store = store
+        self.planner = planner
     }
 
     public func dispatch(_ action: BotUserAction) async throws -> BotActionResult {
         let key = "\(action.botID)\u{0}\(action.nonce)"
-        if let eventID = try await nonceStore.eventID(botID: action.botID, nonce: action.nonce) {
+        if let task = inFlight[key] { return try await Self.duplicateResult(from: task) }
+        if let eventID = try await store.eventID(botID: action.botID, nonce: action.nonce) {
             return .duplicate(eventID: eventID)
         }
-        if let task = inFlight[key] {
-            let result = try await task.value
-            if case .accepted(let eventID) = result { return .duplicate(eventID: eventID) }
-            return result
-        }
-        if let invalid = validate(action) { return invalid }
+        if let task = inFlight[key] { return try await Self.duplicateResult(from: task) }
+        if let invalid = BotUserActionValidation.validate(action) { return invalid }
 
-        let task = Task { try await handler.perform(action, trust: .ownerDirect) }
+        let task = Task {
+            let outcome = try await planner.plan(action, trust: .ownerDirect)
+            switch outcome {
+            case .commit(let plan):
+                try await store.checkCrashPoint("abort-after-plan")
+                return try await store.performAndRecord(action: action, plan: plan)
+            case .stale(let reason):
+                return .stale(reason: reason)
+            case .rejected(let reason):
+                return .rejected(reason: reason)
+            }
+        }
         inFlight[key] = task
         defer { inFlight.removeValue(forKey: key) }
-        let result: BotActionResult
-        do {
-            result = try await task.value
-        } catch {
-            return .rejected(reason: "action_handler_failed")
-        }
-        guard case .accepted(let eventID) = result else { return result }
-        guard !eventID.isEmpty else { return .rejected(reason: "invalid_event_id") }
-        let record = try await nonceStore.record(botID: action.botID, nonce: action.nonce, eventID: eventID)
-        return record.inserted ? .accepted(eventID: eventID) : .duplicate(eventID: record.eventID)
+        return try await task.value
     }
 
-    private func validate(_ action: BotUserAction) -> BotActionResult? {
+    private static func duplicateResult(from task: Task<BotActionResult, Error>) async throws -> BotActionResult {
+        let result = try await task.value
+        if case .accepted(let eventID) = result { return .duplicate(eventID: eventID) }
+        return result
+    }
+}
+
+enum BotUserActionValidation {
+    static func validate(_ action: BotUserAction) -> BotActionResult? {
         guard !action.nonce.isEmpty, !action.botID.isEmpty else { return .rejected(reason: "invalid_action") }
         switch action.kind {
         case .chat:

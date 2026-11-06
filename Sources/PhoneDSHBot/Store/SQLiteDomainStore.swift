@@ -81,13 +81,13 @@ final class SQLiteDatabase: @unchecked Sendable {
             _ = try query("PRAGMA synchronous=FULL")
             _ = try query("PRAGMA foreign_keys=ON")
             let version = try query("PRAGMA user_version").first?["user_version"]?.integer ?? 0
-            guard version <= 1 else { throw SQLiteDomainStoreError.schemaTooNew(Int(version)) }
+            guard version <= 2 else { throw SQLiteDomainStoreError.schemaTooNew(Int(version)) }
             let check = try query("PRAGMA quick_check")
             guard check.count == 1, check[0]["quick_check"]?.text?.lowercased() == "ok" else {
                 throw SQLiteDomainStoreError.corrupted(check.first?["quick_check"]?.text ?? "quick_check failed")
             }
             try execute(Self.schemaSQL)
-            _ = try query("PRAGMA user_version=1")
+            _ = try query("PRAGMA user_version=2")
             try Self.applyFileAttributes(to: fileURL)
         } catch {
             sqlite3_close_v2(opened)
@@ -275,6 +275,13 @@ final class SQLiteDatabase: @unchecked Sendable {
         );
         CREATE INDEX IF NOT EXISTS bot_effect_inbox_lookup
         ON bot_effect_inbox(receiver, effect_key, generation DESC);
+        CREATE TABLE IF NOT EXISTS bot_user_action_nonces (
+            bot_id TEXT NOT NULL,
+            nonce TEXT NOT NULL,
+            event_id TEXT NOT NULL UNIQUE REFERENCES bot_events(event_id),
+            created_commit_seq INTEGER NOT NULL CHECK (created_commit_seq > 0),
+            PRIMARY KEY(bot_id, nonce)
+        );
         """
 }
 
@@ -332,10 +339,16 @@ public actor SQLiteDomainStore {
         guard check.count == 1, check[0]["quick_check"]?.text?.lowercased() == "ok" else {
             throw SQLiteDomainStoreError.corrupted(check.first?["quick_check"]?.text ?? "quick_check failed")
         }
+        let foreignKeyErrors = try database.query("PRAGMA foreign_key_check")
+        guard foreignKeyErrors.isEmpty else {
+            throw SQLiteDomainStoreError.corrupted("SQLite foreign key check failed")
+        }
         let rows = try database.query(
             "SELECT commit_seq, event_id, payload FROM bot_events ORDER BY commit_seq ASC")
         let codec = BotEventEnvelopeCodec()
         var expected = 1
+        var eventSequences: [String: Int64] = [:]
+        var eventBotIDs: [String: String] = [:]
         for row in rows {
             guard let sequence = row["commit_seq"]?.integer, sequence == Int64(expected) else {
                 throw SQLiteDomainStoreError.commitGap(
@@ -348,7 +361,21 @@ public actor SQLiteDomainStore {
             guard event.commitSeq == expected, event.eventId == row["event_id"]?.text else {
                 throw SQLiteDomainStoreError.corrupted("event payload mismatch at commitSeq \(expected)")
             }
+            eventSequences[event.eventId] = sequence
+            eventBotIDs[event.eventId] = event.principal.botId
             expected += 1
+        }
+        let nonces = try database.query(
+            "SELECT bot_id, nonce, event_id, created_commit_seq FROM bot_user_action_nonces")
+        for nonce in nonces {
+            guard let botID = nonce["bot_id"]?.text, !botID.isEmpty,
+                  nonce["nonce"]?.text?.isEmpty == false,
+                  let eventID = nonce["event_id"]?.text,
+                  let createdCommitSeq = nonce["created_commit_seq"]?.integer,
+                  eventSequences[eventID] == createdCommitSeq,
+                  eventBotIDs[eventID] == botID else {
+                throw SQLiteDomainStoreError.corrupted("invalid user action nonce reference")
+            }
         }
     }
 
@@ -364,6 +391,7 @@ public actor SQLiteDomainStore {
             try checkCrashPoint("abort-before-commit")
             try checkCrashPoint("before-commit")
             try database.execute("COMMIT")
+            try checkCrashPoint("abort-after-commit")
             try? SQLiteDatabase.applyFileAttributes(to: fileURL)
             return result
         } catch {
