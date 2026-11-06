@@ -3,13 +3,13 @@
 import Foundation
 import PhoneDSHBot
 
-extension BotJSONValue {
+extension PhoneDSHBot.BotJSONValue {
     var runtimeString: String? {
         if case .string(let value) = self { return value }
         return nil
     }
 
-    var runtimeObject: [String: BotJSONValue]? {
+    var runtimeObject: [String: PhoneDSHBot.BotJSONValue]? {
         if case .object(let value) = self { return value }
         return nil
     }
@@ -122,10 +122,10 @@ enum BotRuntimePresentationFactory {
         return BotActivity(status: .toolRunning, detail: BotToolActivity.describe(name: name, arguments: arguments))
     }
 
-    private static func toolArguments(_ value: BotJSONValue?) -> [String: BotJSONValue] {
+    private static func toolArguments(_ value: PhoneDSHBot.BotJSONValue?) -> [String: PhoneDSHBot.BotJSONValue] {
         if let object = value?.runtimeObject { return object }
         guard let text = value?.runtimeString, let data = text.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode(BotJSONValue.self, from: data) else { return [:] }
+              let decoded = try? JSONDecoder().decode(PhoneDSHBot.BotJSONValue.self, from: data) else { return [:] }
         return decoded.runtimeObject ?? [:]
     }
 }
@@ -144,7 +144,7 @@ enum BotToolActivity {
         "ask_user": "整理问题",
     ]
 
-    static func describe(name rawName: String, arguments: [String: BotJSONValue]) -> String {
+    static func describe(name rawName: String, arguments: [String: PhoneDSHBot.BotJSONValue]) -> String {
         if let custom = arguments.runtimeString("description", "summary", "label") {
             return String(custom.prefix(80))
         }
@@ -165,7 +165,7 @@ enum BotToolActivity {
     }
 }
 
-private extension Dictionary where Key == String, Value == BotJSONValue {
+private extension Dictionary where Key == String, Value == PhoneDSHBot.BotJSONValue {
     func runtimeString(_ keys: String...) -> String? {
         for key in keys {
             if let value = self[key]?.runtimeString, !value.isEmpty { return value }

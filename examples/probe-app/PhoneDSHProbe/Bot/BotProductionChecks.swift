@@ -64,7 +64,7 @@ enum BotProductionChecks {
         _ = try await domain.append(progressEvent(id: "progress-1", time: 2_000, percent: 25))
         let initial = try await rows.watch(after: 0)
         try require(initial.reset && initial.rows.count == 2, "JSONL/progress rebuild did not produce two rows")
-        try require(initial.rows.contains { $0.body["text"]?.runtimeString == "真实 JSONL 用户消息" },
+        try require(initial.rows.contains { botProductionString($0.body["text"]) == "真实 JSONL 用户消息" },
                     "real JSONL user row missing")
         guard let progress = initial.rows.first(where: { $0.body.cardType == .progress }) else {
             throw BotProductionCheckFailure(description: "real progress row missing")
@@ -74,9 +74,9 @@ enum BotProductionChecks {
         let update = try await rows.watch(after: initial.cursor)
         try require(!update.reset && update.rows.count == 1 && update.rows[0].id == progress.id,
                     "progress watch did not update the same row")
-        try require(update.rows[0].body["percent"]?.runtimeInt == 100, "progress update payload missing")
+        try require(botProductionInt(update.rows[0].body["percent"]) == 100, "progress update payload missing")
         let older = try await rows.history(before: progress.id, limit: 1)
-        try require(older.rows.count == 1 && older.rows[0].body["text"]?.runtimeString == "真实 JSONL 用户消息"
+        try require(older.rows.count == 1 && botProductionString(older.rows[0].body["text"]) == "真实 JSONL 用户消息"
                     && !older.hasMore, "row-ID history pagination failed")
 
         let action = BotUserAction(nonce: "nonce-persistent", botID: "main", kind: .chat, text: "真实动作消息")
@@ -91,7 +91,7 @@ enum BotProductionChecks {
         try require(plannedActions.count == 1 && plannedTrusts == [.ownerDirect],
                     "duplicate reached planner or host trust was wrong")
         let actionBatch = try await rows.watch(after: update.cursor)
-        try require(actionBatch.rows.contains { $0.body["text"]?.runtimeString == "真实动作消息"
+        try require(actionBatch.rows.contains { botProductionString($0.body["text"]) == "真实动作消息"
                       && $0.provenance.eventIDs == ["check-action-nonce-persistent"] },
                     "committed action did not project through SQLite")
         try require(try await domain.eventID(botID: action.botID, nonce: action.nonce)

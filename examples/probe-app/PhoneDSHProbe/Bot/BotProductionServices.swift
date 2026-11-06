@@ -6,6 +6,16 @@ import PhoneDSHBot
 import ProbeKit
 #endif
 
+func botProductionString(_ value: PhoneDSHBot.BotJSONValue?) -> String? {
+    guard case .string(let text)? = value else { return nil }
+    return text
+}
+
+func botProductionInt(_ value: PhoneDSHBot.BotJSONValue?) -> Int? {
+    guard case .number(let number)? = value, number.isFinite, number.rounded() == number else { return nil }
+    return Int(exactly: number)
+}
+
 enum BotProductionError: LocalizedError {
     case brainUnavailable
     case invalidService(String)
@@ -40,8 +50,8 @@ struct BotProductionRuntimeContext: Sendable {
         var name = "大肥鱼"
         for event in try await BotProductionEventReader.all(domain: domain) {
             guard event.type == "ui.system_event", event.principal.botId == botID,
-                  event.data["event"]?.runtimeString == "renamed",
-                  let candidate = event.data["botName"]?.runtimeString?
+                  botProductionString(event.data["event"]) == "renamed",
+                  let candidate = botProductionString(event.data["botName"])?
                     .trimmingCharacters(in: .whitespacesAndNewlines), !candidate.isEmpty else { continue }
             name = candidate
         }
