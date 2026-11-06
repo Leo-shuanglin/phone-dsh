@@ -43,7 +43,6 @@ enum BotProductionChecks {
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let databaseURL = root.appendingPathComponent("domain.sqlite")
-        let routineURL = root.appendingPathComponent("routines.json")
         let sessionURL = root.appendingPathComponent("session.v4.jsonl")
         let sessionEvent = BotDSHSessionEvent(type: "user/message", seq: 1, time: 1_000, data: [
             "role": .string("user"),
@@ -59,7 +58,7 @@ enum BotProductionChecks {
         let planner = BotProductionCheckPlanner()
         let environment = BotProductionEnvironment(
             domain: domain, botID: "main", sessionID: "main",
-            routineStore: JSONRoutineStore(fileURL: routineURL), planner: planner, sessionLogURL: sessionURL)
+            routineStore: SQLiteRoutineStore(domainStore: domain), planner: planner, sessionLogURL: sessionURL)
         let rows = BotProductionRowService(environment: environment)
         try await rows.start()
         _ = try await domain.append(progressEvent(id: "progress-1", time: 2_000, percent: 25))
@@ -134,7 +133,7 @@ enum BotProductionChecks {
         let reopened = try SQLiteDomainStore(fileURL: databaseURL, now: { 7_000 })
         let reopenedEnvironment = BotProductionEnvironment(
             domain: reopened, botID: "main", sessionID: "main",
-            routineStore: JSONRoutineStore(fileURL: routineURL), planner: planner, sessionLogURL: sessionURL)
+            routineStore: SQLiteRoutineStore(domainStore: reopened), planner: planner, sessionLogURL: sessionURL)
         let reopenedRows = BotProductionRowService(environment: reopenedEnvironment)
         let persistedDuplicate = try await reopenedRows.perform(action)
         try require(persistedDuplicate == .duplicate(eventID: "check-action-nonce-persistent"),
@@ -162,7 +161,7 @@ enum BotProductionChecks {
 
         let unavailableRows = BotProductionRowService(environment: BotProductionEnvironment(
             domain: reopened, botID: "main", sessionID: "main",
-            routineStore: JSONRoutineStore(fileURL: routineURL), sessionLogURL: sessionURL))
+            routineStore: SQLiteRoutineStore(domainStore: reopened), sessionLogURL: sessionURL))
         let unavailableAction = BotUserAction(nonce: "nonce-unavailable", botID: "main", kind: .chat, text: "不会执行")
         let unavailableResult = try await unavailableRows.perform(unavailableAction)
         guard case .rejected(let unavailableReason) = unavailableResult else {

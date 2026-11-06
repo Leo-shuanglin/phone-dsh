@@ -73,14 +73,12 @@ actor BotProductionEnvironment {
         self.sessionLogURL = nil
         self.domain = domain
         self.runtimeContext = BotProductionRuntimeContext(botID: botID)
-        self.routineMachine = RoutineMachine(store: JSONRoutineStore(
-            fileURL: BotProductionPaths.applicationSupportFile("routines.json")
-        ))
+        self.routineMachine = RoutineMachine(store: SQLiteRoutineStore(domainStore: domain))
         self.planner = BotProductionUnavailablePlanner()
     }
 
     init(domain: SQLiteDomainStore, botID: String, sessionID: String,
-         routineStore: JSONRoutineStore, planner: (any BotUserActionPlanning)? = nil,
+         routineStore: SQLiteRoutineStore, planner: (any BotUserActionPlanning)? = nil,
          turnStopping: (any BotProductionTurnStopping)? = nil, sessionLogURL: URL? = nil) {
         self.botID = botID
         self.sessionID = sessionID
@@ -131,11 +129,6 @@ enum BotProductionEventReader {
 }
 
 enum BotProductionPaths {
-    static func applicationSupportFile(_ name: String) -> URL {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return root.appendingPathComponent("PhoneDSHBot/\(name)")
-    }
-
     static func workspaceRoot() -> URL {
         #if canImport(ProbeKit)
         return ChatHostConfiguration.workspaceRoot()
