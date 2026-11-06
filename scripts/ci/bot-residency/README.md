@@ -20,8 +20,9 @@ deleted.
 ## Prerequisites
 
 - Xcode, XcodeGen, Python 3, and `xcrun devicectl`.
-- A paired physical iPhone/iPad whose `tunnelState` is `available`. A paired
-  but unavailable device, or a simulator, produces `NOT_RUN`.
+- A paired physical iPhone/iPad whose `tunnelState` is `available` or
+  `connected`. A paired but unavailable device, or a simulator, produces
+  `NOT_RUN`. Connection alone never upgrades the verdict to PASS.
 - Automatic-signing credentials for the selected device. Pass the team with
   `--development-team`; optionally choose a provisionable `--bundle-id`.
 - The normal Worker assets staged by the existing repository flow. The spike
