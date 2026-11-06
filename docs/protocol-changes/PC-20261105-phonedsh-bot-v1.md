@@ -9,7 +9,7 @@ status: frozen
 breaking: false
 version_decision: Bot schemaVersion=1；Swift 宿主与 Worker 同一 App bundle 配对升级；不改变 P01/P15 wire 或生命周期版本。
 base: 07585efb2a71daa2e05f55c83abcfb4a2cb39f4d
-contract_revision: b5192c4a3eedd94ac4878bc0270684f7854ac273
+contract_revision: 65e062856c7e87f2f2b649b96383ae84259b2d65
 ```
 
 Protocol impact: P23; P24; P25; P12; P09。
@@ -98,7 +98,7 @@ python3 spec/bot/v1/tools/validate_vectors.py
 | --- | --- |
 | 两次导出至独立临时目录并 `diff -qr`，再与提交的 golden/pin/manifest 比较 | PASS，18 组向量逐字节一致 |
 | `python3 spec/bot/v1/tools/validate_vectors.py` | PASS，schema、正例、反例 |
-| `swift test --filter PhoneDSHBotTests` | PASS，2 tests / 0 failures；仅骨架，不是 WP3 实现 |
+| `swift test --filter PhoneDSHBotTests` | PASS，5 tests / 0 failures（含 CCR 后真实 golden Codable、origin 拒绝未知 kind、effects 重试策略）；仍不是 WP3 实现 |
 | 完整 WP0 命令中的 `phone-spec` | PASS，195 tests |
 | 同一命令中的 `phone-cross-tree` | PASS，8/8 invariants、registry 25 contracts、84 tests |
 | 同一命令中的 `phone-modules` | PASS |
@@ -117,4 +117,5 @@ python3 spec/bot/v1/tools/validate_vectors.py
 
 | revision | 由谁 | 原因（含 CCR） | 通知端 |
 | --- | --- | --- | --- |
-| `b5192c4a3eedd94ac4878bc0270684f7854ac273` | contract owner / 主 Agent | 初始冻结；纳入连续单 session、P0/P1 卡片、复用总表、WP12 观测与成本；同步最新 origin/main `07585efb`。无 CCR | 所有 WP 待启动；当前无实现 agent 在跑 |
+| `b5192c4a3eedd94ac4878bc0270684f7854ac273` | contract owner / 主 Agent | 初始冻结；纳入连续单 session、P0/P1 卡片、复用总表、WP12 观测与成本；同步最新 origin/main `07585efb`。无 CCR | 所有 WP |
+| `65e062856c7e87f2f2b649b96383ae84259b2d65` | contract owner / 主 Agent | WP3 CCR-1：BotEventOrigin 改为冻结的 kind=dsh/local 显式 Codable，拒绝未知 kind/member。CCR-2：BotEffect 增加 kind/target/payloadDigest/retryPolicy/maxAttempts，保留源兼容默认值并支持 network-idempotent 五次尝试。schema/golden 不变，真实 Codable 回归通过 | WP3 重新分派；WP4/WP5/WP6/WP8 集成时同步该修订 |
