@@ -1,7 +1,7 @@
 {
   "schema": "pdsh.ui.page-structure-baseline/1",
   "note": "Known page-structure divergences between the iOS contract and the Android screens. This ratchet only shrinks: fix one, delete its row. Regenerate with --write-baseline only when the change is reviewed as a ratchet move; new rows are written UNREVIEWED and refuse to load until a lane and reason are assigned.",
-  "contracts": 39,
+  "contracts": 41,
   "divergences": [
     {
       "page": "archived-sessions",
@@ -219,6 +219,55 @@
       "name": "state.note",
       "lane": "F",
       "reason": "new divergence on permission-defaults (unresolved-section); registered during the WP0 baseline synchronization after stale iOS contracts hid this existing iOS/Android difference; Lane F owns platform UI alignment and must remove this row when the corresponding page is verified aligned"
+    },
+    {
+      "page": "android-adb-settings",
+      "kind": "missing-section",
+      "name": "<android-screen>",
+      "lane": "F",
+      "reason": "iOS added AndroidADBSettingsPage for TCP/IP ADB setup, testing and cancellation. The Android UI library has no corresponding screen; Lane F must implement and verify it before claiming parity."
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "Android ADB",
+      "lane": "F",
+      "reason": "iOS SettingsPage links AndroidADBSettingsPage, but Android SettingsPage.kt has no matching entry. Lane F owns the Android destination and navigation."
+    },
+    {
+      "page": "settings",
+      "kind": "missing-action",
+      "name": "SSH 主机",
+      "lane": "F",
+      "reason": "iOS SettingsPage links SSHSettingsPage, but Android SettingsPage.kt has no matching entry. Lane F owns the Android destination and navigation."
+    },
+    {
+      "page": "ssh-settings",
+      "kind": "missing-section",
+      "name": "<android-screen>",
+      "lane": "F",
+      "reason": "iOS added SSHSettingsPage for saved connections and host-key verification. The Android UI library has no corresponding screen; Lane F must implement and verify it before claiming parity."
+    },
+    {
+      "page": "licenses",
+      "kind": "missing-action",
+      "name": "SSH 组件许可全文",
+      "lane": "F",
+      "reason": "iOS added a dedicated SSH license text link and bundled license file; Android has no matching SSH license action. Lane F must provide the equivalent license display."
+    },
+    {
+      "page": "licenses",
+      "kind": "title-mismatch",
+      "name": "SSH 组件许可",
+      "lane": "F",
+      "reason": "iOS titles the SSH license subpage SSH 组件许可, while Android LicensesPage uses the generic 开源许可 title. This is a real content and navigation difference, not an equivalent title."
+    },
+    {
+      "page": "licenses",
+      "kind": "unresolved-section",
+      "name": "<manual region>",
+      "lane": "F",
+      "reason": "The iOS SSH license subpage renders one scrolling Text without Section/PageSection/GroupBox, so no section tree can be compared statically. The actual license content and navigation still require Lane F verification."
     }
   ]
 }
