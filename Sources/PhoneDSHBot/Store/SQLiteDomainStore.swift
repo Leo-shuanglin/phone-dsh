@@ -295,6 +295,7 @@ public actor SQLiteDomainStore {
     var ephemeralBuffer: [BotEvent] = []
     var droppedEphemeral = 0
     var crashPoint: String?
+    var inboxFlights: [BotEffectInboxFlightKey: Task<BotEffectInboxEntry, Error>] = [:]
 
     public init(
         fileURL: URL,
