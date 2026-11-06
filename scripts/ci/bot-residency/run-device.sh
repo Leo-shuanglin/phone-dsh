@@ -145,7 +145,8 @@ for device in devices:
         "tunnelState": connection.get("tunnelState"),
     }
     sanitized.append(row)
-    if row["reality"] == "physical" and row["pairingState"] == "paired" and row["tunnelState"] == "available":
+    if (row["reality"] == "physical" and row["pairingState"] == "paired"
+            and row["tunnelState"] in {"available", "connected"}):
         available.append(row)
 json.dump({"devices": sanitized}, open(destination, "w", encoding="utf-8"), indent=2, sort_keys=True)
 if requested:
