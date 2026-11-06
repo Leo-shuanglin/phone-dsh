@@ -20,15 +20,6 @@ private func assertEqual<T: Equatable>(_ lhs: @autoclosure () async -> T,
     XCTAssertEqual(left, right)
 }
 
-private actor AuditSink: BotAuditRecording {
-    private(set) var records: [BotAuditRecord] = []
-
-    func append(_ record: BotAuditRecord) -> Bool {
-        records.append(record)
-        return true
-    }
-}
-
 final class BotAuthorizationTests: XCTestCase {
     private let effect = BotToolEffect(tool: "memory", operation: "memory.forget",
                                        resource: "memory:user&fact=shared", mutability: .destructive,
@@ -147,9 +138,13 @@ final class BotAuthorizationTests: XCTestCase {
         await assertEqual(await store.list().count, 0)
     }
 
-    func testAuditNeverContainsArgumentResourceOrDisplaySecrets() async throws {
-        let sink = AuditSink()
-        let store = BotGrantStore(now: { 1_000 }, audit: sink)
+    func testAuditUsesDurableEffectEventWithoutSecrets() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("phonedsh-wp4-audit-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let eventStore = try SQLiteDomainStore(fileURL: root.appendingPathComponent("domain.sqlite"),
+                                               now: { 1_000 })
+        let store = BotGrantStore(now: { 1_000 }, audit: BotAuditLog(eventLog: eventStore))
         let secret = "super-secret-value-that-must-not-leak"
         let auto = BotToolEffect(tool: "memory", operation: "memory.write",
                                  resource: "memory:agent&fact=\(secret)", mutability: .write,
@@ -158,39 +153,86 @@ final class BotAuthorizationTests: XCTestCase {
         let result = await BotExecutionAuthorizer(grants: store).authorizeExecution(
             principal: principal, effects: [auto], source: "memory", argsDigest: digest)
         XCTAssertTrue(result.allowed)
-        let records = await sink.records
-        XCTAssertEqual(records.count, 1)
-        let encoded = String(data: try JSONEncoder().encode(records), encoding: .utf8)!
+        let events = try await eventStore.events(after: 0, limit: 10)
+        XCTAssertEqual(events.count, 1)
+        let event = try XCTUnwrap(events.first)
+        XCTAssertEqual(event.type, "effect.attempted")
+        XCTAssertEqual(event.commitSeq, 1)
+        XCTAssertEqual(event.origin, .local(source: "effect-runner"))
+        XCTAssertEqual(event.principal.kind, "chat")
+        XCTAssertEqual(event.principal.sessionId, "s1")
+        XCTAssertFalse(event.eventId.isEmpty)
+        XCTAssertFalse(event.traceId.isEmpty)
+        let record = try JSONDecoder().decode(BotAuditRecord.self, from: event.data.encoded())
+        XCTAssertEqual(record.event, "tool-execution")
+        XCTAssertEqual(record.effects.count, 1)
+        XCTAssertEqual(record.effects[0].argsDigest, digest)
+        XCTAssertEqual(record.effects[0].resourceDigest,
+                       BotArgumentsDigest.digest(ofUTF8: auto.resource))
+        let encoded = String(data: try JSONEncoder().encode(event), encoding: .utf8)!
         XCTAssertFalse(encoded.contains(secret))
         XCTAssertFalse(encoded.contains("memory:agent&fact="))
         XCTAssertTrue(encoded.contains(digest))
-        XCTAssertEqual(records[0].effects[0].argsDigest, digest)
-        XCTAssertEqual(records[0].effects[0].resourceDigest,
-                       BotArgumentsDigest.digest(ofUTF8: auto.resource))
+        try await eventStore.close()
     }
 
-    func testFileAuditIsPrivateAndDigestOnly() async throws {
+    func testSQLiteAuditPermissionsGrantEventsAndNoJSONL() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("phonedsh-wp4-audit-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let log = BotAuditLog(dataRoot: root)
-        let store = BotGrantStore(now: { 1_000 }, audit: log)
-        let secret = "file-audit-secret"
-        let auto = BotToolEffect(tool: "memory", operation: "memory.write",
-                                 resource: "fact=\(secret)", mutability: .write, policy: .auto,
-                                 label: secret, detail: secret)
-        await assertTrue(await BotExecutionAuthorizer(grants: store)
-            .authorizeExecution(principal: principal, effects: [auto]).allowed)
-        let directory = root.appendingPathComponent("authz")
-        let files = try FileManager.default.contentsOfDirectory(at: directory,
-                                                                includingPropertiesForKeys: nil)
-        XCTAssertEqual(files.count, 1)
-        let text = try String(contentsOf: try XCTUnwrap(files.first), encoding: .utf8)
-        XCTAssertFalse(text.contains(secret))
-        XCTAssertFalse(text.contains(auto.resource))
-        let fileMode = try FileManager.default.attributesOfItem(atPath: files[0].path)[.posixPermissions] as? NSNumber
-        let directoryMode = try FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions] as? NSNumber
-        XCTAssertEqual(fileMode?.intValue, 0o600)
-        XCTAssertEqual(directoryMode?.intValue, 0o700)
+        let file = root.appendingPathComponent("domain.sqlite")
+        let eventStore = try SQLiteDomainStore(fileURL: file, now: { 1_000 })
+        let grants = BotGrantStore(now: { 1_000 }, audit: BotAuditLog(eventLog: eventStore))
+        _ = try await grants.add(BotGrant(id: "grant-once", botId: "main", tool: effect.tool,
+                                         operation: effect.operation, resource: effect.resource,
+                                         scope: .once, decision: .allow))
+        await assertTrue(await grants.consume(id: "grant-once"))
+        _ = try await grants.add(BotGrant(id: "grant-until", botId: "main", tool: effect.tool,
+                                         operation: effect.operation, resource: effect.resource,
+                                         scope: .until, decision: .allow))
+        await assertTrue(await grants.revoke(id: "grant-until"))
+        try await eventStore.close()
+
+        let reopened = try SQLiteDomainStore(fileURL: file, now: { 2_000 })
+        let events = try await reopened.events(after: 0, limit: 10)
+        XCTAssertEqual(events.map(\.type),
+                       ["grant.added", "grant.consumed", "grant.added", "grant.revoked"])
+        XCTAssertEqual(events.map(\.commitSeq), [1, 2, 3, 4])
+        XCTAssertEqual(Set(events.map(\.eventId)).count, 4)
+        XCTAssertEqual(Set(events.map(\.traceId)).count, 4)
+        for event in events {
+            XCTAssertEqual(event.origin, .local(source: "ipc"))
+            XCTAssertEqual(event.principal.kind, "ipc")
+            let record = try JSONDecoder().decode(BotAuditRecord.self, from: event.data.encoded())
+            XCTAssertEqual(record.event, event.type)
+            XCTAssertEqual(record.grants.count, 1)
+            let encoded = String(data: try JSONEncoder().encode(event), encoding: .utf8)!
+            XCTAssertFalse(encoded.contains(effect.resource))
+            XCTAssertFalse(encoded.contains(effect.label))
+            XCTAssertFalse(encoded.contains(effect.detail))
+        }
+
+        let manager = FileManager.default
+        let directoryMode = try manager.attributesOfItem(atPath: root.path)[.posixPermissions] as? NSNumber
+        let databaseMode = try manager.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(directoryMode.map { $0.intValue & 0o777 }, 0o700)
+        XCTAssertEqual(databaseMode.map { $0.intValue & 0o777 }, 0o600)
+        let walURL = URL(fileURLWithPath: file.path + "-wal")
+        if manager.fileExists(atPath: walURL.path) {
+            let mode = try manager.attributesOfItem(atPath: walURL.path)[.posixPermissions] as? NSNumber
+            XCTAssertEqual(mode.map { $0.intValue & 0o777 }, 0o600)
+        }
+        let paths = try manager.subpathsOfDirectory(atPath: root.path)
+        XCTAssertFalse(paths.contains { $0.hasSuffix(".jsonl") })
+        XCTAssertFalse(paths.contains("authz"))
+        try await reopened.close()
+    }
+
+    func testAuditAppendFailureReturnsFalse() async throws {
+        let log = BotAuditLog(eventLog: UnimplementedBotEventLog())
+        let record = BotAuditRecord(at: 1_000, source: "test", decision: .allow,
+                                    principal: BotAuditPrincipal(botId: "main", kind: "ipc", certain: true),
+                                    reason: "test")
+        await assertFalse(await log.append(record))
     }
 }

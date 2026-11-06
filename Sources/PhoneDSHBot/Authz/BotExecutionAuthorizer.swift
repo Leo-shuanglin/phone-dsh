@@ -13,18 +13,22 @@ public struct BotExecutionPrincipal: Codable, Sendable, Equatable {
     public let botId: String?
     public let sessionId: String?
     public let kind: BotExecutionPrincipalKind
+    public let sessionKind: BotSessionKind?
     public let certain: Bool
 
     public init(botId: String?, sessionId: String? = nil,
-                kind: BotExecutionPrincipalKind = .model, certain: Bool = true) {
+                kind: BotExecutionPrincipalKind = .model,
+                sessionKind: BotSessionKind? = nil, certain: Bool = true) {
         self.botId = botId
         self.sessionId = sessionId
         self.kind = kind
+        self.sessionKind = sessionKind
         self.certain = certain
     }
 
     public init(gateway principal: BotGatewayPrincipal, certain: Bool = true) {
-        self.init(botId: principal.botId, sessionId: principal.sessionId, kind: .model, certain: certain)
+        self.init(botId: principal.botId, sessionId: principal.sessionId, kind: .model,
+                  sessionKind: principal.kind, certain: certain)
     }
 
     public static func userUI(botId: String, sessionId: String? = nil) -> BotExecutionPrincipal {
@@ -162,7 +166,9 @@ public struct BotExecutionAuthorizer: Sendable {
         let record = BotAuditRecord(at: Int64(Date().timeIntervalSince1970 * 1_000), source: source,
                                     decision: allowed ? .allow : .deny,
                                     principal: BotAuditPrincipal(botId: principal.botId,
+                                                                 sessionId: principal.sessionId,
                                                                  kind: principal.kind.rawValue,
+                                                                 sessionKind: principal.sessionKind,
                                                                  certain: principal.certain),
                                     effects: effects.map { BotExecutionAuditing.effect($0, argsDigest: argsDigest) },
                                     grants: grants.map(BotExecutionAuditing.grant), reason: reason)

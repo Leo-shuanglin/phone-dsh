@@ -228,7 +228,9 @@ public actor BotGrantStore {
                                    resource: grant.resource, mutability: .write, policy: .ask)
         let record = BotAuditRecord(at: now(), event: event, source: grant.source,
                                     decision: grant.decision,
-                                    principal: BotAuditPrincipal(botId: grant.botId, kind: "grant", certain: true),
+                                    principal: BotAuditPrincipal(botId: grant.botId,
+                                                                 sessionId: grant.sessionId,
+                                                                 kind: "ipc", certain: true),
                                     effects: [BotExecutionAuditing.effect(effect, argsDigest: nil)],
                                     grants: [BotExecutionAuditing.grant(grant)], reason: reason)
         await audit.append(record)

@@ -4,12 +4,17 @@ import Foundation
 
 public struct BotAuditPrincipal: Codable, Sendable, Equatable {
     public let botId: String?
+    public let sessionId: String?
     public let kind: String
+    public let sessionKind: BotSessionKind?
     public let certain: Bool
 
-    public init(botId: String?, kind: String, certain: Bool) {
+    public init(botId: String?, sessionId: String? = nil, kind: String,
+                sessionKind: BotSessionKind? = nil, certain: Bool) {
         self.botId = botId
+        self.sessionId = sessionId
         self.kind = kind
+        self.sessionKind = sessionKind
         self.certain = certain
     }
 }
@@ -79,11 +84,11 @@ public protocol BotAuditRecording: Actor {
 }
 
 public actor BotAuditLog: BotAuditRecording {
-    private let dataRoot: URL
+    private let eventLog: any BotEventLog
     private let encoder: JSONEncoder
 
-    public init(dataRoot: URL) {
-        self.dataRoot = dataRoot
+    public init(eventLog: any BotEventLog) {
+        self.eventLog = eventLog
         encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     }
@@ -91,33 +96,43 @@ public actor BotAuditLog: BotAuditRecording {
     @discardableResult
     public func append(_ record: BotAuditRecord) async -> Bool {
         do {
-            let directory = dataRoot.appendingPathComponent("authz", isDirectory: true)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-                                                     attributes: [.posixPermissions: 0o700])
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-            let file = directory.appendingPathComponent("tool-audit-\(Self.dateKey(record.at)).jsonl")
-            if !FileManager.default.fileExists(atPath: file.path) {
-                guard FileManager.default.createFile(atPath: file.path, contents: nil,
-                                                     attributes: [.posixPermissions: 0o600]) else { return false }
+            let data = try BotJSONValue.parse(encoder.encode(record))
+            guard case .object = data else { return false }
+            let type: String
+            let origin: BotEventOrigin
+            switch record.event {
+            case "tool-execution":
+                type = "effect.attempted"
+                origin = .local(source: "effect-runner")
+            case "grant.added", "grant.consumed", "grant.revoked":
+                type = record.event
+                origin = .local(source: "ipc")
+            default:
+                return false
             }
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
-            var data = try encoder.encode(record)
-            data.append(0x0a)
-            let handle = try FileHandle(forWritingTo: file)
-            defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: data)
+            let eventId = "authz-\(UUID().uuidString.lowercased())"
+            let event = BotEvent(type: type, eventId: eventId, time: record.at, origin: origin,
+                                 traceId: "trace-\(UUID().uuidString.lowercased())",
+                                 principal: BotPrincipal(botId: record.principal.botId,
+                                                         sessionId: record.principal.sessionId,
+                                                         kind: Self.principalKind(record.principal)),
+                                 causationId: nil, correlationId: nil, data: data)
+            _ = try await eventLog.append(event)
             return true
         } catch {
             return false
         }
     }
 
-    private static func dateKey(_ milliseconds: Int64) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar.current
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date(timeIntervalSince1970: Double(milliseconds) / 1_000))
+    private static func principalKind(_ principal: BotAuditPrincipal) -> String {
+        if let sessionKind = principal.sessionKind { return sessionKind.rawValue }
+        switch principal.kind {
+        case "chat", "task", "routine", "team", "proactive", "watchdog", "ipc":
+            return principal.kind
+        case "model":
+            return "chat"
+        default:
+            return "ipc"
+        }
     }
 }
