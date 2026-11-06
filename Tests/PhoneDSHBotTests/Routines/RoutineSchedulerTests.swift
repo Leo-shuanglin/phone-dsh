@@ -9,8 +9,8 @@ final class RoutineSchedulerTests: XCTestCase {
         let root = try wp6TempDirectory(self)
         let now = wp6Date(2026, 5, 12, 12)
         let clock = WP6Clock(now)
-        let machine = wp6Machine(root: root)
-        let inbox = wp6Inbox(root: root)
+        let machine = try wp6Machine(root: root)
+        let inbox = try wp6Inbox(root: root)
         let sink = WP6RoutineSink()
         _ = try await machine.create(botId: "bot-a", title: "Held", prompt: "report",
                                      schedule: .interval(everyMinutes: 5, timezone: "UTC"),
@@ -32,7 +32,7 @@ final class RoutineSchedulerTests: XCTestCase {
                 if request.routine.id == "silent" { return .success("[quiet]") }
                 return .success(request.routine.id == "interrupt" ? "Three blockers. Second sentence." : "Held result.")
             },
-            settings: { wp6Settings() }, now: { clock.now }
+            available: { _ in true }, settings: { wp6Settings() }, now: { clock.now }
         )
         try await scheduler.tick()
 
@@ -44,9 +44,9 @@ final class RoutineSchedulerTests: XCTestCase {
         XCTAssertEqual(deliverer.notifications[0].body, "Three blockers.")
         XCTAssertEqual(deliverer.notifications[0].deepLink,
                        "phonedsh://bot/bot-a/row/routine-run-interrupt-1")
-        try await WP6AssertEqual(try await machine.delivery("interrupt:1")?.notified, "sent")
-        try await WP6AssertEqual(try await machine.delivery("silent:1")?.quiet, true)
-        try await WP6AssertEqual(try await machine.delivery("held:1")?.status, .delivered)
+        try await WP6AssertEqual(try await machine.delivery("interrupt:1", botId: "bot-a")?.notified, "sent")
+        try await WP6AssertEqual(try await machine.delivery("silent:1", botId: "bot-a")?.quiet, true)
+        try await WP6AssertEqual(try await machine.delivery("held:1", botId: "bot-a")?.status, .delivered)
     }
 
     func testQuietHoursPersistDeferralAndUrgentReasonIsMandatory() async throws {
@@ -54,8 +54,8 @@ final class RoutineSchedulerTests: XCTestCase {
         let quietAt = wp6Date(2026, 5, 12, 23, timeZone: "Asia/Taipei")
         let quietEnd = wp6Date(2026, 5, 13, 8, timeZone: "Asia/Taipei")
         let clock = WP6Clock(quietAt)
-        let machine = wp6Machine(root: root)
-        let inbox = wp6Inbox(root: root)
+        let machine = try wp6Machine(root: root)
+        let inbox = try wp6Inbox(root: root)
         let sink = WP6RoutineSink()
         let settings = wp6Settings(quietStart: "23:00", quietEnd: "08:00", timeZone: "Asia/Taipei")
         _ = try await machine.create(botId: "bot-a", title: "Night digest", prompt: "digest",
@@ -65,16 +65,17 @@ final class RoutineSchedulerTests: XCTestCase {
                                      schedule: .daily(time: "23:00", timezone: "Asia/Taipei"),
                                      urgent: true, urgentReason: "production is down",
                                      now: quietAt - 3_600_000, id: "urgent")
-        var document = try JSONRoutineStore(fileURL: root.appendingPathComponent("routines.json")).read()
-        document.routines.append(Routine(id: "legacy-invalid", agentId: "bot-a", title: "Invalid urgent",
-                                         prompt: "do not bypass", schedule: .daily(time: "23:00", timezone: "Asia/Taipei"),
-                                         urgent: true, createdAt: quietAt - 3_600_000, nextRunAt: quietAt))
-        try JSONRoutineStore(fileURL: root.appendingPathComponent("routines.json")).write(document)
+        _ = try await machine.store.mutate(botId: "bot-a") { document in
+            document.routines.append(Routine(id: "legacy-invalid", agentId: "bot-a", title: "Invalid urgent",
+                                             prompt: "do not bypass", schedule: .daily(time: "23:00", timezone: "Asia/Taipei"),
+                                             urgent: true, createdAt: quietAt - 3_600_000, nextRunAt: quietAt))
+            return RoutineMutation(value: (), botId: "bot-a")
+        }
         let runs = WP6RunLog()
         let makeScheduler: () -> RoutineScheduler = {
             RoutineScheduler(botId: "bot-a", machine: machine, inbox: inbox, sink: sink,
                              runner: { request in runs.append(request); return .success("still down") },
-                             settings: { settings }, now: { clock.now })
+                             available: { _ in true }, settings: { settings }, now: { clock.now })
         }
         try await makeScheduler().tick()
         XCTAssertEqual(runs.all.map(\.routine.id), ["urgent"])
@@ -104,8 +105,8 @@ final class RoutineSchedulerTests: XCTestCase {
         let root = try wp6TempDirectory(self)
         let now = wp6Date(2026, 5, 12, 12)
         let clock = WP6Clock(now)
-        let machine = wp6Machine(root: root)
-        let inbox = wp6Inbox(root: root)
+        let machine = try wp6Machine(root: root)
+        let inbox = try wp6Inbox(root: root)
         let sink = WP6RoutineSink()
         for id in ["first", "second"] {
             _ = try await machine.create(botId: "bot-a", title: id, prompt: "run \(id)",
@@ -146,14 +147,14 @@ final class RoutineSchedulerTests: XCTestCase {
             let root = try wp6TempDirectory(self)
             let now = wp6Date(2026, 5, 12, 12)
             let clock = WP6Clock(now)
-            let machine = wp6Machine(root: root)
+            let machine = try wp6Machine(root: root)
             _ = try await machine.create(botId: "bot-a", title: "Timeout", prompt: "wait",
                                          schedule: .interval(everyMinutes: 5, timezone: "UTC"),
                                          delivery: .interrupt, interruptReason: "must know",
                                          now: now - 600_000, id: "timeout")
             let proactive = WP6Proactive()
             let scheduler = RoutineScheduler(
-                botId: "bot-a", machine: machine, inbox: wp6Inbox(root: root), sink: WP6RoutineSink(),
+                botId: "bot-a", machine: machine, inbox: try wp6Inbox(root: root), sink: WP6RoutineSink(),
                 proactive: proactive,
                 runner: { _ in
                     do {
@@ -164,10 +165,11 @@ final class RoutineSchedulerTests: XCTestCase {
                     }
                 },
                 cancelRunner: { _ in RoutineCancellationResult(cancelled: confirmed) },
+                available: { _ in true },
                 settings: { wp6Settings() }, now: { clock.now }, runTimeoutMs: 20, cancelGraceMs: 50
             )
             try await scheduler.tick()
-            let delivery = try await machine.delivery("timeout:1")
+            let delivery = try await machine.delivery("timeout:1", botId: "bot-a")
             XCTAssertEqual(delivery?.resultStatus, confirmed ? .timedOut : .needsReconciliation)
             XCTAssertEqual(delivery?.cancelOrigin, "timeout")
             XCTAssertEqual(delivery?.text, "")
@@ -180,16 +182,16 @@ final class RoutineSchedulerTests: XCTestCase {
         let root = try wp6TempDirectory(self)
         let now = wp6Date(2026, 5, 12, 12)
         let clock = WP6Clock(now)
-        let machine = wp6Machine(root: root)
+        let machine = try wp6Machine(root: root)
         _ = try await machine.create(botId: "bot-a", title: "Overlap", prompt: "wait",
                                      schedule: .interval(everyMinutes: 5, timezone: "UTC"),
                                      idempotent: true, now: now - 600_000, id: "overlap")
         let scheduler = RoutineScheduler(
-            botId: "bot-a", machine: machine, inbox: wp6Inbox(root: root), sink: WP6RoutineSink(),
+            botId: "bot-a", machine: machine, inbox: try wp6Inbox(root: root), sink: WP6RoutineSink(),
             runner: { _ in
                 try? await Task.sleep(nanoseconds: 50_000_000)
                 return .success("done")
-            }, settings: { wp6Settings() }, now: { clock.now }
+            }, available: { _ in true }, settings: { wp6Settings() }, now: { clock.now }
         )
         let ticking = Task { try await scheduler.tick() }
         var started = false
@@ -224,7 +226,7 @@ final class RoutineSchedulerTests: XCTestCase {
         let root = try wp6TempDirectory(self)
         let now = wp6Date(2026, 5, 12, 12)
         let clock = WP6Clock(now)
-        let machine = wp6Machine(root: root)
+        let machine = try wp6Machine(root: root)
         let sink = WP6RoutineSink()
         _ = try await machine.create(botId: "bot-a", title: "Digest", prompt: "digest",
                                      schedule: .interval(everyMinutes: 5), now: now, id: "daily")
@@ -233,15 +235,15 @@ final class RoutineSchedulerTests: XCTestCase {
                                                      status: .succeeded, text: "result",
                                                      finishedAt: now + 1)
         let finished = try XCTUnwrap(pendingFinish)
-        _ = try await machine.claimDelivery("daily:1", now: now + 2)
+        _ = try await machine.claimDelivery("daily:1", botId: "bot-a", now: now + 2)
         _ = try await sink.deliver(RoutineAutomation(delivery: try XCTUnwrap(finished.delivery)))
-        let scheduler = RoutineScheduler(botId: "bot-a", machine: machine, inbox: wp6Inbox(root: root),
+        let scheduler = RoutineScheduler(botId: "bot-a", machine: machine, inbox: try wp6Inbox(root: root),
                                          sink: sink, runner: { _ in .success("unused") },
-                                         settings: { wp6Settings() }, now: { clock.now })
+                                         available: { _ in true }, settings: { wp6Settings() }, now: { clock.now })
         try await scheduler.recover()
         await WP6AssertEqual(await sink.rows.count, 1)
         await WP6AssertEqual(await sink.duplicateCalls, 1)
-        try await WP6AssertEqual(try await machine.delivery("daily:1")?.status, .delivered)
+        try await WP6AssertEqual(try await machine.delivery("daily:1", botId: "bot-a")?.status, .delivered)
         try await WP6AssertEqual(try await wp6Inbox(root: root).items().count, 1)
     }
 }

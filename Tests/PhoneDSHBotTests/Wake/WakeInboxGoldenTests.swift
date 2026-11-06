@@ -12,7 +12,7 @@ final class WakeInboxGoldenTests: XCTestCase {
         let expectedItem = try JSONDecoder().decode(WakeInboxItem.self,
             from: JSONSerialization.data(withJSONObject: XCTUnwrap(enqueued["item"])))
         let root = try wp6TempDirectory(self)
-        let inbox = wp6Inbox(root: root)
+        let inbox = try wp6Inbox(root: root)
 
         let inserted = try await inbox.enqueue(expectedItem)
         XCTAssertTrue(inserted.ok)
@@ -44,12 +44,12 @@ final class WakeInboxGoldenTests: XCTestCase {
         XCTAssertThrowsError(try WakeInboxItem(id: "held-2", kind: "routine-result", text: "x",
                                                createdAt: 0, state: .staged, stagedAt: 1, stagedKey: ""))
         let root = try wp6TempDirectory(self)
-        let inbox = wp6Inbox(root: root)
+        let inbox = try wp6Inbox(root: root)
         let item = try WakeInboxItem(id: "held-1", kind: "routine-result", text: "result",
                                      requestId: "daily:1", createdAt: 1)
         _ = try await inbox.enqueue(item)
         let staged = try await inbox.stage(now: 2, key: "stage-1")
-        let reopened = wp6Inbox(root: root)
+        let reopened = try wp6Inbox(root: root)
         try await WP6AssertEqual(try await reopened.recover(), 1)
         try await WP6AssertEqual(try await reopened.items().first?.state, .pending)
         let restaged = try await reopened.stage(now: 3, key: "stage-2")
@@ -60,11 +60,11 @@ final class WakeInboxGoldenTests: XCTestCase {
         try await WP6AssertEqual(try await reopened.commit(final.key), 1)
     }
 
-    func testCorruptInboxFailsClosed() async throws {
+    func testClosedStoreFailsClosed() async throws {
         let root = try wp6TempDirectory(self)
-        let file = root.appendingPathComponent("wake-inbox.json")
-        try Data("not-json".utf8).write(to: file)
-        let inbox = wp6Inbox(root: root)
+        let domainStore = try SQLiteDomainStore(fileURL: root.appendingPathComponent("domain.sqlite"))
+        let inbox = WakeInbox(store: SQLiteWakeInboxStore(domainStore: domainStore, botId: "bot-a"))
+        try await domainStore.close()
         let item = try WakeInboxItem(id: "held-1", kind: "routine-result", text: "x", createdAt: 1)
         await XCTAssertThrowsErrorAsync(try await inbox.enqueue(item))
     }

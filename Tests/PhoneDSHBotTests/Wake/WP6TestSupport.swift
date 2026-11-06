@@ -201,12 +201,14 @@ func WP6AssertGreaterThanOrEqual<T: Comparable>(_ actual: @autoclosure () async 
     XCTAssertGreaterThanOrEqual(value, expected(), file: file, line: line)
 }
 
-func wp6Machine(root: URL) -> RoutineMachine {
-    RoutineMachine(store: JSONRoutineStore(fileURL: root.appendingPathComponent("routines.json")))
+func wp6Machine(root: URL) throws -> RoutineMachine {
+    let domainStore = try SQLiteDomainStore(fileURL: root.appendingPathComponent("domain.sqlite"), now: { 1_000 })
+    return RoutineMachine(store: SQLiteRoutineStore(domainStore: domainStore))
 }
 
-func wp6Inbox(root: URL) -> WakeInbox {
-    WakeInbox(store: JSONWakeInboxStore(fileURL: root.appendingPathComponent("wake-inbox.json")))
+func wp6Inbox(root: URL) throws -> WakeInbox {
+    let domainStore = try SQLiteDomainStore(fileURL: root.appendingPathComponent("domain.sqlite"), now: { 1_000 })
+    return WakeInbox(store: SQLiteWakeInboxStore(domainStore: domainStore, botId: "bot-a"))
 }
 
 func wp6Settings(mode: ProactiveMode = .on, dnd: Bool = false, quietStart: String = "00:00",

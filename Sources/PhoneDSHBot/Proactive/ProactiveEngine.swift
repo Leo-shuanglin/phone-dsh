@@ -59,57 +59,71 @@ public actor ProactiveEngine: ProactiveConsidering {
         history.suffix(max(0, limit)).reversed()
     }
 
+    private enum RestoreError: Error {
+        case cursorDidNotAdvance
+        case malformedConsideration(String)
+    }
+
     @discardableResult
     public func restoreAccounting() async -> Int {
         if restored { return restoredCount }
-        restored = true
-        guard let eventLog else { return 0 }
-        var events: [BotEvent] = []
-        var cursor = 0
+        guard let eventLog else {
+            restored = true
+            restoredCount = 0
+            return 0
+        }
         do {
+            var events: [BotEvent] = []
+            var cursor = 0
             while true {
                 let page = try await eventLog.events(after: cursor, limit: 500)
                 if page.isEmpty { break }
                 events.append(contentsOf: page)
-                guard let next = page.compactMap(\.commitSeq).max(), next > cursor else { break }
+                guard let next = page.compactMap(\.commitSeq).max(), next > cursor else {
+                    throw RestoreError.cursorDidNotAdvance
+                }
                 cursor = next
                 if page.count < 500 { break }
             }
+            let now = nowProvider()
+            let settings = settingsProvider().normalized()
+            let today = RoutineQuietHours.dayKey(now, timeZone: settings.timeZone)
+            let accepted = events.filter { event in
+                guard event.type == "proactive.considered",
+                      RoutineQuietHours.dayKey(event.time, timeZone: settings.timeZone) == today,
+                      let decision = Self.string(event.data, "decision") else { return false }
+                return decision == "did" || decision == "would"
+            }.sorted {
+                ($0.time, $0.commitSeq ?? 0) < ($1.time, $1.commitSeq ?? 0)
+            }
+            var considerations: [AcceptedConsideration] = []
+            for event in accepted {
+                guard let kindText = Self.string(event.data, "kind"),
+                      let kind = ProactiveKind(rawValue: kindText),
+                      let botId = Self.string(event.data, "botId") ?? event.principal.botId,
+                      !botId.isEmpty else {
+                    throw RestoreError.malformedConsideration(event.eventId)
+                }
+                let dedupeKey = Self.string(event.data, "dedupeKey") ?? event.correlationId ?? event.eventId
+                guard !dedupeKey.isEmpty else { throw RestoreError.malformedConsideration(event.eventId) }
+                let decision = Self.string(event.data, "decision") ?? "skip"
+                let mode = Self.string(event.data, "mode") ?? ""
+                let historicalSpend = mode == "would" || decision == "did"
+                considerations.append(AcceptedConsideration(
+                    at: event.time, kind: kind, botId: botId, dedupeKey: dedupeKey,
+                    cost: max(1, Self.int(event.data, "cost") ?? 1),
+                    channel: Self.string(event.data, "channel") ?? "system-notification",
+                    spendBudget: Self.bool(event.data, "spendBudget") ?? historicalSpend,
+                    fuseRecorded: Self.bool(event.data, "fuseRecorded") ?? historicalSpend
+                ))
+            }
+            for consideration in considerations { policy.restore(consideration) }
+            restoredCount = considerations.count
+            restored = true
+            return restoredCount
         } catch {
             return 0
         }
-        let now = nowProvider()
-        let settings = settingsProvider().normalized()
-        let today = RoutineQuietHours.dayKey(now, timeZone: settings.timeZone)
-        let accepted = events.filter { event in
-            guard event.type == "proactive.considered",
-                  RoutineQuietHours.dayKey(event.time, timeZone: settings.timeZone) == today,
-                  let decision = Self.string(event.data, "decision") else { return false }
-            return decision == "did" || decision == "would"
-        }.sorted {
-            ($0.time, $0.commitSeq ?? 0) < ($1.time, $1.commitSeq ?? 0)
-        }
-        for event in accepted {
-            guard let kindText = Self.string(event.data, "kind"),
-                  let kind = ProactiveKind(rawValue: kindText),
-                  let botId = Self.string(event.data, "botId") ?? event.principal.botId,
-                  !botId.isEmpty else { continue }
-            let dedupeKey = Self.string(event.data, "dedupeKey") ?? event.correlationId ?? event.eventId
-            guard !dedupeKey.isEmpty else { continue }
-            let decision = Self.string(event.data, "decision") ?? "skip"
-            let mode = Self.string(event.data, "mode") ?? ""
-            let historicalSpend = mode == "would" || decision == "did"
-            let spendBudget = Self.bool(event.data, "spendBudget") ?? historicalSpend
-            let fuseRecorded = Self.bool(event.data, "fuseRecorded") ?? historicalSpend
-            let cost = max(1, Self.int(event.data, "cost") ?? 1)
-            policy.restore(AcceptedConsideration(
-                at: event.time, kind: kind, botId: botId, dedupeKey: dedupeKey, cost: cost,
-                channel: Self.string(event.data, "channel") ?? "system-notification",
-                spendBudget: spendBudget, fuseRecorded: fuseRecorded
-            ))
-            restoredCount += 1
-        }
-        return restoredCount
     }
 
     public func budgetSpent() -> Int {
