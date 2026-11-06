@@ -4,12 +4,12 @@ import CryptoKit
 import Foundation
 
 public actor BotWatchdogMonitor {
-    private struct UnitKey: Hashable {
+    private struct UnitKey: Hashable, Sendable {
         let kind: BotWatchdogUnitKind
         let id: String
     }
 
-    private struct SeenKey: Hashable {
+    private struct SeenKey: Hashable, Sendable {
         let unit: UnitKey
         let check: BotWatchdogCheck
     }
@@ -25,6 +25,7 @@ public actor BotWatchdogMonitor {
     private let clock: @Sendable () -> Int64
     private let log: @Sendable (String) -> Void
     private var units: [UnitKey: TrackedUnit] = [:]
+    private var pending: Set<SeenKey> = []
     private var seen: Set<SeenKey> = []
     private var recentFlags: [BotWatchdogFlag] = []
 
@@ -252,8 +253,9 @@ public actor BotWatchdogMonitor {
         let trimmedId = unitId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedId.isEmpty else { return nil }
         let seenKey = SeenKey(unit: UnitKey(kind: unitKind, id: trimmedId), check: finding.check)
-        guard !seen.contains(seenKey) else { return nil }
-        seen.insert(seenKey)
+        guard !seen.contains(seenKey), !pending.contains(seenKey) else { return nil }
+        pending.insert(seenKey)
+        defer { pending.remove(seenKey) }
         let eventId = Self.eventId(kind: unitKind, id: trimmedId, check: finding.check)
         let event = BotEvent(
             type: "watchdog.flagged",
@@ -273,7 +275,12 @@ public actor BotWatchdogMonitor {
                 "evidence": finding.evidence,
             ]))
         do {
+            if try await Self.hasCommittedEvent(eventId: eventId, eventLog: eventLog) {
+                seen.insert(seenKey)
+                return nil
+            }
             let commitSeq = try await eventLog.append(event)
+            seen.insert(seenKey)
             let flag = BotWatchdogFlag(
                 unitKind: unitKind, unitId: trimmedId, botId: botId,
                 check: finding.check, evidence: finding.evidence,
@@ -286,6 +293,22 @@ public actor BotWatchdogMonitor {
         } catch {
             log("watchdog flag publish failed (\(unitKind.rawValue)/\(trimmedId)/\(finding.check.rawValue)): \(error)")
             return nil
+        }
+    }
+
+    private static func hasCommittedEvent(eventId: String, eventLog: any BotEventLog) async throws -> Bool {
+        if let store = eventLog as? SQLiteDomainStore {
+            return try await store.event(withId: eventId) != nil
+        }
+        var cursor = 0
+        while true {
+            let events = try await eventLog.events(after: cursor, limit: 1_000)
+            if events.isEmpty { return false }
+            for event in events {
+                if event.eventId == eventId { return true }
+                if let commitSeq = event.commitSeq { cursor = max(cursor, commitSeq) }
+            }
+            if events.count < 1_000 { return false }
         }
     }
 
