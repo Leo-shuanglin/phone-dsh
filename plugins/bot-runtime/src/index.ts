@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: MIT
 export { default as steering } from './steering.ts'
 export { default as volatileContext } from './volatile-context.ts'
+export { default as identityBridge } from './identity-bridge.ts'
+export { default as approvalGate } from './approval-gate.ts'
+export { default as sandboxApproval } from './sandbox-approval.ts'
+export { default as streamForward } from './stream-forward.ts'
+export { default as redact } from './redact.ts'
+export { dshbotChannel, BotRuntimeRemote, BotStreamHub } from './channel.ts'
+export { assemblePrompt, runtimePersonaBlock, variantBlock } from './prompt/assemble.ts'
 export type { VolatileContextSource, VolatileSnapshot } from './volatile-context.ts'

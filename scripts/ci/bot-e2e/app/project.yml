@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: MIT
+name: BotE2E
+options:
+  bundleIdPrefix: dev.phone-dsh.bot-e2e
+  deploymentTarget:
+    iOS: '17.0'
+  createIntermediateGroups: true
+packages:
+  PhoneDSH:
+    path: ../../../..
+targets:
+  BotE2EApp:
+    type: application
+    platform: iOS
+    deploymentTarget: '17.0'
+    sources:
+      - path: Sources
+    dependencies:
+      - package: PhoneDSH
+        product: PhoneDSHBot
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: dev.phone-dsh.bot-e2e.app
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+  BotE2ETests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: '17.0'
+    sources:
+      - path: ../../../../Tests/PhoneDSHBotTests/MCP/BotConversationE2ETests.swift
+      - path: ../../../../Tests/PhoneDSHBotTests/MCP/BotDSHRemoteRuntimeTests.swift
+      - path: ../../../../Tests/PhoneDSHBotTests/MCP/BotRemoteTestSupport.swift
+      - path: ../../../../Tests/PhoneDSHBotTests/MCP/BotMCPTestSupport.swift
+    dependencies:
+      - target: BotE2EApp
+      - package: PhoneDSH
+        product: PhoneDSHBot
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: dev.phone-dsh.bot-e2e.tests
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+schemes:
+  - name: BotE2EApp
+    build:
+      targets:
+        BotE2EApp: all
+        BotE2ETests: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - BotE2ETests
