@@ -9,7 +9,7 @@ status: frozen
 breaking: false
 version_decision: Bot schemaVersion=1；Swift 宿主与 Worker 同一 App bundle 配对升级；不改变 P01/P15 wire 或生命周期版本。
 base: 07585efb2a71daa2e05f55c83abcfb4a2cb39f4d
-contract_revision: 3c7a6efaab5d95b71cbceb7b69d900f5e8665552
+contract_revision: 30b306c96f57aace6d3275cad9a23142ecb7bf3c
 ```
 
 Protocol impact: P23; P24; P25; P12; P09; P13。
@@ -122,6 +122,8 @@ python3 spec/bot/v1/tools/validate_vectors.py
 | `784cd28e4be998477f4ab1d25bb7967d2cfa0a49` | contract owner / 主 Agent | WP2 CCR-2：冻结现有 phone App MCP 的 BotVolatileContext 请求/响应、发现名、scope、大小、迟到结果和错误语义；WP2 consumer、WP7 Swift producer。CCR-1 workspace/image 收录由协调者处理，不属于协议变更 | WP2 重新分派；WP7 按此实现 producer |
 | `0074475d322395f6cdb06caa42ea391a214bd0da` | contract owner / 主 Agent | 上游基线升级为 DSH Bot bf4075b；golden 除来源 SHA 无语义差异。补充 Bot 色彩、composer 活动行、简洁回复/next-step、真实鱼素材与 FishDirector 状态映射。用户已明确头像资产授权 | WP7/WP9 按新基线接线；其余 WP 无需变更 |
 | `3c7a6efaab5d95b71cbceb7b69d900f5e8665552` | contract owner / 主 Agent | 新增 FishDirector schema/golden 与纯 Swift 对拍实现；纳入真实 512px 头像资源及 BotFishAvatar。20 组向量、127 个 Bot 测试通过 | WP9 直接消费公共状态机和资产；WP7 提供真实事件 |
+| `7214962fc4ca51f1bdfd60b25b49dc2997131a40` | contract owner / 主 Agent | 接受 WP7 durable-action CCR；SQLite v2 同事务提交动作事件、effects 和 nonce，保留 P25 wire 与既有结果类型 | transaction 实现者、WP7、WP9 |
+| `30b306c96f57aace6d3275cad9a23142ecb7bf3c` | contract owner / 主 Agent | 集成审查发现 Grant 重启丢失与旧调用身份漂移；冻结 SQLite Grant 快照恢复和 principal incarnation 绑定 | WP4 后续修复、WP7 |
 
 ## 7. WP7 CCR：durable user-action transaction
 
