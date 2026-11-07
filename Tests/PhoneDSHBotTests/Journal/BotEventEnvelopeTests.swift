@@ -21,7 +21,7 @@ final class BotEventEnvelopeTests: XCTestCase {
 
         let deviceData = try JSONSerialization.data(withJSONObject: fixture["validDeviceEvent"] as! [String: Any])
         let device = try codec.decode(deviceData)
-        XCTAssertEqual(device.eventId, "dev:m1")
+        XCTAssertEqual(device.eventId, "dev:device-a:1:m1")
         XCTAssertEqual(device.origin, .local(source: "device:lan:device-a"))
         XCTAssertEqual(device.principal.kind, "device")
         XCTAssertEqual(try codec.decode(try codec.encode(device)), device)

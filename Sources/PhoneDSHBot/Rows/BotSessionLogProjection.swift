@@ -283,6 +283,7 @@ public struct BotSessionLogProjector: Sendable {
     private func projectUI(botID: String, events: [BotEvent]) -> [BotRowMutation] {
         var result: [BotRowMutation] = []
         var seenEventIDs: Set<String> = []
+        let (answeredCards, dismissedCards) = cardOutcomes(botID: botID, events: events)
         for (index, event) in events.sorted(by: stableUIEventOrder).enumerated() {
             guard event.principal.botId == nil || event.principal.botId == botID,
                   let data = objectValue(event.data), seenEventIDs.insert(event.eventId).inserted else { continue }
@@ -312,6 +313,14 @@ public struct BotSessionLogProjector: Sendable {
             let provenance = BotRowProvenance(eventIDs: [event.eventId], trust: trust, tainted: false)
             let fallbackID = "e-ui-\(event.eventId)"
             var id = nonEmpty(payload, "id") ?? nonEmpty(payload, "rowID") ?? fallbackID
+            if event.type == "card.presented" {
+                // A closed card is locally hidden and must stay hidden after a cache rebuild.
+                if dismissedCards.contains(id) { continue }
+                if let optionID = answeredCards[id] {
+                    payload["status"] = .string("answered")
+                    payload["answeredOptionID"] = .string(optionID)
+                }
+            }
             var kind: BotRowKind = .sendMessage
             var role: String?
             var body: BotRowBody?
@@ -368,6 +377,25 @@ public struct BotSessionLogProjector: Sendable {
             result.append(.upsert(draft, order))
         }
         return result
+    }
+
+    private func cardOutcomes(botID: String, events: [BotEvent]) -> (answered: [String: String], dismissed: Set<String>) {
+        var answered: [String: String] = [:]
+        var dismissed: Set<String> = []
+        for event in events.sorted(by: stableUIEventOrder) {
+            guard event.principal.botId == nil || event.principal.botId == botID,
+                  let data = objectValue(event.data),
+                  let cardID = nonEmpty(data, "cardID") else { continue }
+            switch event.type {
+            case "card.answered":
+                answered[cardID] = nonEmpty(data, "optionID") ?? answered[cardID] ?? ""
+            case "card.dismissed":
+                dismissed.insert(cardID)
+            default:
+                break
+            }
+        }
+        return (answered, dismissed)
     }
 
     private func uiBody(_ payload: [String: BotJSONValue], eventType: String) -> BotRowBody? {

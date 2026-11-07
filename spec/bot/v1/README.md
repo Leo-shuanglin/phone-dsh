@@ -22,9 +22,11 @@
 - `p0`：第一版 App MCP 和 persona 可以暴露的全部工具。
 - `p1`：`show_table`、`show_callout`、`show_info`、`show_payload`、`show_library`。本修订只冻结 schema 和 payload，标为 `target`；第一版不得注册到 App MCP，也不得写进 persona。
 
+`ReplyToDevice` 是 phoneDSH 宿主扩展（不来自 dsh-bot 0.78.4）：参数只有 `message`（1–1000），宿主从本回合 staged 的 `device-event` 解析来源设备/transport/映射 session，模型不能指定目标。效果为 `device.reply`、`external-send`、`ask`，`resource`/`target` 在执行点替换为具体设备与 transport session；来源不一致或授权不匹配一律拒绝。纯参数分类器把它登记为已知工具，返回 `golden/tool-effects.json` 的 `hostExtensions` 形状（`resource: device:*`、`execution: device-reply`）；`execute` 先解析 staged 来源，用 `BotDeviceReplyTool.requiredEffect` 的具体效果走通用 classify → 授权 → 执行路径，工具本身不再重复授权。完整规则见 `PC-20261106-bot-device-event-envelope@2` §2.4。
+
 `canvas`、`product`、`gift` 不在手机卡片词汇中。未知工具、未知 `cardType`、缺少渲染所需数据的卡片一律 fail-closed；工具返回失败，不生成半空卡片。
 
-`card-payload.schema.json` 的字段来自 dsh-bot `cardPayloads.cjs` 的白名单。`golden/card-payload.json` 必须由真实 builder/normalizer 导出。链接只接受 HTTP/HTTPS；卡片数据必须自带，不能假设存在服务端 callback 补全。
+`card-payload.schema.json` 的字段来自 dsh-bot `cardPayloads.cjs` 的白名单。`golden/card-payload.json` 是 `export-vectors.mjs` 的原样导出，不得手改；phoneDSH 对卡片负载的增量（宿主分配的 `optionID`、recommended 移到首位、负向 fixture）放在 `golden/card-payload.phone.json`，两个文件都由 `validate_vectors.py` 校验 schema/负向结果，并由 Swift `BotCardPayloadTests` 用真实 builder 对拍。重跑导出器后 `card-payload.json` 必须无 diff；`card-payload.phone.json` 不需要重新导出。链接只接受 HTTP/HTTPS；卡片数据必须自带，不能假设存在服务端 callback 补全。
 
 ### 2.1 volatile 上下文快照（WP2 CCR）
 
@@ -37,7 +39,15 @@
 - consumer 的本地 revision 防止旧请求覆盖新请求；producer revision 用于诊断，不作为跨进程持久游标。不得将静态工具发现当成宿主数据已接通。
 - 只有实际注册 `mcp__phone__BotVolatileContext` 的 Bot MCP 才启用 Bot 专用身份登记和 `/approval`。普通 DSH 工作台没有此能力时，`identity-bridge` 与 Bot 专用审批门禁直接继续原工具权限链，不要求 Bot identity 路由，也不得把 Bot 缺失当成允许 Bot 写入。
 
-### 2.2 Grant 恢复与调用代次
+### 2.2 Bot MCP 端点、身份与审批
+
+App 运行 Bot runtime 时，`PDSH_PHONE_MCP_URL` 指向 Bot MCP listener，它是 Worker 唯一的 `phone` MCP 服务器；`PhoneDSHHost` 不得再用 `/mcp/native` 覆盖它。Bot server 在进程内把非 Bot 工具的 `tools/list`/`tools/call` 转发给原生 MCP 处理（ADB），因此两类工具共享一个 `mcp__phone__` 命名空间。`nativeMCP` 仍保留 `/mcp/native` 路由给其他调用方；只有未配置 Bot 端点时才沿用旧的原生 env。
+
+身份登记在 `tools/pre-execute` 先于结构审批完成，并在 `tools/execute` 清理；登记有效期必须覆盖 300 秒审批等待。认领同时绑定代次、bare tool name、参数摘要和仍有效的 principal incarnation。Worker 重启时取消所有待审批（并写 `approval.decided`/`ui.notice`）、清空旧登记并推进代次；Task 记录持久化，未完成项以 `interrupted`/`worker_restarted` 返回并只唤醒父对话一次。HTTP 只监听 loopback、Origin 精确匹配、路径精确、Bearer 常量时间比较，且 Worker 只拿 token placeholder，由宿主在 `/v1/http` egress 注入真实 bearer。
+
+完整条款见 [mcp-endpoint.md](mcp-endpoint.md)。
+
+### 2.3 Grant 恢复与调用代次
 
 - 生产 `BotGrantStore` 必须以同一个 `SQLiteDomainStore` 为权威，使用 `authz.grant_snapshot` durable 事件保存完整当前 Grant 集合及精确匹配字段；最后一次完整快照决定恢复状态。该投影不是审计：既有审计事件继续只存参数/resource 摘要，不能拿摘要反推 Grant。
 - add/extend/consume/revoke 先持久化新快照，再公开新内存状态；once 在持久化期间不得被第二个执行找到。持久化失败不得改变可见授权。所有执行入口必须先完成恢复，缺失、损坏或版本不支持均 fail-closed，不能临时退回空 store 后按 auto-policy 放行。
@@ -58,7 +68,7 @@ routine、cron、run-attempt、安静时段、silent/held/interrupt、held inbox
 
 ### 4.1 设备 ingress
 
-设备消息先落 SQLite，再进入 held inbox。`device.event` 使用 `eventId/traceId/correlationId = "dev:" + msg_id`，`origin = device:<transport>:<device_id>`；principal 的 session 是个人 Agent 唯一连续主对话，kind 为 device，所有文本均不可信。每个 Bot 不为设备另建主 session，既有 DSH 设备管理路径不变。held kind 为 `device-event`，requestId 同样为 `dev:msg_id`，可选 `deviceID/transport/deviceSeq` 保存来源。重复 msg_id 去重，冲突 payload 拒绝，乱序按设备 seq 补齐，崩溃后从 durable event 恢复。WebContent 不可用时 pending/staged，恢复后只补一次。蓝牙/LAN 原始扫描不能作为稳定身份或唤醒依据，工具仍走执行点再授权和全局 PhoneCapabilityGate。完整映射以 `docs/protocol-changes/PC-20261106-bot-device-ingress.md` 为准。
+设备消息先落 SQLite，再进入 held inbox。P07 envelope 的 `epoch`（缺省 0，非降序）标识设备 session incarnation，seq 作用域为 `(device, dir, epoch)`；`device.event` 使用 `eventId/traceId/correlationId = "dev:<device_id>:<epoch>:<msg_id>"`，`origin = device:<transport>:<device_id>`；principal 的 session 是个人 Agent 唯一连续主对话，kind 为 device，所有文本均不可信。每个 Bot 不为设备另建主 session，既有 DSH 设备管理路径不变。held kind 为 `device-event`，requestId 同样为 scoped ID，设备分支必填 `deviceID/transport/deviceSeq` 并可选 `deviceEpoch` 保存来源。去重键为 `(device_id, epoch, msg_id)`，同设备同 epoch 同 seq 唯一；乱序按每 epoch 的 delivered watermark 补齐，等待 30 s 或缓存超过 32 条时跳过缺口并写 `ui.notice`（`data.kind=device.gap`），崩溃后从 durable event 与 WakeInbox `deviceCursors` 恢复且不重放已入队历史。WebContent 不可用时 pending/staged，恢复后只补一次。蓝牙/LAN 原始扫描不能作为稳定身份或唤醒依据，工具仍走执行点再授权和全局 PhoneCapabilityGate。来源回复只允许 `ReplyToDevice`，由宿主解析本回合 staged 来源，效果为 `device.reply`/external-send/ask；`needs_reconciliation` 在重连时对账。完整映射以 `docs/protocol-changes/PC-20261106-bot-device-ingress.md` 和 `PC-20261106-bot-device-event-envelope@2` 为准。
 
 ## 5. 行与交互
 
@@ -72,7 +82,7 @@ Row、RowBatch、UserAction 和 ActionResult 以对应 schema 为准。`body.typ
 - 流式文字只存在内存覆盖层，不写 durable 事件，手机每秒最多推送 10 次。
 - 运行中输入通过 steering 并入当前回合，不排队；停止只取消当前回合并丢弃迟到输出，不重启 runtime。
 - 隐藏回合只显示卡片；question/steps 成功后宿主抑制模型收尾文字。
-- question/steps 只有 2–4 个真实选项，无“其他”或卡内输入；`cardAnswer` 仅含 `cardID + optionID`，选项值作为普通 `chat` 新消息，自由文本不经过卡片。推荐取第一个合法 recommended/primary，其余 primary 归一为 default，danger 不推荐。仅 question 可关闭，且 dismiss 只做本地隐藏，不写模型可见事件或触发新回合；steps 不提供关闭动作。
+- question/steps 只有 2–4 个真实选项，无“其他”或卡内输入；宿主在生成卡片时分配稳定 `optionID`（`o0`…`o3`），UI 只提交这个 ID，`cardAnswer` 仅含 `cardID + optionID`，选项值作为普通 `chat` 新消息，自由文本不经过卡片。推荐取第一个合法 recommended/primary 并移到第一位，其余 primary 归一为 default，danger 不推荐。回答写 durable `card.answered`，关闭写 durable `card.dismissed`；已回答、已关闭或已过期的卡再次提交返回 stale，新 question/steps 卡出现时旧的 open 选择卡过期。仅 question 可关闭：关闭不产生模型可见回合，宿主在下一次用户回合开头以 held 项告知模型视为不回答；DSH 不可用时关闭仍在本地立即生效。steps 不提供关闭动作，`cardDismiss` 对 steps 返回 rejected。
 - 所有消息卡片与同一 assistant 回复气泡共享列宽，不得超过该气泡；question/steps 内距 12、选项视觉高 44、间距 4，其他卡片同样按内容紧凑排列。超过 4 个步骤/条目默认折叠，详细规则以 `spec/ui/v1/pages/bot-chat.md` 为准。
 - 第一版不提供新建对话、对话列表、回滚或删除单条。现有 DSH 多 session 工作台保留为独立高级入口。
 
@@ -102,4 +112,4 @@ node spec/tools/bot/export-vectors.mjs \
 python3 spec/bot/v1/tools/validate_vectors.py
 ```
 
-导出器只读 dsh-bot，临时 fixture 写系统临时目录。所有实现必须让真实 codec/状态机读取这些 golden；Python 校验器通过不能替代运行时 conformance。
+导出器只读 dsh-bot，临时 fixture 写系统临时目录。所有实现必须让真实 codec/状态机读取这些 golden；Python 校验器通过不能替代运行时 conformance。`golden/card-payload.json` 覆盖上游导出；`golden/card-payload.phone.json` 是 phoneDSH 增量（`optionID`、recommended 首位、负向 fixture），两者分工见 §2。

@@ -35,6 +35,31 @@ final class BotDSHRemoteRuntimeTests: XCTestCase {
         XCTAssertTrue(events.contains { $0.eventId.contains("dsh:gb-main:3:conversation.assistant_message") })
     }
 
+    func testBotSessionsAreNamespacedAndClaimedBeforeTurns() async throws {
+        let fixture = try makeBotMCPFixture()
+        defer { fixture.cleanup() }
+        let transport = BotScriptedRemoteTransport(scripts: [
+            "gb-main": [[.turn(), .assistant("main"), .end()]],
+            "gb-created-1": [[.turn(), .assistant("task"), .end()]],
+        ])
+        let remote = try await BotDSHRemoteRuntime(transport: transport, runtime: fixture.runtime)
+        let main = try await remote.sendUserMessage("hello")
+        XCTAssertEqual(main.sessionId, "gb-main")
+        XCTAssertEqual(transport.requestedSessionIds, ["gb-main"])
+        XCTAssertEqual(transport.claimedSessions, ["gb-main"])
+
+        let parent = try await makeParent(fixture.runtime)
+        let task = try await remote.start(request: BotTaskRequest(
+            parent: parent, title: "Namespaced task", prompt: "inspect",
+            asynchronous: false, timeoutMs: 1_000))
+        XCTAssertEqual(task.status, "completed")
+        XCTAssertEqual(transport.requestedSessionIds.count, 2)
+        XCTAssertTrue(transport.requestedSessionIds[1].hasPrefix("gb-task-"),
+                      "task session must use the Bot namespace: \(transport.requestedSessionIds[1])")
+        XCTAssertTrue(transport.claimedSessions.contains(task.sessionId),
+                      "the created task session must be claimed before its turn")
+    }
+
     func testSecondMessageSteersTheOnlyCollectorAndNextTurnGetsANewAttempt() async throws {
         let fixture = try makeBotMCPFixture()
         defer { fixture.cleanup() }
@@ -68,6 +93,7 @@ final class BotDSHRemoteRuntimeTests: XCTestCase {
         ])
         let first = try await BotDSHRemoteRuntime(transport: firstTransport, runtime: fixture.runtime)
         _ = try await first.sendUserMessage("first")
+        XCTAssertEqual(firstTransport.claimedSessions, ["gb-main"])
 
         let resumedTransport = BotScriptedRemoteTransport(mainId: "gb-new", scripts: [
             "gb-main": [[.turn(2), .assistant("resumed"), .end(turn: 2)]],
@@ -77,6 +103,8 @@ final class BotDSHRemoteRuntimeTests: XCTestCase {
         XCTAssertEqual(resumedResult.sessionId, "gb-main")
         XCTAssertEqual(resumedResult.text, "resumed")
         XCTAssertEqual(resumedTransport.createCount, 0)
+        XCTAssertEqual(resumedTransport.claimedSessions, ["gb-main"],
+                       "a legacy/recovered main session id must be claimed explicitly")
         let recoveredID = await resumed.mainSessionId
         XCTAssertEqual(recoveredID, "gb-main")
 
@@ -89,6 +117,7 @@ final class BotDSHRemoteRuntimeTests: XCTestCase {
         XCTAssertEqual(replaced.sessionId, "gb-new")
         XCTAssertEqual(replaced.text, "replacement")
         XCTAssertEqual(replacementTransport.createCount, 1)
+        XCTAssertEqual(replacementTransport.claimedSessions, ["gb-new"])
     }
 
     func testAttachTransportRevalidatesThePersistedMainSession() async throws {
@@ -178,6 +207,7 @@ final class BotDSHRemoteRuntimeTests: XCTestCase {
         let parentPrompt = try XCTUnwrap(transport.prompts["gb-main"])
         XCTAssertTrue(parentPrompt.text.hasPrefix("[SAND_HIDDEN_PROMPT][subagent]"))
         XCTAssertFalse(parentPrompt.text.contains("hidden result must not render"))
+        XCTAssertEqual(transport.promptRequestIds.last?.requestId, "task-settled:\(taskId)")
         let records = try await BotLLMLedger(eventLog: fixture.store).records()
         XCTAssertEqual(Set(records.map(\.purpose)), [.frontTurn, .workerTurn])
         let events = try await botEvents(fixture.store)
@@ -217,8 +247,11 @@ final class BotDSHRemoteRuntimeTests: XCTestCase {
         let other = try await makeParent(fixture.runtime, sessionId: "gb-other", callId: "other-parent")
         await assertUnauthorized { try await remote.await(taskId: started.taskId, timeoutMs: 1_000, parent: other) }
         await assertUnauthorized { try await remote.stop(taskId: started.taskId, parent: other) }
+        // A reissued incarnation is the same logical conversation after a
+        // restart; it may read the terminal record (the status is explicit).
         let nextIncarnation = try await makeParent(fixture.runtime, callId: "next-incarnation")
-        await assertUnauthorized { try await remote.await(taskId: started.taskId, timeoutMs: 1_000, parent: nextIncarnation) }
+        let recovered = try await remote.await(taskId: started.taskId, timeoutMs: 1_000, parent: nextIncarnation)
+        XCTAssertEqual(recovered.status, "stopped")
     }
 
     func testCancelOnlyCancelsCurrentSessionTurn() async throws {
@@ -238,6 +271,69 @@ final class BotDSHRemoteRuntimeTests: XCTestCase {
         let result = try await running.value
         XCTAssertEqual(result.status, "cancelled")
         XCTAssertEqual(transport.cancellations, ["gb-main"])
+    }
+
+    func testHeldDeliveryRequestIdIsDerivedFromInboxItems() async throws {
+        let fixture = try makeBotMCPFixture()
+        defer { fixture.cleanup() }
+        let transport = BotScriptedRemoteTransport(scripts: [
+            "gb-main": [[.turn(), .assistant("held ok"), .end()]],
+        ])
+        let inbox = WakeInbox(store: SQLiteWakeInboxStore(domainStore: fixture.store, botId: "main"))
+        let remote = try await BotDSHRemoteRuntime(transport: transport, runtime: fixture.runtime,
+                                                   wakeInbox: inbox, now: { 1_000 })
+        _ = try await remote.sendUserMessage("establish")
+        _ = try await inbox.enqueue(try WakeInboxItem(
+            id: "held-1", kind: "routine-result", text: "held text", createdAt: 1_000))
+        transport.queue(sessionId: "gb-main", events: [.turn(2), .assistant("held ok"), .end(turn: 2)])
+        _ = try await remote.sendUserMessage("next")
+        let expected = try BotArgumentsDigest.string(for: .array([.string("held-1")]))
+        XCTAssertEqual(transport.promptRequestIds.last?.requestId, "held:\(expected)")
+        XCTAssertTrue(transport.prompts["gb-main"]?.text.contains("held text") == true)
+        let remaining = try await inbox.items()
+        XCTAssertEqual(remaining.count, 0)
+    }
+
+    func testWorkerRestartInterruptsTaskAndWakesParentOnce() async throws {
+        let fixture = try makeBotMCPFixture()
+        defer { fixture.cleanup() }
+        let parent = try await makeParent(fixture.runtime)
+        let transport = BotScriptedRemoteTransport(scripts: [
+            "gb-main": [
+                [.turn(), .assistant("parent"), .end()],
+                [.turn(2), .assistant("woke"), .end(turn: 2)],
+            ],
+        ])
+        let remote = try await BotDSHRemoteRuntime(transport: transport, runtime: fixture.runtime)
+        _ = try await remote.sendUserMessage("parent")
+
+        transport.pause("gb-created-1")
+        transport.queue(sessionId: "gb-created-1", events: [.turn()])
+        let started = try await remote.start(request: BotTaskRequest(
+            parent: parent, title: "Interrupt me", prompt: "long work",
+            asynchronous: true, timeoutMs: 1_000))
+        try await waitUntil { transport.openMuxCount >= 2 }
+        await remote.workerRestarted()
+        transport.resume("gb-created-1")
+
+        let interrupted = try await remote.await(taskId: started.taskId, timeoutMs: 1_000, parent: parent)
+        XCTAssertEqual(interrupted.status, "interrupted")
+        XCTAssertEqual(interrupted.error, "worker_restarted")
+        let delivered = await remote.deliverInterruptedTaskWakes()
+        XCTAssertEqual(delivered, 1)
+        XCTAssertEqual(transport.promptRequestIds.last?.requestId, "task-interrupted:\(started.taskId)")
+        let second = await remote.deliverInterruptedTaskWakes()
+        XCTAssertEqual(second, 0)
+
+        // A new app process restores the same explicit status and does not
+        // answer `unauthorized` merely because the principal incarnation moved.
+        let restored = try await BotDSHRemoteRuntime(transport: transport, runtime: fixture.runtime)
+        let nextParent = try await makeParent(fixture.runtime, callId: "restored-parent")
+        let restoredRecord = try await restored.await(taskId: started.taskId, timeoutMs: 1_000, parent: nextParent)
+        XCTAssertEqual(restoredRecord.status, "interrupted")
+        XCTAssertEqual(restoredRecord.error, "worker_restarted")
+        let stopped = try await restored.stop(taskId: started.taskId, parent: nextParent)
+        XCTAssertEqual(stopped.status, "interrupted")
     }
 
     private func makeParent(_ runtime: BotMCPRuntime, sessionId: String = "gb-main",

@@ -35,7 +35,11 @@ public enum BotAttributionError: Error, Sendable, Equatable {
 }
 
 public actor BotAttributionRegistry {
-    public static let defaultTTLMilliseconds: Int64 = 30_000
+    /// One registration must outlive the 300 s approval wait plus transport
+    /// slack; otherwise an approval card approved near the deadline could
+    /// never be claimed. The runtime still prunes expired entries and a Worker
+    /// restart invalidates every registration through a new generation.
+    public static let defaultTTLMilliseconds: Int64 = BotApprovalCoordinator.defaultTimeoutMilliseconds + 30_000
     public static let defaultMaximumEntries = 4_096
 
     private let now: @Sendable () -> Int64
@@ -146,6 +150,12 @@ public actor BotAttributionRegistry {
 
     func revokeSession(_ sessionId: String) -> Int {
         let ids = entries.values.filter { $0.sessionId == sessionId }.map(\.id)
+        for id in ids { entries.removeValue(forKey: id) }
+        return ids.count
+    }
+
+    func cancelRuntime(runtimeId: String) -> Int {
+        let ids = entries.values.filter { $0.runtimeId == runtimeId }.map(\.id)
         for id in ids { entries.removeValue(forKey: id) }
         return ids.count
     }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 
+#if DEBUG
 import Foundation
 import SwiftUI
 
@@ -36,7 +37,6 @@ enum BotUIFixtures {
             body = widget("question", [
                 "question": "要把这份整理好的内容保存到哪里？",
                 "helpText": "推荐保存到文档库，之后可以继续编辑。",
-                "allowCustom": true,
                 "options": [
                     ["id": "library", "label": "保存到文档库", "description": "保留版本并方便之后查找", "recommended": true],
                     ["id": "pdf", "label": "导出 PDF", "description": "生成适合分享的固定版面"],
@@ -45,8 +45,7 @@ enum BotUIFixtures {
             ])
         case .steps:
             body = widget("steps", [
-                "helpText": "选择下一步，或在输入框说明其他做法。",
-                "allowCustom": true,
+                "helpText": "选择下一步继续；自由输入请用下方输入框发普通消息。",
                 "steps": [
                     ["id": "review", "label": "查看验收结果", "description": "先确认测试和截图证据", "recommended": true],
                     ["id": "pr", "label": "创建 Pull Request"],
@@ -218,7 +217,8 @@ struct BotUIFixtureRootView: View {
         self.diagnostics = diagnostics
         let chat = BotChatModel(
             rows: BotUIFixtures.rows(for: fixture),
-            fixtureHistory: fixture == .failClosed ? [] : [BotUIRow.text(id: "older-fixture", seq: 0, role: "assistant", text: "更早的历史消息")]
+            fixtureHistory: fixture == .failClosed ? [] : [BotUIRow.text(id: "older-fixture", seq: 0, role: "assistant", text: "更早的历史消息")],
+            fixtureActions: true
         )
         if fixture == .chat { chat.beginTurn(turnID: "fixture-chat-turn") }
         _chatModel = StateObject(wrappedValue: chat)
@@ -280,7 +280,7 @@ enum BotUIFixtureChecks {
         try checkRowProtocol(at: rowProtocolURL)
         passed.append("shared-row-protocol-decoding")
 
-        let model = BotChatModel(rows: BotUIFixtures.rows(for: .progress))
+        let model = BotChatModel(rows: BotUIFixtures.rows(for: .progress), fixtureActions: true)
         var updated = BotUIFixtures.rows(for: .progress)[1]
         updated.id = "progress-updated"
         updated.seq = 3
@@ -299,7 +299,7 @@ enum BotUIFixtureChecks {
                     "late stream survived cancellation")
         passed.append("stop-drops-late-output")
 
-        let streamModel = BotChatModel()
+        let streamModel = BotChatModel(fixtureActions: true)
         streamModel.beginTurn(turnID: "rate-check")
         for index in 0..<20 {
             streamModel.receiveStream(turnID: "rate-check", text: "delta-\(index)")
@@ -311,14 +311,14 @@ enum BotUIFixtureChecks {
         streamModel.stop()
         passed.append("stream-max-10hz-latest-wins")
 
-        let deepLinkModel = BotChatModel(rows: BotUIFixtures.rows(for: .question))
+        let deepLinkModel = BotChatModel(rows: BotUIFixtures.rows(for: .question), fixtureActions: true)
         let good = URL(string: "phonedsh://bot/main/row/card-question")!
         let bad = URL(string: "phonedsh://bot/main/row/missing")!
         try require(deepLinkModel.openDeepLink(good) && !deepLinkModel.openDeepLink(bad),
                     "deep link did not resolve exactly")
         passed.append("deep-link-exact-row")
 
-        let hidden = BotChatModel(rows: BotUIFixtures.rows(for: .failClosed))
+        let hidden = BotChatModel(rows: BotUIFixtures.rows(for: .failClosed), fixtureActions: true)
         try require(hidden.visibleRows.isEmpty, "P1/unknown/incomplete row rendered")
         passed.append("fail-closed-P1-unknown-incomplete")
 
@@ -390,7 +390,6 @@ enum BotUIFixtureChecks {
     }
 }
 
-#if DEBUG
 #Preview("Question") { BotUIFixtureRootView(fixture: .question) }
 #Preview("Progress · Dark", traits: .fixedLayout(width: 390, height: 844)) {
     BotUIFixtureRootView(fixture: .progress).preferredColorScheme(.dark)

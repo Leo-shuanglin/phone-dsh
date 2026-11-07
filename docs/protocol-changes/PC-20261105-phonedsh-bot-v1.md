@@ -124,6 +124,7 @@ python3 spec/bot/v1/tools/validate_vectors.py
 | `3c7a6efaab5d95b71cbceb7b69d900f5e8665552` | contract owner / 主 Agent | 新增 FishDirector schema/golden 与纯 Swift 对拍实现；纳入真实 512px 头像资源及 BotFishAvatar。20 组向量、127 个 Bot 测试通过 | WP9 直接消费公共状态机和资产；WP7 提供真实事件 |
 | `7214962fc4ca51f1bdfd60b25b49dc2997131a40` | contract owner / 主 Agent | 接受 WP7 durable-action CCR；SQLite v2 同事务提交动作事件、effects 和 nonce，保留 P25 wire 与既有结果类型 | transaction 实现者、WP7、WP9 |
 | `30b306c96f57aace6d3275cad9a23142ecb7bf3c` | contract owner / 主 Agent | 集成审查发现 Grant 重启丢失与旧调用身份漂移；冻结 SQLite Grant 快照恢复和 principal incarnation 绑定 | WP4 后续修复、WP7 |
+| PR #60 cards worktree（待主会话提交） | 卡片修復工作區 | 宿主分配 optionID、card.answered/card.dismissed 狀態、關閉改 durable 事件加 held 提示、禁止 cardAnswer text/customText、recommended 歸一與 golden/tools-list 對拍；詳見 §11 | WP7/WP8/WP9；主會話 review |
 
 ## 7. WP7 CCR：durable user-action transaction
 
@@ -165,11 +166,23 @@ python3 spec/bot/v1/tools/validate_vectors.py
 
 §9 的独立 BotDock 工作包已按用户要求停止，不在本轮继续实现。用户随后单独要求对齐所有消息卡片的样式与手机尺寸，因此本修订只恢复卡片本身的紧凑呈现，不恢复底栏或其他视觉工作。
 
-- question/steps 没有“其他”选项、卡内输入框或自定义答案提交。`cardAnswer` 只接受 `cardID + optionID`，选项的 `value ?? label` 作为普通新聊天消息；自由文本只能走普通 `chat`。P25 target schema 直接删除 `customText`，不保留别名；此前未发布该 target，不宣称旧版兼容。
-- 仅 question 支持 dismiss，且只隐藏本地卡片，不产生模型可见消息、审批拒绝或额外模型回合；steps 不提供关闭动作。同一回合不得反复弹回。选项选择不是 approval，也不触发独立 approval grant。
-- 工具输入为 2–4 个选项；无有价值下一步时不调用工具，禁止空卡或凑选项。对象字段只含 `label/value/style/recommended/description`，steps 另允许字符串简写。推荐归一以第一个合法推荐胜出，其余 primary 降为 default，danger 不推荐；这与上游运行时一致，不把多推荐直接抛成工具错误。
+- question/steps 没有“其他”选项、卡内输入框或自定义答案提交。卡片生成时由宿主分配稳定 `optionID`（`o0`…`o3`），`cardAnswer` 只接受 `cardID + optionID`，planner 校验该 ID 属于原卡；选项的 `value ?? label` 作为普通新聊天消息，自由文本只能走普通 `chat`。P25 target schema 直接删除 `customText`，并禁止 `cardAnswer` 携带 `text`/`customText`；Swift 解码同样拒绝，不保留别名；此前未发布该 target，不宣称旧版兼容。
+- 仅 question 支持关闭，步骤卡不提供关闭动作，`cardDismiss` 对 steps 返回 rejected。关闭写 durable `card.dismissed`，只做本地隐藏，不产生模型可见消息、审批拒绝或额外模型回合；宿主在下一次用户回合开头以 held 项告知模型“视为不回答、不要在同一话题重问”。DSH 不可用时关闭仍立即提交本地 durable 事件。回答写 durable `card.answered`；已回答、已关闭或已过期的卡再次提交返回 stale，新 question/steps 卡出现时旧的 open 选择卡过期。同一回合不得反复弹回。选项选择不是 approval，也不触发独立 approval grant。
+- 工具输入为 2–4 个选项；无有价值下一步时不调用工具，禁止空卡或凑选项。对象字段只含 `label/value/style/recommended/description`，steps 另允许字符串简写。推荐归一以第一个合法推荐胜出并移到第一位，其余 primary 降为 default，danger 不推荐；这与上游运行时一致，不把多推荐直接抛成工具错误。
 - 所有消息卡片与同一 assistant 回复气泡共享唯一 `BotMessageColumn`，宽度不得超过该气泡，不额外增加外边距，不使用 transcript 内全屏/居中模态。question/steps 内距 12、选项视觉高 44、间距 4、默认透明；recommended 才使用轻 tint、细边和徽标。其他工作/产出/审批/Task/routine/notice 卡同样受此列宽与紧凑内容约束。
 - 高度按内容，超过 4 个步骤/条目默认折叠；预览只能由用户主动打开。44pt 命中区、深浅色、动态字体与 Reduce Motion 保持，不通过放大卡片换取触控面积。
 - 新增紧凑卡片实现工作包，只修改原 WP9 的 `Bot/Bot{CardView,WorkCardView,UIComponents,ChatPage,ChatModel,UIModels,Fixtures}.swift` 及 `scripts/ci/bot-ui/**` 中必要场景，禁止改 BotDock、RootView 或其他页面。必须实际测量卡片与回复气泡宽度，不能用 fixture 存在代替尺寸验收。
 
 验收：shared schema/golden、PhoneDSHBotTests、三项 contract gate，以及真实模拟器的全部 P0 卡片浅/深截图、宽度断言、无自定义输入、recommended、选中/关闭与折叠交互。
+
+## 11. 卡片選項 ID、狀態與關閉語義修訂（PR #60 修復）
+
+本次修訂由 PR #60 卡片修復工作區提出，尚待 contract owner 在主會話審查並提交。它不新增 wire major，沿用 Bot `schemaVersion=1` 和同 App bundle 配對升級。
+
+- **選項身份**：`ask_user`/`show_next_steps` 的 builder 在推薦歸一後由宿主分配 `id: "o0"…"o3"`，寫入 `card.presented`；模型不需要也不能提供 ID。UI 只提交 `cardID + optionID`，planner 從 durable `card.presented` 的 `options`/`steps` 校驗 ID 屬於該卡。舊資料中沒有 `id` 的卡片視為不可回答（`unknown_option`），不回退用 label 猜測。
+- **卡片狀態**：回答寫 `card.answered`，關閉寫 `card.dismissed`；兩者都是 durable BotEvent 類型，加入 `event-envelope.schema.json` 與 `BotEventEnvelopeCodec.durableEventTypes`。已回答、已關閉或已過期（同一 Bot 之後又出現 question/steps 卡）的卡再次提交返回 stale：`already_answered`、`card_dismissed`、`card_expired`。投影器在重建時保留已回答狀態並隱藏已關閉卡片。
+- **關閉語義**：question 關閉只提交 `card.dismissed`，不再呼叫 remote runtime、不開隱藏回合；planner 同時投遞一個 held inbox `card-dismissed` 項，下一次用戶回合開頭由 `HeldMessages` 告知模型視為不回答且不要在同一話題重問。held inbox 滿或不可用時不阻止本地關閉。steps 的 `cardDismiss` 返回 rejected（`only_question_cards_can_be_dismissed`），UI 不提供關閉按鈕。DSH 不可用時 question 關閉仍由本地 SQLite 提交。
+- **不允許自填**：`user-action.schema.json` 的 `cardAnswer` 分支用 `not` 禁止 `text`/`customText`；`BotUserAction` 與 UI action 解碼器同樣拒絕。自由文本只能作為普通 `chat` 發送。
+- **推薦約束**：`BotToolCatalog` 的 `ask_user`/`show_next_steps` 運行時描述寫明「最多一個 recommended、不能推薦 danger、放第一位」；builder 把第一個合法 recommended/primary 移到第一位並降級其餘 primary。`golden/card-payload.phone.json` 增加多 recommended、danger 被推薦、推薦不在第一位和 danger-only 的歸一向量，並由真實 Swift builder 對拍。新增測試比對 `tools/list` 與 `golden/tool-catalog.json` 的 P0 名稱及 required schema。
+- **Golden 來源（兩個文件的分工）**：`golden/card-payload.json` 保持 `spec/tools/bot/export-vectors.mjs` 的原樣導出，不手改；重跑導出器後必須無 diff。phoneDSH 的增量（宿主分配 `optionID`、recommended 移到首位、負向 fixture）放在 `golden/card-payload.phone.json`。`validate_vectors.py` 用同一 `card-payload.schema.json` 校驗兩者的正向向量，並要求負向向量 `ok=false`，同時拒絕上游文件出現 option `id`。`BotCardPayloadTests` 用真實 Swift builder 對拍：上游向量按去掉 option id 後的形狀比較，phone 增量按完整結果比較。若把增量寫回上游文件，導出會產生 diff 且上游一致性檢查失敗。
+- **相容性**：新事件類型對舊 App 是未知非 ignorable durable event，舊版回滾不得跳過或靜默丟棄；必須同 bundle 升級。既有 durable 資料保留，沒有 schema 版本 bump，也不修改 P01/P02/P03/P15 訊息。`card.presented` 新增 `id` 是 additive field；未發布的舊 Bot 卡片沒有選項 ID，只能 stale 而不能靠 label 回答。

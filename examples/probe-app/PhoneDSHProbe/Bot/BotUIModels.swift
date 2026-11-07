@@ -212,9 +212,17 @@ enum BotUIUserAction: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: Keys.self)
+        let raw = try decoder.container(keyedBy: BotUIDynamicKey.self)
         let nonce = try container.decode(String.self, forKey: .nonce)
         let botID = try container.decode(String.self, forKey: .botID)
-        switch try container.decode(String.self, forKey: .kind) {
+        let kind = try container.decode(String.self, forKey: .kind)
+        if kind == "cardAnswer",
+           raw.contains(BotUIDynamicKey("text")) || raw.contains(BotUIDynamicKey("customText")) {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "cardAnswer must not contain text or customText; free-form replies use chat"))
+        }
+        switch kind {
         case "chat":
             self = .chat(nonce: nonce, botID: botID, text: try container.decode(String.self, forKey: .text))
         case "cardAnswer":
@@ -337,6 +345,7 @@ struct BotUIHistoryPage {
 
 struct BotChatDriver {
     var history: (String?, Int) async throws -> BotUIHistoryPage
+    var watch: (Int) async throws -> BotUIRowBatch
     var perform: (BotUIUserAction) async -> BotUIActionResult
     var stopCurrentTurn: (String?) async -> Void
 }
@@ -370,16 +379,12 @@ struct BotUIChoice: Equatable, Identifiable {
     var danger: Bool
 
     static func parse(_ value: BotJSONValue, index: Int) -> BotUIChoice? {
-        if let label = value.string?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
-            return BotUIChoice(id: label, label: label, value: label, description: nil,
-                               recommended: false, danger: false)
-        }
         guard let object = value.object,
               let rawLabel = object.string("label", "text", "title", "value"),
-              !rawLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+              !rawLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let id = object.string("id", "optionID"), !id.isEmpty else { return nil }
         let label = rawLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let style = object["style"]?.string?.lowercased() ?? "default"
-        let id = object.string("id", "optionID") ?? label
         return BotUIChoice(id: id, label: label,
                            value: object["value"]?.string ?? label,
                            description: object.string("description", "detail"),

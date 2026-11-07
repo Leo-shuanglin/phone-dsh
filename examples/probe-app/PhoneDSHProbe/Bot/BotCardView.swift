@@ -47,8 +47,9 @@ private struct BotChoiceCardView: View {
     }
     private var help: String? { card.body.string("helpText", "help") }
     private var muted: Bool { model.mutedCardIDs.contains(row.id) }
+    private var answered: Bool { card.body["status"]?.string == "answered" }
     private var locked: Bool {
-        muted || model.actionStates[key] == .pending || model.actionStates[key] == .accepted
+        answered || muted || model.actionStates[key] == .pending || model.actionStates[key] == .accepted
     }
     private var canDismiss: Bool {
         !isSteps && card.body["dismissible"]?.bool != false
@@ -142,7 +143,7 @@ private struct BotChoiceCardView: View {
                     }
                 }
 
-                if model.actionStates[key] == .accepted {
+                if model.actionStates[key] == .accepted || answered {
                     Label("已送出", systemImage: "checkmark")
                         .botSecondaryFont()
                         .foregroundStyle(HomeSpec.textSecondary)

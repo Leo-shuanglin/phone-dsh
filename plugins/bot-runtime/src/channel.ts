@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { botOwnedSessions } from './bot-sessions.ts'
 import { registerBotStreamHub } from './runtime-registry.ts'
 
 class AsyncQueue<T> {
@@ -49,6 +50,10 @@ export interface BotCancelRequest {
 }
 
 export interface BotStreamRequest {
+  readonly sessionId: string
+}
+
+export interface BotClaimSessionRequest {
   readonly sessionId: string
 }
 
@@ -122,9 +127,22 @@ export class BotRuntimeRemote extends TypertRemoteService {
     agent.cancel({ kind: 'user' }, { keepInbox: true })
     return { ok: true, sessionId }
   }
+
+  /**
+   * Claims an existing session as Bot-owned before its first turn. This is the
+   * non-MCP path the Bot runtime uses for the deterministic main session and
+   * for legacy/recovered session ids that predate the `gb-` namespace; the
+   * identity and approval gates read the same Worker-local registry.
+   */
+  botClaimSession(request: BotClaimSessionRequest): { ok: boolean; sessionId: string } {
+    const sessionId = String(request?.sessionId ?? '')
+    if (!sessionId) return { ok: false, sessionId }
+    botOwnedSessions(this.ctx).add(sessionId)
+    return { ok: true, sessionId }
+  }
 }
 
-function markRemoteMethod(name: 'botStream' | 'botCancel'): void {
+function markRemoteMethod(name: 'botStream' | 'botCancel' | 'botClaimSession'): void {
   const descriptor = Object.getOwnPropertyDescriptor(BotRuntimeRemote.prototype, name)
   if (typeof descriptor?.value !== 'function') throw new TypeError(`Bot Remote method is missing: ${name}`)
   let initializer: ((this: BotRuntimeRemote) => void) | undefined
@@ -141,6 +159,7 @@ function markRemoteMethod(name: 'botStream' | 'botCancel'): void {
 
 markRemoteMethod('botStream')
 markRemoteMethod('botCancel')
+markRemoteMethod('botClaimSession')
 
 export async function dshbotChannel(ctx: Context): Promise<void> {
   const hub = new BotStreamHub()

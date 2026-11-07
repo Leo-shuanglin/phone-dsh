@@ -4,6 +4,10 @@ import Foundation
 import PhoneDSH
 import PhoneDSHAgentCore
 import PhoneDSHBot
+#if canImport(PhoneDSHADB) && canImport(PhoneDSHLoopback)
+import PhoneDSHADB
+import PhoneDSHLoopback
+#endif
 #if canImport(ProbeKit)
 import ProbeKit
 #endif
@@ -21,123 +25,35 @@ actor BotDeferredVolatileContextProvider: BotVolatileContextProviding {
     }
 }
 
-actor BotRemoteActionPlanner: BotUserActionPlanning {
-    let remote: BotDSHRemoteRuntime
-    let runtime: BotMCPRuntime
-    let handler: BotMCPHandler
-    let store: SQLiteDomainStore
-    let botID: String
-
-    init(remote: BotDSHRemoteRuntime, runtime: BotMCPRuntime,
-         handler: BotMCPHandler, store: SQLiteDomainStore, botID: String) {
-        self.remote = remote
-        self.runtime = runtime
-        self.handler = handler
-        self.store = store
-        self.botID = botID
-    }
-
-    func plan(_ action: BotUserAction, trust: BotUserActionTrust) async throws -> BotUserActionPlanOutcome {
-        guard trust == .ownerDirect, action.botID == botID else {
-            return .rejected(reason: "untrusted_action")
-        }
-        switch action.kind {
-        case .chat:
-            guard let text = action.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
-                return .rejected(reason: "missing_text")
-            }
-            return try await complete(action, result: remote.sendUserMessage(text))
-        case .cardAnswer:
-            guard let cardID = action.cardID, let optionID = action.optionID,
-                  let card = try await card(cardID), card.kind == "question" || card.kind == "steps" else {
-                return .stale(reason: "unknown_card")
-            }
-            guard let option = card.options.first(where: { $0.id == optionID }) else {
-                return .stale(reason: "unknown_option")
-            }
-            let prompt = "<user_action>Owner selected card \(cardID), option \(optionID): \(option.label)</user_action>"
-            return try await complete(action, result: remote.sendHiddenInteraction(prompt))
-        case .cardDismiss:
-            guard let cardID = action.cardID, let card = try await card(cardID), card.kind == "question" else {
-                return .rejected(reason: "only_question_cards_can_be_dismissed")
-            }
-            let prompt = "<user_action>Owner dismissed question card \(cardID). Do not show this card again unless a new turn makes it necessary.</user_action>"
-            return try await complete(action, result: remote.sendHiddenInteraction(prompt))
-        case .approval:
-            guard let approvalID = action.approvalID, let decision = action.decision,
-                  let digest = action.digest else { return .rejected(reason: "invalid_approval") }
-            switch await handler.resolveApproval(approvalId: approvalID, decision: decision, digest: digest) {
-            case .resolved:
-                return try await accept(action, turnID: nil)
-            case .stale(let reason):
-                return .stale(reason: reason)
-            }
-        case .stopTask:
-            guard let threadID = action.threadID else { return .rejected(reason: "missing_thread_id") }
-            let stopped = try await remote.stopTaskFromUser(taskID: threadID)
-            guard stopped.status == "stopped" else { return .rejected(reason: stopped.error ?? "task_not_stopped") }
-            return try await accept(action, turnID: nil)
-        }
-    }
-
-    private func complete(_ action: BotUserAction,
-                          result: BotRemoteTurnResult) async throws -> BotUserActionPlanOutcome {
-        guard result.status == "completed" else {
-            return .rejected(reason: result.error ?? "turn_not_completed")
-        }
-        return try await accept(action, turnID: result.turnId)
-    }
-
-    private func accept(_ action: BotUserAction, turnID: String?) async throws -> BotUserActionPlanOutcome {
-        guard let sessionID = await remote.mainSessionIdentifier() else {
-            throw BotMCPError.unavailable("main session unavailable")
-        }
-        let event = BotEvent(
-            type: "conversation.turn_started", eventId: "action:\(action.nonce)", time: currentMilliseconds(),
-            origin: .local(source: "user"), traceId: "action:\(action.nonce)",
-            principal: BotPrincipal(botId: botID, sessionId: sessionID, kind: "chat"),
-            causationId: nil, correlationId: action.nonce, turnId: turnID,
-            data: .object([
-                "action": .string(action.kind.rawValue), "nonce": .string(action.nonce),
-                "ownerDirect": .bool(true),
-            ]))
-        return .commit(BotUserActionPlan(event: event))
-    }
-
-    private func card(_ id: String) async throws -> (kind: String, options: [(id: String, label: String)])? {
-        var cursor = 0
-        while true {
-            let events = try await store.events(after: cursor, limit: 500)
-            for event in events where event.type == "card.presented" && event.principal.botId == botID {
-                guard event.data["id"]?.stringValue == id || event.eventId == id,
-                      let kind = event.data["cardType"]?.stringValue ?? event.data["card"]?["kind"]?.stringValue
-                        ?? event.data["kind"]?.stringValue else { continue }
-                let options = (event.data["options"]?.arrayValue ?? event.data["card"]?["options"]?.arrayValue ?? [])
-                    .compactMap { option -> (id: String, label: String)? in
-                        guard let id = option["id"]?.stringValue ?? option["optionId"]?.stringValue,
-                              let label = option["label"]?.stringValue ?? option["text"]?.stringValue else { return nil }
-                        return (id, label)
-                    }
-                return (kind, options)
-            }
-            guard events.count == 500, let last = events.last?.commitSeq else { return nil }
-            cursor = last
-        }
-    }
-}
-
-private func currentMilliseconds() -> Int64 { Int64(Date().timeIntervalSince1970 * 1_000) }
-
 actor BotRuntimeTurnStopper: BotProductionTurnStopping {
     let remote: BotDSHRemoteRuntime
     init(remote: BotDSHRemoteRuntime) { self.remote = remote }
     func stopCurrentTurn(turnID: String?) async throws { try await remote.stopMainTurn(turnID: turnID) }
 }
 
+/// UI-visible connection state of the production Bot runtime. The Bot page
+/// renders a disconnect banner for `recovering`/`failed` instead of silently
+/// presenting stale rows after the Worker died.
+enum BotRuntimeState: Equatable, Sendable {
+    case idle
+    case preparing
+    case connecting
+    case ready
+    case recovering
+    case failed(String)
+    case stopped
+
+    var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+}
+
 @MainActor
 final class BotRuntimeComposition {
     struct Launch {
         let composition: BotRuntimeComposition
+        let environment: BotProductionEnvironment
         let workerEnvironment: [String: String]
     }
 
@@ -151,20 +67,50 @@ final class BotRuntimeComposition {
     let wakeInbox: WakeInbox
     let outbox: BotProductionEffectRunner
     let routineOutbox: BotRoutineOutbox
+    let rows: BotProductionRowService
+    let info: BotProductionInfoService
 
     private var host: PhoneDSHHost?
     private var hostTask: Task<Void, Never>?
+    /// The Host whose event stream `hostTask` is currently draining. Worker
+    /// restart recovery runs *inside* that task, so rebinding the same Host
+    /// must not cancel the observer it is running on.
+    private var observedHost: PhoneDSHHost?
     private var tickTask: Task<Void, Never>?
+    private var recoveryTask: Task<Void, Never>?
     private var started = false
 
-    static func prepare(environment: BotProductionEnvironment,
-                        botID: String = "main") async throws -> Launch {
-        let store = environment.domain
+    /// The Worker never carries the real Bot bearer. The host egress route
+    /// (`MCPEgressPolicy.grantBotRuntimeEndpoint`) injects it after stripping
+    /// the placeholder, so neither the page URL (`?env=`) nor the Worker
+    /// process ever sees it.
+    static let workerTokenPlaceholder = "phone-host-injects-bot-mcp-token"
+
+    /// Observed by `ChatModel`; the Bot page shows this state as a banner.
+    private(set) var state: BotRuntimeState = .idle {
+        didSet {
+            guard oldValue != state else { return }
+            onStateChange?(state)
+        }
+    }
+    var onStateChange: ((BotRuntimeState) -> Void)?
+
+    /// Builds the one production composition: `BotMCPRuntime` owns the single
+    /// `RoutineMachine` and `BotMemory`, and the environment receives those
+    /// exact instances instead of constructing parallel stores.
+    static func prepare(store: SQLiteDomainStore,
+                        botID: String = "main",
+                        sessionLogURL: URL? = nil) async throws -> Launch {
         let deferred = BotDeferredVolatileContextProvider()
         let runtime = BotMCPRuntime(store: store, volatileProvider: deferred)
+        let machine = await runtime.routineMachine
+        let memory = await runtime.memory
+        let environment = BotProductionEnvironment(
+            domain: store, botID: botID, sessionID: botID,
+            routineMachine: machine, memory: memory, sessionLogURL: sessionLogURL)
         let language = Locale.preferredLanguages.first?.hasPrefix("zh") == true ? "zh" : "en"
         let volatile = await BotDomainVolatileContextProvider(
-            memory: await runtime.memory, routines: await runtime.routineMachine,
+            memory: memory, routines: machine,
             personaAsync: { _, _ in
                 let context = try await environment.context()
                 let name = context.botName.replacingOccurrences(of: "\n", with: " ").prefix(80)
@@ -180,9 +126,9 @@ final class BotRuntimeComposition {
         let composition = await BotRuntimeComposition(
             environment: environment, runtime: runtime, handler: handler, server: server,
             remote: remote, wakeInbox: inbox, botID: botID)
-        return Launch(composition: composition, workerEnvironment: [
+        return Launch(composition: composition, environment: environment, workerEnvironment: [
             "PDSH_PHONE_MCP_URL": url.absoluteString,
-            "PDSH_PHONE_MCP_TOKEN": server.token,
+            "PDSH_PHONE_MCP_TOKEN": workerTokenPlaceholder,
         ])
     }
 
@@ -197,10 +143,13 @@ final class BotRuntimeComposition {
         self.wakeInbox = wakeInbox
         let machine = await runtime.routineMachine
         planner = BotRemoteActionPlanner(remote: remote, runtime: runtime, handler: handler,
-                                         store: environment.domain, botID: botID)
+                                         store: environment.domain, botID: botID,
+                                         wakeInbox: wakeInbox)
         routineOutbox = BotRoutineOutbox(
             store: environment.domain, machine: machine, botID: botID)
         outbox = BotProductionEffectRunner(store: environment.domain)
+        rows = BotProductionRowService(environment: environment)
+        info = BotProductionInfoService(environment: environment)
         scheduler = RoutineScheduler(
             botId: botID, machine: machine, inbox: wakeInbox,
             sink: routineOutbox,
@@ -211,40 +160,116 @@ final class BotRuntimeComposition {
             leaseOwner: "bot-runtime-composition")
     }
 
+    /// Attaches to `newHost` and rebinds every dependency the old Host owned.
+    ///
+    /// A different Host is no longer an error: `ChatModel.stop()` and
+    /// `restartEngine()` build a new Host, so the composition detaches the old
+    /// binding, attaches the new transport and re-runs recovery exactly once.
     func start(host newHost: PhoneDSHHost) async throws {
-        if let current = host {
-            if current === newHost, started { return }
-            guard current === newHost else {
-                throw BotMCPError.unavailable("a different Host is already attached")
-            }
-        } else {
-            host = newHost
+        if let current = host, current === newHost, started, !state.isFailure {
+            return
         }
-        try await newHost.start()
-        let transport = try await newHost.makeTransport()
-        await remote.attachTransport(transport)
-        let sessionID = try await remote.startMainSession()
-        try await environment.connect(BotProductionComposition(
-            sessionID: sessionID, planner: planner,
-            turnStopping: BotRuntimeTurnStopper(remote: remote)))
+        if let current = host, current !== newHost {
+            await detachBinding()
+        }
+        host = newHost
+        try await bind(to: newHost, recovering: false)
+    }
+
+    /// One retry path the Bot page can call after a visible disconnect; the
+    /// next `.restarted` Host event retries automatically as well.
+    func retry() async {
+        guard let host else { return }
+        guard !started || state.isFailure else { return }
+        do {
+            try await bind(to: host, recovering: true)
+        } catch {
+            state = .failed("Bot 连接恢复失败：\(error.localizedDescription)")
+            scheduleRecoveryRetry(host)
+        }
+    }
+
+    /// The single recovery path for a fresh Host, a rebuilt Host after a
+    /// Worker termination, a manual retry and the scheduled retry loop.
+    ///
+    /// Order is part of the contract: the replaced Worker incarnation is
+    /// invalidated first, then the transport/session are rebound, durable work
+    /// is recovered, device ingress is republished and only then the outbox and
+    /// scheduler start.
+    private func bind(to newHost: PhoneDSHHost, recovering: Bool) async throws {
+        state = recovering ? .recovering : .connecting
+        do {
+            // 1. The old Worker process is gone: pending approvals, tool-call
+            // registrations and in-flight tasks belong to that incarnation.
+            // Invalidate them before the replacement Worker can claim anything.
+            _ = await runtime.workerRestarted()
+
+            // 2. Transport for the new Worker incarnation.
+            try await newHost.start()
+            let transport = try await newHost.makeTransport()
+            await remote.attachTransport(transport)
+
+            // 3. Main session, then the production environment that owns the
+            // single routine/memory authority.
+            let sessionID = try await remote.startMainSession()
+            try await environment.connect(BotProductionComposition(
+                sessionID: sessionID, planner: planner,
+                turnStopping: BotRuntimeTurnStopper(remote: remote)))
+
+            // 4. Durable routines, then 5. task wakes interrupted by the
+            // previous Worker.
+            _ = try await scheduler.recover()
+            _ = await remote.deliverInterruptedTaskWakes()
+
+            // 6/7. Device ingress and the reconnect reconciliation. The
+            // connector is re-read from the global coordinator so a Host
+            // rebuild never keeps feeding the previous connector instance.
+            #if canImport(ProbeKit)
+            if let deviceBinding {
+                try await deviceBinding.attach(runtime: remote)
+                try await deviceBinding.ingress.recover()
+                try await deviceBinding.refreshConnector()
+                await deviceBinding.reconcileOnReconnect()
+            }
+            #endif
+
+            // Every bind also re-attaches the native MCP forwarder: one Bot
+            // endpoint owns both Bot and native Android tools.
+            #if canImport(PhoneDSHADB) && canImport(PhoneDSHLoopback)
+            await attachNativeMCP(ADBMCPServer.shared)
+            #endif
+
+            await installOutboxHandlers()
+            started = true
+            observeHost(newHost)
+
+            // 8. Publishes the shared outbox, then the scheduler. 9. ready.
+            await outbox.start()
+            await scheduler.start()
+            startTick()
+            state = .ready
+        } catch {
+            state = .failed("Bot 连接失败：\(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    private func installOutboxHandlers() async {
         await outbox.register(kind: BotRoutineOutbox.kind) { [routineOutbox] lease in
             try await routineOutbox.apply(lease)
         }
         #if canImport(ProbeKit)
-        if let deviceBinding {
-            try await deviceBinding.attach(runtime: remote)
-            if let writer = try? deviceBinding.replyWriter() {
-                let replies = BotDeviceReplyService(store: environment.domain, writer: writer)
-                await outbox.register(kind: "device-reply") { [replies] lease in
-                    try await replies.deliver(lease)
-                }
+        if let deviceBinding, let writer = try? deviceBinding.replyWriter() {
+            let replies = BotDeviceReplyService(store: environment.domain, writer: writer)
+            await outbox.register(kind: "device-reply") { [replies] lease in
+                try await replies.deliver(lease)
             }
         }
         #endif
-        started = true
-        observeHost(newHost)
-        await outbox.start()
-        await scheduler.start()
+    }
+
+    private func startTick() {
+        guard tickTask == nil else { return }
         tickTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -258,20 +283,58 @@ final class BotRuntimeComposition {
     var deviceBinding: BotDeviceProviderBinding?
     #endif
 
+    #if canImport(PhoneDSHADB) && canImport(PhoneDSHLoopback)
+    /// The Bot MCP listener is the Worker's only `phone` server. Native
+    /// Android tools are forwarded in-process so one endpoint owns the env.
+    func attachNativeMCP(_ server: ADBMCPServer) async {
+        await handler.attachNativeMCP(BotADBNativeMCPForwarder(server: server))
+    }
+    #endif
+
+    /// Tears down the Host-bound half of the runtime. The MCP server, durable
+    /// stores and the single routine/memory authority stay alive across Host
+    /// rebuilds; a later `start(host:)` republishes scheduler, outbox and the
+    /// device ingress.
     func stop() async {
+        await detachBinding()
+        await runtime.approvals.cancelAll(reason: "shutdown")
+        _ = await runtime.gateway.attribution.prune()
+        host = nil
+        started = false
+        state = .stopped
+    }
+
+    private func detachBinding() async {
         await scheduler.stop()
         await outbox.stop()
         tickTask?.cancel()
+        tickTask = nil
+        recoveryTask?.cancel()
+        recoveryTask = nil
         hostTask?.cancel()
-        await runtime.approvals.cancelAll()
+        hostTask = nil
+        observedHost = nil
+        await remote.attachTransport(UnstartedBotTransport())
         started = false
     }
 
     private func observeHost(_ host: PhoneDSHHost) {
+        // `bind` is called from `hostTask` itself after `.restarted` /
+        // `.webContentTerminated`; cancelling then would cancel the very task
+        // that is recovering. Reuse the live observation of the same Host.
+        if observedHost === host, hostTask != nil { return }
         hostTask?.cancel()
+        observedHost = host
         hostTask = Task { [weak self, remote] in
+            defer {
+                if let self, self.observedHost === host {
+                    self.observedHost = nil
+                    self.hostTask = nil
+                }
+            }
             for await event in host.eventStream() {
                 guard let self else { return }
+                guard self.isAttached(host) else { return }
                 switch event {
                 case .webContentTerminated(let count):
                     _ = await remote.watchdogMonitor().observeMobile(
@@ -288,20 +351,57 @@ final class BotRuntimeComposition {
         }
     }
 
+    private func isAttached(_ host: PhoneDSHHost) -> Bool {
+        self.host === host
+    }
+
     private func recoverAfterWorkerTermination(_ host: PhoneDSHHost) async {
+        guard self.host === host else { return }
+        state = .recovering
         do {
-            let transport = try await host.makeTransport()
-            await remote.attachTransport(transport)
-            _ = try await remote.startMainSession()
-            _ = try await scheduler.recover()
-            #if canImport(ProbeKit)
-            try await deviceBinding?.ingress.recover()
-            #endif
+            try await bind(to: host, recovering: true)
         } catch {
-            return
+            state = .failed("Bot 连接恢复失败：\(error.localizedDescription)")
+            scheduleRecoveryRetry(host)
+        }
+    }
+
+    /// A transient transport failure must not strand the Bot page: retry while
+    /// this Host is still the attached one, and let a later `.restarted` event
+    /// (or the page's retry button) start a fresh attempt.
+    private func scheduleRecoveryRetry(_ host: PhoneDSHHost) {
+        recoveryTask?.cancel()
+        recoveryTask = Task { [weak self] in
+            guard let self else { return }
+            for _ in 0..<5 {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled, self.host === host else { return }
+                do {
+                    try await self.bind(to: host, recovering: true)
+                    return
+                } catch {
+                    self.state = .failed("Bot 连接恢复失败：\(error.localizedDescription)")
+                }
+            }
         }
     }
 }
+
+#if canImport(PhoneDSHADB) && canImport(PhoneDSHLoopback)
+/// Adapts the native JSON-RPC server to the Bot handler without adding a
+/// PhoneDSHBot -> PhoneDSHADB module dependency.
+struct BotADBNativeMCPForwarder: BotNativeMCPForwarding {
+    let server: ADBMCPServer
+
+    func handle(_ request: BotJSONValue, headers: [String: String]) async -> BotJSONValue? {
+        guard let body = try? request.encoded() else { return nil }
+        let response = await server.handle(LoopbackRequest(
+            method: "POST", path: "/mcp/native", headers: headers, body: body))
+        guard response.status == 200 else { return nil }
+        return try? BotJSONValue.parse(response.body)
+    }
+}
+#endif
 
 private struct UnstartedBotTransport: DSHRemoteTransport {
     func call(_ endpoint: String, args: PhoneDSHBot.BotJSONValue) async throws -> PhoneDSHBot.BotJSONValue {

@@ -38,7 +38,7 @@ final class BotGatewayIncarnationTests: XCTestCase {
 
         let second = try await gateway.issueSession(botId: "main", sessionId: "s1", kind: .chat)
         XCTAssertNotEqual(second.incarnation, first.incarnation)
-        await gatewayAssertNil(await gateway.resolveToolCall(runtimeId: "runtime", arguments: arguments))
+        await gatewayAssertNil(await gateway.resolveToolCall(runtimeId: "runtime", name: "UpdateMemory", arguments: arguments))
         await gatewayAssertEqual(await gateway.tokens.lookupSession("s1")?.incarnation, second.incarnation)
         XCTAssertNil(BotResolvedToolCall(sessionId: "s1", callId: "old-call", agentId: "main",
                                          principal: second, attribution: old))
@@ -47,7 +47,7 @@ final class BotGatewayIncarnationTests: XCTestCase {
                                                      name: "UpdateMemory", arguments: arguments,
                                                      runtimeId: "runtime")
         XCTAssertEqual(new.incarnation, second.incarnation)
-        let resolved = try await gatewayUnwrap(await gateway.resolveToolCall(runtimeId: "runtime",
+        let resolved = try await gatewayUnwrap(await gateway.resolveToolCall(runtimeId: "runtime", name: "UpdateMemory",
                                                                               arguments: arguments))
         XCTAssertEqual(resolved.principal, second)
         XCTAssertEqual(resolved.attribution, new)
@@ -63,7 +63,7 @@ final class BotGatewayIncarnationTests: XCTestCase {
         let rotated = try await gatewayUnwrap(try await gateway.tokens.rotate(issued.token))
         XCTAssertNotEqual(rotated.principal.incarnation, issued.principal.incarnation)
         await gatewayAssertNil(await gateway.tokens.lookup(issued.token))
-        await gatewayAssertNil(await gateway.resolveToolCall(runtimeId: "runtime", arguments: arguments))
+        await gatewayAssertNil(await gateway.resolveToolCall(runtimeId: "runtime", name: "UpdateMemory", arguments: arguments))
 
         _ = try await gateway.registerToolCall(sessionId: "s1", callId: "before-revoke",
                                                name: "UpdateMemory", arguments: arguments,
@@ -71,7 +71,7 @@ final class BotGatewayIncarnationTests: XCTestCase {
         await gatewayAssertTrue(await gateway.tokens.revoke(rotated.token))
         await gatewayAssertNil(await gateway.tokens.lookup(rotated.token))
         await gatewayAssertNil(await gateway.tokens.lookupSession("s1"))
-        await gatewayAssertNil(await gateway.resolveToolCall(runtimeId: "runtime", arguments: arguments))
+        await gatewayAssertNil(await gateway.resolveToolCall(runtimeId: "runtime", name: "UpdateMemory", arguments: arguments))
     }
 
     func testConcurrentIssueSessionLeavesOneCurrentGeneration() async throws {
@@ -100,13 +100,13 @@ final class BotGatewayIncarnationTests: XCTestCase {
         for _ in 0..<20 {
             await gatewayAssertEqual(await gateway.tokens.lookupSession("shared"), current)
         }
-        await gatewayAssertNil(await gateway.resolveToolCall(runtimeId: "runtime", arguments: arguments))
+        await gatewayAssertNil(await gateway.resolveToolCall(runtimeId: "runtime", name: "UpdateMemory", arguments: arguments))
 
         let fresh = try await gateway.registerToolCall(sessionId: "shared", callId: "fresh",
                                                        name: "UpdateMemory", arguments: arguments,
                                                        runtimeId: "runtime")
         XCTAssertEqual(fresh.incarnation, current.incarnation)
-        await gatewayAssertEqual(await gateway.resolveToolCall(runtimeId: "runtime",
+        await gatewayAssertEqual(await gateway.resolveToolCall(runtimeId: "runtime", name: "UpdateMemory",
                                                                 arguments: arguments)?.principal, current)
     }
 
@@ -123,7 +123,7 @@ final class BotGatewayIncarnationTests: XCTestCase {
         _ = try await gateway.registerToolCall(sessionId: "s1", callId: "call",
                                                name: "UpdateMemory", arguments: forgedArguments,
                                                runtimeId: "runtime")
-        let resolved = try await gatewayUnwrap(await gateway.resolveToolCall(runtimeId: "runtime",
+        let resolved = try await gatewayUnwrap(await gateway.resolveToolCall(runtimeId: "runtime", name: "UpdateMemory",
                                                                               arguments: forgedArguments))
         let principal = BotExecutionPrincipal(gateway: resolved.principal)
         XCTAssertEqual(principal.kind, .model)

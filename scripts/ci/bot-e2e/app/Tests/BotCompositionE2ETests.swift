@@ -4,6 +4,7 @@ import Foundation
 import UIKit
 import XCTest
 import PhoneDSH
+import PhoneDSHADB
 import PhoneDSHAgentCore
 import PhoneDSHBot
 import PhoneDSHEngine
@@ -17,10 +18,8 @@ final class BotCompositionE2ETests: XCTestCase {
             .appendingPathComponent("bot-production-composition-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try SQLiteDomainStore(fileURL: root.appendingPathComponent("domain.sqlite"))
-        let routineStore = SQLiteRoutineStore(domainStore: store)
-        let environment = BotProductionEnvironment(
-            domain: store, botID: "main", sessionID: "main", routineStore: routineStore)
-        let launch = try await BotRuntimeComposition.prepare(environment: environment)
+        let launch = try await BotRuntimeComposition.prepare(store: store)
+        let environment = launch.environment
         let mock = MockModelUpstream()
         mock.script = .generic(command: "printf BOT_TOOL", toolText: "BOT_TOOL", finalText: "BOT_COMPOSITION_OK")
         let mockURL = try mock.start()
@@ -37,24 +36,29 @@ final class BotCompositionE2ETests: XCTestCase {
             CredentialScope(service: "127.0.0.1"): Credential(
                 kind: .apiKey(header: "x-api-key"), value: "composition-test-fixture"),
         ])
-        var configuration = PhoneDSHConfiguration(
+        // The same production assembly the App's ChatModel boots, including
+        // nativeMCP and the Bot Worker environment.
+        let configuration = ChatHostConfiguration.makeProduction(
             workspaceRoot: root.appendingPathComponent("workspace", isDirectory: true),
-            token: "", origin: URL(string: "http://127.0.0.1:1")!, bundle: bundle,
+            bundle: bundle,
             allowedModelHosts: [mockURL.absoluteString],
+            egressAllowHosts: [],
             credentialProvider: PhoneMCPCredentialProvider(policy: mcpPolicy, base: baseCredentials),
-            egressAuthorizer: mcpPolicy, drainDeadline: 2, helloTimeout: 60)
-        configuration.engine.bootTimeout = 60
-        configuration.engine.environment = launch.workerEnvironment.merging([
-            "DEEPSEEK_BASE_URL": mockURL.absoluteString,
-            "DEEPSEEK_API_KEY": "composition-test-placeholder",
-            "DSH_TELEMETRY_DISABLED": "1",
-            "PDSH_LLM_DELIVERY_IDLE_TIMEOUT_MS": "5000",
-        ]) { _, new in new }
+            egressAuthorizer: mcpPolicy,
+            workerEnvironment: launch.workerEnvironment.merging([
+                "DEEPSEEK_BASE_URL": mockURL.absoluteString,
+                "DEEPSEEK_API_KEY": "composition-test-placeholder",
+                "DSH_TELEMETRY_DISABLED": "1",
+                "PDSH_LLM_DELIVERY_IDLE_TIMEOUT_MS": "5000",
+            ]) { _, new in new },
+            nativeMCP: ADBMCPServer.shared,
+            drainDeadline: 2, helloTimeout: 60)
         let app = try XCTUnwrap(UIApplication.shared.delegate as? AppDelegate)
         let engineHolder = BotCompositionEngineHolder()
         let host = PhoneDSHHost(configuration: configuration) { configuration in
             await engineHolder.attach(configuration, to: app.anchor)
         }
+        var activeHost = host
         try await launch.composition.start(host: host)
         let mainSessionID = await launch.composition.remote.mainSessionIdentifier()
         let sessionID = try XCTUnwrap(mainSessionID)
@@ -64,6 +68,21 @@ final class BotCompositionE2ETests: XCTestCase {
         XCTAssertEqual(direct.status, "completed", direct.error ?? "no error")
         XCTAssertTrue(direct.text.contains("BOT_COMPOSITION_OK"),
                       "text=\(direct.text); requests=\(mock.requestCount)")
+        let transport = try await host.makeTransport()
+        var workerToolNames: [String] = []
+        for _ in 0..<40 {
+            let inventory = try await transport.call("phone/listTools", args: .object([:]))
+            workerToolNames = (inventory["tools"]?.arrayValue ?? []).compactMap {
+                $0["name"]?.stringValue
+            }
+            if workerToolNames.contains("mcp__phone__Task") { break }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        XCTAssertTrue(workerToolNames.contains("mcp__phone__Task"),
+                      "Bot MCP Task must be visible in the Worker tools/list: \(workerToolNames)")
+        XCTAssertTrue(workerToolNames.contains("mcp__phone__BotVolatileContext"),
+                      "Bot MCP volatile tool must be visible in the Worker tools/list")
+
         let rows = BotProductionRowService(environment: environment)
         let action = BotUserAction(nonce: "composition-chat", botID: "main", kind: .chat, text: "请给出结果")
         let accepted = try await rows.perform(action)
@@ -83,14 +102,16 @@ final class BotCompositionE2ETests: XCTestCase {
         XCTAssertEqual(list.status, 200)
         XCTAssertNotNil(list.json["result"]?["tools"]?.arrayValue)
 
-        let volatileArguments: BotJSONValue = .object(["sessionId": .string(sessionID)])
+        let volatileArguments: PhoneDSHBot.BotJSONValue = .object(["sessionId": .string(sessionID)])
         _ = try await launch.composition.runtime.registerIdentity(
             runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: sessionID,
-            callId: "volatile-context", name: BotToolCatalog.volatileContextName, arguments: volatileArguments)
+            callId: "volatile-context", name: BotToolCatalog.volatileContextName,
+            arguments: volatileArguments)
         let volatile = await launch.composition.handler.rpc(
             method: "tools/call",
             params: .object([
-                "name": .string(BotToolCatalog.volatileContextName), "arguments": volatileArguments,
+                "name": .string(BotToolCatalog.volatileContextName),
+                "arguments": volatileArguments,
             ]), id: .string("volatile-context"))
         XCTAssertEqual(volatile["result"]?["structuredContent"]?["schemaVersion"]?.intValue, 1)
         XCTAssertTrue(volatile["result"]?["structuredContent"]?["blocks"]?["persona"]?.stringValue?
@@ -184,12 +205,36 @@ final class BotCompositionE2ETests: XCTestCase {
         XCTAssertTrue(resumed.text.contains("BOT_ROUTINE_OK"))
         let recoveredDuplicate = try await rows.perform(action)
         XCTAssertEqual(recoveredDuplicate, .duplicate(eventID: "action:composition-chat"))
+
+        // A Host rebuild (ChatModel.stop -> start / restartEngine) must rebind
+        // the same Bot runtime instead of refusing a different Host.
+        try await activeHost.stop()
+        let rebuilt = PhoneDSHHost(configuration: configuration) { configuration in
+            await engineHolder.attach(configuration, to: app.anchor)
+        }
+        try await launch.composition.start(host: rebuilt)
+        activeHost = rebuilt
+        let rebuiltSessionID = await launch.composition.remote.mainSessionIdentifier()
+        XCTAssertEqual(rebuiltSessionID, sessionID)
+        let afterRebuild = try await launch.composition.remote.sendUserMessage("Host 重建后的继续对话")
+        XCTAssertEqual(afterRebuild.status, "completed", afterRebuild.error ?? "no error")
+        XCTAssertTrue(afterRebuild.text.contains("BOT_ROUTINE_OK"))
+
         await launch.composition.stop()
-        try await host.stop()
+        try await activeHost.stop()
         try await store.close()
     }
 
-    private func post(url: URL, token: String, body: Data) async throws -> (status: Int, json: BotJSONValue) {
+    /// The old DEBUG-only production checks now live here instead of the App
+    /// target; this drives the same real row/projection/services code paths.
+    func testProductionServicesChecks() async throws {
+        let passed = try await BotProductionChecks.run()
+        XCTAssertTrue(passed.contains("session-jsonl-row-rebuild"))
+        XCTAssertTrue(passed.contains("plan-commit-accepted-duplicate-reopen"))
+        XCTAssertTrue(passed.contains("fish-production-presentation-activity-ttl"))
+    }
+
+    private func post(url: URL, token: String, body: Data) async throws -> (status: Int, json: PhoneDSHBot.BotJSONValue) {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -197,7 +242,7 @@ final class BotCompositionE2ETests: XCTestCase {
         request.httpBody = body
         let (data, response) = try await URLSession.shared.data(for: request)
         return ((response as? HTTPURLResponse)?.statusCode ?? -1,
-                (try? BotJSONValue.parse(data)) ?? .null)
+                (try? PhoneDSHBot.BotJSONValue.parse(data)) ?? .null)
     }
 }
 

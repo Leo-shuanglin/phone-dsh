@@ -34,9 +34,27 @@ final class RowProtocolGoldenTests: XCTestCase {
         let action = try RowTestSupport.decode(BotUserAction.self, actionObject)
         try RowTestSupport.assertEncoded(action, equals: actionObject)
 
+        let cardAnswerObject = try RowTestSupport.object(valid["cardAnswer"], in: "row-protocol.valid.cardAnswer")
+        let cardAnswer = try RowTestSupport.decode(BotUserAction.self, cardAnswerObject)
+        XCTAssertEqual(cardAnswer.kind, .cardAnswer)
+        XCTAssertEqual(cardAnswer.optionID, "o1")
+        XCTAssertNil(cardAnswer.text)
+        try RowTestSupport.assertEncoded(cardAnswer, equals: cardAnswerObject)
+
         let resultObject = try RowTestSupport.object(valid["result"], in: "row-protocol.valid.result")
         let result = try RowTestSupport.decode(BotActionResult.self, resultObject)
         try RowTestSupport.assertEncoded(result, equals: resultObject)
+    }
+
+    func testCardAnswerGoldenNegativeVectorsUseRealDecoder() throws {
+        let fixture = try RowTestSupport.golden("row-protocol")
+        let invalidActions = try RowTestSupport.array(fixture["invalidActions"], in: "row-protocol.invalidActions")
+        for (index, vector) in invalidActions.enumerated() {
+            XCTAssertThrowsError(
+                try RowTestSupport.decode(BotUserAction.self, vector["action"]),
+                "invalidActions[\(index)] unexpectedly decoded"
+            )
+        }
     }
 
     func testSharedActionAcceptDuplicateAndStaleVectorsUseRealDispatcher() async throws {

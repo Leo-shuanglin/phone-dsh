@@ -123,6 +123,13 @@ public protocol BotTaskExecuting: Actor {
     func stop(taskId: String, parent: BotResolvedToolCall) async throws -> BotTaskRecord
 }
 
+/// Optional task-executor hook: the Worker was replaced, so no in-memory task
+/// work can continue. The executor persists interrupted records and arranges a
+/// single parent wake.
+public protocol BotTaskRestarting: Actor {
+    func workerRestarted() async
+}
+
 public struct BotTaskRequest: Sendable, Equatable {
     public let parent: BotResolvedToolCall
     public let title: String

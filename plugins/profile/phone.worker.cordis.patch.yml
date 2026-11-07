@@ -53,7 +53,10 @@
 #   PDSH_DSH_PORT, PDSH_DSH_LAUNCH_TOKEN   surface-phone loopback carrier
 #   PDSH_LIFECYCLE_FILE                  optional lifecycle control file
 #   PDSH_SANDBOX_MODE                    default workspace-write
-#   PDSH_PHONE_MCP_URL, PDSH_PHONE_MCP_TOKEN  optional App MCP endpoint
+#   PDSH_PHONE_MCP_URL, PDSH_PHONE_MCP_TOKEN  optional App MCP endpoint;
+#                                             the token is a placeholder the
+#                                             host egress replaces with the
+#                                             real Bot bearer
 #   DSH_HOME                           virtual home (`<root>/home` by default)
 #   PDSH_SHELL                           Worker shell core: just-bash (default) or runtime
 #   PDSH_SHELL_TIMEOUT_MS                per-command wall-clock limit (default 120 s)
@@ -649,6 +652,10 @@
         file: !!js process.env.PDSH_LIFECYCLE_FILE
 
     # The App's own MCP server (phone tools) on loopback, streamable HTTP.
+    # The App's Bot runtime is the only `phone` server: it serves the Bot
+    # catalog and forwards the native Android tools. The Authorization header
+    # is the documented non-secret placeholder; the host injects the real
+    # bearer at its /v1/http egress and strips the Worker value.
     - id: mcp-phone
       name: '@deepseek-ai/dsh-mcp-client'
       disabled: !!js "!process.env.PDSH_PHONE_MCP_URL"
@@ -850,6 +857,9 @@
 
     - id: dshbot-channel
       name: '@phone-dsh/dsh-bot-runtime/channel'
+    # Order is a contract: the identity registration must be visible to the
+    # App before the structural approval card is requested. Both hooks are
+    # `tools/pre-execute`; registration is cleaned in `tools/execute`.
     - id: dshbot-identity-bridge
       name: '@phone-dsh/dsh-bot-runtime/identity-bridge'
       disabled: !!js "!process.env.PDSH_PHONE_MCP_URL"
@@ -893,7 +903,7 @@
 
       ## 请求用户决策
 
-      默认自己决策并推进。只有真实取舍、需要点头的有后果操作或动手前需要批准的计划才出卡。只问一个自然问题，给 2–4 个真实选项；选项值像用户会说的回复。危险选项标 danger，明显更优的一项放第一并标 primary 或 recommended:true；最多一个推荐，绝不推荐 danger。卡片没有文字输入框，用户可直接输入其他答案，不要添加“其他”凑数。卡片被关闭即视为拒绝，不要重新再问。
+      默认自己决策并推进。只有真实取舍、需要点头的有后果操作或动手前需要批准的计划才出卡。只问一个自然问题，给 2–4 个真实选项；选项值像用户会说的回复。危险选项标 danger，明显更优的一项放第一并标 primary 或 recommended:true；最多一个推荐，绝不推荐 danger。卡片没有卡内文字输入框或自定义答案提交，也不要添加“其他”凑数；用户想自由回答时直接在下方输入框发普通消息。用户关闭提问卡即视为不回答，宿主会在下一次用户回合开头告诉你，不要在同一话题重问。
 
       回复结尾若包含建议、下一步或可选项，正文只写结论和一句理由，然后用 `mcp__phone__show_next_steps` 或 `mcp__phone__ask_user` 呈现，不要把建议写成正文列表后结束。完成报告且没有需要用户决定的事项时，正文回答即可，不要为了有卡硬造卡片。
 

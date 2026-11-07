@@ -22,8 +22,21 @@ public protocol BotDeviceMessageDelivering: Actor {
     func deliverDeviceMessages() async throws
 }
 
+/// Durable, transport-independent device ingress.
+///
+/// Ordering domains are `(device_id, epoch, seq)`. A delivered-seq watermark is
+/// persisted in the WakeInbox snapshot; only the new contiguous tail is
+/// enqueued, so reopening never replays accepted history. A gap that waits too
+/// long (or buffers too many out-of-order messages) is skipped with a durable
+/// user-visible `ui.notice` carrying `data.kind = "device.gap"`.
 public actor BotDeviceIngress {
     public typealias WakeHandler = @Sendable (WakeSignal) -> Void
+
+    private struct DeviceMessageKey: Hashable {
+        let deviceID: String
+        let epoch: Int64
+        let msgID: String
+    }
 
     private struct Accepted {
         let envelope: BotDeviceEnvelope
@@ -37,20 +50,32 @@ public actor BotDeviceIngress {
     public let botID: String
 
     private let now: @Sendable () -> Int64
+    private let gapSkipAfterMs: Int64
+    private let maxBufferedPerDevice: Int
     private let onWake: WakeHandler?
-    private var accepted: [String: Accepted] = [:]
+    private var accepted: [DeviceMessageKey: Accepted] = [:]
+    private var sequenceOwners: [String: [Int64: [Int64: DeviceMessageKey]]] = [:]
+    private var buffered: [String: [Int64: [Int64: Accepted]]] = [:]
+    private var watermarks: [String: [Int64: Int64]] = [:]
+    private var maxEpochs: [String: Int64] = [:]
+    private var reserving: Set<DeviceMessageKey> = []
+    private var reservedSequences: [String: [Int64: Set<Int64>]] = [:]
     private var loaded = false
     private var driver: (any BotDeviceMessageDelivering)?
     private var delivering = false
 
     public init(store: SQLiteDomainStore, botID: String = "main", inbox: WakeInbox? = nil,
                 now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000) },
-                onWake: WakeHandler? = nil) {
+                onWake: WakeHandler? = nil,
+                gapSkipAfterMs: Int64 = 30_000,
+                maxBufferedPerDevice: Int = 32) {
         self.store = store
         self.botID = botID
         self.inbox = inbox ?? WakeInbox(store: SQLiteWakeInboxStore(domainStore: store, botId: botID))
         self.now = now
         self.onWake = onWake
+        self.gapSkipAfterMs = max(0, gapSkipAfterMs)
+        self.maxBufferedPerDevice = max(1, maxBufferedPerDevice)
     }
 
     public func attach(_ driver: any BotDeviceMessageDelivering) async throws {
@@ -65,15 +90,15 @@ public actor BotDeviceIngress {
     public func receive(data: Data, transport: BotDeviceTransport,
                         expectedSessionID: String, displayName: String) async throws -> BotDeviceIngressReceipt {
         let envelope = try BotDeviceEnvelope(data: data, expectedSessionID: expectedSessionID)
-        try await synchronize()
-        return try await receive(envelope, transport: transport, displayName: displayName)
+        return try await receive(envelope, transport: transport,
+                                 expectedSessionID: expectedSessionID, displayName: displayName)
     }
 
     public func receive(_ envelope: BotDeviceEnvelope, transport: BotDeviceTransport,
                         expectedSessionID: String, displayName: String) async throws -> BotDeviceIngressReceipt {
         try envelope.validateIngress(expectedSessionID: expectedSessionID)
         try await synchronize()
-        return try await receive(envelope, transport: transport, displayName: displayName)
+        return try await accept(envelope, transport: transport, displayName: displayName)
     }
 
     public func recover() async throws {
@@ -89,51 +114,138 @@ public actor BotDeviceIngress {
         delivering = true
         defer { delivering = false }
         for _ in 0..<WakeInbox.maxItems {
-            guard try await readyPendingItems().isEmpty == false else { return }
+            let ready = try await readyPendingItems()
+            guard !ready.isEmpty else { return }
             try await driver.deliverDeviceMessages()
         }
-        if try await readyPendingItems().isEmpty == false {
+        let remaining = try await readyPendingItems()
+        if !remaining.isEmpty {
             throw BotDeviceEnvelopeError.sequence("device delivery did not drain the ready inbox")
         }
     }
 
-    private func receive(_ envelope: BotDeviceEnvelope, transport: BotDeviceTransport,
-                         displayName: String) async throws -> BotDeviceIngressReceipt {
-        let eventID = BotDeviceIdentifiers.durableID(msgID: envelope.msgID)
-        if let existing = accepted[envelope.msgID] {
+    private func accept(_ envelope: BotDeviceEnvelope, transport: BotDeviceTransport,
+                        displayName: String) async throws -> BotDeviceIngressReceipt {
+        let key = DeviceMessageKey(deviceID: envelope.deviceID, epoch: envelope.epoch, msgID: envelope.msgID)
+        let eventID = envelope.eventID
+        if let existing = accepted[key] {
             guard try existing.envelope.canonicalData() == envelope.canonicalData(),
                   existing.transport == transport else {
                 throw BotDeviceEnvelopeError.conflict(eventID)
             }
             return BotDeviceIngressReceipt(eventID: eventID, disposition: .duplicate)
         }
-        let related = accepted.values.filter { $0.envelope.deviceID == envelope.deviceID }
-        if related.contains(where: { $0.envelope.seq == envelope.seq }) {
-            throw BotDeviceEnvelopeError.conflict("duplicate device seq \(envelope.seq)")
+        if let maxEpoch = maxEpochs[key.deviceID], key.epoch < maxEpoch {
+            throw BotDeviceEnvelopeError.sequence("stale device epoch \(key.epoch) (current \(maxEpoch))")
         }
-        let heldSequences = try await inbox.items().filter {
-            $0.kind == "device-event" && $0.deviceID == envelope.deviceID
-        }.compactMap(\.deviceSeq)
-        if let oldestHeld = heldSequences.min(), envelope.seq + 1 < oldestHeld {
-            throw BotDeviceEnvelopeError.sequence("message precedes the next device sequence gap")
+        if let owner = sequenceOwners[key.deviceID]?[key.epoch]?[envelope.seq] {
+            guard owner == key else {
+                throw BotDeviceEnvelopeError.conflict("duplicate device seq \(envelope.seq)")
+            }
+            return BotDeviceIngressReceipt(eventID: eventID, disposition: .duplicate)
         }
-        if heldSequences.isEmpty, let baseline = related.map(\.envelope.seq).min(), envelope.seq < baseline {
-            throw BotDeviceEnvelopeError.sequence("message precedes the accepted device sequence baseline")
+        if let watermark = watermarks[key.deviceID]?[key.epoch], envelope.seq <= watermark {
+            throw BotDeviceEnvelopeError.sequence(
+                "message seq \(envelope.seq) is at or below the delivered watermark \(watermark)")
         }
+        // The actor is re-entrant at every await below. Reserve the key and seq
+        // synchronously so two concurrent accepts cannot commit the same
+        // device/epoch/seq before the first durable append returns.
+        guard !reserving.contains(key),
+              reservedSequences[key.deviceID]?[key.epoch]?.contains(envelope.seq) != true else {
+            throw BotDeviceEnvelopeError.conflict("device message is already being accepted")
+        }
+        reserving.insert(key)
+        reservedSequences[key.deviceID, default: [:]][key.epoch, default: []].insert(envelope.seq)
+        defer {
+            reserving.remove(key)
+            reservedSequences[key.deviceID]?[key.epoch]?.remove(envelope.seq)
+            if reservedSequences[key.deviceID]?[key.epoch]?.isEmpty == true {
+                reservedSequences[key.deviceID]?.removeValue(forKey: key.epoch)
+            }
+            if reservedSequences[key.deviceID]?.isEmpty == true {
+                reservedSequences.removeValue(forKey: key.deviceID)
+            }
+        }
+
         let sessionID = try await requireMainSession()
         let receivedAt = now()
         let event = try envelope.ingressEvent(
-            botID: botID, mainSessionID: sessionID, transport: transport, receivedAt: receivedAt)
-        _ = try await store.append(event)
-        accepted[envelope.msgID] = Accepted(
+            botID: botID, mainSessionID: sessionID, transport: transport,
+            displayName: displayName, receivedAt: receivedAt)
+        // `store.append` is idempotent on `event_id`, so a duplicate commit by
+        // another ingress instance returns the existing row instead of a
+        // second one. Check first, then keep the UNIQUE violation as defense in
+        // depth: the durable identity of a device message is the `bot_events`
+        // `event_id` key `dev:<device>:<epoch>:<msg>` (there is no separate
+        // device table). First writer wins.
+        if let receipt = try await existingDeviceMessage(
+            eventID: eventID, key: key, envelope: envelope, transport: transport,
+            displayName: displayName, receivedAt: receivedAt) {
+            return receipt
+        }
+        do {
+            _ = try await store.append(event)
+        } catch {
+            if let receipt = try await existingDeviceMessage(
+                eventID: eventID, key: key, envelope: envelope, transport: transport,
+                displayName: displayName, receivedAt: receivedAt) {
+                return receipt
+            }
+            throw error
+        }
+        let value = Accepted(
             envelope: envelope, transport: transport, displayName: displayName, receivedAt: receivedAt)
-        let ready = try await releaseReadyItems(deviceID: envelope.deviceID)
+        accepted[key] = value
+        sequenceOwners[key.deviceID, default: [:]][key.epoch, default: [:]][envelope.seq] = key
+        if envelope.epoch > (maxEpochs[key.deviceID] ?? -1) {
+            maxEpochs[key.deviceID] = envelope.epoch
+        }
+        buffered[key.deviceID, default: [:]][key.epoch, default: [:]][envelope.seq] = value
+        let ready = try await releaseReadyItems(deviceID: key.deviceID)
         return BotDeviceIngressReceipt(
             eventID: eventID, disposition: ready.contains(eventID) ? .ready : .buffered)
     }
 
+    /// Reads a message another writer committed first. Returns nil when the
+    /// event id is not stored; throws `conflict` when the stored envelope or
+    /// transport differs from the incoming delivery.
+    private func existingDeviceMessage(
+        eventID: String, key: DeviceMessageKey, envelope: BotDeviceEnvelope,
+        transport: BotDeviceTransport, displayName: String, receivedAt: Int64
+    ) async throws -> BotDeviceIngressReceipt? {
+        guard let stored = try await store.event(withId: eventID) else { return nil }
+        guard stored.type == "device.event",
+              stored.principal.botId == botID,
+              let storedTransport = stored.data["transport"]?.stringValue,
+              storedTransport == transport.rawValue,
+              let storedValue = stored.data["envelope"],
+              let rawEnvelope = try? storedValue.encoded(),
+              let storedEnvelope = try? BotDeviceEnvelope(data: rawEnvelope),
+              (try? storedEnvelope.canonicalData()) == (try? envelope.canonicalData()) else {
+            throw BotDeviceEnvelopeError.conflict(eventID)
+        }
+        let storedReceivedAt = stored.data["receivedAt"]?.intValue.map { Int64($0) }
+        let value = Accepted(
+            envelope: storedEnvelope, transport: transport,
+            displayName: stored.data["displayName"]?.stringValue ?? displayName,
+            receivedAt: storedReceivedAt ?? receivedAt)
+        accepted[key] = value
+        sequenceOwners[key.deviceID, default: [:]][key.epoch, default: [:]][storedEnvelope.seq] = key
+        if storedEnvelope.epoch > (maxEpochs[key.deviceID] ?? -1) {
+            maxEpochs[key.deviceID] = storedEnvelope.epoch
+        }
+        return BotDeviceIngressReceipt(eventID: eventID, disposition: .duplicate)
+    }
+
     private func synchronize() async throws {
         if loaded { return }
+        let storedCursors = try await inbox.deviceCursors()
+        watermarks = storedCursors.mapValues { epochs in
+            Dictionary(uniqueKeysWithValues: epochs.compactMap { key, value in
+                Int64(key).map { ($0, value) }
+            })
+        }
         var cursor = 0
         while true {
             let events = try await store.events(after: cursor, limit: 500)
@@ -143,35 +255,50 @@ public actor BotDeviceIngress {
                       case .local(let source) = event.origin,
                       let transportValue = event.data["transport"]?.stringValue,
                       let transport = BotDeviceTransport(rawValue: transportValue),
-                      source == "device:\(transport.rawValue):\(event.data["envelope"]?["device_id"]?.stringValue ?? "")",
-                      let data = try? event.data["envelope"]?.encoded(),
-                      let envelope = try? BotDeviceEnvelope(data: data) else {
+                      let envelopeValue = event.data["envelope"],
+                      let rawEnvelope = try? envelopeValue.encoded(),
+                      let envelope = try? BotDeviceEnvelope(data: rawEnvelope),
+                      source == "device:\(transport.rawValue):\(envelope.deviceID)" else {
                     throw SQLiteDomainStoreError.corrupted("invalid device.event projection")
                 }
-                let existing = accepted[envelope.msgID]
-                if let existing,
-                   (try existing.envelope.canonicalData()) != (try envelope.canonicalData()) {
-                    throw SQLiteDomainStoreError.corrupted("conflicting committed device msg_id")
+                let key = DeviceMessageKey(
+                    deviceID: envelope.deviceID, epoch: envelope.epoch, msgID: envelope.msgID)
+                if accepted[key] != nil { continue }
+                if let owner = sequenceOwners[key.deviceID]?[key.epoch]?[envelope.seq],
+                   owner != key {
+                    // A committed duplicate seq is corrupt input. Keep the first
+                    // committed message and move on; one bad device must not
+                    // wedge replay for every device.
+                    continue
                 }
-                let displayName = try await existingDeviceItem(msgID: envelope.msgID)?.fromAgentName ?? envelope.deviceID
-                accepted[envelope.msgID] = Accepted(
-                    envelope: envelope, transport: transport, displayName: displayName,
-                    receivedAt: event.time)
+                let receivedAt: Int64
+                if let hostReceivedAt = event.data["receivedAt"]?.intValue {
+                    receivedAt = Int64(hostReceivedAt)
+                } else {
+                    receivedAt = event.time
+                }
+                let displayName = event.data["displayName"]?.stringValue ?? envelope.deviceID
+                let value = Accepted(
+                    envelope: envelope, transport: transport,
+                    displayName: displayName, receivedAt: receivedAt)
+                accepted[key] = value
+                sequenceOwners[key.deviceID, default: [:]][key.epoch, default: [:]][envelope.seq] = key
+                if envelope.epoch > (maxEpochs[key.deviceID] ?? -1) {
+                    maxEpochs[key.deviceID] = envelope.epoch
+                }
+                let watermark = watermarks[key.deviceID]?[key.epoch] ?? -1
+                if envelope.seq > watermark {
+                    buffered[key.deviceID, default: [:]][key.epoch, default: [:]][envelope.seq] = value
+                }
             }
             guard events.count == 500, let last = events.last?.commitSeq else { break }
             cursor = last
-        }
-        for group in Dictionary(grouping: accepted.values, by: \.envelope.deviceID) {
-            let sequences = group.value.map(\.envelope.seq)
-            guard Set(sequences).count == sequences.count else {
-                throw SQLiteDomainStoreError.corrupted("duplicate committed device seq")
-            }
         }
         loaded = true
     }
 
     private func restoreReadyItems() async throws {
-        for deviceID in Set(accepted.values.map(\.envelope.deviceID)) {
+        for deviceID in Set(buffered.keys) {
             _ = try await releaseReadyItems(deviceID: deviceID)
         }
     }
@@ -192,51 +319,96 @@ public actor BotDeviceIngress {
         return found
     }
 
-    private func existingDeviceItem(msgID: String) async throws -> WakeInboxItem? {
-        let eventID = BotDeviceIdentifiers.durableID(msgID: msgID)
-        return try await inbox.items().first { $0.kind == "device-event" && $0.requestId == eventID }
-    }
-
     private func releaseReadyItems(deviceID: String) async throws -> Set<String> {
         var released: Set<String> = []
-        for value in try await readyEnvelopes(deviceID: deviceID) {
-            let result = try await inbox.enqueue(value.envelope.heldItem(
-                transport: value.transport, displayName: value.displayName, receivedAt: value.receivedAt))
-            guard !result.duplicate else { continue }
-            released.insert(BotDeviceIdentifiers.durableID(msgID: value.envelope.msgID))
-            onWake?(WakeSignal(botId: botID, reason: "device:\(value.envelope.msgID)", at: now()))
+        guard let epochs = buffered[deviceID] else { return released }
+        for epoch in epochs.keys.sorted() {
+            guard var pending = buffered[deviceID]?[epoch], !pending.isEmpty else { continue }
+            let watermark = watermarks[deviceID]?[epoch]
+            var expected: Int64
+            if let watermark {
+                guard watermark < Int64.max else { continue }
+                expected = watermark + 1
+            } else {
+                expected = pending.keys.min() ?? 0
+            }
+            var forced = pending.count > maxBufferedPerDevice
+            while true {
+                if let value = pending[expected] {
+                    let item = try value.envelope.heldItem(
+                        transport: value.transport, displayName: value.displayName,
+                        receivedAt: value.receivedAt)
+                    _ = try await inbox.enqueue(item)
+                    pending.removeValue(forKey: expected)
+                    buffered[deviceID]?[epoch] = pending
+                    setWatermark(deviceID: deviceID, epoch: epoch, seq: expected)
+                    try await inbox.advanceDeviceCursor(
+                        deviceID: deviceID, epoch: epoch, seq: expected)
+                    released.insert(value.envelope.eventID)
+                    onWake?(WakeSignal(
+                        botId: botID, reason: "device:\(value.envelope.msgID)", at: now()))
+                    if expected == Int64.max { break }
+                    expected += 1
+                    forced = pending.count > maxBufferedPerDevice
+                    continue
+                }
+                guard let next = pending.keys.filter({ $0 > expected }).min(),
+                      let nextValue = pending[next] else { break }
+                let waitedMs = now() - nextValue.receivedAt
+                guard forced || waitedMs >= gapSkipAfterMs else { break }
+                let reason = forced ? "buffer-limit" : "timeout"
+                try await recordGap(
+                    deviceID: deviceID, epoch: epoch, fromSeq: expected, toSeq: next - 1,
+                    reason: reason, transport: nextValue.transport)
+                let skippedTo = next - 1
+                setWatermark(deviceID: deviceID, epoch: epoch, seq: skippedTo)
+                try await inbox.advanceDeviceCursor(
+                    deviceID: deviceID, epoch: epoch, seq: skippedTo)
+                expected = next
+                forced = pending.count > maxBufferedPerDevice
+            }
+            if pending.isEmpty { buffered[deviceID]?.removeValue(forKey: epoch) }
         }
+        if buffered[deviceID]?.isEmpty == true { buffered.removeValue(forKey: deviceID) }
         return released
     }
 
-    private func readyEnvelopes(deviceID: String) async throws -> [Accepted] {
-        let ordered = accepted.values.filter { $0.envelope.deviceID == deviceID }.sorted {
-            ($0.envelope.seq, $0.envelope.msgID) < ($1.envelope.seq, $1.envelope.msgID)
-        }
-        guard !ordered.isEmpty else { return [] }
-        let heldSequences = try await inbox.items().filter {
-            $0.kind == "device-event" && $0.deviceID == deviceID
-        }.compactMap(\.deviceSeq)
-        let start = heldSequences.min() ?? ordered[0].envelope.seq
-        var expected = start
-        var ready: [Accepted] = []
-        for value in ordered where value.envelope.seq >= start {
-            guard value.envelope.seq == expected else { break }
-            ready.append(value)
-            expected += 1
-        }
-        return ready
+    private func setWatermark(deviceID: String, epoch: Int64, seq: Int64) {
+        if let existing = watermarks[deviceID]?[epoch], existing >= seq { return }
+        watermarks[deviceID, default: [:]][epoch] = seq
+    }
+
+    private func recordGap(deviceID: String, epoch: Int64, fromSeq: Int64, toSeq: Int64,
+                           reason: String, transport: BotDeviceTransport) async throws {
+        let sessionID = try await requireMainSession()
+        let eventID = "device-gap:\(deviceID):\(epoch):\(fromSeq):\(toSeq)"
+        let text = "设备 \(deviceID) 的消息缺口 seq \(fromSeq)–\(toSeq) 已跳过（\(reason)），后续消息继续交付。"
+        let event = BotEvent(
+            type: "ui.notice", eventId: eventID, time: now(),
+            origin: .local(source: "device:\(transport.rawValue):\(deviceID)"),
+            traceId: eventID,
+            principal: BotPrincipal(botId: botID, sessionId: sessionID, kind: "device"),
+            causationId: nil, correlationId: eventID,
+            data: .object([
+                "kind": .string("device.gap"),
+                "tone": .string("warning"),
+                "text": .string(text),
+                "deviceID": .string(deviceID),
+                "epoch": .number(Double(epoch)),
+                "fromSeq": .number(Double(fromSeq)),
+                "toSeq": .number(Double(toSeq)),
+                "reason": .string(reason),
+            ]))
+        _ = try await store.append(event)
     }
 
     private func readyPendingItems() async throws -> [WakeInboxItem] {
-        let pending = try await inbox.items().filter { $0.kind == "device-event" && $0.state == .pending }
-        var ready: [WakeInboxItem] = []
-        for deviceID in Set(pending.compactMap(\.deviceID)) {
-            let ids = Set(try await readyEnvelopes(deviceID: deviceID).map {
-                BotDeviceIdentifiers.durableID(msgID: $0.envelope.msgID)
-            })
-            ready.append(contentsOf: pending.filter { $0.deviceID == deviceID && ids.contains($0.requestId ?? "") })
+        let pending = try await inbox.items().filter {
+            $0.kind == "device-event" && $0.state == .pending
         }
-        return ready.sorted { ($0.deviceID ?? "", $0.deviceSeq ?? 0, $0.id) < ($1.deviceID ?? "", $1.deviceSeq ?? 0, $1.id) }
+        return pending.sorted {
+            ($0.deviceID ?? "", $0.deviceEpoch ?? 0, $0.deviceSeq ?? 0, $0.id)
+                < ($1.deviceID ?? "", $1.deviceEpoch ?? 0, $1.deviceSeq ?? 0, $1.id)
+        }
     }
 }

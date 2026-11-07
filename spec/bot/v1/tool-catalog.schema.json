@@ -10,7 +10,7 @@
         "type": "object",
         "required": ["name", "inputSchema"],
         "properties": {
-          "name": {"enum": ["ask_user", "show_next_steps", "show_attachment", "show_document", "show_progress", "show_checklist", "show_link", "UpdateMemory", "RecallMemory", "Task", "AwaitTask", "StopSubagent", "UpdateRoutine", "ListRoutines", "RequestApproval", "SendToUser"]},
+          "name": {"enum": ["ask_user", "show_next_steps", "show_attachment", "show_document", "show_progress", "show_checklist", "show_link", "UpdateMemory", "RecallMemory", "Task", "AwaitTask", "StopSubagent", "UpdateRoutine", "ListRoutines", "RequestApproval", "SendToUser", "ReplyToDevice"]},
           "description": {"type": "string"},
           "inputSchema": {"type": "object"}
         },

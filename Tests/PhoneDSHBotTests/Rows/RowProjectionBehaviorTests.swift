@@ -72,4 +72,33 @@ final class RowProjectionBehaviorTests: XCTestCase {
                                                         sessionEvents: [], uiEvents: [ipc, user])
         XCTAssertEqual(snapshot.rows.map(\.provenance.trust), [BotRowProvenance.model, BotRowProvenance.ownerDirect])
     }
+
+    func testCardAnswerAndDismissalPersistAcrossRebuild() {
+        let answeredCard = RowTestSupport.uiEvent(type: "card.presented", id: "evt-card-answered", commitSeq: 1, time: 1,
+                                                  data: [
+                                                    "id": .string("card-answered"),
+                                                    "cardType": .string("question"),
+                                                    "question": .string("保存到哪里？"),
+                                                    "options": .array([.object(["id": .string("o0"), "label": .string("文档库")]),
+                                                                       .object(["id": .string("o1"), "label": .string("PDF")])])
+                                                  ])
+        let answer = RowTestSupport.uiEvent(type: "card.answered", id: "evt-card-answer", commitSeq: 2, time: 2,
+                                            data: ["cardID": .string("card-answered"), "optionID": .string("o1")])
+        let dismissedCard = RowTestSupport.uiEvent(type: "card.presented", id: "evt-card-dismissed", commitSeq: 3, time: 3,
+                                                   data: [
+                                                    "id": .string("card-dismissed"),
+                                                    "cardType": .string("question"),
+                                                    "question": .string("继续吗？"),
+                                                    "options": .array([.object(["id": .string("o0"), "label": .string("继续")]),
+                                                                       .object(["id": .string("o1"), "label": .string("停止")])])
+                                                   ])
+        let dismissal = RowTestSupport.uiEvent(type: "card.dismissed", id: "evt-card-dismiss", commitSeq: 4, time: 4,
+                                               data: ["cardID": .string("card-dismissed")])
+        let snapshot = BotSessionLogProjector().project(
+            botID: "main", sessionID: "main", sessionEvents: [],
+            uiEvents: [answeredCard, answer, dismissedCard, dismissal])
+        XCTAssertEqual(snapshot.rows.map(\.id), ["card-answered"])
+        XCTAssertEqual(snapshot.rows.first?.body["status"], .string("answered"))
+        XCTAssertEqual(snapshot.rows.first?.body["answeredOptionID"], .string("o1"))
+    }
 }

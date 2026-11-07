@@ -34,7 +34,7 @@ final class BotCaptureUITests: XCTestCase {
         XCTAssertEqual(count, expected, "action log: \(actionLog)", file: file, line: line)
     }
 
-    func testQuestionAnswerLocksAndCustomAnswer() throws {
+    func testQuestionAnswerLocksAndHasNoCustomInput() throws {
         launch("question")
         let option = app.buttons["bot.choice.option.library"]
         XCTAssertTrue(option.waitForExistence(timeout: 3))
@@ -44,15 +44,8 @@ final class BotCaptureUITests: XCTestCase {
         usleep(300_000)
         assertCount("cardAnswer", 1)
         XCTAssertTrue(app.staticTexts["已送出"].waitForExistence(timeout: 2))
-
-        launch("question")
-        let field = app.textFields["bot.choice.custom"]
-        XCTAssertTrue(field.waitForExistence(timeout: 3))
-        field.tap()
-        field.typeText("自定义回答")
-        app.buttons["bot.choice.custom.send"].tap()
-        usleep(300_000)
-        assertCount("cardAnswer", 1)
+        XCTAssertFalse(app.textFields["bot.choice.custom"].exists)
+        XCTAssertFalse(app.buttons["bot.choice.custom.send"].exists)
     }
 
     func testChecklistToggleAndSendBack() throws {

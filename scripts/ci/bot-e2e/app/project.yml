@@ -47,6 +47,8 @@ targets:
       - path: ../../../../examples/probe-app/PhoneDSHProbe/Bot/BotRuntimeComposition.swift
       - path: ../../../../examples/probe-app/PhoneDSHProbe/Bot/BotRuntimeEffects.swift
       - path: ../../../../examples/probe-app/PhoneDSHProbe/Bot/BotRuntimePresentation.swift
+      # The App and this E2E build the same production host assembly.
+      - path: ../../../../examples/probe-app/ProbeKit/ChatHostConfiguration.swift
     dependencies:
       - target: BotE2EApp
       - package: PhoneDSH
@@ -59,10 +61,29 @@ targets:
         product: PhoneDSHHarness
       - package: PhoneDSH
         product: PhoneDSHAgentCore
+      - package: PhoneDSH
+        product: PhoneDSHController
+      - package: PhoneDSH
+        product: PhoneDSHLoopback
+      - package: PhoneDSH
+        product: PhoneDSHADB
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
         PRODUCT_BUNDLE_IDENTIFIER: dev.phone-dsh.bot-e2e.tests
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+  BotChatModelTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: '17.0'
+    sources:
+      - path: TestsChatModel
+      - path: ../../../../examples/probe-app/PhoneDSHProbe/Bot/BotChatModel.swift
+      - path: ../../../../examples/probe-app/PhoneDSHProbe/Bot/BotUIModels.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: dev.phone-dsh.bot-e2e.chat-model-tests
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
 schemes:
   - name: BotE2EApp
@@ -70,9 +91,11 @@ schemes:
       targets:
         BotE2EApp: all
         BotE2ETests: all
+        BotChatModelTests: all
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - BotE2ETests
+        - BotChatModelTests

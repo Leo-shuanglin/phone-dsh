@@ -7,20 +7,22 @@ public enum BotToolCatalog {
         "ask_user", "show_next_steps", "show_attachment", "show_document", "show_progress",
         "show_checklist", "show_link", "UpdateMemory", "RecallMemory", "Task", "AwaitTask",
         "StopSubagent", "UpdateRoutine", "ListRoutines", "RequestApproval", "SendToUser",
+        deviceReplyName,
     ]
     public static let p1TargetNames = ["show_table", "show_callout", "show_info", "show_payload", "show_library"]
     public static let volatileContextName = "BotVolatileContext"
+    public static let deviceReplyName = "ReplyToDevice"
     public static let cardToolNames = Set(p0Names.prefix(7))
 
     public static let definitions: [BotMCPToolDefinition] = [
-        tool("ask_user", "Show a question card with 2-4 concrete suggested replies. A successful card ends the turn.", schema([
+        tool("ask_user", "Show a question card with 2-4 concrete suggested replies. The host assigns each option a stable optionID. Put a clearly best option first, mark at most one option recommended:true (or style:primary), and never recommend a danger option. A successful card ends the turn.", schema([
             "question": string(), "options": array(object([
                 "label": string(), "value": string(), "style": enumString(["primary", "default", "danger"]),
                 "recommended": bool(), "description": string(),
             ], required: ["label"]), minItems: 2, maxItems: 4),
             "helpText": string(),
         ], required: ["question", "options"])),
-        tool("show_next_steps", "Offer 2-4 tappable next actions. A successful card ends the turn.", schema([
+        tool("show_next_steps", "Offer 2-4 tappable next actions. Put a clearly best step first, mark at most one step recommended:true (or style:primary), and never recommend a danger step. A successful card ends the turn.", schema([
             "steps": array(.object(["anyOf": .array([string(), object([
                 "label": string(), "value": string(), "description": string(),
                 "style": enumString(["primary", "default", "danger"]), "recommended": bool(),
@@ -99,6 +101,11 @@ public enum BotToolCatalog {
         tool("SendToUser", "Send one message to the user in this chat.", schema([
             "message": string(),
         ], required: ["message"])),
+        tool(deviceReplyName, "Reply once to the device message(s) of this turn. The host resolves the source device, transport and mapped session; the caller cannot name a destination.", schema([
+            "message": .object([
+                "type": .string("string"), "minLength": .number(1), "maxLength": .number(1000),
+            ]),
+        ], required: ["message"], additionalProperties: false)),
     ]
 
     public static let volatileContextDefinition = BotMCPToolDefinition(

@@ -121,13 +121,13 @@ final class BotGatewayTests: XCTestCase {
                                                               name: "mcp__dshbot__RecallMemory",
                                                               arguments: arguments, runtimeId: "runtime-1")
         let wrongDigest = try BotArgumentsDigest.string(for: .object(["query": .string("其他")]))
-        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime-1", argsDigest: wrongDigest))
-        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime-2", arguments: arguments))
-        let resolved = try await unwrap(await gateway.resolveToolCall(runtimeId: "runtime-1", arguments: arguments))
+        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime-1", name: "RecallMemory", argsDigest: wrongDigest))
+        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime-2", name: "RecallMemory", arguments: arguments))
+        let resolved = try await unwrap(await gateway.resolveToolCall(runtimeId: "runtime-1", name: "RecallMemory", arguments: arguments))
         XCTAssertEqual(resolved.agentId, "main")
         XCTAssertEqual(resolved.callId, "call-1")
         XCTAssertEqual(resolved.attribution, registration)
-        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime-1", arguments: arguments))
+        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime-1", name: "RecallMemory", arguments: arguments))
 
         do {
             _ = try await gateway.registerToolCall(sessionId: "unknown", callId: "call-2",
@@ -145,8 +145,31 @@ final class BotGatewayTests: XCTestCase {
                                                               name: "UpdateMemory", runtimeId: "runtime")
         await assertTrue(await gateway.tokens.revoke(issued.token))
         let digest = registration.argsDigest
-        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime", argsDigest: digest))
-        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime", argsDigest: digest))
+        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime", name: "UpdateMemory", argsDigest: digest))
+        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime", name: "UpdateMemory", argsDigest: digest))
+    }
+
+    func testClaimIsBoundToToolNameAndCannotStealAnotherRegistration() async throws {
+        let gateway = BotGateway(now: { 1_000 })
+        _ = try await gateway.issueSession(botId: "main", sessionId: "gb-main", kind: .chat)
+        let arguments = BotJSONValue.object(["value": .string("same")])
+        let bash = try await gateway.registerToolCall(
+            sessionId: "gb-main", callId: "bash-call", name: "mcp__phone__bash",
+            arguments: arguments, runtimeId: "runtime")
+        let write = try await gateway.registerToolCall(
+            sessionId: "gb-main", callId: "write-call", name: "mcp__phone__write",
+            arguments: arguments, runtimeId: "runtime")
+        XCTAssertEqual(bash.name, "bash")
+        XCTAssertEqual(write.name, "write")
+
+        let claimedWrite = try await unwrap(await gateway.resolveToolCall(
+            runtimeId: "runtime", name: "write", arguments: arguments))
+        XCTAssertEqual(claimedWrite.callId, "write-call")
+        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime", name: "write", arguments: arguments))
+        let claimedBash = try await unwrap(await gateway.resolveToolCall(
+            runtimeId: "runtime", name: "bash", arguments: arguments))
+        XCTAssertEqual(claimedBash.callId, "bash-call")
+        await assertNil(await gateway.resolveToolCall(runtimeId: "runtime", name: "edit", arguments: arguments))
     }
 
     func testAttributionDuplicateExpiryAmbiguityAndRuntimeScope() async throws {
@@ -181,7 +204,9 @@ final class BotGatewayTests: XCTestCase {
 
         let expiring = try await registry.register(sessionId: "s5", incarnation: "i5", callId: "c5", name: "A",
                                                    arguments: .object(["expiry": .bool(true)]), runtimeId: "r4")
-        clock.advance(30_000)
+        // The runtime TTL covers the 300 s approval window; one registration
+        // must survive that wait and then expire.
+        clock.advance(BotAttributionRegistry.defaultTTLMilliseconds + 1)
         try await assertNil(try await registry.claimByDigest(argsDigest: expiring.argsDigest, runtimeId: "r4"))
         await assertEqual(await registry.count, 0)
     }

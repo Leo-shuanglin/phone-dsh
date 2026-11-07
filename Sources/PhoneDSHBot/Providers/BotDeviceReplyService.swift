@@ -10,9 +10,10 @@ public struct BotDeviceReply: Codable, Sendable, Equatable {
     public init(source: BotDeviceEnvelope, transport: BotDeviceTransport,
                 sessionID: String, text: String, downSeq: Int64 = 0) throws {
         self.envelope = try BotDeviceEnvelope(
-            msgID: BotDeviceIdentifiers.downMessageID(msgID: source.msgID),
+            msgID: BotDeviceIdentifiers.downMessageID(
+                deviceID: source.deviceID, epoch: source.epoch, msgID: source.msgID),
             deviceID: source.deviceID, sessionID: sessionID, dir: "down", kind: "text",
-            origin: "agent", audience: "device", seq: downSeq, text: text)
+            origin: "agent", audience: "device", seq: downSeq, epoch: source.epoch, text: text)
         self.transport = transport
         self.sourceMessageID = source.msgID
     }
@@ -23,92 +24,180 @@ public struct BotDeviceReply: Codable, Sendable, Equatable {
         self.sourceMessageID = sourceMessageID
     }
 
-    public var effectKey: String { BotDeviceIdentifiers.durableID(msgID: sourceMessageID) }
+    public var effectKey: String {
+        BotDeviceIdentifiers.durableID(
+            deviceID: envelope.deviceID, epoch: envelope.epoch, msgID: sourceMessageID)
+    }
+
+    func replacingDownSeq(_ seq: Int64) throws -> BotDeviceReply {
+        let replaced = try BotDeviceEnvelope(
+            msgID: envelope.msgID, deviceID: envelope.deviceID, sessionID: envelope.sessionID,
+            dir: envelope.dir, kind: envelope.kind, origin: envelope.origin,
+            audience: envelope.audience, seq: seq, epoch: envelope.epoch,
+            tsMs: envelope.tsMs, text: envelope.text, audio: envelope.audio)
+        return BotDeviceReply(envelope: replaced, transport: transport, sourceMessageID: sourceMessageID)
+    }
 }
 
 public protocol BotDeviceReplyWriting: Sendable {
     func send(_ reply: BotDeviceReply) async throws -> String?
 }
 
-public enum BotDeviceReplyError: Error, Sendable {
+/// A transport adapter uses these classes to tell apart "confirmed not sent"
+/// (safe to retry) from "may have been sent" (reconcile, never blind-resend).
+public enum BotDeviceReplyWriteError: Error, Sendable, Equatable {
+    case transient(String)
+    case unknown(String)
+}
+
+public enum BotDeviceDownlinkReceipt: Sendable, Equatable {
+    case applied(resultRef: String?)
+    case notApplied
+    case unknown
+}
+
+public protocol BotDeviceReceiptQuerying: Sendable {
+    func receipt(for reply: BotDeviceReply) async throws -> BotDeviceDownlinkReceipt
+}
+
+public enum BotDeviceReplyError: Error, Sendable, Equatable {
     case unauthorized
     case payloadConflict
+    case invalidSource(String)
+    case sequence(String)
+}
+
+public struct BotDeviceReconciliationSummary: Sendable, Equatable {
+    public var applied = 0
+    public var retried = 0
+    public var unconfirmed = 0
+
+    public init() {}
 }
 
 public actor BotDeviceReplyService {
     public let store: SQLiteDomainStore
     private let writer: any BotDeviceReplyWriting
+    private let reconciler: (any BotDeviceReceiptQuerying)?
     private let now: @Sendable () -> Int64
     private let owner: String
     private var requests: [String: BotDeviceReply] = [:]
     private var loaded = false
 
     public init(store: SQLiteDomainStore, writer: any BotDeviceReplyWriting,
+                reconciler: (any BotDeviceReceiptQuerying)? = nil,
                 now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000) },
                 owner: String = "bot-device-reply") {
         self.store = store
         self.writer = writer
+        self.reconciler = reconciler
         self.now = now
         self.owner = owner
     }
 
     @discardableResult
     public func stage(_ reply: BotDeviceReply, authorized: BotExecutionDecision) async throws -> String {
-        let effect = try Self.effect(reply)
-        let resource = "device:\(reply.transport.rawValue):\(reply.envelope.deviceID)"
-        guard authorized.allowed, authorized.effects.contains(where: {
-            $0.tool == "device.reply" && $0.operation == "device.reply" && $0.resource == resource
-                && $0.mutability == .externalSend && $0.policy == .ask
-        }) else {
-            throw BotDeviceReplyError.unauthorized
-        }
-        try await restore()
-        if let previous = requests[reply.effectKey] {
-            guard previous == reply else { throw BotDeviceReplyError.payloadConflict }
-            return reply.effectKey
-        }
-        let event = BotEvent(
-            type: "device.reply.staged", eventId: "staged:\(reply.effectKey)", time: now(),
-            origin: .local(source: "device:\(reply.transport.rawValue):\(reply.envelope.deviceID)"),
-            traceId: reply.effectKey,
-            principal: BotPrincipal(
-                botId: authorized.principal.botId, sessionId: authorized.principal.sessionId, kind: "device"),
-            causationId: nil, correlationId: reply.effectKey,
-            data: .object([
-                "envelope": try reply.envelope.jsonValue,
-                "transport": .string(reply.transport.rawValue),
-                "sourceMessageID": .string(reply.sourceMessageID),
-            ]))
-        _ = try await store.append(event)
-        requests[reply.effectKey] = reply
-        return try await store.enqueue(effect)
+        let receipt = try await BotDeviceReplyStager.shared.stage(
+            reply, authorized: authorized, store: store, now: now())
+        requests[receipt.effectKey] = receipt.reply
+        return receipt.effectKey
     }
 
     public func runNext() async throws -> BotEffectState? {
         try await restore()
-        let pending = try await store.effects(state: .pending) + store.effects(state: .failed)
-        guard let next = pending.sorted(by: {
+        let pending = try await store.effects(state: .pending)
+        let failed = try await store.effects(state: .failed)
+        let candidates = pending + failed
+        guard let next = candidates.filter({ $0.effect.kind == "device-reply" }).sorted(by: {
             ($0.effect.notBefore ?? 0, $0.enqueuedCommitSeq, $0.effectKey)
                 < ($1.effect.notBefore ?? 0, $1.enqueuedCommitSeq, $1.effectKey)
-        }).first, next.effect.kind == "device-reply" else { return nil }
+        }).first else { return nil }
         guard let lease = try await store.lease(owner: owner, now: now()) else { return nil }
+        guard let leasedRecord = try await store.effect(lease.effectKey),
+              leasedRecord.effect.kind == "device-reply" else { return nil }
+        guard next.effectKey == lease.effectKey else { return nil }
         return try await deliver(lease)
     }
 
     public func deliver(_ lease: BotEffectLease) async throws -> BotEffectState {
         try await restore()
         guard let request = requests[lease.effectKey] else {
-            try await store.fail(lease, errorClass: "permanent", reason: "device reply payload is missing")
-            return .deadLetter
+            if let record = try await store.effect(lease.effectKey),
+               record.effect.kind == "device-reply" {
+                try await store.fail(lease, errorClass: "permanent", reason: "device reply payload is missing")
+                return .deadLetter
+            }
+            return .failed
         }
         do {
-            let resultRef = try await writer.send(request)
+            guard let resultRef = try await writer.send(request) else {
+                // A missing receipt is not success: the bytes may have reached
+                // the device. Keep the effect for reconciliation, never ack it.
+                try await store.fail(lease, errorClass: "unknown", reason: "writer returned no receipt")
+                return .needsReconciliation
+            }
             try await store.ack(lease, resultRef: resultRef)
             return .acked
+        } catch let error as BotDeviceReplyWriteError {
+            switch error {
+            case .transient(let reason):
+                try await store.fail(lease, errorClass: "transient", reason: reason)
+                return .failed
+            case .unknown(let reason):
+                try await store.fail(lease, errorClass: "unknown", reason: reason)
+                return .needsReconciliation
+            }
         } catch {
             try await store.fail(lease, errorClass: "unknown", reason: String(describing: error))
             return .needsReconciliation
         }
+    }
+
+    /// Reconnect entry point. Applied receipts are acknowledged, definitively
+    /// not-applied effects are retried, and everything else stays
+    /// `needs_reconciliation` with one user-visible notice per attempt.
+    @discardableResult
+    public func reconcile(
+        _ query: (any BotDeviceReceiptQuerying)? = nil
+    ) async throws -> BotDeviceReconciliationSummary {
+        try await restore()
+        let query = query ?? reconciler
+        var summary = BotDeviceReconciliationSummary()
+        for record in try await store.effects(state: .needsReconciliation)
+        where record.effect.kind == "device-reply" {
+            let request = requests[record.effectKey]
+            var outcome: BotDeviceDownlinkReceipt = .unknown
+            if let request, let query {
+                do {
+                    outcome = try await query.receipt(for: request)
+                } catch {
+                    outcome = .unknown
+                }
+            }
+            switch outcome {
+            case .applied(let resultRef):
+                do {
+                    try await store.ackReconciled(
+                        effectKey: record.effectKey, generation: record.generation,
+                        attempt: record.attempt, resultRef: resultRef)
+                    summary.applied += 1
+                } catch {
+                    // A concurrent ack/retry already moved the row; the next
+                    // pass will see the new state.
+                }
+            case .notApplied:
+                do {
+                    try await store.retryNeedsReconciliation(record.effectKey, notBefore: now())
+                    summary.retried += 1
+                } catch {
+                    // Same race as above; leave the row untouched.
+                }
+            case .unknown:
+                try await recordReconciliationNotice(record, request: request)
+                summary.unconfirmed += 1
+            }
+        }
+        return summary
     }
 
     public func restore() async throws {
@@ -137,7 +226,35 @@ public actor BotDeviceReplyService {
         loaded = true
     }
 
-    private static func effect(_ reply: BotDeviceReply) throws -> BotEffect {
+    private func recordReconciliationNotice(_ record: BotEffectRecord,
+                                            request: BotDeviceReply?) async throws {
+        let sourceEvent = try await store.event(withId: record.effectKey)
+        let botID = sourceEvent?.principal.botId
+        let sessionID = sourceEvent?.principal.sessionId
+        let deviceID = request?.envelope.deviceID ?? "device"
+        let transport = request?.transport.rawValue ?? "unknown"
+        let source = BotDeviceTransport(rawValue: transport) != nil
+            ? "device:\(transport):\(deviceID)" : "comm-service"
+        let eventID = "device-reconcile:\(record.effectKey):\(record.generation):\(record.attempt)"
+        let text = "设备 \(deviceID) 的一条回复结果未知（可能已送达）。请先在设备上确认；确认前不会重发。"
+        let event = BotEvent(
+            type: "ui.notice", eventId: eventID, time: now(),
+            origin: .local(source: source), traceId: eventID,
+            principal: BotPrincipal(botId: botID, sessionId: sessionID, kind: "device"),
+            causationId: nil, correlationId: record.effectKey,
+            data: .object([
+                "kind": .string("device.reconcile"),
+                "tone": .string("warning"),
+                "text": .string(text),
+                "effectKey": .string(record.effectKey),
+                "deviceID": .string(deviceID),
+                "generation": .number(Double(record.generation)),
+                "attempt": .number(Double(record.attempt)),
+            ]))
+        _ = try await store.append(event)
+    }
+
+    static func effect(_ reply: BotDeviceReply) throws -> BotEffect {
         let resource = "device:\(reply.transport.rawValue):\(reply.envelope.deviceID)"
         let digest = try BotArgumentsDigest.string(for: .object([
             "envelope": try reply.envelope.jsonValue,
@@ -153,8 +270,9 @@ public actor BotDeviceReplyService {
                                       sessionID: String) -> BotToolEffect {
         let resource = "device:\(reply.transport.rawValue):\(reply.envelope.deviceID)"
         return BotToolEffect(
-            tool: "device.reply", operation: "device.reply", resource: resource,
+            tool: "ReplyToDevice", operation: "device.reply", resource: resource,
             target: sessionID, mutability: .externalSend, policy: .ask,
-            label: "Reply to source device", detail: "Replies only through the host-mapped device transport session.")
+            label: "Reply to source device",
+            detail: "Replies only through the host-mapped source device transport session.")
     }
 }

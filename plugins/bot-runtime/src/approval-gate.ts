@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { argsDigest, botRuntimeAvailable, dispatchArguments, PHONE_TOOL_PREFIX } from './identity-bridge.ts'
+import {
+  argsDigest, BOT_RUNTIME_UNAVAILABLE_REASON, botRuntimeAvailable, botSessionOwned,
+  dispatchArguments, NATIVE_PHONE_TOOL_PREFIX, PHONE_TOOL_PREFIX,
+} from './identity-bridge.ts'
 
 export interface ApprovalEffect {
   tool: string
@@ -118,6 +121,18 @@ export function phoneEffectsForApproval(name: string, args: Record<string, unkno
   const bare = name.startsWith(PHONE_TOOL_PREFIX) ? name.slice(PHONE_TOOL_PREFIX.length) : name
   if (bare === 'bash') return bashEffectsForApproval(args)
   if (bare === 'BotVolatileContext' || UI_TOOLS.has(bare) || AUTO_TOOLS.has(bare)) return []
+  if (bare === 'ReplyToDevice') {
+    // Host extension registered in golden/tool-effects.json hostExtensions:
+    // the App replaces resource/target with the resolved staged source before
+    // authorization. Marking it known/execution keeps `alwaysScope=until` and
+    // `deferConsumption=true`, matching BotMCPRuntime.approve.
+    return [{
+      tool: 'ReplyToDevice', operation: 'device.reply', resource: 'device:*', target: '*',
+      mutability: 'external-send', policy: 'ask', label: '回覆來源設備',
+      detail: 'host resolves the staged source (deviceID, transport, mapped transport session) and replaces resource/target with the concrete values before execution; the model cannot name a destination',
+      ui: false, execution: 'device-reply', known: true, isMcp: true,
+    }]
+  }
   if (bare === 'UpdateMemory') {
     const action = String(args.action ?? 'write')
     const scope = String(args.scope ?? 'agent')
@@ -127,9 +142,22 @@ export function phoneEffectsForApproval(name: string, args: Record<string, unkno
   return [unclassifiedEffect(name, args)]
 }
 
+/**
+ * The structural gate only owns the Worker shell/file tools and Bot's own
+ * phone tools. Native Android tools keep the App's native MCP authorization;
+ * unrelated built-ins (read/grep/glob/web) must not be turned into approval
+ * requests, which used to end as unattributed and blocked them.
+ */
+export function needsStructuralApproval(name: string): boolean {
+  if (name.startsWith(NATIVE_PHONE_TOOL_PREFIX)) return false
+  if (name === 'bash' || name === 'write' || name === 'edit') return true
+  return name.startsWith(PHONE_TOOL_PREFIX)
+}
+
 function sensitiveRead(exec: { name: string; arguments?: unknown }): boolean {
   const args = dispatchArguments(exec.arguments)
-  if (exec.name === 'bash') return SENSITIVE_RE.test(String(args.command ?? ''))
+  const bare = exec.name.startsWith(PHONE_TOOL_PREFIX) ? exec.name.slice(PHONE_TOOL_PREFIX.length) : exec.name
+  if (bare === 'bash') return SENSITIVE_RE.test(String(args.command ?? ''))
   for (const key of ['file_path', 'path', 'pattern']) {
     if (SENSITIVE_RE.test(String(args[key] ?? ''))) return true
   }
@@ -162,9 +190,16 @@ export default function dshbotApprovalGate(ctx: Context, config: ApprovalGateCon
   const send = config.request ?? ((payload: Record<string, unknown>, signal?: AbortSignal) => postApproval(url, token, payload, signal))
 
   ctx.on('tools/pre-execute', async (exec: { name: string; arguments?: unknown; agent?: Agent; callId?: string; signal?: AbortSignal }, next: () => Promise<any>) => {
-    if (!botRuntimeAvailable(ctx, exec)) return next()
+    // Workbench sessions keep the ordinary DSH permission chain. Ownership is
+    // claimed by the Bot runtime, never inferred from the globally registered
+    // MCP catalog.
+    if (!botSessionOwned(ctx, exec)) return next()
     if (sensitiveRead(exec)) {
       return { kind: 'deny', reason: '[sensitive read] The operation targets protected credentials and was NOT executed.' }
+    }
+    if (!needsStructuralApproval(exec.name)) return next()
+    if (!botRuntimeAvailable(ctx, exec)) {
+      return { kind: 'deny', reason: BOT_RUNTIME_UNAVAILABLE_REASON }
     }
     const args = dispatchArguments(exec.arguments)
     const effects = phoneEffectsForApproval(exec.name, args)

@@ -30,7 +30,12 @@ public final class BotMCPHTTPServer: @unchecked Sendable {
 
     public func start() async throws -> URL {
         guard lock.withLock({ self.listener == nil }) else { throw BotMCPHTTPError.alreadyStarted }
-        let listener = try NWListener(using: .tcp, on: .any)
+        // The Bot MCP surface is only ever reached through the host's
+        // /v1/http egress, never from the LAN. Bind the IPv4 loopback
+        // explicitly instead of `.any`.
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
+        let listener = try NWListener(using: parameters)
         listener.newConnectionHandler = { [weak self] connection in
             self?.accept(connection)
         }
@@ -134,24 +139,37 @@ public final class BotMCPHTTPServer: @unchecked Sendable {
             send(.text(413, #"{"error":"request too large"}"#), on: connection)
             return
         }
-        guard request.headers["authorization"] == "Bearer \(token)" else {
-            send(.text(401, #"{"error":"unauthorized"}"#), on: connection)
+        // A request that carries an Origin must carry exactly this server's
+        // origin (LoopbackServer's rule). Requests from the host egress carry
+        // none, so they stay accepted.
+        if let origin = request.headers["origin"],
+           origin.caseInsensitiveCompare(originString) != .orderedSame {
+            send(.text(403, #"{"error":"origin mismatch"}"#), on: connection)
             return
         }
-        if request.method == "DELETE" {
-            send(.text(200, ""), on: connection)
+        guard Self.tokenMatches(request.headers["authorization"], expected: "Bearer \(token)") else {
+            send(.text(401, #"{"error":"unauthorized"}"#), on: connection)
             return
         }
         guard request.method == "POST" else {
             send(.text(405, #"{"error":"method not allowed"}"#), on: connection)
             return
         }
+        // Paths are exact. A query string, a trailing slash, a different case
+        // or a `..` segment is not a route; DELETE cannot succeed anywhere.
+        guard !request.target.isEmpty,
+              !request.target.contains("?"),
+              !request.target.contains("#"),
+              !request.target.contains(".."),
+              request.target.hasPrefix("/") else {
+            send(.text(400, #"{"error":"invalid request target"}"#), on: connection)
+            return
+        }
         guard let value = try? BotJSONValue.parse(request.body) else {
             send(.text(400, #"{"error":"invalid JSON"}"#), on: connection)
             return
         }
-        let path = request.target.split(separator: "?", omittingEmptySubsequences: false).first.map(String.init) ?? request.target
-        switch path {
+        switch request.target {
         case "/identity/register":
             let reply = await handler.registerIdentity(value)
             send(.json(200, reply), on: connection)
@@ -172,7 +190,8 @@ public final class BotMCPHTTPServer: @unchecked Sendable {
                 }
                 guard let id = object["id"] else { continue }
                 let params = object["params"] ?? .object([:])
-                replies.append(await handler.rpc(method: method, params: params, id: id))
+                replies.append(await handler.rpc(method: method, params: params, id: id,
+                                                 headers: request.headers))
             }
             if replies.isEmpty {
                 send(.text(202, "", session: true), on: connection)
@@ -197,6 +216,29 @@ public final class BotMCPHTTPServer: @unchecked Sendable {
         var data = Data(head.utf8)
         data.append(body)
         connection.send(content: data, completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    private var originString: String {
+        let current = lock.withLock { endpoint }
+        guard let current,
+              var components = URLComponents(url: current, resolvingAgainstBaseURL: false) else { return "" }
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? ""
+    }
+
+    /// Constant-time comparison over UTF-8 bytes. Length is allowed to differ
+    /// (it is not secret), but equal-length byte comparison does not exit on
+    /// the first mismatch.
+    static func tokenMatches(_ supplied: String?, expected: String) -> Bool {
+        guard let supplied else { return false }
+        let left = Array(supplied.utf8)
+        let right = Array(expected.utf8)
+        guard left.count == right.count else { return false }
+        var difference: UInt8 = 0
+        for index in left.indices { difference |= left[index] ^ right[index] }
+        return difference == 0
     }
 
     private static func randomToken() -> String {

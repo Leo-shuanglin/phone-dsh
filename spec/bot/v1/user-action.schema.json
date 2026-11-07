@@ -23,9 +23,13 @@
     {
       "required": ["cardID", "optionID"],
       "properties": {
+        "nonce": {"type": "string", "minLength": 1},
+        "botID": {"type": "string", "minLength": 1},
         "kind": {"const": "cardAnswer"},
+        "cardID": {"type": "string"},
         "optionID": {"type": "string", "minLength": 1}
-      }
+      },
+      "additionalProperties": false
     },
     {
       "required": ["cardID"],

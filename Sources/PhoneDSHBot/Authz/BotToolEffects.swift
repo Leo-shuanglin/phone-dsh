@@ -144,6 +144,19 @@ public enum BotToolEffectClassifier {
                                     ? "在對話中送出一則訊息\(preview.isEmpty ? "" : "：\(preview)")"
                                     : "Posts one message into the conversation\(preview.isEmpty ? "" : ": \(preview)")",
                                  isMcp: isMcp)
+        case BotDeviceReplyTool.toolName:
+            // Host extension (tool-effects.json hostExtensions): the pure
+            // argument classifier can only name the staged source. The runtime
+            // resolves the concrete device id and session and replaces
+            // resource/target before authorization; the model cannot name a
+            // destination. Keeping it registered means it is a known effect
+            // instead of an unclassified, fail-closed write.
+            return BotToolEffect(
+                tool: BotDeviceReplyTool.toolName, operation: "device.reply",
+                resource: "device:*", target: "*", mutability: .externalSend, policy: .ask,
+                label: "回覆來源設備",
+                detail: "host resolves the staged source (deviceID, transport, mapped transport session) and replaces resource/target with the concrete values before execution; the model cannot name a destination",
+                execution: "device-reply")
         case "UpdateRoutine":
             let title = clip(args["title"], max: 80)
             let action = args["action"].map { clip($0, max: 40) } ?? "update"

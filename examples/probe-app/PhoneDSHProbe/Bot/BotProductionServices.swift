@@ -16,6 +16,10 @@ func botProductionInt(_ value: PhoneDSHBot.BotJSONValue?) -> Int? {
     return Int(exactly: number)
 }
 
+func botProductionNowMilliseconds() -> Int64 {
+    Int64(Date().timeIntervalSince1970 * 1_000)
+}
+
 enum BotProductionError: LocalizedError {
     case brainUnavailable
     case invalidService(String)
@@ -65,46 +69,36 @@ struct BotProductionComposition {
     var turnStopping: (any BotProductionTurnStopping)? = nil
 }
 
+/// The single production authority for one Bot's durable dependencies.
+///
+/// `BotMCPRuntime` owns exactly one `RoutineMachine` and one `BotMemory`; the
+/// composition root creates those once and injects them here. No second
+/// routine store or memory-fact wrapper is constructed for the UI path.
 actor BotProductionEnvironment {
-    private static var cached: BotProductionEnvironment?
-
     let botID: String
     private(set) var sessionID: String
     let sessionLogURL: URL?
     let domain: SQLiteDomainStore
     let routineMachine: RoutineMachine
+    let memory: BotMemory
     let runtimeContext: BotProductionRuntimeContext
     private var planner: any BotUserActionPlanning
     private var turnStopping: (any BotProductionTurnStopping)?
 
-    private init(botID: String = "main", domain: SQLiteDomainStore) {
-        self.botID = botID
-        self.sessionID = botID
-        self.sessionLogURL = nil
-        self.domain = domain
-        self.runtimeContext = BotProductionRuntimeContext(botID: botID)
-        self.routineMachine = RoutineMachine(store: SQLiteRoutineStore(domainStore: domain))
-        self.planner = BotProductionUnavailablePlanner()
-    }
-
     init(domain: SQLiteDomainStore, botID: String, sessionID: String,
-         routineStore: SQLiteRoutineStore, planner: (any BotUserActionPlanning)? = nil,
-         turnStopping: (any BotProductionTurnStopping)? = nil, sessionLogURL: URL? = nil) {
+         routineMachine: RoutineMachine, memory: BotMemory,
+         planner: (any BotUserActionPlanning)? = nil,
+         turnStopping: (any BotProductionTurnStopping)? = nil,
+         sessionLogURL: URL? = nil) {
         self.botID = botID
         self.sessionID = sessionID
         self.sessionLogURL = sessionLogURL
         self.domain = domain
+        self.routineMachine = routineMachine
+        self.memory = memory
         self.runtimeContext = BotProductionRuntimeContext(botID: botID)
-        self.routineMachine = RoutineMachine(store: routineStore)
         self.planner = planner ?? BotProductionUnavailablePlanner()
         self.turnStopping = turnStopping
-    }
-
-    static func live() throws -> BotProductionEnvironment {
-        if let cached { return cached }
-        let environment = try BotProductionEnvironment(domain: SQLiteDomainStore.applicationSupport())
-        cached = environment
-        return environment
     }
 
     func connect(_ composition: BotProductionComposition) throws {
@@ -181,6 +175,9 @@ struct BotProductionHistoryPage: Sendable, Equatable {
     var hasMore: Bool
 }
 
+/// Reads the same durable rows the production Bot page renders. One instance
+/// belongs to the composition root; the UI passes its driver around instead of
+/// constructing another projection authority.
 actor BotProductionRowService {
     private let environment: BotProductionEnvironment
     private let history: BotRowHistory
@@ -279,22 +276,57 @@ struct BotProductionInfoSnapshot: Sendable {
     var approvals: [BotProductionApproval]
 }
 
+/// Read/write view over the same `BotMemory` and `RoutineMachine` the
+/// composition root injected; nothing here opens a second fact store.
 actor BotProductionInfoService {
     private let environment: BotProductionEnvironment
-    private let memoryStore: SQLiteBotMemoryFactStore
 
     init(environment: BotProductionEnvironment) {
         self.environment = environment
-        self.memoryStore = SQLiteBotMemoryFactStore(eventLog: environment.domain, botID: environment.botID)
     }
 
     func load() async throws -> BotProductionInfoSnapshot {
-        async let facts = memoryStore.facts(scope: nil)
-        async let routines = environment.routineMachine.list(botId: environment.botID)
+        let memory = environment.memory
+        let machine = environment.routineMachine
+        let botName = try await environment.context().botName
+        async let facts = memory.facts(scope: nil)
+        async let routines = machine.list(botId: environment.botID)
         async let approvals = approvalRecords()
         return try await BotProductionInfoSnapshot(
-            botName: environment.context().botName,
-            memories: facts, routines: routines, approvals: approvals)
+            botName: botName, memories: facts, routines: routines, approvals: approvals)
+    }
+
+    func rename(_ name: String) async throws {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw BotProductionError.invalidService("Bot 名不能为空。") }
+        let eventID = "bot-rename-\(UUID().uuidString.lowercased())"
+        let event = BotEvent(
+            type: "ui.system_event", eventId: eventID, time: botProductionNowMilliseconds(),
+            origin: .local(source: "user"), traceId: eventID,
+            principal: BotPrincipal(botId: environment.botID, sessionId: nil, kind: "ui"),
+            causationId: nil, correlationId: nil,
+            data: .object(["event": .string("renamed"), "botName": .string(trimmed)]))
+        _ = try await environment.domain.append(event)
+    }
+
+    func forget(factID: String) async throws {
+        let result = try await environment.memory.forget(factID: factID)
+        guard result.ok else {
+            throw BotProductionError.invalidService(result.error ?? "忘记记忆失败")
+        }
+    }
+
+    func eraseMemories() async throws {
+        let facts = try await environment.memory.facts(scope: nil)
+        for fact in facts {
+            _ = try await environment.memory.erase(factID: fact.factID)
+        }
+    }
+
+    func setRoutineEnabled(_ routineID: String, enabled: Bool) async throws {
+        _ = try await environment.routineMachine.update(
+            botId: environment.botID, routineId: routineID,
+            patch: RoutinePatch(enabled: enabled), now: botProductionNowMilliseconds())
     }
 
     private func approvalRecords() async throws -> [BotProductionApproval] {
@@ -321,8 +353,11 @@ actor BotProductionInfoService {
 struct BotProductionInfoDriver {
     var load: () async throws -> BotProductionInfoSnapshot
 
+    static func production(service: BotProductionInfoService) -> BotProductionInfoDriver {
+        BotProductionInfoDriver(load: { try await service.load() })
+    }
+
     static func production(environment: BotProductionEnvironment) -> BotProductionInfoDriver {
-        let service = BotProductionInfoService(environment: environment)
-        return BotProductionInfoDriver(load: { try await service.load() })
+        production(service: BotProductionInfoService(environment: environment))
     }
 }

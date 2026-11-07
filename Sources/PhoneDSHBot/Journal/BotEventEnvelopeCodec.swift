@@ -29,6 +29,7 @@ public struct BotEventEnvelopeCodec: Sendable {
         "conversation.tool_call", "conversation.tool_result", "conversation.turn_ended",
         "conversation.automation_run", "approval.requested", "approval.decided", "grant.created",
         "grant.added", "grant.consumed", "grant.revoked", "grant.migrated", "card.presented",
+        "card.answered", "card.dismissed",
         "ui.system_event", "ui.notice", "ui.send_to_user", "transcript.rollback",
         "transcript.row_deleted", "transcript.imported", "bot.greeting_seeded", "bot.created",
         "comm.outbound", "comm.inbound", "comm.reply", "comm.failed", "task.created", "task.started",

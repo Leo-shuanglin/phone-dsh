@@ -88,8 +88,11 @@ final class BotScriptedRemoteTransport: DSHRemoteTransport, @unchecked Sendable 
 
     private(set) var prompts: [String: (sessionId: String, mode: String, text: String)] = [:]
     private(set) var promptHistory: [(sessionId: String, mode: String, text: String)] = []
+    private(set) var promptRequestIds: [(sessionId: String, requestId: String, mode: String)] = []
     private(set) var cancellations: [String] = []
     private(set) var createdIDs: [String] = []
+    private(set) var requestedSessionIds: [String] = []
+    private(set) var claimedSessions: [String] = []
     private(set) var openMuxCount = 0
 
     init(mainId: String = "gb-main", scripts: [String: [[BotScriptedEvent]]]) {
@@ -123,13 +126,19 @@ final class BotScriptedRemoteTransport: DSHRemoteTransport, @unchecked Sendable 
     func call(_ endpoint: String, args: BotJSONValue) async throws -> BotJSONValue {
         switch endpoint {
         case "session/create":
+            let requested = args["request"]?["sessionId"]?.stringValue ?? ""
             let id = lock.withLock { () -> String in
                 defer { nextCreateIndex += 1 }
+                requestedSessionIds.append(requested)
                 let id = nextCreateIndex == 0 ? mainId : "gb-created-\(nextCreateIndex)"
                 createdIDs.append(id)
                 return id
             }
             return .object(["sessionId": .string(id)])
+        case "phone/botClaimSession":
+            let sessionId = args["request"]?["sessionId"]?.stringValue ?? ""
+            lock.withLock { claimedSessions.append(sessionId) }
+            return .object(["ok": .bool(true), "sessionId": .string(sessionId)])
         case "session/page":
             let sessionId = args["request"]?["address"]?["sessionId"]?.stringValue ?? ""
             let failed = lock.withLock { () -> Bool in
@@ -148,9 +157,11 @@ final class BotScriptedRemoteTransport: DSHRemoteTransport, @unchecked Sendable 
             let text = (request["content"]?.arrayValue ?? []).compactMap {
                 $0["text"]?.stringValue
             }.joined()
+            let requestId = request["requestId"]?.stringValue ?? ""
             lock.withLock {
                 prompts[sessionId] = (sessionId, mode, text)
                 promptHistory.append((sessionId, mode, text))
+                promptRequestIds.append((sessionId, requestId, mode))
             }
             return .object([:])
         case "session/cancel":

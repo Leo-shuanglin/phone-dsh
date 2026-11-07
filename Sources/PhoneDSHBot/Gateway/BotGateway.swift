@@ -75,15 +75,21 @@ public actor BotGateway {
             throw BotGatewayError.unknownSession
         }
         return try await attribution.register(sessionId: sessionId, incarnation: principal.incarnation,
-                                              callId: callId, name: name,
+                                              callId: callId, name: Self.bareToolName(name),
                                               arguments: arguments, argsDigest: argsDigest,
                                               runtimeId: runtimeId, expiresAt: expiresAt,
                                               ttlMilliseconds: ttlMilliseconds)
     }
 
-    public func resolveToolCall(runtimeId: String, argsDigest: String) async -> BotResolvedToolCall? {
-        guard !runtimeId.isEmpty, !argsDigest.isEmpty,
-              let entry = try? await attribution.claimByDigest(argsDigest: argsDigest,
+    /// Claims the one registration for `runtimeId` + tool name + argument
+    /// digest. The tool name is part of the identity: a `bash` registration
+    /// with the same argument digest must never be consumed by `write`.
+    public func resolveToolCall(runtimeId: String, name: String,
+                                argsDigest: String) async -> BotResolvedToolCall? {
+        let bareName = Self.bareToolName(name)
+        guard !runtimeId.isEmpty, !bareName.isEmpty, !argsDigest.isEmpty,
+              let entry = try? await attribution.claimByDigest(name: bareName,
+                                                               argsDigest: argsDigest,
                                                                runtimeId: runtimeId),
               let principal = await tokens.lookupSession(entry.sessionId),
               entry.incarnation == principal.incarnation else { return nil }
@@ -92,14 +98,30 @@ public actor BotGateway {
                                    attribution: entry)
     }
 
-    public func resolveToolCall(runtimeId: String, arguments: BotJSONValue) async -> BotResolvedToolCall? {
+    public func resolveToolCall(runtimeId: String, name: String,
+                                arguments: BotJSONValue) async -> BotResolvedToolCall? {
         guard let digest = try? BotArgumentsDigest.string(for: arguments) else { return nil }
-        return await resolveToolCall(runtimeId: runtimeId, argsDigest: digest)
+        return await resolveToolCall(runtimeId: runtimeId, name: name, argsDigest: digest)
+    }
+
+    /// Revokes every pending attribution for one runtime generation. A Worker
+    /// restart calls this before switching generation so no old call can be
+    /// claimed by the new Worker.
+    @discardableResult
+    public func cancelToolCalls(runtimeId: String) async -> Int {
+        await attribution.cancelRuntime(runtimeId: runtimeId)
     }
 
     @discardableResult
     public func cancelToolCall(id: String) async -> Bool {
         await attribution.cancel(id: id)
+    }
+
+    /// The MCP client exposes tools as `mcp__<server>__<name>`; attribution is
+    /// keyed by the bare name so a registration and its claim agree.
+    static func bareToolName(_ name: String) -> String {
+        guard name.hasPrefix("mcp__") else { return name }
+        return name.components(separatedBy: "__").last ?? name
     }
 
     private func discardStaleAttributions(sessionId: String) async {

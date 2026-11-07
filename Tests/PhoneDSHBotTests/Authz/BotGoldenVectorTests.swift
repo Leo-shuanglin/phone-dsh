@@ -14,6 +14,7 @@ final class BotGoldenVectorTests: XCTestCase {
         let source: Source
         let valid: [Call]
         let invalid: [Call]
+        let hostExtensions: [Call]?
     }
 
     private struct Call: Decodable {
@@ -56,6 +57,26 @@ final class BotGoldenVectorTests: XCTestCase {
             "limit": .number(9_223_372_036_854_775_808.0),
         ]))
         XCTAssertTrue(effect.detail.contains("limit="))
+    }
+
+    /// R2: ReplyToDevice is a known host extension in the pure argument
+    /// classifier; the concrete device id is resolved before execution.
+    func testReplyToDeviceHostExtensionMatchesSharedGolden() throws {
+        let vector = try JSONDecoder().decode(ToolVector.self, from: golden("tool-effects"))
+        let extensions = try XCTUnwrap(vector.hostExtensions)
+        XCTAssertEqual(extensions.map(\.name), [BotToolCatalog.deviceReplyName])
+        for call in extensions {
+            let actual = BotToolEffectClassifier.effect(
+                for: call.name, arguments: call.args, language: .zh)
+            XCTAssertEqual(actual, call.effect, "host extension mismatch for \(call.name)")
+            XCTAssertTrue(actual.known)
+            XCTAssertEqual(actual.resource, "device:*")
+            XCTAssertEqual(actual.execution, "device-reply")
+        }
+        let unknown = BotToolEffectClassifier.effect(for: "GenerateImage", arguments: .object([:]))
+        XCTAssertFalse(unknown.known)
+        XCTAssertEqual(unknown.operation, "tool.unclassified")
+        XCTAssertEqual(unknown.policy, .ask)
     }
 
     func testApprovalPatternsSharedGolden() throws {

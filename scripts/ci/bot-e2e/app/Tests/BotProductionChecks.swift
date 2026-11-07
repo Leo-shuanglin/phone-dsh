@@ -56,9 +56,12 @@ enum BotProductionChecks {
 
         let domain = try SQLiteDomainStore(fileURL: databaseURL, now: { 5_000 })
         let planner = BotProductionCheckPlanner()
+        let memoryStore = SQLiteBotMemoryFactStore(eventLog: domain, botID: "main", now: { 5_000 })
         let environment = BotProductionEnvironment(
             domain: domain, botID: "main", sessionID: "main",
-            routineStore: SQLiteRoutineStore(domainStore: domain), planner: planner, sessionLogURL: sessionURL)
+            routineMachine: RoutineMachine(store: SQLiteRoutineStore(domainStore: domain)),
+            memory: BotMemory(store: memoryStore, dataRoot: root.path, botID: "main", now: { 5_000 }),
+            planner: planner, sessionLogURL: sessionURL)
         let rows = BotProductionRowService(environment: environment)
         try await rows.start()
         _ = try await domain.append(progressEvent(id: "progress-1", time: 2_000, percent: 25))
@@ -97,8 +100,7 @@ enum BotProductionChecks {
         try require(try await domain.eventID(botID: action.botID, nonce: action.nonce)
                     == "check-action-nonce-persistent", "durable nonce missing")
 
-        let memory = SQLiteBotMemoryFactStore(eventLog: domain, botID: "main", now: { 5_000 })
-        _ = try await memory.append(PhoneDSHBot.BotMemoryFact(
+        _ = try await memoryStore.append(PhoneDSHBot.BotMemoryFact(
             factID: "memory-check", text: "真实只读记忆", learnedAtMS: 5_000,
             tier: .note, scope: .agent, source: BotMemorySource(kind: .userTurn)))
         _ = try await environment.routineMachine.create(
@@ -133,7 +135,11 @@ enum BotProductionChecks {
         let reopened = try SQLiteDomainStore(fileURL: databaseURL, now: { 7_000 })
         let reopenedEnvironment = BotProductionEnvironment(
             domain: reopened, botID: "main", sessionID: "main",
-            routineStore: SQLiteRoutineStore(domainStore: reopened), planner: planner, sessionLogURL: sessionURL)
+            routineMachine: RoutineMachine(store: SQLiteRoutineStore(domainStore: reopened)),
+            memory: BotMemory(
+                store: SQLiteBotMemoryFactStore(eventLog: reopened, botID: "main", now: { 7_000 }),
+                dataRoot: root.path, botID: "main", now: { 7_000 }),
+            planner: planner, sessionLogURL: sessionURL)
         let reopenedRows = BotProductionRowService(environment: reopenedEnvironment)
         let persistedDuplicate = try await reopenedRows.perform(action)
         try require(persistedDuplicate == .duplicate(eventID: "check-action-nonce-persistent"),
@@ -161,7 +167,11 @@ enum BotProductionChecks {
 
         let unavailableRows = BotProductionRowService(environment: BotProductionEnvironment(
             domain: reopened, botID: "main", sessionID: "main",
-            routineStore: SQLiteRoutineStore(domainStore: reopened), sessionLogURL: sessionURL))
+            routineMachine: RoutineMachine(store: SQLiteRoutineStore(domainStore: reopened)),
+            memory: BotMemory(
+                store: SQLiteBotMemoryFactStore(eventLog: reopened, botID: "main"),
+                dataRoot: root.path, botID: "main"),
+            sessionLogURL: sessionURL))
         let unavailableAction = BotUserAction(nonce: "nonce-unavailable", botID: "main", kind: .chat, text: "不会执行")
         let unavailableResult = try await unavailableRows.perform(unavailableAction)
         guard case .rejected(let unavailableReason) = unavailableResult else {

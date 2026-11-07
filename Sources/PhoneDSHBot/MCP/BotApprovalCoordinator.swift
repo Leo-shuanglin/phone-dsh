@@ -29,6 +29,11 @@ public enum BotApprovalResolution: Sendable, Equatable {
 }
 
 public actor BotApprovalCoordinator {
+    /// One card stays pending for five minutes. Identity registrations inherit
+    /// at least this lifetime (`BotAttributionRegistry.defaultTTLMilliseconds`)
+    /// so an approval can always be resolved against its originating call.
+    public static let defaultTimeoutMilliseconds: Int64 = 300_000
+
     private struct Pending {
         let principal: BotGatewayPrincipal
         let effects: [BotToolEffect]
@@ -49,7 +54,7 @@ public actor BotApprovalCoordinator {
 
     public init(grants: BotGrantStore, eventWriter: BotMCPEventWriter,
                 now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000) },
-                approvalTimeoutMs: Int64 = 300_000) {
+                approvalTimeoutMs: Int64 = BotApprovalCoordinator.defaultTimeoutMilliseconds) {
         self.grants = grants
         authorizer = BotExecutionAuthorizer(grants: grants)
         self.eventWriter = eventWriter
@@ -175,14 +180,36 @@ public actor BotApprovalCoordinator {
         return true
     }
 
-    public func cancelAll() {
+    /// Cancels every pending card. A Worker restart calls this so no card can
+    /// survive into a new incarnation; each card is closed as a visible
+    /// cancelled decision and the UI gets one notice per session.
+    @discardableResult
+    public func cancelAll(reason: String = "worker_restarted") async -> Int {
         let requests = pending
         pending.removeAll()
         for (id, request) in requests {
             request.timeout?.cancel()
+            let data = BotJSONValue.object([
+                "approvalID": .string(id), "decision": .string("deny"),
+                "status": .string("cancelled"), "reason": .string(reason),
+            ])
+            try? await eventWriter.append(
+                type: "approval.decided", principal: request.principal, data: data,
+                eventId: "cancelled:\(id)")
+            try? await eventWriter.append(
+                type: "ui.notice", principal: request.principal,
+                data: .object([
+                    "id": .string("notice-\(id)"),
+                    "kind": .string("approval_cancelled"),
+                    "approvalID": .string(id),
+                    "reason": .string(reason),
+                    "text": .string("The app restarted and cancelled the pending approval."),
+                ]),
+                eventId: "notice:\(id)")
             request.continuation.resume(returning: BotApprovalOutcome(
                 ok: false, allowed: false, approvalId: id, message: "approval unavailable"))
         }
+        return requests.count
     }
 
     public func pendingDigest(approvalId: String) -> String? {

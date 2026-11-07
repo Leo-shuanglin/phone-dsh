@@ -35,7 +35,7 @@ public enum BotCardPayloads {
         guard (2...4).contains(options.count) else { throw BotCardPayloadError.invalid("ask_user 需要 2–4 个有效 options。") }
         var card: [String: BotJSONValue] = [
             "cardType": .string("question"), "question": .string(question),
-            "options": .array(normalizeRecommendations(options)),
+            "options": .array(assignOptionIDs(normalizeRecommendations(options))),
         ]
         if let help = try optionalString(args, "helpText") { card["helpText"] = .string(help) }
         return .object(card)
@@ -55,7 +55,8 @@ public enum BotCardPayloads {
             return isSyntheticOther(step) ? nil : .object(step)
         }
         guard (2...4).contains(steps.count) else { throw BotCardPayloadError.invalid("show_next_steps 需要 2–4 个有效 steps。") }
-        return .object(["cardType": .string("steps"), "steps": .array(normalizeRecommendations(steps))])
+        return .object(["cardType": .string("steps"),
+                        "steps": .array(assignOptionIDs(normalizeRecommendations(steps)))])
     }
 
     private static func normalizedChoice(_ value: BotJSONValue, path: String) throws -> [String: BotJSONValue] {
@@ -78,14 +79,29 @@ public enum BotCardPayloads {
             return string(choice["style"]) != "danger"
                 && (bool(choice["recommended"]) == true || string(choice["style"]) == "primary")
         }
-        return values.enumerated().map { index, value in
+        var ordered = values
+        if let first {
+            let recommended = ordered.remove(at: first)
+            ordered.insert(recommended, at: 0)
+        }
+        return ordered.enumerated().map { index, value in
             guard case .object(var choice) = value else { return value }
-            if index == first {
+            if index == 0, first != nil {
                 choice["recommended"] = .bool(true)
             } else {
                 choice.removeValue(forKey: "recommended")
                 if string(choice["style"]) == "primary" { choice["style"] = .string("default") }
             }
+            return .object(choice)
+        }
+    }
+
+    /// The host owns option identity: models only supply labels, values, styles and prose.
+    /// Numbering happens after normalization so the first rendered choice is always `o0`.
+    private static func assignOptionIDs(_ values: [BotJSONValue]) -> [BotJSONValue] {
+        values.enumerated().map { index, value in
+            guard case .object(var choice) = value else { return value }
+            choice["id"] = .string("o\(index)")
             return .object(choice)
         }
     }

@@ -147,7 +147,8 @@ actor RowActionPlannerDouble: BotUserActionPlanning {
         case .chat: type = "conversation.user_message"
         case .approval: type = "approval.decided"
         case .stopTask: type = "task.stop_requested"
-        case .cardAnswer, .cardDismiss: type = "ui.system_event"
+        case .cardAnswer: type = "card.answered"
+        case .cardDismiss: type = "card.dismissed"
         }
         let event = BotEvent(
             type: type, eventId: eventID, time: 1_000, origin: .local(source: "user"),

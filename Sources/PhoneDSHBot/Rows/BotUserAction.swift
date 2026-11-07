@@ -43,6 +43,52 @@ public struct BotUserAction: Codable, Sendable, Equatable {
         self.digest = digest
         self.threadID = threadID
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case nonce, botID, kind, text, cardID, optionID, approvalID, decision, digest, threadID
+    }
+
+    private struct DynamicKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+
+        init(_ value: String) {
+            stringValue = value
+            intValue = nil
+        }
+
+        init?(stringValue: String) { self.init(stringValue) }
+        init?(intValue: Int) {
+            stringValue = String(intValue)
+            self.intValue = intValue
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.container(keyedBy: DynamicKey.self)
+        if raw.contains(DynamicKey("customText")) {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "cardAnswer must not contain customText; free-form replies use kind=chat"))
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(BotUserActionKind.self, forKey: .kind)
+        if kind == .cardAnswer, raw.contains(DynamicKey("text")) {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "cardAnswer must not contain text; free-form replies use kind=chat"))
+        }
+        nonce = try container.decode(String.self, forKey: .nonce)
+        botID = try container.decode(String.self, forKey: .botID)
+        self.kind = kind
+        text = try container.decodeIfPresent(String.self, forKey: .text)
+        cardID = try container.decodeIfPresent(String.self, forKey: .cardID)
+        optionID = try container.decodeIfPresent(String.self, forKey: .optionID)
+        approvalID = try container.decodeIfPresent(String.self, forKey: .approvalID)
+        decision = try container.decodeIfPresent(BotApprovalDecision.self, forKey: .decision)
+        digest = try container.decodeIfPresent(String.self, forKey: .digest)
+        threadID = try container.decodeIfPresent(String.self, forKey: .threadID)
+    }
 }
 
 public enum BotActionResult: Codable, Sendable, Equatable {
@@ -179,6 +225,9 @@ enum BotUserActionValidation {
             guard action.text != nil else { return .rejected(reason: "missing_text") }
         case .cardAnswer:
             guard action.cardID?.isEmpty == false else { return .rejected(reason: "missing_card_id") }
+            guard action.text == nil else {
+                return .rejected(reason: "unexpected_card_answer_field")
+            }
             guard action.optionID?.isEmpty == false else {
                 return .rejected(reason: "missing_card_answer")
             }

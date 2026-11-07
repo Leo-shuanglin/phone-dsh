@@ -501,5 +501,28 @@
         "isMcp": false
       }
     }
+  ],
+  "hostExtensions": [
+    {
+      "name": "ReplyToDevice",
+      "args": {
+        "message": "已收到"
+      },
+      "policy": "ask",
+      "effect": {
+        "tool": "ReplyToDevice",
+        "operation": "device.reply",
+        "resource": "device:*",
+        "target": "*",
+        "mutability": "external-send",
+        "policy": "ask",
+        "label": "回覆來源設備",
+        "detail": "host resolves the staged source (deviceID, transport, mapped transport session) and replaces resource/target with the concrete values before execution; the model cannot name a destination",
+        "ui": false,
+        "execution": "device-reply",
+        "known": true,
+        "isMcp": false
+      }
+    }
   ]
 }

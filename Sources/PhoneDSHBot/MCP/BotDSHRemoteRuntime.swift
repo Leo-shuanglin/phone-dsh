@@ -19,13 +19,44 @@ public struct BotRemoteTurnResult: Sendable, Equatable {
     }
 }
 
-public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
+public actor BotDSHRemoteRuntime: BotTaskExecuting, BotTaskRestarting, BotDeviceMessageDelivering {
+    /// Durable task projection. It is stored as `persistedTask` inside the
+    /// existing `task.created`/`task.updated` events, so no new table, event
+    /// type or wire field is introduced.
+    struct PersistedBotTask: Codable, Sendable, Equatable {
+        var taskId: String
+        var sessionId: String
+        var parentSessionId: String
+        var parentBotId: String
+        var parentIncarnation: String
+        var parentKind: String
+        var title: String
+        var prompt: String
+        var asynchronous: Bool
+        var timeoutMs: Int
+        var status: String
+        var result: String?
+        var partial: String?
+        var error: String?
+        var createdAt: Int64
+        var wakeDelivered: Bool
+    }
+
     private struct TaskState {
-        var request: BotTaskRequest
+        var ownerBotId: String
+        var ownerSessionId: String
+        var ownerIncarnation: String
+        var parentKind: BotSessionKind
+        var title: String
+        var prompt: String
+        var asynchronous: Bool
+        var timeoutMs: Int
         var record: BotTaskRecord
         var generation: Int
         var work: Task<BotTaskRecord, Error>?
         var stopWork: Task<BotTaskRecord, Error>?
+        var live: Bool
+        var wakeDelivered: Bool
     }
 
     private struct TurnCoordinator {
@@ -57,6 +88,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
     private var coordinators: [String: TurnCoordinator] = [:]
     private var queuedTurns: [String: QueuedTurn] = [:]
     private var taskStates: [String: TaskState] = [:]
+    private var interruptedTaskWakes: [String] = []
     private var routineSessions: [String: String] = [:]
     private var mainSessionTask: Task<String, Error>?
 
@@ -82,6 +114,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
         watchdog = BotWatchdogMonitor(eventLog: runtime.store, now: now)
         try await runtime.grants.recover()
         await runtime.attachTaskExecutor(self)
+        await restorePersistedTasks()
     }
 
     public func attachTransport(_ newTransport: any DSHRemoteTransport) async {
@@ -104,22 +137,31 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
         mainSessionId = nil
     }
 
-    public func sendUserMessage(_ text: String) async throws -> BotRemoteTurnResult {
+    /// `requestId` is the DSH prompt idempotency key. Callers replaying a
+    /// persisted delivery (user action nonce, held inbox item, routine run)
+    /// must pass the same value so the Worker does not open a second turn.
+    public func sendUserMessage(_ text: String, requestId: String? = nil) async throws -> BotRemoteTurnResult {
         let sessionId = try await ensureMainSession()
         let steer = canSteer(sessionId: sessionId)
         var prompt = text
         var stagedKey: String?
         var held = false
+        var promptRequestId = requestId
         if !steer, let wakeInbox {
             let staged = try await wakeInbox.stage(now: now())
             stagedKey = staged.key
             if !staged.items.isEmpty {
                 prompt = HeldMessages.block(items: staged.items) + "\n\n" + text
                 held = true
+                // Held deliveries derive their id from the item ids, not from
+                // the random staged key, so a crash replay after `revert`
+                // reuses the same id for the same items.
+                promptRequestId = Self.deliveryRequestId(prefix: "held", items: staged.items)
             }
         }
         do {
-            let result = try await runTurn(sessionId: sessionId, kind: .chat, prompt: prompt, hidden: false, held: held)
+            let result = try await runTurn(sessionId: sessionId, kind: .chat, prompt: prompt,
+                                           hidden: false, held: held, requestId: promptRequestId)
             if let stagedKey { _ = try await wakeInbox?.commit(stagedKey) }
             return result
         } catch {
@@ -128,9 +170,10 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
         }
     }
 
-    public func sendHiddenInteraction(_ text: String) async throws -> BotRemoteTurnResult {
+    public func sendHiddenInteraction(_ text: String, requestId: String? = nil) async throws -> BotRemoteTurnResult {
         let sessionId = try await ensureMainSession()
-        return try await runTurn(sessionId: sessionId, kind: .chat, prompt: text, hidden: true)
+        return try await runTurn(sessionId: sessionId, kind: .chat, prompt: text,
+                                 hidden: true, requestId: requestId)
     }
 
     public func stopMainTurn(turnID: String?) async throws {
@@ -144,10 +187,17 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
 
     public func stopTaskFromUser(taskID: String) async throws -> BotTaskRecord {
         guard let state = taskStates[taskID] else { throw BotMCPError.invalidRequest("unknown_task") }
-        guard state.request.parent.principal.botId == botId,
-              state.request.parent.principal.kind == .chat else { throw BotMCPError.unauthorized }
+        guard state.ownerBotId == botId, state.parentKind == .chat else { throw BotMCPError.unauthorized }
+        if !state.live
+            || ["stopped", "completed", "failed", "interrupted"].contains(state.record.status) {
+            return state.record
+        }
         let generation = state.generation + 1
         taskStates[taskID]?.generation = generation
+        taskStates[taskID]?.record = BotTaskRecord(
+            taskId: state.record.taskId, sessionId: state.record.sessionId,
+            status: "stopping", title: state.record.title,
+            result: nil, partial: state.record.partial, error: nil)
         return try await performStop(taskId: taskID, generation: generation)
     }
 
@@ -166,7 +216,9 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
                     "title": .string(request.routine.title), "attempt": .number(Double(request.attempt)),
                     "scheduledFor": .number(Double(request.startedAt)),
                 ]), eventId: "started:\(request.runId)")
-            let result = try await runTurn(sessionId: sessionId, kind: .routine, prompt: request.wake.text, hidden: true)
+            let result = try await runTurn(
+                sessionId: sessionId, kind: .routine, prompt: request.wake.text, hidden: true,
+                requestId: "routine:\(request.runId)")
             let reply = RoutineWakeBuilder.normalizeReply(result.text)
             _ = try await runtime.eventWriter.append(
                 type: "routine.run_finished", principal: principal,
@@ -205,7 +257,24 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
         let record = BotTaskRecord(
             taskId: taskId, sessionId: sessionId, status: "running", title: request.title,
             result: nil, partial: "")
-        taskStates[taskId] = TaskState(request: request, record: record, generation: 1, work: nil, stopWork: nil)
+        let state = TaskState(
+            ownerBotId: request.parent.principal.botId,
+            ownerSessionId: request.parent.sessionId,
+            ownerIncarnation: request.parent.principal.incarnation,
+            parentKind: request.parent.principal.kind,
+            title: request.title, prompt: request.prompt,
+            asynchronous: request.asynchronous, timeoutMs: request.timeoutMs,
+            record: record, generation: 1, work: nil, stopWork: nil,
+            live: true, wakeDelivered: false)
+        taskStates[taskId] = state
+        // Durability precedes work: a crash after this event leaves an
+        // interrupted task the next process can report, never an orphan.
+        do {
+            try await persistTask(taskId: taskId, type: "task.created", eventId: "created:\(taskId)")
+        } catch {
+            taskStates.removeValue(forKey: taskId)
+            throw error
+        }
         if request.asynchronous {
             let work = Task { try await self.executeTask(taskId: taskId, generation: 1) }
             taskStates[taskId]?.work = work
@@ -218,7 +287,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
         guard let state = try ownedTask(taskId: taskId, parent: parent) else {
             throw BotMCPError.invalidRequest("unknown task: \(taskId)")
         }
-        if let work = state.work {
+        if state.live, let work = state.work {
             let completed = await waitForTask(work, timeoutMs: timeoutMs)
             if !completed { return taskStates[taskId]?.record ?? state.record }
         }
@@ -230,7 +299,8 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
             throw BotMCPError.invalidRequest("unknown task: \(taskId)")
         }
         if let stopWork = state.stopWork { return try await stopWork.value }
-        if ["stopped", "completed", "failed"].contains(state.record.status) { return state.record }
+        if ["stopped", "completed", "failed", "interrupted"].contains(state.record.status)
+            || !state.live { return state.record }
         let generation = state.generation + 1
         taskStates[taskId]?.generation = generation
         taskStates[taskId]?.record = BotTaskRecord(
@@ -257,6 +327,9 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
             taskStates[taskId]?.record = stopped
             taskStates[taskId]?.work = nil
             taskStates[taskId]?.stopWork = nil
+            taskStates[taskId]?.live = false
+            try? await persistTask(taskId: taskId, type: "task.updated",
+                                   eventId: "persisted:stopped:\(taskId)")
             let principal = try await ensureSession(sessionId: stopped.sessionId, kind: .task)
             _ = try await runtime.eventWriter.append(
                 type: "task.settled", principal: principal, data: stopped.jsonValue,
@@ -274,7 +347,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
         do {
             let turn = try await runTurn(
                 sessionId: state.record.sessionId, kind: .task,
-                prompt: state.request.prompt, hidden: true)
+                prompt: state.prompt, hidden: true, requestId: "task-turn:\(taskId)")
             guard let current = taskStates[taskId], current.generation == generation,
                   current.record.status == "running" else {
                 return taskStates[taskId]?.record ?? state.record
@@ -287,15 +360,19 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
                 partial: turn.text, error: completed ? nil : turn.error ?? "task turn failed")
             taskStates[taskId]?.record = record
             taskStates[taskId]?.work = nil
+            taskStates[taskId]?.live = false
+            try? await persistTask(taskId: taskId, type: "task.updated",
+                                   eventId: "persisted:settled:\(taskId)")
             let principal = try await ensureSession(sessionId: record.sessionId, kind: .task)
             _ = try await runtime.eventWriter.append(
                 type: "task.settled", principal: principal, data: record.jsonValue,
                 eventId: "settled:\(taskId)")
-            if state.request.asynchronous, state.request.parent.principal.kind == .chat,
+            if state.asynchronous, state.parentKind == .chat,
                taskStates[taskId]?.generation == generation {
-                let prompt = "[SAND_HIDDEN_PROMPT][subagent]\n\(state.record.title) | \(record.status) | \(taskId)\n\(String(turn.text.prefix(1_200)))"
+                let prompt = "[SAND_HIDDEN_PROMPT][subagent]\n\(state.title) | \(record.status) | \(taskId)\n\(String(turn.text.prefix(1_200)))"
                 _ = try await runTurn(
-                    sessionId: state.request.parent.sessionId, kind: .chat, prompt: prompt, hidden: true)
+                    sessionId: state.ownerSessionId, kind: .chat, prompt: prompt, hidden: true,
+                    requestId: "task-settled:\(taskId)")
             }
             return record
         } catch {
@@ -309,18 +386,205 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
                 result: nil, partial: nil, error: String(describing: error))
             taskStates[taskId]?.record = record
             taskStates[taskId]?.work = nil
+            taskStates[taskId]?.live = false
+            try? await persistTask(taskId: taskId, type: "task.updated",
+                                   eventId: "persisted:failed:\(taskId)")
             return record
         }
     }
 
     private func ownedTask(taskId: String, parent: BotResolvedToolCall) throws -> TaskState? {
         guard let state = taskStates[taskId] else { return nil }
-        guard state.request.parent.principal.botId == parent.principal.botId,
-              state.request.parent.sessionId == parent.sessionId,
-              state.request.parent.principal.incarnation == parent.principal.incarnation else {
+        guard state.ownerBotId == parent.principal.botId,
+              state.ownerSessionId == parent.sessionId else {
+            throw BotMCPError.unauthorized
+        }
+        // A live call is bound to the exact session incarnation. A persisted
+        // record may outlive its incarnation; the same bot+session may still
+        // read or stop it (and the interrupted status is explicit).
+        if state.live, state.ownerIncarnation != parent.principal.incarnation {
             throw BotMCPError.unauthorized
         }
         return state
+    }
+
+    // MARK: - Durable task records
+
+    /// Hides the Worker restart from `AwaitTask`/`StopSubagent`: every task
+    /// that was running in the replaced process becomes an explicit
+    /// `interrupted` record, and one parent wake is queued per asynchronous
+    /// chat task. Terminal records survive too, so a restart never turns an
+    /// existing task id into `unauthorized`.
+    public func workerRestarted() async {
+        let live = taskStates.filter { $0.value.live }
+        for (taskId, state) in live {
+            state.work?.cancel()
+            state.stopWork?.cancel()
+            let record = BotTaskRecord(
+                taskId: state.record.taskId, sessionId: state.record.sessionId,
+                status: "interrupted", title: state.record.title,
+                result: nil, partial: state.record.partial, error: "worker_restarted")
+            taskStates[taskId]?.record = record
+            taskStates[taskId]?.generation = state.generation + 1
+            taskStates[taskId]?.work = nil
+            taskStates[taskId]?.stopWork = nil
+            taskStates[taskId]?.live = false
+            try? await persistTask(taskId: taskId, type: "task.updated",
+                                   eventId: "persisted:interrupted:\(taskId)")
+            if state.asynchronous, state.parentKind == .chat, !state.wakeDelivered,
+               !interruptedTaskWakes.contains(taskId) {
+                interruptedTaskWakes.append(taskId)
+            }
+        }
+    }
+
+    /// Delivers the single hidden wake for each task interrupted by a Worker
+    /// restart. The prompt id is derived from the task id, so a crash between
+    /// the turn and the wake marker makes the next attempt idempotent.
+    @discardableResult
+    public func deliverInterruptedTaskWakes() async -> Int {
+        guard !interruptedTaskWakes.isEmpty else { return 0 }
+        var delivered = 0
+        for taskId in interruptedTaskWakes {
+            guard let state = taskStates[taskId],
+                  state.record.status == "interrupted", !state.wakeDelivered else {
+                interruptedTaskWakes.removeAll { $0 == taskId }
+                continue
+            }
+            let prompt = "[SAND_HIDDEN_PROMPT][subagent]\n"
+                + "\(state.title) | interrupted | \(taskId)\n"
+                + "The Worker restarted and interrupted this task; its result is incomplete."
+            do {
+                let result = try await runTurn(
+                    sessionId: state.ownerSessionId, kind: .chat, prompt: prompt, hidden: true,
+                    requestId: "task-interrupted:\(taskId)")
+                guard result.status == "completed" else { continue }
+                taskStates[taskId]?.wakeDelivered = true
+                try? await persistTask(taskId: taskId, type: "task.updated",
+                                       eventId: "persisted:wake:\(taskId)")
+                interruptedTaskWakes.removeAll { $0 == taskId }
+                delivered += 1
+            } catch {
+                continue
+            }
+        }
+        return delivered
+    }
+
+    private func persistTask(taskId: String, type: String, eventId: String) async throws {
+        guard let state = taskStates[taskId] else { return }
+        let snapshot = PersistedBotTask(
+            taskId: state.record.taskId, sessionId: state.record.sessionId,
+            parentSessionId: state.ownerSessionId, parentBotId: state.ownerBotId,
+            parentIncarnation: state.ownerIncarnation, parentKind: state.parentKind.rawValue,
+            title: state.title, prompt: state.prompt, asynchronous: state.asynchronous,
+            timeoutMs: state.timeoutMs, status: state.record.status,
+            result: state.record.result, partial: state.record.partial,
+            error: state.record.error, createdAt: now(), wakeDelivered: state.wakeDelivered)
+        let principal = sessions[state.ownerSessionId] ?? BotGatewayPrincipal(
+            botId: state.ownerBotId, sessionId: state.ownerSessionId,
+            kind: state.parentKind, expiresAt: Int64.max,
+            incarnation: state.ownerIncarnation)
+        var data = state.record.jsonValue
+        if case .object(var fields) = data {
+            fields["persistedTask"] = try jsonValue(snapshot)
+            data = .object(fields)
+        }
+        try await runtime.eventWriter.append(
+            type: type, principal: principal, data: data, eventId: eventId)
+    }
+
+    private func restorePersistedTasks() async {
+        var latest: [String: PersistedBotTask] = [:]
+        var settled: [String: BotTaskRecord] = [:]
+        var cursor = 0
+        while true {
+            let events: [BotEvent]
+            do {
+                events = try await runtime.store.events(after: cursor, limit: 1_000)
+            } catch {
+                break
+            }
+            for event in events {
+                if let snapshot = Self.decodePersistedTask(event) {
+                    latest[snapshot.taskId] = snapshot
+                }
+                if event.type == "task.settled", let record = Self.decodeTaskRecord(event.data),
+                   let taskId = record["task_id"]?.stringValue {
+                    settled[taskId] = BotTaskRecord(
+                        taskId: taskId,
+                        sessionId: record["sessionId"]?.stringValue ?? "",
+                        status: record["status"]?.stringValue ?? "failed",
+                        title: record["title"]?.stringValue ?? "",
+                        result: record["result"]?.stringValue,
+                        partial: record["partial"]?.stringValue,
+                        error: record["error"]?.stringValue)
+                }
+            }
+            guard events.count == 1_000, let last = events.last?.commitSeq else { break }
+            cursor = last
+        }
+        for (taskId, stored) in latest {
+            var snapshot = stored
+            var record = BotTaskRecord(
+                taskId: taskId, sessionId: snapshot.sessionId, status: snapshot.status,
+                title: snapshot.title, result: snapshot.result,
+                partial: snapshot.partial, error: snapshot.error)
+            if let terminal = settled[taskId] {
+                record = terminal
+                snapshot.status = terminal.status
+                snapshot.result = terminal.result
+                snapshot.partial = terminal.partial
+                snapshot.error = terminal.error
+            }
+            let interrupted = record.status == "running" || record.status == "stopping"
+            if interrupted {
+                record = BotTaskRecord(
+                    taskId: taskId, sessionId: snapshot.sessionId, status: "interrupted",
+                    title: snapshot.title, result: nil, partial: record.partial,
+                    error: "worker_restarted")
+                snapshot.status = "interrupted"
+                snapshot.error = "worker_restarted"
+            }
+            let kind = BotSessionKind(rawValue: snapshot.parentKind) ?? .chat
+            taskStates[taskId] = TaskState(
+                ownerBotId: snapshot.parentBotId, ownerSessionId: snapshot.parentSessionId,
+                ownerIncarnation: snapshot.parentIncarnation, parentKind: kind,
+                title: snapshot.title, prompt: snapshot.prompt,
+                asynchronous: snapshot.asynchronous, timeoutMs: snapshot.timeoutMs,
+                record: record, generation: 1, work: nil, stopWork: nil,
+                live: false, wakeDelivered: snapshot.wakeDelivered)
+            if interrupted {
+                try? await persistTask(taskId: taskId, type: "task.updated",
+                                       eventId: "persisted:interrupted:\(taskId)")
+            }
+            if interrupted, snapshot.asynchronous, kind == .chat, !snapshot.wakeDelivered {
+                interruptedTaskWakes.append(taskId)
+            }
+        }
+        interruptedTaskWakes = Array(Set(interruptedTaskWakes)).sorted()
+    }
+
+    private static func decodePersistedTask(_ event: BotEvent) -> PersistedBotTask? {
+        guard let value = event.data["persistedTask"],
+              let data = try? value.encoded() else { return nil }
+        return try? JSONDecoder().decode(PersistedBotTask.self, from: data)
+    }
+
+    private static func decodeTaskRecord(_ data: BotJSONValue) -> BotJSONValue? {
+        data["task_id"] == nil ? nil : data
+    }
+
+    private static func deliveryRequestId(prefix: String, items: [WakeInboxItem]) -> String {
+        let digest = (try? BotArgumentsDigest.string(for: .array(items.map { .string($0.id) })))
+            ?? items.map(\.id).joined(separator: ",")
+        return "\(prefix):\(digest)"
+    }
+
+    private func jsonValue<T: Encodable>(_ value: T) throws -> BotJSONValue {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try BotJSONValue.parse(encoder.encode(value))
     }
 
     private func waitForTask(_ work: Task<BotTaskRecord, Error>, timeoutMs: Int) async -> Bool {
@@ -352,7 +616,9 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
         guard let stagedKey = staged?.key, let items = staged?.items, !items.isEmpty else { return }
         do {
             let prompt = HeldMessages.block(items: items)
-            _ = try await runTurn(sessionId: sessionId, kind: .chat, prompt: prompt, hidden: true, held: true)
+            _ = try await runTurn(
+                sessionId: sessionId, kind: .chat, prompt: prompt, hidden: true, held: true,
+                requestId: Self.deliveryRequestId(prefix: "device", items: items))
             _ = try await wakeInbox?.commit(stagedKey)
         } catch {
             _ = try await wakeInbox?.revert(stagedKey)
@@ -391,6 +657,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
     private func recoverOrCreateMainSession() async throws -> String {
         if let recovered = try await latestMainSessionEvent() {
             if await validateRemoteSession(recovered, attempts: 100) {
+                try await claimOwnedSession(recovered)
                 let principal = try await runtime.issueSession(botId: botId, sessionId: recovered, kind: .chat)
                 sessions[recovered] = principal
                 _ = try await runtime.eventWriter.append(
@@ -457,15 +724,45 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
 
     private func createSession(kind: BotSessionKind) async throws -> String {
         var fields: [String: BotJSONValue] = ["cwd": .string("/dsh/workspace")]
-        if kind == .chat { fields["sessionId"] = .string("gb-\(botId)") }
+        fields["sessionId"] = .string(mintedSessionID(kind: kind))
         let request: BotJSONValue = .object(fields)
         let created = try await transport.call("session/create", args: .object(["request": request]))
         guard let sessionId = created["sessionId"]?.stringValue, !sessionId.isEmpty else {
             throw BotMCPError.unavailable("session/create returned no sessionId")
         }
+        try await claimOwnedSession(sessionId)
         let principal = try await runtime.issueSession(botId: botId, sessionId: sessionId, kind: kind)
         sessions[sessionId] = principal
         return sessionId
+    }
+
+    /// New Bot sessions carry the reserved `gb-` namespace even before the
+    /// claim RPC lands; legacy/recovered ids are claimed explicitly. Both feed
+    /// the Worker-local owned-session registry that gates identity/approval.
+    private func mintedSessionID(kind: BotSessionKind) -> String {
+        if kind == .chat { return "gb-\(botId)" }
+        return "gb-\(kind.rawValue)-\(UUID().uuidString.lowercased())"
+    }
+
+    /// A Bot session must be owned before its first turn. New `gb-` sessions
+    /// are already deterministically owned by the Worker namespace; legacy or
+    /// recovered ids need this RPC. A Worker that predates the claim method is
+    /// tolerated only for `gb-` ids; everything else fails closed.
+    private func claimOwnedSession(_ sessionId: String) async throws {
+        let response: BotJSONValue
+        do {
+            response = try await transport.call("phone/botClaimSession", args: .object([
+                "request": .object(["sessionId": .string(sessionId)]),
+            ]))
+        } catch {
+            if sessionId.hasPrefix("gb-") { return }
+            throw error
+        }
+        guard response["ok"]?.boolValue == true else {
+            // An unacknowledged claim can never make a legacy id safe.
+            if sessionId.hasPrefix("gb-") { return }
+            throw BotMCPError.unavailable("Bot session ownership was not acknowledged for \(sessionId)")
+        }
     }
 
     private func ensureSession(sessionId: String, kind: BotSessionKind) async throws -> BotGatewayPrincipal {
@@ -473,6 +770,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
         guard await validateRemoteSession(sessionId) else {
             throw BotMCPError.unavailable("session/page could not resume \(sessionId)")
         }
+        try await claimOwnedSession(sessionId)
         let principal = try await runtime.issueSession(botId: botId, sessionId: sessionId, kind: kind)
         sessions[sessionId] = principal
         return principal
@@ -534,11 +832,13 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
     }
 
     private func runTurn(sessionId: String, kind: BotSessionKind,
-                         prompt: String, hidden: Bool, held: Bool = false) async throws -> BotRemoteTurnResult {
+                         prompt: String, hidden: Bool, held: Bool = false,
+                         requestId: String? = nil) async throws -> BotRemoteTurnResult {
         _ = try await ensureSession(sessionId: sessionId, kind: kind)
+        let requestId = requestId ?? "bot-\(UUID().uuidString.lowercased())"
         if canSteer(sessionId: sessionId), kind == .chat, !hidden,
            let active = coordinators[sessionId] {
-            try await sendPrompt(sessionId: sessionId, prompt: prompt, mode: "steer")
+            try await sendPrompt(sessionId: sessionId, prompt: prompt, mode: "steer", requestId: requestId)
             return try await active.work.value
         }
         if let predecessor = queuedTurns[sessionId]?.work ?? coordinators[sessionId]?.work {
@@ -554,22 +854,22 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
                 }
                 return try await startCoordinatedTurn(
                     sessionId: sessionId, kind: kind, prompt: prompt, hidden: hidden, held: held,
-                    attemptId: attemptId)
+                    attemptId: attemptId, requestId: requestId)
             }
             queuedTurns[sessionId] = QueuedTurn(attemptId: attemptId, work: work, cancelled: false)
             return try await work.value
         }
         return try await startCoordinatedTurn(
             sessionId: sessionId, kind: kind, prompt: prompt, hidden: hidden, held: held,
-            attemptId: UUID().uuidString.lowercased())
+            attemptId: UUID().uuidString.lowercased(), requestId: requestId)
     }
 
     private func startCoordinatedTurn(sessionId: String, kind: BotSessionKind,
                                       prompt: String, hidden: Bool, held: Bool,
-                                      attemptId: String) async throws -> BotRemoteTurnResult {
+                                      attemptId: String, requestId: String) async throws -> BotRemoteTurnResult {
         let work = Task { try await self.performCoordinatedTurn(
             sessionId: sessionId, kind: kind, prompt: prompt, hidden: hidden, held: held,
-            attemptId: attemptId) }
+            attemptId: attemptId, requestId: requestId) }
         coordinators[sessionId] = TurnCoordinator(
             sessionId: sessionId, attemptId: attemptId, kind: kind, hidden: hidden,
             work: work, cancelRequested: false, promptAccepted: false)
@@ -578,7 +878,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
 
     private func performCoordinatedTurn(sessionId: String, kind: BotSessionKind,
                                         prompt: String, hidden: Bool, held: Bool,
-                                        attemptId: String) async throws -> BotRemoteTurnResult {
+                                        attemptId: String, requestId: String) async throws -> BotRemoteTurnResult {
         await runtime.beginTurn(sessionId: sessionId, hidden: hidden, held: held)
         var mux: (any DSHMuxConnection)?
         do {
@@ -605,7 +905,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
                 return BotRemoteTurnResult(
                     sessionId: sessionId, turnId: nil, status: "cancelled", text: "", error: "cancelled")
             }
-            try await sendPrompt(sessionId: sessionId, prompt: prompt, mode: "queue")
+            try await sendPrompt(sessionId: sessionId, prompt: prompt, mode: "queue", requestId: requestId)
             coordinators[sessionId]?.promptAccepted = true
             let result = try await collectTurn(
                 mux: opened, sessionId: sessionId, kind: kind, hidden: hidden, attemptId: attemptId)
@@ -625,8 +925,8 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotDeviceMessageDelivering {
         coordinators.removeValue(forKey: sessionId)
     }
 
-    private func sendPrompt(sessionId: String, prompt: String, mode: String) async throws {
-        let requestId = "bot-\(UUID().uuidString.lowercased())"
+    private func sendPrompt(sessionId: String, prompt: String, mode: String,
+                            requestId: String) async throws {
         _ = try await transport.call("session/prompt", args: .object(["request": .object([
             "requestId": .string(requestId), "sessionId": .string(sessionId), "mode": .string(mode),
             "content": .array([.object(["type": .string("text"), "text": .string(prompt)])]),

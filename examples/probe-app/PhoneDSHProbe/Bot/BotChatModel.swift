@@ -40,6 +40,16 @@ private final class BotStreamCoalescer {
     }
 }
 
+enum BotChatModelError: LocalizedError {
+    case runtimeUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .runtimeUnavailable: return "Bot 运行时未连接：动作未执行。"
+        }
+    }
+}
+
 enum BotUIActionState: Equatable {
     case pending
     case accepted
@@ -62,18 +72,25 @@ final class BotChatModel: ObservableObject {
 
     let context: BotRuntimeContext
     private let driver: BotChatDriver?
+    /// Only fixture/preview models may fabricate an accepted action without a
+    /// production driver. The default must fail loudly, never pretend success.
+    private let fixtureActions: Bool
     private let stream = BotStreamCoalescer()
     private var cancelledTurnIDs: Set<String> = []
     private var consumedNonces: [String: String] = [:]
     private var fixtureHistory: [BotUIRow]
     private var fixtureHistoryCursor: String?
     private var historyCursor: String?
+    private var watchCursor = 0
+    private var watching = false
 
     init(rows: [BotUIRow] = [], context: BotRuntimeContext = BotRuntimeContext(),
-         driver: BotChatDriver? = nil, fixtureHistory: [BotUIRow] = []) {
+         driver: BotChatDriver? = nil, fixtureHistory: [BotUIRow] = [],
+         fixtureActions: Bool = false) {
         self.rows = rows.sorted { $0.seq < $1.seq }
         self.context = context
         self.driver = driver
+        self.fixtureActions = fixtureActions
         self.fixtureHistory = fixtureHistory
         self.fixtureHistoryCursor = fixtureHistory.first?.id
         self.hasMoreHistory = driver != nil || !fixtureHistory.isEmpty
@@ -144,7 +161,9 @@ final class BotChatModel: ObservableObject {
                                   seq: (rows.map(\.seq).max() ?? 0) + 1,
                                   role: "user", text: trimmed, eventID: "local:\(nonce)")
         rows.append(local)
-        if driver == nil && runningTurnID == nil { beginTurn(turnID: "fixture-turn") }
+        if driver == nil && fixtureActions && runningTurnID == nil {
+            beginTurn(turnID: "fixture-turn")
+        }
         Task { await perform(action, key: "chat:\(localID)", localRowID: localID) }
     }
 
@@ -246,6 +265,24 @@ final class BotChatModel: ObservableObject {
         rows.sort { $0.seq < $1.seq }
     }
 
+    /// Polls the production row projection until the view's `.task` is
+    /// cancelled. Fixture models have no driver and simply do not run it.
+    func watchLoop() async {
+        guard let driver, !watching else { return }
+        watching = true
+        defer { watching = false }
+        while !Task.isCancelled {
+            do {
+                let batch = try await driver.watch(watchCursor)
+                apply(batch)
+                watchCursor = max(watchCursor, batch.cursor)
+            } catch {
+                runtimeNotice = "Bot 实时更新失败：\(error.localizedDescription)"
+            }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+        }
+    }
+
     func loadHistory() async {
         guard hasMoreHistory, !loadingHistory else { return }
         loadingHistory = true
@@ -254,9 +291,11 @@ final class BotChatModel: ObservableObject {
             let page: BotUIHistoryPage
             if let driver {
                 page = try await driver.history(historyCursor ?? visibleRows.first?.id, 50)
-            } else {
+            } else if fixtureActions {
                 page = BotUIHistoryPage(rows: fixtureHistory, nextCursor: nil, hasMore: false)
                 fixtureHistory = []
+            } else {
+                throw BotChatModelError.runtimeUnavailable
             }
             page.rows.forEach(upsert)
             historyCursor = page.nextCursor
@@ -283,8 +322,13 @@ final class BotChatModel: ObservableObject {
         if let driver {
             actionLog.append(action.logLabel)
             result = await driver.perform(action)
-        } else {
+        } else if fixtureActions {
             result = fixturePerform(action)
+        } else {
+            // The production page always injects a driver. If it is absent the
+            // Bot runtime is disconnected; report that instead of fabricating
+            // an accepted event.
+            result = .rejected(reason: BotChatModelError.runtimeUnavailable.localizedDescription)
         }
         if let eventID = result.eventID {
             actionStates[key] = .accepted

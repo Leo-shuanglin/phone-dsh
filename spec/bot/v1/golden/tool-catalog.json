@@ -767,6 +767,25 @@
             "message"
           ]
         }
+      },
+      {
+        "name": "ReplyToDevice",
+        "description": "Reply once to the device message(s) that triggered this turn. phoneDSH extension (not in the dsh-bot 0.78.4 catalog): the host resolves the source device, transport and mapped transport session from the staged held-inbox items, so the model cannot choose a destination. The effect is external-send and requires the user's grant.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "description": "Text to send to the source device; the host stamps origin=agent, dir=down, audience=device and a persisted downlink seq."
+            }
+          },
+          "required": [
+            "message"
+          ],
+          "additionalProperties": false
+        }
       }
     ],
     "p1": [

@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: MIT
 
+import Foundation
 import XCTest
 @testable import PhoneDSHBot
+
+private final class BotRuntimeClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int64
+    init(_ value: Int64) { self.value = value }
+    func now() -> Int64 { lock.withLock { value } }
+    func advance(_ milliseconds: Int64) { lock.withLock { value += milliseconds } }
+}
 
 final class BotMCPRuntimeTests: XCTestCase {
     func testCardMemoryTaskAndRoutineCallsUseClaimedSessionAndSQLite() async throws {
@@ -268,6 +277,85 @@ final class BotMCPRuntimeTests: XCTestCase {
         XCTAssertTrue(remaining.isEmpty)
         let grants = await fixture.runtime.grants.list(botId: "main")
         XCTAssertFalse(grants.contains { $0.decision == .allow })
+    }
+
+    func testWorkerRestartInvalidatesRegistrationsAndApprovals() async throws {
+        let fixture = try makeBotMCPFixture()
+        defer { fixture.cleanup() }
+        _ = try await fixture.runtime.issueSession(botId: "main", sessionId: "gb-main", kind: .chat)
+        let args = BotJSONValue.object([
+            "action": .string("forget"), "scope": .string("user"), "fact": .string("private"),
+        ])
+        let digest = try BotArgumentsDigest.string(for: args)
+        _ = try await fixture.runtime.registerIdentity(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: "gb-main",
+            callId: "old-call", name: "UpdateMemory", arguments: args)
+        let pending = Task {
+            await fixture.runtime.approve(
+                runtimeId: BotMCPRuntime.defaultRuntimeID, callId: "old-call",
+                name: "UpdateMemory", action: "Forget", detail: "test", command: "",
+                argsDigest: digest, alwaysScope: "until", askAction: "tool-call")
+        }
+        var approvalId: String?
+        for _ in 0..<100 {
+            if let first = await fixture.runtime.approvals.pendingIDs.first { approvalId = first; break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        _ = try XCTUnwrap(approvalId)
+        _ = await fixture.runtime.workerRestarted()
+        let outcome = await pending.value
+        XCTAssertFalse(outcome.allowed)
+        let staleApproval = await fixture.runtime.approve(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, callId: "old-call",
+            name: "UpdateMemory", action: "Forget", detail: "test", command: "",
+            argsDigest: digest, alwaysScope: "until", askAction: "tool-call")
+        XCTAssertEqual(staleApproval.message, "unattributed")
+        let staleExecution = await fixture.runtime.execute(
+            name: "UpdateMemory", arguments: args,
+            context: BotMCPRequestContext(callId: "old-call"))
+        XCTAssertEqual(staleExecution.structuredContent?["error"]?["code"], .string("unattributed"))
+        let events = try await botEvents(fixture.store)
+        XCTAssertTrue(events.contains { $0.type == "approval.decided" && $0.data["status"] == .string("cancelled") })
+        XCTAssertTrue(events.contains { $0.type == "ui.notice" && $0.data["kind"] == .string("approval_cancelled") })
+
+        // The new generation accepts a fresh registration and claims it.
+        let freshArgs = BotJSONValue.object([:])
+        _ = try await fixture.runtime.registerIdentity(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: "gb-main",
+            callId: "new-call", name: "ListRoutines", arguments: freshArgs)
+        let fresh = await fixture.runtime.execute(
+            name: "ListRoutines", arguments: freshArgs,
+            context: BotMCPRequestContext(callId: "new-call"))
+        XCTAssertNotEqual(fresh.isError, true, String(describing: fresh.structuredContent))
+    }
+
+    func testExpiredRegistrationCannotApproveAndIsPruned() async throws {
+        XCTAssertGreaterThanOrEqual(BotAttributionRegistry.defaultTTLMilliseconds,
+                                    BotApprovalCoordinator.defaultTimeoutMilliseconds)
+        let clock = BotRuntimeClock(1_000)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try SQLiteDomainStore(fileURL: directory.appendingPathComponent("domain.sqlite"),
+                                          now: { clock.now() })
+        let runtime = BotMCPRuntime(store: store, now: { clock.now() })
+        _ = try await runtime.issueSession(botId: "main", sessionId: "gb-main", kind: .chat)
+        let args = BotJSONValue.object(["query": .string("x")])
+        _ = try await runtime.registerIdentity(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, sessionId: "gb-main",
+            callId: "expiring", name: "RecallMemory", arguments: args)
+        let live = await runtime.identityForApproval(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, callId: "expiring")
+        XCTAssertNotNil(live)
+        clock.advance(BotAttributionRegistry.defaultTTLMilliseconds + 1)
+        let expired = await runtime.identityForApproval(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, callId: "expiring")
+        XCTAssertNil(expired)
+        let stale = await runtime.approve(
+            runtimeId: BotMCPRuntime.defaultRuntimeID, callId: "expiring",
+            name: "RecallMemory", action: "Read", detail: "test", command: "",
+            argsDigest: try BotArgumentsDigest.string(for: args),
+            alwaysScope: "until", askAction: "tool-call")
+        XCTAssertEqual(stale.message, "unattributed")
     }
 
     func testMemoryWriteUsesResolvedPrincipalAndCurrentTurn() async throws {
