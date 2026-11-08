@@ -292,6 +292,16 @@ final class BotDSHRemoteRuntimeTests: XCTestCase {
         XCTAssertTrue(transport.prompts["gb-main"]?.text.contains("held text") == true)
         let remaining = try await inbox.items()
         XCTAssertEqual(remaining.count, 0)
+
+        _ = try await inbox.enqueue(try WakeInboxItem(
+            id: "held-2", kind: "routine-result", text: "another result", createdAt: 1_000))
+        transport.queue(sessionId: "gb-main", events: [.turn(3), .assistant("held ok"), .end(turn: 3)])
+        _ = try await remote.sendUserMessage("another message", requestId: "user-action:nonce-2")
+        let digest = try BotArgumentsDigest.string(for: .array([.string("held-2")]))
+        let heldRequestID = "held:\(digest)"
+        XCTAssertEqual(transport.promptRequestIds.last?.requestId, heldRequestID)
+        let live = await remote.heldChatActionNonces(sessionID: "gb-main")
+        XCTAssertEqual(live[heldRequestID], "nonce-2")
     }
 
     func testWorkerRestartInterruptsTaskAndWakesParentOnce() async throws {

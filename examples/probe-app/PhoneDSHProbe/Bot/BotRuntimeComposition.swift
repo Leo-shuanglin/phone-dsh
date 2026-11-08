@@ -148,7 +148,7 @@ final class BotRuntimeComposition {
         routineOutbox = BotRoutineOutbox(
             store: environment.domain, machine: machine, botID: botID)
         outbox = BotProductionEffectRunner(store: environment.domain)
-        rows = BotProductionRowService(environment: environment)
+        rows = BotProductionRowService(environment: environment, remote: remote)
         info = BotProductionInfoService(environment: environment)
         scheduler = RoutineScheduler(
             botId: botID, machine: machine, inbox: wakeInbox,
@@ -367,16 +367,12 @@ final class BotRuntimeComposition {
 struct BotADBNativeMCPForwarder: BotNativeMCPForwarding {
     let server: ADBMCPServer
 
-    // The app target also declares an unrelated `BotJSONValue` UI enum in
-    // BotUIModels.swift. Pin this conformance to the protocol's JSON type.
-    typealias BotJSONValue = PhoneDSHBot.BotJSONValue
-
-    func handle(_ request: BotJSONValue, headers: [String: String]) async -> BotJSONValue? {
-        guard let body = try? JSONEncoder().encode(request) else { return nil }
+    func handle(_ request: PhoneDSHBot.BotJSONValue, headers: [String: String]) async -> PhoneDSHBot.BotJSONValue? {
+        guard let body = try? request.encoded() else { return nil }
         let response = await server.handle(LoopbackRequest(
             method: "POST", path: "/mcp/native", headers: headers, body: body))
         guard response.status == 200 else { return nil }
-        return try? JSONDecoder().decode(BotJSONValue.self, from: response.body)
+        return try? PhoneDSHBot.BotJSONValue.parse(response.body)
     }
 }
 #endif

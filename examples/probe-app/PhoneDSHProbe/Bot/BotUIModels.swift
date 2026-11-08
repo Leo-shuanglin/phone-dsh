@@ -148,6 +148,11 @@ struct BotUIRow: Codable, Equatable, Identifiable {
     var provenance: BotUIProvenance
     var streaming: Bool
     var createdAt: Int
+    var chatActionNonce: String? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case id, botID, seq, updatedSeq, kind, role, body, provenance, streaming, createdAt
+    }
 
     static func fixture(id: String, botID: String = "main", seq: Int = 0,
                         kind: String = "event", role: String? = nil,

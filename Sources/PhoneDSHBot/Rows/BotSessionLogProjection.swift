@@ -24,11 +24,30 @@ public struct BotDSHSessionEvent: Codable, Sendable, Equatable {
         case type, seq, time, data, surfaceOp, eventID = "eventId"
     }
 
+    private struct SessionHeader: Decodable {
+        let type: String
+        let version: Int
+        let id: String
+        let createdAt: Int64
+        let isSeeded: Bool
+        let delegationDepth: Int
+    }
+
     public static func parseJSONL(_ data: Data) throws -> [BotDSHSessionEvent] {
-        try data.split(separator: 0x0A).compactMap { line in
+        let decoder = JSONDecoder()
+        var firstRecord = true
+        return try data.split(separator: 0x0A).compactMap { line in
             let trimmed = line.drop(while: { $0 == 0x20 || $0 == 0x09 || $0 == 0x0D })
             guard !trimmed.isEmpty else { return nil }
-            return try JSONDecoder().decode(BotDSHSessionEvent.self, from: Data(trimmed))
+            let record = Data(trimmed)
+            if firstRecord {
+                firstRecord = false
+                if let header = try? decoder.decode(SessionHeader.self, from: record),
+                   header.type == "session", header.version == 4 {
+                    return nil
+                }
+            }
+            return try decoder.decode(BotDSHSessionEvent.self, from: record)
         }
     }
 }
@@ -90,6 +109,7 @@ private struct BotRowDraft {
     var body: BotRowBody
     var provenance: BotRowProvenance
     var createdAt: Int64
+    var chatActionNonce: String? = nil
 }
 
 private enum BotRowMutation {
@@ -113,15 +133,39 @@ public struct BotSessionLogProjector: Sendable {
 
     public func project(botID: String, sessionID: String,
                         sessionEvents: [BotDSHSessionEvent],
-                        uiEvents: [BotEvent]) -> BotRowProjectionSnapshot {
-        var mutations = projectDSH(botID: botID, sessionID: sessionID, events: sessionEvents)
+                        uiEvents: [BotEvent], heldRequestNonces: [String: String] = [:]) -> BotRowProjectionSnapshot {
+        let heldActionNonces = heldActionNonces(
+            botID: botID, sessionID: sessionID, sessionEvents: sessionEvents, uiEvents: uiEvents)
+        var mutations = projectDSH(botID: botID, sessionID: sessionID, events: sessionEvents,
+                                   heldActionNonces: heldActionNonces, heldRequestNonces: heldRequestNonces)
         mutations.append(contentsOf: projectUI(botID: botID, events: uiEvents))
         mutations.sort { $0.order < $1.order }
         return apply(mutations, botID: botID)
     }
 
-    private func projectDSH(botID: String, sessionID: String,
-                            events: [BotDSHSessionEvent]) -> [BotRowMutation] {
+    private func heldActionNonces(botID: String, sessionID: String,
+                                  sessionEvents: [BotDSHSessionEvent], uiEvents: [BotEvent]) -> [Int: String] {
+        let directNonces = Set(sessionEvents.compactMap { event -> String? in
+            guard event.type == "user/message" else { return nil }
+            let source = objectValue(event.data["source"])
+                ?? objectValue(objectValue(event.data["message"])?["source"])
+            return chatActionNonce(source)
+        })
+        var byTurn: [Int: Set<String>] = [:]
+        for event in uiEvents {
+            guard event.type == "conversation.turn_started", event.origin.isDirectUser,
+                  event.principal.botId == botID, event.principal.sessionId == sessionID,
+                  let turn = event.turnId.flatMap(Int.init), turn > 0,
+                  let data = objectValue(event.data), stringValue(data["action"]) == "chat",
+                  let nonce = nonEmpty(data, "nonce"), event.eventId == "action:\(nonce)",
+                  !directNonces.contains(nonce) else { continue }
+            byTurn[turn, default: []].insert(nonce)
+        }
+        return byTurn.compactMapValues { $0.count == 1 ? $0.first : nil }
+    }
+
+    private func projectDSH(botID: String, sessionID: String, events: [BotDSHSessionEvent],
+                            heldActionNonces: [Int: String], heldRequestNonces: [String: String]) -> [BotRowMutation] {
         let ignored: Set<String> = [
             "session", "permission/preset", "sandbox/mode", "approval/policy",
             "system/message", "developer/message", "agent/inbox/spliced",
@@ -165,9 +209,13 @@ public struct BotSessionLogProjector: Sendable {
                 let visibleText = stripHeldMessages(rawText)
                 var fields = fieldsFrom(message)
                 fields["text"] = .string(visibleText)
-                let draft = draft(id: rowID(sessionID, event.seq), event: event, kind: .message,
+                var draft = draft(id: rowID(sessionID, event.seq), event: event, kind: .message,
                                   role: "user", body: BotRowBody(type: .text, additionalProperties: fields),
                                   trust: BotRowProvenance.ownerDirect)
+                draft.chatActionNonce = chatActionNonce(source)
+                if sourceKind == "user", let requestID = stringValue(source?["rpcId"]), requestID.hasPrefix("held:") {
+                    draft.chatActionNonce = heldActionNonces[turn] ?? heldRequestNonces[requestID]
+                }
                 result.append(.upsert(draft, order))
             case "assistant/message":
                 let message = objectValue(event.data["message"]) ?? [:]
@@ -348,8 +396,13 @@ public struct BotSessionLogProjector: Sendable {
                 if let approvalID { fields["approvalID"] = .string(approvalID) }
                 body = BotRowBody(type: .approval, additionalProperties: fields)
             } else if event.type.hasPrefix("task.") {
-                let taskID = nonEmpty(payload, "taskID") ?? nonEmpty(payload, "taskId") ?? nonEmpty(payload, "threadID")
-                if let taskID { id = nonEmpty(payload, "id") ?? "e-\(botID)-task-\(taskID)" }
+                let nativeTaskID = nonEmpty(payload, "task_id")
+                let taskID = nativeTaskID ?? nonEmpty(payload, "taskID") ?? nonEmpty(payload, "taskId")
+                    ?? nonEmpty(payload, "threadID")
+                if let taskID {
+                    let stableID = "e-\(botID)-task-\(taskID)"
+                    id = nativeTaskID != nil ? stableID : nonEmpty(payload, "id") ?? stableID
+                }
                 let cardKey = nonEmpty(payload, "cardKey") ?? taskID.map { "task:\($0)" }
                 body = BotRowBody(type: .widget, cardType: .task, cardKey: cardKey,
                                   additionalProperties: fieldsFrom(payload))
@@ -447,6 +500,7 @@ public struct BotSessionLogProjector: Sendable {
                 var row = BotRow(id: id, botID: botID, seq: old?.seq ?? input.seq, updatedSeq: old?.updatedSeq ?? 0,
                                  kind: input.kind, role: input.role, body: input.body, provenance: provenance,
                                  streaming: false, createdAt: old?.createdAt ?? input.createdAt)
+                row.chatActionNonce = input.chatActionNonce
                 if let old, sameContent(old, row) {
                     if let progressKey { progressRows[progressKey] = id }
                     continue
@@ -509,9 +563,10 @@ public actor BotRowHistory {
 
     @discardableResult
     public func rebuild(botID: String, sessionID: String, sessionEvents: [BotDSHSessionEvent],
-                        uiEvents: [BotEvent]) throws -> BotRowBatch {
+                        uiEvents: [BotEvent], heldRequestNonces: [String: String] = [:]) throws -> BotRowBatch {
         let projected = projector.project(botID: botID, sessionID: sessionID,
-                                          sessionEvents: sessionEvents, uiEvents: uiEvents)
+                                          sessionEvents: sessionEvents, uiEvents: uiEvents,
+                                          heldRequestNonces: heldRequestNonces)
         snapshot = reconciled(projected)
         return resetBatch()
     }
@@ -600,6 +655,7 @@ private func sameContent(_ lhs: BotRow, _ rhs: BotRow) -> Bool {
     lhs.id == rhs.id && lhs.botID == rhs.botID && lhs.seq == rhs.seq && lhs.kind == rhs.kind
         && lhs.role == rhs.role && lhs.body == rhs.body && lhs.provenance == rhs.provenance
         && lhs.streaming == rhs.streaming && lhs.createdAt == rhs.createdAt
+        && lhs.chatActionNonce == rhs.chatActionNonce
 }
 
 private func rowID(_ sessionID: String, _ seq: Int, suffix: String = "") -> String {
@@ -651,13 +707,28 @@ private func isApprovalTool(_ name: String) -> Bool {
     name.components(separatedBy: "__").last?.split(separator: ".").last == "RequestApproval"
 }
 
+private func chatActionNonce(_ source: [String: BotJSONValue]?) -> String? {
+    let prefix = "user-action:"
+    guard stringValue(source?["kind"]) == "user",
+          let id = stringValue(source?["rpcId"]), id.hasPrefix(prefix), id.count > prefix.count else {
+        return nil
+    }
+    return String(id.dropFirst(prefix.count))
+}
+
 private func approvalStatus(_ text: String) -> String {
+    let fields = parseArguments(text)
+    if fields["allowed"]?.boolValue == false || stringValue(fields["decision"]) == "denied" {
+        return "denied"
+    }
+    if fields["allowed"]?.boolValue == true { return "allowed" }
     let lower = text.lowercased()
     if text.contains("永不允許") || lower.contains("never allow") { return "never" }
     if text.contains("總是允許") || lower.contains("always allow") { return "always" }
     if text.contains("逾時") || lower.contains("timed out") || lower.contains("timeout") { return "timed-out" }
+    if text.contains("拒絕") || lower.contains("denied") || lower.contains("rejected")
+        || lower.contains("not allowed") { return "denied" }
     if text.contains("允許") || lower.contains("allowed") { return "allowed" }
-    if text.contains("拒絕") || lower.contains("denied") || lower.contains("rejected") { return "denied" }
     return "unknown"
 }
 

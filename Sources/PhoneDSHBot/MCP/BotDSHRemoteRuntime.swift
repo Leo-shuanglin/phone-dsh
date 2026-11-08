@@ -87,6 +87,7 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotTaskRestarting {
     private var sessions: [String: BotGatewayPrincipal] = [:]
     private var coordinators: [String: TurnCoordinator] = [:]
     private var queuedTurns: [String: QueuedTurn] = [:]
+    private var recentHeldChatActions: [(requestId: String, nonce: String)] = []
     private var taskStates: [String: TaskState] = [:]
     private var interruptedTaskWakes: [String] = []
     private var routineSessions: [String: String] = [:]
@@ -157,6 +158,12 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotTaskRestarting {
                 // the random staged key, so a crash replay after `revert`
                 // reuses the same id for the same items.
                 promptRequestId = Self.deliveryRequestId(prefix: "held", items: staged.items)
+                if let promptRequestId, let requestId, requestId.hasPrefix("user-action:") {
+                    let nonce = String(requestId.dropFirst("user-action:".count))
+                    recentHeldChatActions.removeAll { $0.requestId == promptRequestId }
+                    recentHeldChatActions.append((promptRequestId, nonce))
+                    if recentHeldChatActions.count > 64 { recentHeldChatActions.removeFirst() }
+                }
             }
         }
         do {
@@ -174,6 +181,11 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotTaskRestarting {
         let sessionId = try await ensureMainSession()
         return try await runTurn(sessionId: sessionId, kind: .chat, prompt: text,
                                  hidden: true, requestId: requestId)
+    }
+
+    public func heldChatActionNonces(sessionID: String) -> [String: String] {
+        guard sessionID == mainSessionId else { return [:] }
+        return Dictionary(uniqueKeysWithValues: recentHeldChatActions.map { ($0.requestId, $0.nonce) })
     }
 
     public func stopMainTurn(turnID: String?) async throws {
