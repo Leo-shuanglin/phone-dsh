@@ -13,6 +13,8 @@ struct BotChatPage: View {
     @State private var sourceRow: BotUIRow?
     @State private var documentRow: BotUIRow?
     @State private var preservingHistoryPosition = false
+    /// Finished turns whose process row the user opened.
+    @State private var openTurns: Set<Int> = []
     @FocusState private var composerFocused: Bool
 
     init(model: BotChatModel, cardActions: BotCardActions = BotCardActions(),
@@ -95,17 +97,30 @@ struct BotChatPage: View {
                         .onAppear { loadHistory(proxy: proxy) }
                         .accessibilityIdentifier("bot.history.loader")
                     }
-                    if model.visibleRows.isEmpty && model.streamingText == nil {
+                    if model.displayRows.isEmpty && model.streamingText == nil && model.live == nil {
                         BotEmptyState(title: "嗨，我是 \(model.context.botName)",
                                       message: "我可以处理任务、整理文件和查找资料。\n想让我帮你做什么？",
                                       showsAvatar: true)
                             .padding(.top, 120)
                             .accessibilityIdentifier("bot.chat.empty")
                     }
-                    ForEach(model.visibleRows) { row in
+                    let anchors = processAnchors
+                    ForEach(model.displayRows) { row in
+                        if let turn = anchors[row.id], let process = model.turnProcesses[turn] {
+                            BotTurnProcessBlock(process: process, isOpen: openTurns.contains(turn)) {
+                                withAnimation(.easeOut(duration: 0.16)) {
+                                    if openTurns.contains(turn) { openTurns.remove(turn) } else { openTurns.insert(turn) }
+                                }
+                            }
+                            .id("process-\(turn)")
+                        }
                         BotTranscriptRow(row: row, model: model, actions: resolvedCardActions,
                                          sourceRow: $sourceRow)
                             .id(row.id)
+                    }
+                    if let live = model.live {
+                        BotLiveTurnView(live: live)
+                        Color.clear.frame(height: 1).id("bot-live-tail")
                     }
                     if let streaming = model.streamingText {
                         BotStreamingRow(text: streaming)
@@ -119,6 +134,9 @@ struct BotChatPage: View {
             .onChange(of: model.visibleRows.map(\.id)) { _, _ in
                 guard !preservingHistoryPosition, model.scrollRequestID == nil else { return }
                 if let last = model.visibleRows.last { proxy.scrollTo(last.id, anchor: .bottom) }
+            }
+            .onChange(of: liveScrollKey) { _, key in
+                if key != nil { proxy.scrollTo("bot-live-tail", anchor: .bottom) }
             }
             .onChange(of: model.streamingText) { _, value in
                 if value != nil { proxy.scrollTo("bot-live-stream", anchor: .bottom) }
@@ -250,6 +268,25 @@ struct BotChatPage: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// The first answer row of each turn that has tool steps carries that
+    /// turn's process row above it, as on the DSH page.
+    private var processAnchors: [String: Int] {
+        var anchors: [String: Int] = [:]
+        var seen: Set<Int> = []
+        for row in model.displayRows where BotChatModel.isAnswer(row) {
+            guard let turn = BotChatModel.turn(of: row), model.turnProcesses[turn] != nil,
+                  seen.insert(turn).inserted else { continue }
+            anchors[row.id] = turn
+        }
+        return anchors
+    }
+
+    private var liveScrollKey: String? {
+        model.live.map { live in
+            "\(live.segments.count):\(live.buffer.count):\(live.tools.count):\(live.ended)"
+        }
+    }
+
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -318,16 +355,85 @@ private struct BotTextRow: View {
                         .background(HomeSpec.userBubble, in: HomeSpec.bubbleShape)
                 }
             } else {
-                NativeMarkdownBody(markdown: row.body["text"]?.string ?? "", streaming: false,
-                                   workspaceFiles: [], onOpenFile: { _ in })
-                    .font(NativeChatTheme.bodyFont())
-                    .lineSpacing(NativeChatTheme.bodyLineSpacing)
-                    .foregroundStyle(HomeSpec.textPrimary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                BotAnswerBubbleContent(text: row.body["text"]?.string ?? "", streaming: false)
             }
         }
         .padding(.horizontal, HomeSpec.contentInset)
         .padding(.vertical, HomeSpec.blockGap / 2)
+    }
+}
+
+/// The Bot's own words: the DSH markdown body inside a white bubble on the
+/// leading side (top-leading corner square, hairline edge), up to 86% wide.
+private struct BotAnswerBubbleContent: View {
+    let text: String
+    let streaming: Bool
+
+    var body: some View {
+        BotAdaptiveBubbleLayout(ratio: 0.86, trailing: false) {
+            NativeMarkdownBody(markdown: text, streaming: streaming, workspaceFiles: [], onOpenFile: { _ in })
+                .font(NativeChatTheme.bodyFont())
+                .lineSpacing(NativeChatTheme.bodyLineSpacing)
+                .foregroundStyle(HomeSpec.textPrimary)
+                .textSelection(.enabled)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(HomeSpec.surface, in: HomeSpec.botBubbleShape)
+                .overlay(HomeSpec.botBubbleShape.strokeBorder(HomeSpec.borderList, lineWidth: 0.5))
+        }
+    }
+}
+
+/// A finished turn's process row ("已完成，用时 …"); open, it lists the
+/// turn's tool calls as DSH tool rows.
+private struct BotTurnProcessBlock: View {
+    let process: BotTurnProcess
+    let isOpen: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            NativeTurnProcessRow(state: process.state, isOpen: isOpen, isFoldable: true, onToggle: onToggle)
+            if isOpen {
+                ToolRunRow(items: process.items)
+            }
+        }
+        .padding(.horizontal, HomeSpec.contentInset)
+        .padding(.vertical, HomeSpec.blockGap / 2)
+    }
+}
+
+/// The running turn in arrival order: committed text bubbles, tool groups,
+/// the text still streaming, then DSH's running clock.
+private struct BotLiveTurnView: View {
+    let live: BotLiveTurn
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(live.segments.enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .text(let text):
+                    BotAnswerBubbleContent(text: text, streaming: false)
+                        .padding(.horizontal, HomeSpec.contentInset)
+                        .padding(.vertical, HomeSpec.blockGap / 2)
+                case .tools(let ids):
+                    ToolRunRow(items: live.tools(for: ids))
+                        .padding(.horizontal, HomeSpec.contentInset)
+                        .padding(.vertical, HomeSpec.blockGap / 2)
+                }
+            }
+            if !live.buffer.isEmpty {
+                BotAnswerBubbleContent(text: live.buffer, streaming: true)
+                    .padding(.horizontal, HomeSpec.contentInset)
+                    .padding(.vertical, HomeSpec.blockGap / 2)
+                    .accessibilityIdentifier("bot.streaming.text")
+            }
+            if !live.ended {
+                NativeRunningStatus(startedAt: live.startedAt, showsDivider: false)
+                    .padding(.horizontal, HomeSpec.contentInset)
+                    .padding(.vertical, HomeSpec.blockGap / 2)
+            }
+        }
     }
 }
 
@@ -357,11 +463,7 @@ private struct BotStreamingRow: View {
     let text: String
 
     var body: some View {
-        NativeMarkdownBody(markdown: text, streaming: true, workspaceFiles: [], onOpenFile: { _ in })
-            .font(NativeChatTheme.bodyFont())
-            .lineSpacing(NativeChatTheme.bodyLineSpacing)
-            .foregroundStyle(HomeSpec.textPrimary)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        BotAnswerBubbleContent(text: text, streaming: true)
             .padding(.horizontal, HomeSpec.contentInset)
             .padding(.vertical, HomeSpec.blockGap / 2)
             .accessibilityIdentifier("bot.streaming.text")

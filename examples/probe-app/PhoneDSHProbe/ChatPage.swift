@@ -4017,7 +4017,8 @@ private struct ChatMessageRow: View {
 
 }
 
-private struct ToolRunRow: View {
+/// Shared with the Bot page, which draws its tool steps the same way.
+struct ToolRunRow: View {
     let items: [ChatItem]
     var workspaceFiles: [WorkspaceFile] = []
     var onOpenFile: (String) -> Void = { _ in }

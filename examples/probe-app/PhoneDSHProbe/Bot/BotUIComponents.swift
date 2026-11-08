@@ -54,73 +54,6 @@ extension View {
     }
 }
 
-enum BotCardShape {
-    case conversation
-    case object
-    case work
-    case inline
-    case approval
-
-    var radius: CGFloat {
-        switch self {
-        case .conversation, .object: HomeSpec.bubbleRadius
-        case .work: HomeSpec.listCardRadius
-        case .inline, .approval: 12
-        }
-    }
-
-    var surface: Color {
-        switch self {
-        case .approval: NativeParityTokens.selector
-        default: HomeSpec.surface
-        }
-    }
-}
-
-struct BotCard<Content: View>: View {
-    let shape: BotCardShape
-    @ViewBuilder var content: Content
-
-    init(_ shape: BotCardShape = .work, @ViewBuilder content: () -> Content) {
-        self.shape = shape
-        self.content = content()
-    }
-
-    var body: some View {
-        content
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(shape.surface, in: RoundedRectangle(cornerRadius: shape.radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: shape.radius, style: .continuous)
-                .strokeBorder(NativeParityTokens.borderL2, lineWidth: 0.5))
-    }
-}
-
-struct BotPrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .botFont(size: HomeSpec.bodySize, lineHeight: HomeSpec.bodyLine, weight: .semibold)
-            .foregroundStyle(HomeSpec.primaryButtonInk)
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(HomeSpec.primaryButton, in: Capsule())
-            .opacity(configuration.isPressed ? 0.8 : 1)
-    }
-}
-
-struct BotSecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .botProcessFont(weight: .medium)
-            .foregroundStyle(NativeParityTokens.labelPrimary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-            .background(NativeParityTokens.selector, in: Capsule())
-            .overlay(Capsule().strokeBorder(NativeParityTokens.borderL2, lineWidth: 0.5))
-            .opacity(configuration.isPressed ? 0.72 : 1)
-    }
-}
-
 struct BotTextButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -163,45 +96,6 @@ struct BotStatusPill: View {
         .padding(.vertical, 5)
         .background(tone.color.opacity(0.1), in: Capsule())
         .accessibilityElement(children: .combine)
-    }
-}
-
-struct BotCardHeader: View {
-    let title: String
-    var systemImage: String?
-    var status: String?
-    var tone: BotStatusTone = .neutral
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(NativeParityTokens.labelSecondary)
-                    .frame(width: 32, height: 32)
-                    .background(NativeParityTokens.selector, in: RoundedRectangle(cornerRadius: 10))
-            }
-            Text(title)
-                .botTitleFont()
-                .foregroundStyle(HomeSpec.textPrimary)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if let status { BotStatusPill(text: status, tone: tone) }
-        }
-        .accessibilityElement(children: .contain)
-    }
-}
-
-struct BotIconTile: View {
-    let systemImage: String
-
-    var body: some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 20, weight: .medium))
-            .foregroundStyle(NativeParityTokens.labelSecondary)
-            .frame(width: 42, height: 42)
-            .background(NativeParityTokens.selector, in: RoundedRectangle(cornerRadius: 12))
-            .accessibilityHidden(true)
     }
 }
 

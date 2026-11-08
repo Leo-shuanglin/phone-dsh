@@ -95,6 +95,15 @@ enum HomeSpec {
                                topTrailingRadius: 0,
                                style: .continuous)
     }
+
+    /// The Bot's bubble mirrors the user's: the top-leading corner is square.
+    static var botBubbleShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(topLeadingRadius: 0,
+                               bottomLeadingRadius: bubbleRadius,
+                               bottomTrailingRadius: bubbleRadius,
+                               topTrailingRadius: bubbleRadius,
+                               style: .continuous)
+    }
 }
 
 /// True for rows drawn inside a list card: they drop to the 14/22 list
