@@ -81,6 +81,7 @@ final class BotChatModel: ObservableObject {
     private var fixtureHistory: [BotUIRow]
     private var fixtureHistoryCursor: String?
     private var historyCursor: String?
+    private let historyPageSize = 50
     private var watchCursor = 0
     private var watching = false
 
@@ -234,19 +235,30 @@ final class BotChatModel: ObservableObject {
     }
 
     func apply(_ batch: BotUIRowBatch) {
-        if batch.reset { rows = [] }
+        var incoming = batch.rows[...]
+        if batch.reset {
+            rows.removeAll { !$0.id.hasPrefix("local-") }
+            if driver != nil {
+                incoming = incoming.suffix(historyPageSize)
+                historyCursor = incoming.first?.id
+                hasMoreHistory = batch.rows.count > incoming.count
+            }
+        }
         if !batch.deletes.isEmpty {
             let deleted = Set(batch.deletes)
             rows.removeAll { deleted.contains($0.id) }
         }
-        batch.rows.forEach(upsert)
-        historyCursor = batch.cursor > 0 ? String(batch.cursor) : historyCursor
+        incoming.forEach(upsert)
+        watchCursor = batch.cursor
     }
 
     func upsert(_ row: BotUIRow) {
         guard row.body.type != "deleted" else {
             rows.removeAll { $0.id == row.id }
             return
+        }
+        if let nonce = row.chatActionNonce {
+            rows.removeAll { $0.id == "local-\(nonce)" }
         }
         var index = rows.firstIndex(where: { $0.id == row.id })
         if index == nil, row.body.cardType == "progress", let cardKey = row.body.cardKey {
@@ -275,7 +287,6 @@ final class BotChatModel: ObservableObject {
             do {
                 let batch = try await driver.watch(watchCursor)
                 apply(batch)
-                watchCursor = max(watchCursor, batch.cursor)
             } catch {
                 runtimeNotice = "Bot 实时更新失败：\(error.localizedDescription)"
             }
@@ -290,7 +301,8 @@ final class BotChatModel: ObservableObject {
         do {
             let page: BotUIHistoryPage
             if let driver {
-                page = try await driver.history(historyCursor ?? visibleRows.first?.id, 50)
+                let anchor = historyCursor ?? rows.first(where: { !$0.id.hasPrefix("local-") })?.id
+                page = try await driver.history(anchor, historyPageSize)
             } else if fixtureActions {
                 page = BotUIHistoryPage(rows: fixtureHistory, nextCursor: nil, hasMore: false)
                 fixtureHistory = []

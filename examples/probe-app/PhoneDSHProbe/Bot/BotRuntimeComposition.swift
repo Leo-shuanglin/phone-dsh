@@ -148,7 +148,7 @@ final class BotRuntimeComposition {
         routineOutbox = BotRoutineOutbox(
             store: environment.domain, machine: machine, botID: botID)
         outbox = BotProductionEffectRunner(store: environment.domain)
-        rows = BotProductionRowService(environment: environment)
+        rows = BotProductionRowService(environment: environment, remote: remote)
         info = BotProductionInfoService(environment: environment)
         scheduler = RoutineScheduler(
             botId: botID, machine: machine, inbox: wakeInbox,
@@ -393,12 +393,12 @@ final class BotRuntimeComposition {
 struct BotADBNativeMCPForwarder: BotNativeMCPForwarding {
     let server: ADBMCPServer
 
-    func handle(_ request: BotJSONValue, headers: [String: String]) async -> BotJSONValue? {
+    func handle(_ request: PhoneDSHBot.BotJSONValue, headers: [String: String]) async -> PhoneDSHBot.BotJSONValue? {
         guard let body = try? request.encoded() else { return nil }
         let response = await server.handle(LoopbackRequest(
             method: "POST", path: "/mcp/native", headers: headers, body: body))
         guard response.status == 200 else { return nil }
-        return try? BotJSONValue.parse(response.body)
+        return try? PhoneDSHBot.BotJSONValue.parse(response.body)
     }
 }
 #endif

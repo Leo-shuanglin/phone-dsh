@@ -125,6 +125,11 @@ public struct BotRow: Codable, Sendable, Equatable, Identifiable {
     public var provenance: BotRowProvenance
     public var streaming: Bool
     public var createdAt: Int64
+    public internal(set) var chatActionNonce: String? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case id, botID, seq, updatedSeq, kind, role, body, provenance, streaming, createdAt
+    }
 
     public init(id: String, botID: String, seq: Int, updatedSeq: Int, kind: BotRowKind,
                 role: String? = nil, body: BotRowBody, provenance: BotRowProvenance,
@@ -143,10 +148,12 @@ public struct BotRow: Codable, Sendable, Equatable, Identifiable {
 
     public func replacing(body: BotRowBody? = nil, updatedSeq: Int? = nil,
                           provenance: BotRowProvenance? = nil, streaming: Bool? = nil) -> BotRow {
-        BotRow(id: id, botID: botID, seq: seq, updatedSeq: updatedSeq ?? self.updatedSeq,
-               kind: kind, role: role, body: body ?? self.body,
-               provenance: provenance ?? self.provenance, streaming: streaming ?? self.streaming,
-               createdAt: createdAt)
+        var row = self
+        row.updatedSeq = updatedSeq ?? self.updatedSeq
+        row.body = body ?? self.body
+        row.provenance = provenance ?? self.provenance
+        row.streaming = streaming ?? self.streaming
+        return row
     }
 }
 

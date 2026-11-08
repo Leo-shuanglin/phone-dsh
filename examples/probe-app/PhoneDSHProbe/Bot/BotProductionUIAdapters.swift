@@ -67,6 +67,7 @@ extension BotUIRow {
                 tainted: row.provenance.tainted),
             streaming: row.streaming,
             createdAt: Int(clamping: row.createdAt))
+        chatActionNonce = row.chatActionNonce
     }
 }
 
