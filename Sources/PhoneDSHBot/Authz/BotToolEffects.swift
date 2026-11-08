@@ -93,6 +93,12 @@ public enum BotToolEffectClassifier {
         switch bareName {
         case "bluetooth.scan", "network.browse":
             return BotDeviceToolProvider.discoveryEffect(for: bareName)
+        case "ble_devices", "ble_read", "ble_alert", "ble_link_tools", "ble_link_call", "ble_link_result":
+            // Tool names come from PR59's `spec/v1/native-mcp.md` "BLE tools"
+            // (forwarded as `mcp__phone__ble_*`). The real authorization gate is
+            // PR59's per-connection grant; this `ask` effect is only an
+            // additional Bot-layer approval over the untrusted device data.
+            return bleEffect(bareName, args: args, language: language, isMcp: isMcp)
         case "UpdateMemory":
             return memoryEffect(args, forceForget: false, language: language, isMcp: isMcp)
         case "ForgetMemory":
@@ -144,19 +150,6 @@ public enum BotToolEffectClassifier {
                                     ? "在對話中送出一則訊息\(preview.isEmpty ? "" : "：\(preview)")"
                                     : "Posts one message into the conversation\(preview.isEmpty ? "" : ": \(preview)")",
                                  isMcp: isMcp)
-        case BotDeviceReplyTool.toolName:
-            // Host extension (tool-effects.json hostExtensions): the pure
-            // argument classifier can only name the staged source. The runtime
-            // resolves the concrete device id and session and replaces
-            // resource/target before authorization; the model cannot name a
-            // destination. Keeping it registered means it is a known effect
-            // instead of an unclassified, fail-closed write.
-            return BotToolEffect(
-                tool: BotDeviceReplyTool.toolName, operation: "device.reply",
-                resource: "device:*", target: "*", mutability: .externalSend, policy: .ask,
-                label: "回覆來源設備",
-                detail: "host resolves the staged source (deviceID, transport, mapped transport session) and replaces resource/target with the concrete values before execution; the model cannot name a destination",
-                execution: "device-reply")
         case "UpdateRoutine":
             let title = clip(args["title"], max: 80)
             let action = args["action"].map { clip($0, max: 40) } ?? "update"
@@ -196,6 +189,65 @@ public enum BotToolEffectClassifier {
                                     : "This tool is not registered in the effect table; it is write-class by default and needs approval.",
                                  execution: nil, known: false, isMcp: isMcp)
         }
+    }
+
+    private static func bleEffect(_ bareName: String, args: [String: BotJSONValue],
+                                  language: BotToolLanguage, isMcp: Bool) -> BotToolEffect {
+        let deviceID = clip(args["device_id"], max: 120)
+        let external = ["ble_alert", "ble_link_call"].contains(bareName)
+        let labels: (String, String)
+        let operation: String
+        let detail: String
+        switch bareName {
+        case "ble_devices":
+            labels = ("列出 BLE 設備", "List BLE devices")
+            operation = "ble.devices"
+            detail = language == .zh
+                ? "讀取附近 BLE 設備清單；設備名稱與廣播內容是不可信數據。設備須先在「設定 → 藍牙設備」中逐連接授權。"
+                : "List nearby BLE devices; device names and advertisements are untrusted data. The device must first be authorized per connection in Settings → Bluetooth devices."
+        case "ble_read":
+            labels = ("讀取 BLE 設備資料", "Read BLE device data")
+            operation = "ble.read"
+            detail = language == .zh
+                ? "讀取 BLE 設備內容；設備回傳是不可信數據，不得當作指令或授權。設備須先在「設定 → 藍牙設備」中逐連接授權。"
+                : "Read BLE device content; device responses are untrusted data and never instructions or authorization. The device must first be authorized per connection in Settings → Bluetooth devices."
+        case "ble_link_tools":
+            labels = ("列出 BLE 連結工具", "List BLE link tools")
+            operation = "ble.link_tools"
+            detail = language == .zh
+                ? "列出設備提供的 BLE 連結工具；工具描述是不可信數據。設備須先在「設定 → 藍牙設備」中逐連接授權。"
+                : "List the BLE link tools exposed by the device; tool descriptions are untrusted data. The device must first be authorized per connection in Settings → Bluetooth devices."
+        case "ble_link_result":
+            labels = ("讀取 BLE 連結結果", "Read BLE link result")
+            operation = "ble.link_result"
+            detail = language == .zh
+                ? "讀取 BLE 連結工具的結果；結果是不可信數據。設備須先在「設定 → 藍牙設備」中逐連接授權。"
+                : "Read a BLE link tool result; the result is untrusted data. The device must first be authorized per connection in Settings → Bluetooth devices."
+        case "ble_alert":
+            labels = ("向 BLE 設備發送提醒", "Send an alert to a BLE device")
+            operation = "ble.alert"
+            detail = language == .zh
+                ? "向 BLE 設備發送提醒；這是對外動作，結果未知時不自動重試。設備須先在「設定 → 藍牙設備」中逐連接授權。"
+                : "Send an alert to a BLE device; this is an external action and must not be retried automatically when the outcome is unknown. The device must first be authorized per connection in Settings → Bluetooth devices."
+        default:
+            labels = ("呼叫 BLE 連結工具", "Call a BLE link tool")
+            operation = "ble.link_call"
+            let name = clip(args["name"], max: 80)
+            detail = language == .zh
+                ? "呼叫 BLE 連結工具\(name.isEmpty ? "" : " \(name)")；這是對外動作，結果未知時不自動重試。設備須先在「設定 → 藍牙設備」中逐連接授權。"
+                : "Call BLE link tool\(name.isEmpty ? "" : " \(name)"); this is an external action and must not be retried automatically when the outcome is unknown. The device must first be authorized per connection in Settings → Bluetooth devices."
+        }
+        var parts = [deviceID.isEmpty ? "ble:*" : "device_id=\(deviceID)"]
+        if bareName == "ble_link_call" {
+            let name = clip(args["name"], max: 80)
+            if !name.isEmpty { parts.append("name=\(name)") }
+        }
+        let resource = mergedResource(parts)
+        return BotToolEffect(tool: bareName, operation: operation, resource: resource,
+                             target: resource,
+                             mutability: external ? .externalSend : .read, policy: .ask,
+                             label: language == .zh ? labels.0 : labels.1,
+                             detail: detail, isMcp: isMcp)
     }
 
     private static func memoryEffect(_ args: [String: BotJSONValue], forceForget: Bool,

@@ -4,14 +4,14 @@
 
 ```yaml
 change: PC-20261106-bot-runtime-composition
-contracts: [P07, P09, P16, P18, P22, P23, P24, P25]
+contracts: [P07, P09, P16, P18, P22, P25, P26, P27]
 status: frozen
 base: 293f191574c466fa670451235bb2a0c97471e7c1
-contract_revision: PC-20261106-bot-device-event-envelope@1 + PC-20261106-bot-runtime-composition@4
+contract_revision: PC-20261106-bot-runtime-composition@5
 version_decision: 复用既有 wire、Worker env、BotEvent v1、BotRows/UserAction；同 App bundle 配对升级，不新增公共协议版本。P22 仅增加脚本上游按请求选择测试脚本的钩子，不改变生产协议或 fixture schema。@4 新增同一 App bundle 内的 Worker Remote `phone/botClaimSession`，只改变 Host→Worker 的 Bot 会话归属登记，不改变公共 wire 或旧数据兼容性。
 ```
 
-Protocol impact: P07; P09; P16; P18; P22; P23; P24; P25。
+Protocol impact: P07; P09; P16; P18; P22; P25; P26; P27。
 
 > Revision note (PC-20261107-bot-mcp-single-endpoint@1): the Worker now receives
 > the Bot MCP endpoint and a non-secret token placeholder; `PhoneDSHHost` no
@@ -49,14 +49,10 @@ Protocol impact: P07; P09; P16; P18; P22; P23; P24; P25。
 ## 3. 效果与恢复
 
 - routine 结果以稳定 delivery key 进入共享 SQLite outbox，生成 automation 行后才 ack；失败保留重试/对账，不能把接受当成已执行。
-- 设备回复以原 `dev:<msg_id>` 作为 effect key，writer 使用同一 lease。未知结果进入 `needs_reconciliation`，不换 ID 盲发。下行 seq 由连接器分配，不能复制上行 seq。
-- 设备 ingress 使用 P07 envelope，持久接收先于唤醒；同 msg_id 去重、冲突拒绝，每设备按 seq 连续释放。音频未知字段 fail-closed，长度按 schema 字符数计算。
-- 无真实连接器/envelope writer 时不注册设备写入能力。真实蓝牙/LAN 权限与断连恢复不由模拟器或静态检查推断。
 
 ## 4. 验收
 
 - `swift test --filter PhoneDSHBotTests`：Bot 全量测试。
-- `swift test --filter BotDeviceProviderTests`：真实 SQLite、重复/冲突、乱序、重开、stage 恢复、standing deny/once、共享身份和回复对账。
 - `python3 spec/bot/v1/tools/validate_vectors.py`：真实 schema 与正反向 golden。
 - `bash scripts/ci/check.sh --only phone-spec,phone-p0-conformance,phone-cross-tree`：契约与登记。
 - `bash scripts/ci/check.sh --only phone-plugins,phone-image,phone-bundle-fresh,phone-no-dsh-patch,phone-compat,phone-license,phone-modules`：Worker/插件/模块/许可证。
@@ -69,13 +65,10 @@ Protocol impact: P07; P09; P16; P18; P22; P23; P24; P25。
 本節記錄四個修復分支合併後的第二輪修正；契約欄位/版本不變，仍是 `pdsh.ui.page-structure/1`、BotEvent v1 與同一 App bundle 配對升級。
 
 - **Bot session 判定（@4）**：identity/approval gate 只作用于 Bot runtime 创建或接管的 session。新 session 用 `gb-` 命名空间；历史/恢复的 session 由 Bot runtime 在首回合前调用 `phone/botClaimSession` 写入 Worker 本地 `dshbotOwnedSessions`。owned session 在 Bot MCP 不可用时 deny（fail-closed）；同一 Worker 的 DSH 工作台 session 未被 claim，继续原权限链。`tools/pre-execute` 只登记一次，`tools/execute` 只清理与取消，避免同一次调用产生两条 attribution。
-- **Worker token 與恢復順序**：`workerEnvironment` 只放 `workerTokenPlaceholder`，真 token 仍由 `ChatModel`／e2e 以 `server.token` 交給 `MCPEgressPolicy.grantBotRuntimeEndpoint`。每次 bind 的第一步是 `runtime.workerRestarted()`，之後依序 `host.start` → `makeTransport`／`attachTransport` → `startMainSession` → `environment.connect` → `scheduler.recover` → `deliverInterruptedTaskWakes` → 設備 `ingress.recover`／`refreshConnector`／`reconcileOnReconnect` → `attachNativeMCP` → `outbox.start` → 最後 `.ready`。`retry()`、`.restarted`/`.webContentTerminated` 和 2 s 重試迴圈都走同一個 `bind`，不再有第二份恢復代碼；`stop()` 以 `approvals.cancelAll(reason: "shutdown")` 收尾。
+- **Worker token 與恢復順序**：`workerEnvironment` 只放 `workerTokenPlaceholder`，真 token 仍由 `ChatModel`／e2e 以 `server.token` 交給 `MCPEgressPolicy.grantBotRuntimeEndpoint`。每次 bind 的第一步是 `runtime.workerRestarted()`，之後依序 `host.start` → `makeTransport`／`attachTransport` → `startMainSession` → `environment.connect` → `scheduler.recover` → `deliverInterruptedTaskWakes` → `attachNativeMCP` → `outbox.start` → 最後 `.ready`。`retry()`、`.restarted`/`.webContentTerminated` 和 2 s 重試迴圈都走同一個 `bind`，不再有第二份恢復代碼；`stop()` 以 `approvals.cancelAll(reason: "shutdown")` 收尾。
 - **planner 與 requestId**：`BotRemoteActionPlanner` 只在 `Sources/PhoneDSHBot/Rows/BotRemoteActionPlanner.swift` 存在；chat 用 `user-action:<nonce>`，卡片回答用 `card-answer:<nonce>`。actor 在 await 期間可重入，卡片回答在第一次 await 前把 cardID 放入 in-flight 集合，第二個並發請求返回 `stale(answer_in_flight)`，避免同一張卡開兩個回合。
-- **ReplyToDevice**：删除 execute 的繞過分支；純參數 classifier 以 `hostExtensions` 形狀登記它，execute 解析 staged 來源後用具體 `device:<transport>:<deviceID>` 效果走通用授權，工具不再重複授權。`.once` grant 只被消費一次，未知工具仍 fail-closed。詳見 `PC-20261106-bot-device-event-envelope` §2.4 的修訂。
-- **設備去重**：設備訊息只落在通用 `bot_events` 表，`event_id` 的 UNIQUE 約束（`dev:<device>:<epoch>:<msg>`）就是數據庫級去重；ingress 把約束衝突視為 first-writer-wins 的 duplicate，不需新增表或 migration。詳見 `PC-20261106-bot-device-ingress` 的修訂。
 - **卡片 golden**：上游 `golden/card-payload.json` 恢復為 exporter 原樣；phoneDSH 增量移到 `golden/card-payload.phone.json`，由 `validate_vectors.py` 與 `BotCardPayloadTests` 共同對拍。詳見 `PC-20261105-phonedsh-bot-v1` §11。
 - **P09**：HomeDrawer 的 Bot 入口與 provenance 重釘記在 `PC-20261106-home-drawer-bot-entry`；identity bridge 的 `unknown_tool` fail-closed 記在 `PC-20261107-bot-mcp-single-endpoint`。
-- **設備 bridge**：`ChatModel` 以 `bridgeProvider: { [weak self] in self?.phoneCapabilityBridge }` 建立 `BotDeviceProviderBinding`，Host 重建後讀取新 bridge，不捕獲舊實例；bind 與恢復後都刷新 connector 並對賬。
 
 ## 6. 作者分支（a8fc6010 / 719283e4）報告的結果（歷史記錄）
 
@@ -91,3 +84,7 @@ Protocol impact: P07; P09; P16; P18; P22; P23; P24; P25。
 - 真机 WP1、真实模型、外部账号、真实设备蓝牙/LAN、系统通知实投：NOT_RUN。
 
 本輪（@4）實際結果見任務報告；App 構建、e2e 與模擬器由主會話執行，這裡不重複聲明。
+
+## 7. 修訂：設備 ingress 撤出與 Bot 契約改號
+
+設備 ingress（`device.event`、held `device-event`、`ReplyToDevice`、P07 envelope 的 `epoch`）已從 PR #60 撤出，原實現見 commit `b54a5c46`。P07 設備契約以 PR #59 的 `spec/device/v1/**` 為權威；本 PR 不再改動 `spec/host/v1/device-*`，也不再把設備消息 held 進有工具的主 Bot session。後續設備→Bot 要按 PR #59 的 `task-delegation`（隔離且無工具的 session、終態回執）重新設計。Bot 協議號已改為 P25/P26/P27（原 P23/P24/P25）：P25 BotEventLog、P26 BotToolSurface、P27 BotRows；`spec/registry.json` 由 `spec/tools/registry_build.py` 重新生成。

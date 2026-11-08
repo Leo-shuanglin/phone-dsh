@@ -194,8 +194,7 @@ final class BotRuntimeComposition {
     ///
     /// Order is part of the contract: the replaced Worker incarnation is
     /// invalidated first, then the transport/session are rebound, durable work
-    /// is recovered, device ingress is republished and only then the outbox and
-    /// scheduler start.
+    /// is recovered and only then the outbox and scheduler start.
     private func bind(to newHost: PhoneDSHHost, recovering: Bool) async throws {
         state = recovering ? .recovering : .connecting
         do {
@@ -220,18 +219,6 @@ final class BotRuntimeComposition {
             // previous Worker.
             _ = try await scheduler.recover()
             _ = await remote.deliverInterruptedTaskWakes()
-
-            // 6/7. Device ingress and the reconnect reconciliation. The
-            // connector is re-read from the global coordinator so a Host
-            // rebuild never keeps feeding the previous connector instance.
-            #if canImport(ProbeKit)
-            if let deviceBinding {
-                try await deviceBinding.attach(runtime: remote)
-                try await deviceBinding.ingress.recover()
-                try await deviceBinding.refreshConnector()
-                await deviceBinding.reconcileOnReconnect()
-            }
-            #endif
 
             // Every bind also re-attaches the native MCP forwarder: one Bot
             // endpoint owns both Bot and native Android tools.
@@ -258,14 +245,6 @@ final class BotRuntimeComposition {
         await outbox.register(kind: BotRoutineOutbox.kind) { [routineOutbox] lease in
             try await routineOutbox.apply(lease)
         }
-        #if canImport(ProbeKit)
-        if let deviceBinding, let writer = try? deviceBinding.replyWriter() {
-            let replies = BotDeviceReplyService(store: environment.domain, writer: writer)
-            await outbox.register(kind: "device-reply") { [replies] lease in
-                try await replies.deliver(lease)
-            }
-        }
-        #endif
     }
 
     private func startTick() {
@@ -279,10 +258,6 @@ final class BotRuntimeComposition {
         }
     }
 
-    #if canImport(ProbeKit)
-    var deviceBinding: BotDeviceProviderBinding?
-    #endif
-
     #if canImport(PhoneDSHADB) && canImport(PhoneDSHLoopback)
     /// The Bot MCP listener is the Worker's only `phone` server. Native
     /// Android tools are forwarded in-process so one endpoint owns the env.
@@ -293,8 +268,7 @@ final class BotRuntimeComposition {
 
     /// Tears down the Host-bound half of the runtime. The MCP server, durable
     /// stores and the single routine/memory authority stay alive across Host
-    /// rebuilds; a later `start(host:)` republishes scheduler, outbox and the
-    /// device ingress.
+    /// rebuilds; a later `start(host:)` republishes scheduler and outbox.
     func stop() async {
         await detachBinding()
         await runtime.approvals.cancelAll(reason: "shutdown")
@@ -393,12 +367,16 @@ final class BotRuntimeComposition {
 struct BotADBNativeMCPForwarder: BotNativeMCPForwarding {
     let server: ADBMCPServer
 
+    // The app target also declares an unrelated `BotJSONValue` UI enum in
+    // BotUIModels.swift. Pin this conformance to the protocol's JSON type.
+    typealias BotJSONValue = PhoneDSHBot.BotJSONValue
+
     func handle(_ request: BotJSONValue, headers: [String: String]) async -> BotJSONValue? {
-        guard let body = try? request.encoded() else { return nil }
+        guard let body = try? JSONEncoder().encode(request) else { return nil }
         let response = await server.handle(LoopbackRequest(
             method: "POST", path: "/mcp/native", headers: headers, body: body))
         guard response.status == 200 else { return nil }
-        return try? BotJSONValue.parse(response.body)
+        return try? JSONDecoder().decode(BotJSONValue.self, from: response.body)
     }
 }
 #endif

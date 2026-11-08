@@ -43,7 +43,6 @@ def rejects(instance, schema_name: str, where: str) -> None:
 
 def main() -> int:
     check(load("event-envelope.json")["valid"]["event"], "event-envelope.schema.json", "event")
-    check(load("event-envelope.json")["validDeviceEvent"], "event-envelope.schema.json", "device-event")
     for index, case in enumerate(load("event-envelope.json")["invalid"]):
         rejects(case["event"], "event-envelope.schema.json", f"event.invalid[{index}]")
 
@@ -90,10 +89,11 @@ def main() -> int:
     check(load("context-lint.json")["valid"], "context-lint.schema.json", "context-lint")
     check_many(load("tool-effects.json")["valid"], "tool-effects.schema.json", "tool-effects")
     check_many(load("tool-effects.json")["invalid"], "tool-effects.schema.json", "tool-effects.invalid")
-    # Host-extension effects are derived after source resolution, so they are
-    # not pure argument classifiers; still validate their shared shape.
-    check_many(load("tool-effects.json").get("hostExtensions", []),
-               "tool-effects.schema.json", "tool-effects.hostExtensions")
+    # phoneDSH-native MCP tools from PR59 (BLE) are classified by the same
+    # shared table. They are not part of the upstream exporter batch, so they
+    # live in a dedicated array and are validated with the same schema.
+    check_many(load("tool-effects.json").get("nativeMcp", []),
+               "tool-effects.schema.json", "tool-effects.nativeMcp")
     check_many(load("approval-patterns.json")["valid"], "approval-patterns.schema.json", "approval-patterns")
     check_many(load("approval-patterns.json")["invalid"], "approval-patterns.schema.json", "approval-patterns.invalid")
     check(load("memory-policy.json")["valid"], "memory-policy.schema.json", "memory-policy")

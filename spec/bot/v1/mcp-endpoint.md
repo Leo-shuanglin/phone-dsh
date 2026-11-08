@@ -3,8 +3,8 @@
 # Bot MCP endpoint, identity and restart contract (Bot v1)
 
 Status: normative for the App/Worker `phone` MCP endpoint introduced by the Bot
-runtime. Contracts: P05 (HTTP/MCP gateway), P16 (Worker environment), P23
-(BotEventLog), P24 (BotToolSurface).
+runtime. Contracts: P05 (HTTP/MCP gateway), P16 (Worker environment), P25
+(BotEventLog), P26 (BotToolSurface).
 
 This document is the owning contract for the single `phone` MCP endpoint the
 Worker sees. It does not define a new transport: it reuses MCP Streamable HTTP,

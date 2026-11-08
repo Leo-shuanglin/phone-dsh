@@ -2,7 +2,7 @@
 
 # BotChatPage / Bot 卡片页面（target）
 
-契约：P09、P25。上游：dsh-bot `bf4075b0a2e8092b04b726c59a7b085d5a37e6f6` 的 `FEISHU-CARD-SYSTEM.md`、`CARD-UX-AUDIT.md`、`displayContract.js`、`cardPayloads.cjs`、卡片组件、Transcript、Composer、ActivityLine 和 FishDirector。目标实现路径：`examples/probe-app/PhoneDSHProbe/Bot/**`；当前不声明已有页面或运行时证据。
+契约：P09、P27。上游：dsh-bot `bf4075b0a2e8092b04b726c59a7b085d5a37e6f6` 的 `FEISHU-CARD-SYSTEM.md`、`CARD-UX-AUDIT.md`、`displayContract.js`、`cardPayloads.cjs`、卡片组件、Transcript、Composer、ActivityLine 和 FishDirector。目标实现路径：`examples/probe-app/PhoneDSHProbe/Bot/**`；当前不声明已有页面或运行时证据。
 
 ## 1. 页面与 session
 

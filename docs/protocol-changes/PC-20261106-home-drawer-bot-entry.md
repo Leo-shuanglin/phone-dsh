@@ -4,14 +4,14 @@
 
 ```yaml
 change: PC-20261106-home-drawer-bot-entry
-contracts: [P09, P16, P25]
+contracts: [P09, P16, P27]
 status: implemented
 base: f5e47b2bcc3bc4ae5ca9db598e1cbea09faf5581
 contract_revision: PC-20261106-home-drawer-bot-entry@1
 version_decision: 复用 pdsh.ui.page-structure/1 與 HomeDrawer 既有頁面契約；不新增 schema 欄位或版本，同 App bundle 配對升級。
 ```
 
-Protocol impact: P09; P16; P25。
+Protocol impact: P09; P16; P27。
 
 ## 1. 觸發與現狀
 

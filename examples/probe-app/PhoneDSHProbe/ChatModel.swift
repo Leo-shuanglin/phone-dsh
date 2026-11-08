@@ -967,19 +967,6 @@ final class ChatModel {
 
     private func attachBotRuntime(to host: PhoneDSHHost) async {
         guard let composition = botLaunch?.composition else { return }
-        // The Host recreates `phoneCapabilityBridge` on every engine launch, so
-        // the binding must read the *current* bridge instead of capturing the
-        // instance that existed when the binding was created.
-        if composition.deviceBinding == nil, phoneCapabilityBridge != nil {
-            composition.deviceBinding = try? await BotDeviceProviderBinding(
-                domain: composition.environment.domain, runtime: composition.runtime,
-                bridgeProvider: { [weak self] in self?.phoneCapabilityBridge },
-                onWake: { _ in
-                    Task { @MainActor [weak composition] in
-                        try? await composition?.deviceBinding?.ingress.deliverAvailable()
-                    }
-                })
-        }
         do {
             try await composition.start(host: host)
             botRuntimeState = composition.state

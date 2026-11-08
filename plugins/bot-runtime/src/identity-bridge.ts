@@ -9,6 +9,9 @@ import { BOT_VOLATILE_CONTEXT_TOOL } from './volatile-mcp.ts'
 
 export const PHONE_TOOL_PREFIX = 'mcp__phone__'
 export const NATIVE_PHONE_TOOL_PREFIX = 'mcp__phone__android_'
+// PR59's native-MCP BLE tools have their own per-connection grant and are
+// forwarded by the Bot server; they are not Bot-owned phone tools.
+export const NATIVE_BLE_TOOL_PREFIX = 'mcp__phone__ble_'
 export const DEFAULT_IDENTITY_TIMEOUT_MS = 5_000
 /** One registration must outlive the 300 s approval wait plus transport slack. */
 export const DEFAULT_IDENTITY_LIFETIME_MS = 330_000
@@ -65,6 +68,7 @@ export function identityRegisterUrl(env: NodeJS.ProcessEnv = process.env): strin
  */
 export function needsIdentityRegistration(name: string): boolean {
   if (name.startsWith(NATIVE_PHONE_TOOL_PREFIX)) return false
+  if (name.startsWith(NATIVE_BLE_TOOL_PREFIX)) return false
   if (name === 'bash' || name === 'write' || name === 'edit') return true
   return name.startsWith(PHONE_TOOL_PREFIX)
 }

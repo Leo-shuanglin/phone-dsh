@@ -661,16 +661,10 @@
           "glob": "docs/design/device-*.md"
         },
         {
-          "glob": "docs/protocol-changes/PC-20261106-bot-device-{ingress,event-envelope}.md"
-        },
-        {
           "glob": "android/domain/src/main/kotlin/com/phonedsh/domain/{device,connector}/**"
         },
         {
-          "glob": "examples/probe-app/ProbeKit/{Devices,Bot/Providers}/**"
-        },
-        {
-          "glob": "Sources/PhoneDSHBot/Providers/**"
+          "glob": "examples/probe-app/ProbeKit/Devices/**"
         }
       ],
       "status": [
@@ -680,10 +674,10 @@
         "android/domain/src/test/kotlin/com/phonedsh/domain/device/DeviceCapabilitiesSchemaTest.kt"
       ],
       "source": {
-        "authority": "host/v1 的 envelope／caps／receipt schema；[adapter draft](../docs/design/device-adapter-contract-draft.md)（`draft`）；[device ingress](../docs/protocol-changes/PC-20261106-bot-device-ingress.md)；[device event CCR](../docs/protocol-changes/PC-20261106-bot-device-event-envelope.md)",
-        "ends": "Kotlin `android/domain/.../{device,connector}`；Swift `examples/probe-app/ProbeKit/{Devices,Bot/Providers}`、`Sources/PhoneDSHBot/Providers`",
-        "evidence": "Kotlin `DeviceCapabilitiesSchemaTest`；Swift `BotDeviceProviderTests` 使用真實 SQLite 和假傳輸；第三方傳輸、真機斷連與端到端回執不由 schema 或單測保證",
-        "triggers": "`spec/host/v1/schema/device-*`、`spec/host/v1/golden/device-*`、`docs/design/device-*.md`、`docs/protocol-changes/PC-20261106-bot-device-{ingress,event-envelope}.md`、`android/domain/src/main/kotlin/com/phonedsh/domain/{device,connector}/**`、`examples/probe-app/ProbeKit/{Devices,Bot/Providers}/**`、`Sources/PhoneDSHBot/Providers/**`"
+        "authority": "host/v1 的 envelope／caps／receipt schema；[adapter draft](../docs/design/device-adapter-contract-draft.md)（`draft`）",
+        "ends": "Kotlin `android/domain/.../{device,connector}`；Swift `examples/probe-app/ProbeKit/Devices`",
+        "evidence": "Kotlin `DeviceCapabilitiesSchemaTest`；第三方傳輸與端到端回執不由 schema 保證",
+        "triggers": "`spec/host/v1/schema/device-*`、`spec/host/v1/golden/device-*`、`docs/design/device-*.md`、`android/domain/src/main/kotlin/com/phonedsh/domain/{device,connector}/**`、`examples/probe-app/ProbeKit/Devices/**`"
       }
     },
     {
@@ -1399,7 +1393,7 @@
       }
     },
     {
-      "id": "P23",
+      "id": "P25",
       "owner_role": "BotEventLog／effects owner",
       "authority": [
         "spec/bot/v1/event-envelope.schema.json",
@@ -1445,7 +1439,7 @@
       }
     },
     {
-      "id": "P24",
+      "id": "P26",
       "owner_role": "BotToolSurface／memory／wake／observability owner",
       "authority": [
         "spec/bot/v1"
@@ -1495,7 +1489,7 @@
       }
     },
     {
-      "id": "P25",
+      "id": "P27",
       "owner_role": "BotRows／UserAction owner",
       "authority": [
         "spec/bot/v1"

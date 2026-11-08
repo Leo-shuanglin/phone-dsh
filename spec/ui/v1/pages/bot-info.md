@@ -2,7 +2,7 @@
 
 # BotInfoPage（target）
 
-契约：P09、P23、P24。目标实现路径：`examples/probe-app/PhoneDSHProbe/Bot/**`。
+契约：P09、P25、P26。目标实现路径：`examples/probe-app/PhoneDSHProbe/Bot/**`。
 
 Bot 信息页使用 phoneDSH 现有设置页分组、列表和导航 token，展示并编辑由 runtime-context 注入的 Bot 名，提供记忆、Routines、审批记录三个真实数据入口。页面不得伪造条目数、授权状态或后台 session 过程；读取失败显示失败，不显示为零。
 

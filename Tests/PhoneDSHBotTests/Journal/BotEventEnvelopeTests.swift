@@ -18,19 +18,12 @@ final class BotEventEnvelopeTests: XCTestCase {
         let object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
         XCTAssertEqual((object["origin"] as! [String: Any])["kind"] as? String, "local")
         XCTAssertEqual(try codec.decode(encoded), decoded)
-
-        let deviceData = try JSONSerialization.data(withJSONObject: fixture["validDeviceEvent"] as! [String: Any])
-        let device = try codec.decode(deviceData)
-        XCTAssertEqual(device.eventId, "dev:device-a:1:m1")
-        XCTAssertEqual(device.origin, .local(source: "device:lan:device-a"))
-        XCTAssertEqual(device.principal.kind, "device")
-        XCTAssertEqual(try codec.decode(try codec.encode(device)), device)
     }
 
     func testFrozenGoldenInvalidEventsFailClosedWithFrozenCodes() throws {
         let fixture = try loadFixture()
         let invalid = fixture["invalid"] as! [[String: Any]]
-        XCTAssertEqual(invalid.count, 5)
+        XCTAssertEqual(invalid.count, 4)
         let codec = BotEventEnvelopeCodec()
         for vector in invalid {
             let data = try JSONSerialization.data(withJSONObject: vector["event"] as! [String: Any])

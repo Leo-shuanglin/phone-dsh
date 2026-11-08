@@ -2,7 +2,7 @@
 
 # phoneDSH Bot v1 契约
 
-状态：`target`。本目录冻结 P23 BotEventLog、P24 BotToolSurface、P25 BotRows 的共享语义；静态 schema/golden 通过不等于 Swift、Worker、模型或真机已经实现。
+状态：`target`。本目录冻结 P25 BotEventLog、P26 BotToolSurface、P27 BotRows 的共享语义；静态 schema/golden 通过不等于 Swift、Worker、模型或真机已经实现。
 
 唯一上游规格是 dsh-bot `bf4075b0a2e8092b04b726c59a7b085d5a37e6f6`，由 `dshbot-pin.json` 固定。除 Mac 专属和手机平台限制外，各子系统复用其语义。不得恢复 PR29 的 NativeToolLoop 主循环、Mandate、Ticket 或 MandateTokenStore。
 
@@ -22,11 +22,11 @@
 - `p0`：第一版 App MCP 和 persona 可以暴露的全部工具。
 - `p1`：`show_table`、`show_callout`、`show_info`、`show_payload`、`show_library`。本修订只冻结 schema 和 payload，标为 `target`；第一版不得注册到 App MCP，也不得写进 persona。
 
-`ReplyToDevice` 是 phoneDSH 宿主扩展（不来自 dsh-bot 0.78.4）：参数只有 `message`（1–1000），宿主从本回合 staged 的 `device-event` 解析来源设备/transport/映射 session，模型不能指定目标。效果为 `device.reply`、`external-send`、`ask`，`resource`/`target` 在执行点替换为具体设备与 transport session；来源不一致或授权不匹配一律拒绝。纯参数分类器把它登记为已知工具，返回 `golden/tool-effects.json` 的 `hostExtensions` 形状（`resource: device:*`、`execution: device-reply`）；`execute` 先解析 staged 来源，用 `BotDeviceReplyTool.requiredEffect` 的具体效果走通用 classify → 授权 → 执行路径，工具本身不再重复授权。完整规则见 `PC-20261106-bot-device-event-envelope@2` §2.4。
-
 `canvas`、`product`、`gift` 不在手机卡片词汇中。未知工具、未知 `cardType`、缺少渲染所需数据的卡片一律 fail-closed；工具返回失败，不生成半空卡片。
 
 `card-payload.schema.json` 的字段来自 dsh-bot `cardPayloads.cjs` 的白名单。`golden/card-payload.json` 是 `export-vectors.mjs` 的原样导出，不得手改；phoneDSH 对卡片负载的增量（宿主分配的 `optionID`、recommended 移到首位、负向 fixture）放在 `golden/card-payload.phone.json`，两个文件都由 `validate_vectors.py` 校验 schema/负向结果，并由 Swift `BotCardPayloadTests` 用真实 builder 对拍。重跑导出器后 `card-payload.json` 必须无 diff；`card-payload.phone.json` 不需要重新导出。链接只接受 HTTP/HTTPS；卡片数据必须自带，不能假设存在服务端 callback 补全。
+
+`golden/tool-effects.json` 的 `nativeMcp` 数组登记原生 MCP 的 BLE 工具分类（`ble_devices`、`ble_read`、`ble_alert`、`ble_link_tools`、`ble_link_call`、`ble_link_result`；经 Bot MCP 转发后模型看到 `mcp__phone__ble_*`）。读类为 `read + ask`，发送类为 `external-send + ask`；`resource` 取裁剪后的 `device_id`，没有则 `ble:*`，`ble_link_call` 还带 `name`。工具名来自 `spec/v1/native-mcp.md`「BLE tools」；設備須先在「設定 → 藍牙設備」中逐連接授權，Bot 的 ask 只是附加層。该数组是 phoneDSH 增量：重跑上游导出器只会覆盖上游批次，需把此数组合并回来。
 
 ### 2.1 volatile 上下文快照（WP2 CCR）
 
@@ -65,10 +65,6 @@ facts 是 SQLite 唯一权威。写入归一为单行；注入块逐字对齐；
 routine、cron、run-attempt、安静时段、silent/held/interrupt、held inbox、隐藏唤醒和 `<automation_status>` 与上游一致。安静时段延后而不是丢弃；urgent 必须有理由；WebContent 不可用时常驻宿主排队，恢复后依次运行且错过的只补一次。
 
 主动提醒规则链只用于 interrupt。iOS 通知深链为 `phonedsh://bot/<botID>/row/<rowID>`。推送中继不在本轮，只保留 WakeSignalSource 接口。
-
-### 4.1 设备 ingress
-
-设备消息先落 SQLite，再进入 held inbox。P07 envelope 的 `epoch`（缺省 0，非降序）标识设备 session incarnation，seq 作用域为 `(device, dir, epoch)`；`device.event` 使用 `eventId/traceId/correlationId = "dev:<device_id>:<epoch>:<msg_id>"`，`origin = device:<transport>:<device_id>`；principal 的 session 是个人 Agent 唯一连续主对话，kind 为 device，所有文本均不可信。每个 Bot 不为设备另建主 session，既有 DSH 设备管理路径不变。held kind 为 `device-event`，requestId 同样为 scoped ID，设备分支必填 `deviceID/transport/deviceSeq` 并可选 `deviceEpoch` 保存来源。去重键为 `(device_id, epoch, msg_id)`，同设备同 epoch 同 seq 唯一；乱序按每 epoch 的 delivered watermark 补齐，等待 30 s 或缓存超过 32 条时跳过缺口并写 `ui.notice`（`data.kind=device.gap`），崩溃后从 durable event 与 WakeInbox `deviceCursors` 恢复且不重放已入队历史。WebContent 不可用时 pending/staged，恢复后只补一次。蓝牙/LAN 原始扫描不能作为稳定身份或唤醒依据，工具仍走执行点再授权和全局 PhoneCapabilityGate。来源回复只允许 `ReplyToDevice`，由宿主解析本回合 staged 来源，效果为 `device.reply`/external-send/ask；`needs_reconciliation` 在重连时对账。完整映射以 `docs/protocol-changes/PC-20261106-bot-device-ingress.md` 和 `PC-20261106-bot-device-event-envelope@2` 为准。
 
 ## 5. 行与交互
 

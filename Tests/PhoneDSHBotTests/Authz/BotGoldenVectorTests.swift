@@ -14,7 +14,7 @@ final class BotGoldenVectorTests: XCTestCase {
         let source: Source
         let valid: [Call]
         let invalid: [Call]
-        let hostExtensions: [Call]?
+        let nativeMcp: [Call]?
     }
 
     private struct Call: Decodable {
@@ -59,19 +59,24 @@ final class BotGoldenVectorTests: XCTestCase {
         XCTAssertTrue(effect.detail.contains("limit="))
     }
 
-    /// R2: ReplyToDevice is a known host extension in the pure argument
-    /// classifier; the concrete device id is resolved before execution.
-    func testReplyToDeviceHostExtensionMatchesSharedGolden() throws {
+    /// PR59's native-MCP BLE tools are classified by the same shared table so
+    /// they never fall into `tool.unclassified`. The real authorization gate is
+    /// PR59's per-connection grant; the Bot ask is an additional layer.
+    func testBleNativeMcpEffectsMatchSharedGolden() throws {
         let vector = try JSONDecoder().decode(ToolVector.self, from: golden("tool-effects"))
-        let extensions = try XCTUnwrap(vector.hostExtensions)
-        XCTAssertEqual(extensions.map(\.name), [BotToolCatalog.deviceReplyName])
-        for call in extensions {
+        let entries = try XCTUnwrap(vector.nativeMcp)
+        XCTAssertEqual(entries.map(\.name).sorted(), [
+            "mcp__phone__ble_alert", "mcp__phone__ble_devices", "mcp__phone__ble_link_call",
+            "mcp__phone__ble_link_result", "mcp__phone__ble_link_tools", "mcp__phone__ble_read",
+        ])
+        for call in entries {
+            XCTAssertEqual(call.policy, .ask)
             let actual = BotToolEffectClassifier.effect(
                 for: call.name, arguments: call.args, language: .zh)
-            XCTAssertEqual(actual, call.effect, "host extension mismatch for \(call.name)")
+            XCTAssertEqual(actual, call.effect, "BLE effect mismatch for \(call.name)")
             XCTAssertTrue(actual.known)
-            XCTAssertEqual(actual.resource, "device:*")
-            XCTAssertEqual(actual.execution, "device-reply")
+            XCTAssertTrue(actual.isMcp)
+            XCTAssertNotEqual(actual.operation, "tool.unclassified")
         }
         let unknown = BotToolEffectClassifier.effect(for: "GenerateImage", arguments: .object([:]))
         XCTAssertFalse(unknown.known)

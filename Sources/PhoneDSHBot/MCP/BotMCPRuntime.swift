@@ -293,39 +293,10 @@ public actor BotMCPRuntime {
                 return .success(snapshot.jsonValue)
             }
             let effect = BotToolEffectClassifier.effect(for: bareName, arguments: arguments)
-            var executionEffect = effect
-            var replyAuthorization: BotDeviceReplyTool.Authorization?
-            if bareName == BotToolCatalog.deviceReplyName {
-                // Host extension: the pure classifier knows only the staged
-                // `device:*` shape. Resolve the staged source and authorize the
-                // concrete device/session effect (tool-effects.json
-                // hostExtensions); the model still cannot name a destination.
-                _ = try BotDeviceReplyTool.validatedMessage(arguments)
-                let source = try await BotDeviceReplyTool.resolveSource(
-                    store: store, botID: call.principal.botId)
-                if let mainSessionID = source.mainSessionID, call.sessionId != mainSessionID {
-                    return .failure("unauthorized",
-                                    "ReplyToDevice source session does not match the caller")
-                }
-                executionEffect = BotDeviceReplyTool.requiredEffect(for: source)
-                guard executionEffect.tool == effect.tool,
-                      executionEffect.operation == effect.operation else {
-                    return .failure("permission_denied", "device-reply-effect-mismatch")
-                }
-                let decision = await authorizer.authorizeExecution(
-                    principal: BotExecutionPrincipal(gateway: call.principal),
-                    effects: [executionEffect], source: "app-mcp-execution",
-                    argsDigest: call.attribution.argsDigest)
-                guard decision.allowed else {
-                    return .failure("permission_denied", decision.reason)
-                }
-                replyAuthorization = BotDeviceReplyTool.Authorization(
-                    source: source, decision: decision)
-            } else if let reason = await authorize(call: call, effect: executionEffect) {
+            if let reason = await authorize(call: call, effect: effect) {
                 return .failure("permission_denied", reason)
             }
-            return try await dispatch(name: bareName, arguments: arguments, call: call,
-                                      replyAuthorization: replyAuthorization)
+            return try await dispatch(name: bareName, arguments: arguments, call: call)
         } catch let error as BotMCPError {
             return .failure(Self.code(error), Self.message(error))
         } catch let error as BotCardPayloadError {
@@ -345,8 +316,7 @@ public actor BotMCPRuntime {
     }
 
     private func dispatch(name: String, arguments: BotJSONValue,
-                          call: BotResolvedToolCall,
-                          replyAuthorization: BotDeviceReplyTool.Authorization? = nil) async throws -> BotMCPCallResult {
+                          call: BotResolvedToolCall) async throws -> BotMCPCallResult {
         if BotToolCatalog.cardToolNames.contains(name) {
             let built = try BotCardPayloads.build(tool: name, arguments: arguments)
             guard case .object(let result) = built, let card = result["card"] else {
@@ -377,10 +347,6 @@ public actor BotMCPRuntime {
         case "ListRoutines": return .success(try await BotRoutineTool.list(machine: routineMachine, principal: call.principal))
         case "RequestApproval": return try await requestApproval(arguments, call: call)
         case "SendToUser": return try await sendToUser(arguments, call: call)
-        case BotToolCatalog.deviceReplyName:
-            return .success(try await BotDeviceReplyTool.reply(
-                arguments: arguments, call: call, store: store, authorizer: authorizer,
-                authorization: replyAuthorization))
         default: throw BotMCPError.unknownTool(name)
         }
     }
@@ -563,9 +529,6 @@ public actor BotMCPRuntime {
     private func effectsForApproval(name: String, botID: String,
                                     arguments: BotJSONValue) async -> [BotToolEffect] {
         if name == BotToolCatalog.volatileContextName { return [] }
-        if name == BotToolCatalog.deviceReplyName {
-            return await BotDeviceReplyTool.requiredEffects(store: store, botID: botID)
-        }
         if ["bash", "write", "edit"].contains(name) {
             if name == "bash" {
                 return BotApprovalPatternAnalyzer.effects(tool: name, arguments: arguments, workspace: "/dsh/workspace")

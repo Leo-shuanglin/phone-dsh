@@ -58,21 +58,6 @@
     },
     "committed": {
       "removed": 1
-    },
-    "device": {
-      "id": "dev:living-room-light:1:ble-1",
-      "kind": "device-event",
-      "text": "客厅灯已离线",
-      "requestId": "dev:living-room-light:1:ble-1",
-      "createdAt": 1760000001000,
-      "fromAgentId": "living-room-light",
-      "fromAgentName": "客厅灯",
-      "threadId": "device:living-room-light",
-      "deviceID": "living-room-light",
-      "transport": "bluetooth",
-      "deviceSeq": 7,
-      "deviceEpoch": 1,
-      "state": "pending"
     }
   },
   "invalid": [
@@ -87,28 +72,6 @@
       "state": "staged",
       "stagedKey": "",
       "reason": "missing_staged_key"
-    },
-    {
-      "id": "dev:no-transport",
-      "kind": "device-event",
-      "text": "x",
-      "requestId": "dev:no-transport",
-      "createdAt": 1,
-      "state": "pending",
-      "deviceID": "device-a",
-      "deviceSeq": 1,
-      "reason": "missing_device_transport"
-    },
-    {
-      "id": "dev:no-seq",
-      "kind": "device-event",
-      "text": "x",
-      "requestId": "dev:no-seq",
-      "createdAt": 1,
-      "state": "pending",
-      "deviceID": "device-a",
-      "transport": "lan",
-      "reason": "missing_device_seq"
     }
   ]
 }

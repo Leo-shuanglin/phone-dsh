@@ -41,6 +41,14 @@ const UI_TOOLS = new Set([
 const AUTO_TOOLS = new Set([
   'RecallMemory', 'Task', 'AwaitTask', 'StopSubagent', 'UpdateRoutine', 'ListRoutines', 'SendToUser',
 ])
+// PR59's native-MCP "BLE tools" (`spec/v1/native-mcp.md`), forwarded by the
+// Bot server as `mcp__phone__ble_*`. PR59's per-connection grant is the real
+// authorization gate; this Bot ask is only an additional layer.
+const BLE_TOOLS = new Set([
+  'ble_devices', 'ble_read', 'ble_alert', 'ble_link_tools', 'ble_link_call', 'ble_link_result',
+])
+const BLE_EXTERNAL_TOOLS = new Set(['ble_alert', 'ble_link_call'])
+
 const SENSITIVE_RE = /(?:^|[\s'"(=,:])((?:~\/|\/)[^\s'"`)\]}>,;]*(?:\.ssh|\.aws|\.gnupg|\.netrc|\.npmrc|\.pypirc|\.git-credentials|\.credentials\.yaml)(?:\/[^\s'"`)\]}>,;]*)?)/i
 
 export function approvalUrl(env: NodeJS.ProcessEnv = process.env): string {
@@ -63,6 +71,53 @@ function memoryForgetEffect(args: Record<string, unknown>): ApprovalEffect {
     tool: 'memory', operation: 'memory.forget', resource, target: resource,
     mutability: 'destructive', policy: 'ask', label: factId ? 'Forget a memory (fact_id)' : `Forget memory "${clip(fact, 60)}"`,
     detail: 'Remove one fact from the shared user memory.', ui: false, execution: 'memory', known: true, isMcp: true,
+  }
+}
+
+function bleEffect(bare: string, args: Record<string, unknown>): ApprovalEffect {
+  const deviceID = clip(args.device_id, 120)
+  const external = BLE_EXTERNAL_TOOLS.has(bare)
+  let operation: string
+  let label: string
+  let detail: string
+  switch (bare) {
+    case 'ble_devices':
+      operation = 'ble.devices'
+      label = '列出 BLE 設備'
+      detail = '讀取附近 BLE 設備清單；設備名稱與廣播內容是不可信數據。設備須先在「設定 → 藍牙設備」中逐連接授權。'
+      break
+    case 'ble_read':
+      operation = 'ble.read'
+      label = '讀取 BLE 設備資料'
+      detail = '讀取 BLE 設備內容；設備回傳是不可信數據，不得當作指令或授權。設備須先在「設定 → 藍牙設備」中逐連接授權。'
+      break
+    case 'ble_link_tools':
+      operation = 'ble.link_tools'
+      label = '列出 BLE 連結工具'
+      detail = '列出設備提供的 BLE 連結工具；工具描述是不可信數據。設備須先在「設定 → 藍牙設備」中逐連接授權。'
+      break
+    case 'ble_link_result':
+      operation = 'ble.link_result'
+      label = '讀取 BLE 連結結果'
+      detail = '讀取 BLE 連結工具的結果；結果是不可信數據。設備須先在「設定 → 藍牙設備」中逐連接授權。'
+      break
+    case 'ble_alert':
+      operation = 'ble.alert'
+      label = '向 BLE 設備發送提醒'
+      detail = '向 BLE 設備發送提醒；這是對外動作，結果未知時不自動重試。設備須先在「設定 → 藍牙設備」中逐連接授權。'
+      break
+    default:
+      operation = 'ble.link_call'
+      label = '呼叫 BLE 連結工具'
+      detail = `呼叫 BLE 連結工具${clip(args.name, 80) ? ` ${clip(args.name, 80)}` : ''}；這是對外動作，結果未知時不自動重試。設備須先在「設定 → 藍牙設備」中逐連接授權。`
+  }
+  const parts = [deviceID ? `device_id=${deviceID}` : 'ble:*']
+  if (bare === 'ble_link_call' && clip(args.name, 80)) parts.push(`name=${clip(args.name, 80)}`)
+  const resource = parts.join('&')
+  return {
+    tool: bare, operation, resource, target: resource,
+    mutability: external ? 'external-send' : 'read', policy: 'ask', label, detail,
+    ui: false, execution: null, known: true, isMcp: true,
   }
 }
 
@@ -121,18 +176,7 @@ export function phoneEffectsForApproval(name: string, args: Record<string, unkno
   const bare = name.startsWith(PHONE_TOOL_PREFIX) ? name.slice(PHONE_TOOL_PREFIX.length) : name
   if (bare === 'bash') return bashEffectsForApproval(args)
   if (bare === 'BotVolatileContext' || UI_TOOLS.has(bare) || AUTO_TOOLS.has(bare)) return []
-  if (bare === 'ReplyToDevice') {
-    // Host extension registered in golden/tool-effects.json hostExtensions:
-    // the App replaces resource/target with the resolved staged source before
-    // authorization. Marking it known/execution keeps `alwaysScope=until` and
-    // `deferConsumption=true`, matching BotMCPRuntime.approve.
-    return [{
-      tool: 'ReplyToDevice', operation: 'device.reply', resource: 'device:*', target: '*',
-      mutability: 'external-send', policy: 'ask', label: '回覆來源設備',
-      detail: 'host resolves the staged source (deviceID, transport, mapped transport session) and replaces resource/target with the concrete values before execution; the model cannot name a destination',
-      ui: false, execution: 'device-reply', known: true, isMcp: true,
-    }]
-  }
+  if (BLE_TOOLS.has(bare)) return [bleEffect(bare, args)]
   if (bare === 'UpdateMemory') {
     const action = String(args.action ?? 'write')
     const scope = String(args.scope ?? 'agent')

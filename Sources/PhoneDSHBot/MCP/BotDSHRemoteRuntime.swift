@@ -19,7 +19,7 @@ public struct BotRemoteTurnResult: Sendable, Equatable {
     }
 }
 
-public actor BotDSHRemoteRuntime: BotTaskExecuting, BotTaskRestarting, BotDeviceMessageDelivering {
+public actor BotDSHRemoteRuntime: BotTaskExecuting, BotTaskRestarting {
     /// Durable task projection. It is stored as `persistedTask` inside the
     /// existing `task.created`/`task.updated` events, so no new table, event
     /// type or wire field is introduced.
@@ -609,22 +609,6 @@ public actor BotDSHRemoteRuntime: BotTaskExecuting, BotTaskRestarting, BotDevice
     }
 
     public func mainSessionIdentifier() -> String? { mainSessionId }
-
-    public func deliverDeviceMessages() async throws {
-        let sessionId = try await ensureMainSession()
-        let staged = try await wakeInbox?.stage(now: now(), kind: "device-event")
-        guard let stagedKey = staged?.key, let items = staged?.items, !items.isEmpty else { return }
-        do {
-            let prompt = HeldMessages.block(items: items)
-            _ = try await runTurn(
-                sessionId: sessionId, kind: .chat, prompt: prompt, hidden: true, held: true,
-                requestId: Self.deliveryRequestId(prefix: "device", items: items))
-            _ = try await wakeInbox?.commit(stagedKey)
-        } catch {
-            _ = try await wakeInbox?.revert(stagedKey)
-            throw error
-        }
-    }
 
     public func isAvailable() async -> Bool {
         guard let mainSessionId else { return false }

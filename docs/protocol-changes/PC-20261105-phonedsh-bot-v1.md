@@ -4,7 +4,7 @@
 
 ```yaml
 change: PC-20261105-phonedsh-bot-v1
-contracts: [P23, P24, P25, P12, P09, P13]
+contracts: [P25, P26, P27, P12, P09, P13]
 status: frozen
 breaking: false
 version_decision: Bot schemaVersion=1；Swift 宿主与 Worker 同一 App bundle 配对升级；不改变 P01/P15 wire 或生命周期版本。
@@ -12,14 +12,14 @@ base: 07585efb2a71daa2e05f55c83abcfb4a2cb39f4d
 contract_revision: 30b306c96f57aace6d3275cad9a23142ecb7bf3c
 ```
 
-Protocol impact: P23; P24; P25; P12; P09; P13。
+Protocol impact: P25; P26; P27; P12; P09; P13。
 
 ## 1. 识别与角色
 
 - 具体 trigger → 现况 → 期望：原 DSH 工作台没有统一 Bot 事件、工具、行和常驻宿主边界；PR29 的自建 Swift 主循环、Mandate/Ticket 不合并且不得恢复。现在以 dsh-bot `bf4075b0a2e8092b04b726c59a7b085d5a37e6f6` 为唯一上游，WKWebView Worker 中的 DSH session 作为大脑，Swift 宿主承担确定性常驻能力。
 - 协调者兼 contract owner / reviewer-integrator：本 session 主 Agent。只有该角色修改 `spec/`、本变更单和共享 fixture，并审查同一集成 head 的合并后 diff。
 - 实现者：WP1–WP12 各自隔离 worktree/分支；只在下列独占路径工作。WP7、WP10、WP11、WP12 按依赖排队，不提前开工。
-- Owning spec：`spec/README.md` P23–P25、`spec/bot/v1/README.md`、同目录 schema/golden、`spec/ui/v1/pages/bot-{chat,info}.md`；P12 仍由 `Package.swift`/native ABI 规则所有，P09 仍由 `spec/ui/v1` 所有。
+- Owning spec：`spec/README.md` P25–P27、`spec/bot/v1/README.md`、同目录 schema/golden、`spec/ui/v1/pages/bot-{chat,info}.md`；P12 仍由 `Package.swift`/native ABI 规则所有，P09 仍由 `spec/ui/v1` 所有。
 - 受影响 producer/consumer：dsh-bot 只读规格与向量导出器；TypeScript `plugins/bot-runtime`、既有 `phone-mcp`/profile；Swift `PhoneDSHBot`、ProbeKit App 胶水、SwiftUI Bot 页面；iOS 通知与后台能力。P01 Rust/Kotlin wire、P15 控制端点和现有 DSH 多 session 工作台不改。Android/HarmonyOS 不在本轮 Bot 实现范围。
 - 上游固定：dsh-bot #23 `1730bf08d2dc29fc8c08f3de90ed70ba9d734d1e`、#24 `28437f5d975230766f3f40463fa090d643f63e7c` 已包含；phone-dsh DSH pin 为 `7be5505b0be06009d74891c869063c9cf19a0df0`。
 - PR29 只能从 `61c99054` 用 `git show` 移植 SQLiteDomainStore、loopback/App MCP、通知发送；禁止带入 NativeMainAgentAdapter、NativeToolLoop 主循环、Mandate、Ticket、MandateTokenStore。
@@ -28,7 +28,7 @@ Protocol impact: P23; P24; P25; P12; P09; P13。
 
 | 项目 | Before → After / 依据条款 |
 | --- | --- |
-| 协议登记 | 无 Bot owner → P23 BotEventLog/effects、P24 BotToolSurface/memory/wake/observability、P25 BotRows/UserAction；触发路径和 registry 同步生成。 |
+| 协议登记 | 无 Bot owner → P25 BotEventLog/effects、P26 BotToolSurface/memory/wake/observability、P27 BotRows/UserAction；触发路径和 registry 同步生成。 |
 | fields / encoding / limits | 新增 v1 JSON schema 与 18 组 golden。事件 `schemaVersion=1`、SQLite 分配 `commitSeq`；工具分 P0/P1；行使用 `botID/seq/updatedSeq/cursor`；LLM 账本记录四类 token、TTFT 和耗时；具体类型、必填、上限以 `spec/bot/v1/*.schema.json` 为唯一权威。 |
 | 卡片与工具面 | P0 包含 ask/steps/task/attachment/document/progress/checklist/link、记忆、Task、routine、审批和 SendToUser；P1 table/callout/info/payload/library 仅为 target，不进第一版 persona/App MCP。canvas/product/gift、Mac/Box/Team/CloudAgent/GenerateImage 不开放。 |
 | capability / version / unknown | 宿主与 Worker 同 bundle 配对。未知 cardType、数据不足卡片 fail-closed；未知工具拒绝；不新增 `PDSH_*` env。未知 context profile 回退 default。 |
@@ -48,7 +48,7 @@ Protocol impact: P23; P24; P25; P12; P09; P13。
 
 | Producer → Consumer | 支持 / 拒绝方式及对应证据 |
 | --- | --- |
-| old → new | 既有 DSH Worker/宿主协议不变；新版继续读既有会话。此前没有已发布的 P23–P25 producer，不存在旧 Bot v0 兼容承诺。 |
+| old → new | 既有 DSH Worker/宿主协议不变；新版继续读既有会话。此前没有已发布的 P25–P27 producer，不存在旧 Bot v0 兼容承诺。 |
 | new → old | 旧 App 没有 Bot MCP、行消费者和页面，不宣称能消费新 Bot 数据；不得把新 Worker 与旧宿主混部。静态兼容不表示旧 App 可运行 Bot。 |
 | new → new | 同一 App bundle 配对；真实 codec/状态机必须读取共享有效/无效 golden。当前只有 Python schema 与 Swift 骨架证据，WP 实现证据尚未产生。 |
 | persisted old data → new / rollback | PR29 MemoryStore 无线上数据，不迁移。新 Bot SQLite 从 v1 开始；旧版无 Bot 入口，回滚时保留新库且不自动删除/降级，旧版不会读取它。 |
@@ -122,28 +122,28 @@ python3 spec/bot/v1/tools/validate_vectors.py
 | `784cd28e4be998477f4ab1d25bb7967d2cfa0a49` | contract owner / 主 Agent | WP2 CCR-2：冻结现有 phone App MCP 的 BotVolatileContext 请求/响应、发现名、scope、大小、迟到结果和错误语义；WP2 consumer、WP7 Swift producer。CCR-1 workspace/image 收录由协调者处理，不属于协议变更 | WP2 重新分派；WP7 按此实现 producer |
 | `0074475d322395f6cdb06caa42ea391a214bd0da` | contract owner / 主 Agent | 上游基线升级为 DSH Bot bf4075b；golden 除来源 SHA 无语义差异。补充 Bot 色彩、composer 活动行、简洁回复/next-step、真实鱼素材与 FishDirector 状态映射。用户已明确头像资产授权 | WP7/WP9 按新基线接线；其余 WP 无需变更 |
 | `3c7a6efaab5d95b71cbceb7b69d900f5e8665552` | contract owner / 主 Agent | 新增 FishDirector schema/golden 与纯 Swift 对拍实现；纳入真实 512px 头像资源及 BotFishAvatar。20 组向量、127 个 Bot 测试通过 | WP9 直接消费公共状态机和资产；WP7 提供真实事件 |
-| `7214962fc4ca51f1bdfd60b25b49dc2997131a40` | contract owner / 主 Agent | 接受 WP7 durable-action CCR；SQLite v2 同事务提交动作事件、effects 和 nonce，保留 P25 wire 与既有结果类型 | transaction 实现者、WP7、WP9 |
+| `7214962fc4ca51f1bdfd60b25b49dc2997131a40` | contract owner / 主 Agent | 接受 WP7 durable-action CCR；SQLite v2 同事务提交动作事件、effects 和 nonce，保留 P27 wire 与既有结果类型 | transaction 实现者、WP7、WP9 |
 | `30b306c96f57aace6d3275cad9a23142ecb7bf3c` | contract owner / 主 Agent | 集成审查发现 Grant 重启丢失与旧调用身份漂移；冻结 SQLite Grant 快照恢复和 principal incarnation 绑定 | WP4 后续修复、WP7 |
 | PR #60 cards worktree（待主会话提交） | 卡片修復工作區 | 宿主分配 optionID、card.answered/card.dismissed 狀態、關閉改 durable 事件加 held 提示、禁止 cardAnswer text/customText、recommended 歸一與 golden/tools-list 對拍；詳見 §11 | WP7/WP8/WP9；主會話 review |
 
 ## 7. WP7 CCR：durable user-action transaction
 
-接受 `Sources/PhoneDSHBot/MCP/CONTRACT_CHANGE_REQUEST.md` 报告的“handler 已执行、nonce 未持久化”崩溃窗口。P24/P25 的 JSON wire、`BotUserAction`、`BotActionResult` 和既有 golden 不变，不增加第二套 action envelope 或 result 别名。
+接受 `Sources/PhoneDSHBot/MCP/CONTRACT_CHANGE_REQUEST.md` 报告的“handler 已执行、nonce 未持久化”崩溃窗口。P26/P27 的 JSON wire、`BotUserAction`、`BotActionResult` 和既有 golden 不变，不增加第二套 action envelope 或 result 别名。
 
 - **计划接口**：`BotUserActionPlanning.plan(_:trust:) -> BotUserActionPlanOutcome` 替代会产生副作用的旧 handler。outcome 是 `commit(BotUserActionPlan)`、`stale(reason)` 或 `rejected(reason)`；plan 只含一个 durable `BotEvent` 和零至多个 `BotEffect`。planner 只能验证、授权和生成计划，不得调用 DSH prompt、恢复审批 continuation、写卡片、访问网络或文件。
 - **事务接口**：`SQLiteDomainStore.performAndRecord(action:plan:) -> BotActionResult` 是唯一生产提交入口。它在同一 `BEGIN IMMEDIATE` 事务内检查 nonce、提交事件、effects/outbox 与 `(botID,nonce)→eventID`；成功返回 accepted，已有 nonce 返回原 eventID 的 duplicate。planner 的 stale/rejected 不消耗 nonce。
 - **dispatcher**：`BotUserActionDispatcher` 先查持久 nonce，再只对未消费动作生成计划，最后调用上述单一事务；进程内相同 key 共用同一 Task，已 accepted 的并发重放返回 duplicate。旧的“先 handler.perform、后 nonceStore.record”不得用于生产，也不得通过内存 nonce 或调整记录顺序规避。
 - **原子性边界**：崩溃发生在 commit 前，事件、effects 和 nonce 全部回滚；commit 后重放为 duplicate。不得宣称 DSH、网络、文件或其他进程外部副作用 exactly-once；它们由 outbox 的至少一次投递、inbox 去重及 needs-reconciliation 处理。
-- **SQLite v2**：只新增 nonce 表和索引，既有 v1 数据原地保留。旧 v1 App 回滚时明确拒绝 v2 库，不自动删库或降级。`user_version=2` 和迁移/崩溃测试属于 P23/P25 实现契约，JSON schema 无需改版本。
+- **SQLite v2**：只新增 nonce 表和索引，既有 v1 数据原地保留。旧 v1 App 回滚时明确拒绝 v2 库，不自动删库或降级。`user_version=2` 和迁移/崩溃测试属于 P25/P27 实现契约，JSON schema 无需改版本。
 - **验证**：真实 SQLite 覆盖 v1→v2、并发 duplicate、事件/effect/nonce 同事务、before-commit/after-handler 等崩溃点重开；拒绝和 stale 后允许修正重试。测试不能用 mock nonce 代替数据库，也不能把普通 reopen duplicate 当成崩溃证据。
 - **路径重分配**：一个新的后续工作包拥有 `Sources/PhoneDSHBot/{Store,Journal,Rows}/**` 及对应测试中的 transaction 改动；WP7 只接 `MCP/**` planner/host adapter，WP9 只改 UI caller/fixture，均不得复制 nonce 表或事务。
-- **兼容性**：UI、Worker、Swift host 同 App bundle 更新，P25 wire 不变；旧持久 Bot v1 数据可升级，旧 App 不能读取 v2，与上述回滚拒绝规则一致。
+- **兼容性**：UI、Worker、Swift host 同 App bundle 更新，P27 wire 不变；旧持久 Bot v1 数据可升级，旧 App 不能读取 v2，与上述回滚拒绝规则一致。
 
 验收命令：`swift test --filter PhoneDSHBotTests`；`python3 spec/bot/v1/tools/validate_vectors.py`；`bash scripts/ci/check.sh --only phone-spec,phone-p0-conformance,phone-cross-tree`。冻结提交的 SHA 在推送后通知 WP7/WP9 和 transaction 实现者。
 
 ## 8. 集成审查 CCR：Grant 恢复与 session incarnation
 
-核心审查证明仅有内存 Grant 会在重启后丢失 standing deny，进而让 auto 写操作错误放行。冻结以下最小修订，不改变 P24 的工具 schema、Grant 匹配规则、deny 优先或审批结果：
+核心审查证明仅有内存 Grant 会在重启后丢失 standing deny，进而让 auto 写操作错误放行。冻结以下最小修订，不改变 P26 的工具 schema、Grant 匹配规则、deny 优先或审批结果：
 
 - 在现有 BotEvent/SQLite 中增加 `authz.grant_snapshot` 持久投影，保存完整当前 Grant 集合。其 `canonicalResource` 等匹配字段与上游 `grantEventData` 同义；这是恢复授权所需的状态投影，不是放宽“审计只存摘要”。继续使用 §7 的 SQLite v2，不新增平行数据库、grant wire envelope 或 schema v3。
 - 生产启动必须先 replay 最后一份完整快照并验证全部 Grant，再开放执行；恢复失败 fail-closed。add/extend/consume/revoke 持久化成功后才公开新状态；once 不得因 actor 重入或崩溃复活。standing deny、session/until allow 的既有 TTL 和 scope 不变。
@@ -166,7 +166,7 @@ python3 spec/bot/v1/tools/validate_vectors.py
 
 §9 的独立 BotDock 工作包已按用户要求停止，不在本轮继续实现。用户随后单独要求对齐所有消息卡片的样式与手机尺寸，因此本修订只恢复卡片本身的紧凑呈现，不恢复底栏或其他视觉工作。
 
-- question/steps 没有“其他”选项、卡内输入框或自定义答案提交。卡片生成时由宿主分配稳定 `optionID`（`o0`…`o3`），`cardAnswer` 只接受 `cardID + optionID`，planner 校验该 ID 属于原卡；选项的 `value ?? label` 作为普通新聊天消息，自由文本只能走普通 `chat`。P25 target schema 直接删除 `customText`，并禁止 `cardAnswer` 携带 `text`/`customText`；Swift 解码同样拒绝，不保留别名；此前未发布该 target，不宣称旧版兼容。
+- question/steps 没有“其他”选项、卡内输入框或自定义答案提交。卡片生成时由宿主分配稳定 `optionID`（`o0`…`o3`），`cardAnswer` 只接受 `cardID + optionID`，planner 校验该 ID 属于原卡；选项的 `value ?? label` 作为普通新聊天消息，自由文本只能走普通 `chat`。P27 target schema 直接删除 `customText`，并禁止 `cardAnswer` 携带 `text`/`customText`；Swift 解码同样拒绝，不保留别名；此前未发布该 target，不宣称旧版兼容。
 - 仅 question 支持关闭，步骤卡不提供关闭动作，`cardDismiss` 对 steps 返回 rejected。关闭写 durable `card.dismissed`，只做本地隐藏，不产生模型可见消息、审批拒绝或额外模型回合；宿主在下一次用户回合开头以 held 项告知模型“视为不回答、不要在同一话题重问”。DSH 不可用时关闭仍立即提交本地 durable 事件。回答写 durable `card.answered`；已回答、已关闭或已过期的卡再次提交返回 stale，新 question/steps 卡出现时旧的 open 选择卡过期。同一回合不得反复弹回。选项选择不是 approval，也不触发独立 approval grant。
 - 工具输入为 2–4 个选项；无有价值下一步时不调用工具，禁止空卡或凑选项。对象字段只含 `label/value/style/recommended/description`，steps 另允许字符串简写。推荐归一以第一个合法推荐胜出并移到第一位，其余 primary 降为 default，danger 不推荐；这与上游运行时一致，不把多推荐直接抛成工具错误。
 - 所有消息卡片与同一 assistant 回复气泡共享唯一 `BotMessageColumn`，宽度不得超过该气泡，不额外增加外边距，不使用 transcript 内全屏/居中模态。question/steps 内距 12、选项视觉高 44、间距 4、默认透明；recommended 才使用轻 tint、细边和徽标。其他工作/产出/审批/Task/routine/notice 卡同样受此列宽与紧凑内容约束。
@@ -186,3 +186,7 @@ python3 spec/bot/v1/tools/validate_vectors.py
 - **推薦約束**：`BotToolCatalog` 的 `ask_user`/`show_next_steps` 運行時描述寫明「最多一個 recommended、不能推薦 danger、放第一位」；builder 把第一個合法 recommended/primary 移到第一位並降級其餘 primary。`golden/card-payload.phone.json` 增加多 recommended、danger 被推薦、推薦不在第一位和 danger-only 的歸一向量，並由真實 Swift builder 對拍。新增測試比對 `tools/list` 與 `golden/tool-catalog.json` 的 P0 名稱及 required schema。
 - **Golden 來源（兩個文件的分工）**：`golden/card-payload.json` 保持 `spec/tools/bot/export-vectors.mjs` 的原樣導出，不手改；重跑導出器後必須無 diff。phoneDSH 的增量（宿主分配 `optionID`、recommended 移到首位、負向 fixture）放在 `golden/card-payload.phone.json`。`validate_vectors.py` 用同一 `card-payload.schema.json` 校驗兩者的正向向量，並要求負向向量 `ok=false`，同時拒絕上游文件出現 option `id`。`BotCardPayloadTests` 用真實 Swift builder 對拍：上游向量按去掉 option id 後的形狀比較，phone 增量按完整結果比較。若把增量寫回上游文件，導出會產生 diff 且上游一致性檢查失敗。
 - **相容性**：新事件類型對舊 App 是未知非 ignorable durable event，舊版回滾不得跳過或靜默丟棄；必須同 bundle 升級。既有 durable 資料保留，沒有 schema 版本 bump，也不修改 P01/P02/P03/P15 訊息。`card.presented` 新增 `id` 是 additive field；未發布的舊 Bot 卡片沒有選項 ID，只能 stale 而不能靠 label 回答。
+
+## 12. 修訂：設備 ingress 撤出與 Bot 契約改號
+
+設備 ingress（`device.event`、held `device-event`、`ReplyToDevice`、P07 envelope 的 `epoch`）已從 PR #60 撤出，原實現見 commit `b54a5c46`。P07 設備契約以 PR #59 的 `spec/device/v1/**` 為權威；本 PR 不再改動 `spec/host/v1/device-*`，也不再把設備消息 held 進有工具的主 Bot session。後續設備→Bot 要按 PR #59 的 `task-delegation`（隔離且無工具的 session、終態回執）重新設計。Bot 協議號已改為 P25/P26/P27（原 P23/P24/P25）：P25 BotEventLog、P26 BotToolSurface、P27 BotRows；`spec/registry.json` 由 `spec/tools/registry_build.py` 重新生成。

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import { test } from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -9,6 +10,7 @@ import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import { BotRuntimeRemote, BotStreamHub } from '../bot-runtime/src/channel.ts'
 import dshbotIdentityBridge, { argsDigest, needsIdentityRegistration } from '../bot-runtime/src/identity-bridge.ts'
 import dshbotApprovalGate, { needsStructuralApproval, phoneEffectsForApproval } from '../bot-runtime/src/approval-gate.ts'
+import type { ApprovalEffect } from '../bot-runtime/src/approval-gate.ts'
 
 const WORKBENCH_SESSION = 'session-workbench'
 
@@ -328,26 +330,35 @@ test('identity unknown_tool fails closed for every registration-required tool', 
   }
 })
 
-test('ReplyToDevice approval payload matches the shared host extension', async () => {
-  const effects = phoneEffectsForApproval('mcp__phone__ReplyToDevice', { message: '已收到' })
-  assert.equal(effects.length, 1)
-  assert.equal(effects[0]!.tool, 'ReplyToDevice')
-  assert.equal(effects[0]!.operation, 'device.reply')
-  assert.equal(effects[0]!.resource, 'device:*')
-  assert.equal(effects[0]!.target, '*')
-  assert.equal(effects[0]!.mutability, 'external-send')
-  assert.equal(effects[0]!.policy, 'ask')
-  assert.equal(effects[0]!.execution, 'device-reply')
-  assert.equal(effects[0]!.known, true)
-  assert.equal(needsStructuralApproval('mcp__phone__ReplyToDevice'), true)
-  assert.equal(needsIdentityRegistration('mcp__phone__ReplyToDevice'), true)
+test('BLE native-MCP effects match the shared golden and stay ask-gated', async () => {
+  const golden = JSON.parse(fs.readFileSync(
+    new URL('../../spec/bot/v1/golden/tool-effects.json', import.meta.url), 'utf8')) as {
+      nativeMcp: Array<{ name: string, args: Record<string, unknown>, policy: string, effect: ApprovalEffect }>
+    }
+  const entries = golden.nativeMcp
+  assert.deepEqual(
+    entries.map(entry => entry.name).sort(),
+    ['mcp__phone__ble_alert', 'mcp__phone__ble_devices', 'mcp__phone__ble_link_call',
+      'mcp__phone__ble_link_result', 'mcp__phone__ble_link_tools', 'mcp__phone__ble_read'].sort())
+  for (const entry of entries) {
+    assert.equal(entry.policy, 'ask')
+    const effects = phoneEffectsForApproval(entry.name, entry.args)
+    assert.equal(effects.length, 1, `${entry.name} must have one effect`)
+    assert.deepEqual(effects[0], entry.effect, `${entry.name} must match the shared golden`)
+    assert.notEqual(effects[0]!.operation, 'tool.unclassified')
+    assert.equal(needsStructuralApproval(entry.name), true)
+  }
+  // PR59 serves BLE tools from its native MCP surface with a per-connection
+  // grant; Bot identity registration must not reject them as unknown tools.
+  assert.equal(needsIdentityRegistration('mcp__phone__ble_read'), false)
 
   const ctx = await mount()
   const payloads: Record<string, unknown>[] = []
+  let registrations = 0
   try {
-    registerProbe(ctx, 'mcp__phone__ReplyToDevice')
+    registerProbe(ctx, 'mcp__phone__ble_read')
     await ctx.plugin(dshbotIdentityBridge, {
-      request: async () => ({ ok: true, id: 'device-reply-registration' }),
+      request: async () => { registrations += 1; return { ok: false, error: 'unknown_tool' } },
       cancel: async () => {},
     })
     await ctx.plugin(dshbotApprovalGate, {
@@ -357,18 +368,20 @@ test('ReplyToDevice approval payload matches the shared host extension', async (
       },
     })
     const result = await ctx.tools.execute({
-      callId: ToolCallId('device-reply'), name: 'mcp__phone__ReplyToDevice',
-      arguments: { message: '已收到' }, signal: new AbortController().signal, agent: agent(),
+      callId: ToolCallId('ble-read'), name: 'mcp__phone__ble_read',
+      arguments: { device_id: 'device-a' }, signal: new AbortController().signal, agent: agent(),
     })
     assert.equal(result.isError, false)
+    assert.equal(registrations, 0)
     assert.equal(payloads.length, 1)
-    const proposed = payloads[0]!.effects as { operation: string; known: boolean; execution: string | null }[]
+    const proposed = payloads[0]!.effects as ApprovalEffect[]
     assert.equal(proposed.length, 1)
-    assert.equal(proposed[0]!.operation, 'device.reply')
-    assert.equal(proposed[0]!.known, true)
-    assert.equal(proposed[0]!.execution, 'device-reply')
+    assert.equal(proposed[0]!.operation, 'ble.read')
+    assert.equal(proposed[0]!.mutability, 'read')
+    assert.equal(proposed[0]!.policy, 'ask')
+    assert.equal(proposed[0]!.resource, 'device_id=device-a')
     assert.equal(payloads[0]!.alwaysScope, 'until')
-    assert.equal(payloads[0]!.deferConsumption, true)
+    assert.equal(payloads[0]!.deferConsumption, false)
   } finally {
     await ctx.fiber.dispose()
   }
