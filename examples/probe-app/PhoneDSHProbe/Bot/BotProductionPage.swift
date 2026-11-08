@@ -24,7 +24,7 @@ final class BotProductionHub: ObservableObject {
                 do {
                     try await install(composition: composition)
                 } catch {
-                    error = "Bot 运行时读取失败：\(error.localizedDescription)"
+                    self.error = "Bot 运行时读取失败：\(error.localizedDescription)"
                 }
                 return
             }

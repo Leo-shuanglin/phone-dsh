@@ -159,7 +159,7 @@ public final class BotDeviceProviderBinding {
             return nil
         }
         let service = BotDeviceReplyService(
-            store: ingress.store,
+            store: await ingress.store,
             writer: BotDeviceConnectorReplyWriter(connector: transport),
             reconciler: transport as? any BotDeviceReceiptQuerying)
         do {

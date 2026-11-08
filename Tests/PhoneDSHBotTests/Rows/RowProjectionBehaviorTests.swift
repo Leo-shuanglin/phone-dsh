@@ -4,6 +4,70 @@ import XCTest
 @testable import PhoneDSHBot
 
 final class RowProjectionBehaviorTests: XCTestCase {
+    func testStructuredApprovalDenialIsNeverRenderedAsAllowed() throws {
+        let call = BotDSHSessionEvent(type: "tool/call", seq: 1, time: 1, data: [
+            "name": .string("mcp__phone__RequestApproval"), "callId": .string("approval-call"),
+            "arguments": .string(#"{"action":"test approval"}"#)
+        ])
+        let result = BotDSHSessionEvent(type: "tool/result", seq: 2, time: 2, data: [
+            "message": .object([
+                "toolCallId": .string("approval-call"),
+                "content": .array([.object([
+                    "type": .string("text"),
+                    "text": .string(#"{"allowed":false,"approvalId":"approval-1","decision":"denied","message":"approval denied"}"#)
+                ])])
+            ])
+        ])
+        let rows = BotSessionLogProjector().project(
+            botID: "main", sessionID: "main", sessionEvents: [call, result], uiEvents: []).rows
+        let row = try XCTUnwrap(rows.first)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(row.body["status"], .string("denied"))
+        XCTAssertEqual(row.body["ask"]?["status"], .string("denied"))
+    }
+
+    func testNativeTaskLifecycleUsesOneCompletedRow() throws {
+        let events = ["created", "started", "updated", "settled"].enumerated().map { index, kind in
+            RowTestSupport.uiEvent(type: "task.\(kind)", id: "event-\(kind)", commitSeq: index + 1,
+                                   time: Int64(index), data: [
+                "task_id": .string("task-1"), "title": .string("QA-TASK"),
+                "status": .string(index < 2 ? "running" : "completed")
+            ])
+        }
+        let rows = BotSessionLogProjector().project(
+            botID: "main", sessionID: "main", sessionEvents: [], uiEvents: events).rows
+        XCTAssertEqual(rows.map(\.id), ["e-main-task-task-1"])
+        XCTAssertEqual(rows.first?.body["status"], .string("completed"))
+        XCTAssertEqual(rows.first?.provenance.eventIDs.count, 4)
+    }
+
+    func testHeldPromptUsesUnmatchedChatActionInSameTurn() {
+        let turn = BotDSHSessionEvent(type: "turn/start", seq: 1, time: 1, data: ["turn": .number(7)])
+        func message(seq: Int, rpcID: String) -> BotDSHSessionEvent {
+            var event = RowTestSupport.dshText(seq: seq, time: Int64(seq), role: "user", text: "same")
+            event.data["source"] = .object(["kind": .string("user"), "rpcId": .string(rpcID)])
+            return event
+        }
+        func action(_ nonce: String, turn: String) -> BotEvent {
+            BotEvent(type: "conversation.turn_started", eventId: "action:\(nonce)", time: 10,
+                     origin: .local(source: "user"), traceId: "action:\(nonce)",
+                     principal: BotPrincipal(botId: "main", sessionId: "main", kind: "chat"),
+                     causationId: nil, correlationId: nonce, turnId: turn,
+                     data: .object(["action": .string("chat"), "nonce": .string(nonce)]))
+        }
+        let events = [turn, message(seq: 2, rpcID: "held:digest"), message(seq: 3, rpcID: "user-action:steer")]
+        let actions = [action("held-chat", turn: "7"), action("steer", turn: "7"), action("other", turn: "8")]
+        let projector = BotSessionLogProjector()
+        XCTAssertEqual(projector.project(botID: "main", sessionID: "main", sessionEvents: events,
+                                         uiEvents: [], heldRequestNonces: ["held:digest": "in-flight"])
+            .rows.map(\.chatActionNonce), ["in-flight", "steer"])
+        XCTAssertEqual(projector.project(botID: "main", sessionID: "main", sessionEvents: events,
+                                         uiEvents: actions).rows.map(\.chatActionNonce), ["held-chat", "steer"])
+        XCTAssertEqual(projector.project(botID: "main", sessionID: "main", sessionEvents: events,
+                                         uiEvents: actions + [action("ambiguous", turn: "7")])
+            .rows.map(\.chatActionNonce), [nil, "steer"])
+    }
+
     func testSuccessfulQuestionSuppressesWrapUpUntilTurnEnd() {
         let call = BotDSHSessionEvent(type: "tool/call", seq: 1, time: 1, data: [
             "name": .string("mcp__bot__ask_user"), "callId": .string("question-1"), "arguments": .string("{}")

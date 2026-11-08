@@ -181,14 +181,17 @@ struct BotProductionHistoryPage: Sendable, Equatable {
 actor BotProductionRowService {
     private let environment: BotProductionEnvironment
     private let history: BotRowHistory
+    private let remote: BotDSHRemoteRuntime?
     private var dispatcher: BotUserActionDispatcher?
     private var plannerIdentity: ObjectIdentifier?
     private var started = false
     private var currentPresentation = BotRuntimePresentation()
 
-    init(environment: BotProductionEnvironment, history: BotRowHistory = BotRowHistory()) {
+    init(environment: BotProductionEnvironment, history: BotRowHistory = BotRowHistory(),
+         remote: BotDSHRemoteRuntime? = nil) {
         self.environment = environment
         self.history = history
+        self.remote = remote
     }
 
     func start() async throws {
@@ -215,8 +218,10 @@ actor BotProductionRowService {
             sessionEvents = try BotSessionLogLocator.events(sessionID: sessionID)
         }
         let uiEvents = try await BotProductionEventReader.all(domain: environment.domain)
+        let heldRequestNonces = await remote?.heldChatActionNonces(sessionID: sessionID) ?? [:]
         _ = try await history.rebuild(botID: environment.botID, sessionID: sessionID,
-                                      sessionEvents: sessionEvents, uiEvents: uiEvents)
+                                      sessionEvents: sessionEvents, uiEvents: uiEvents,
+                                      heldRequestNonces: heldRequestNonces)
         currentPresentation = BotRuntimePresentationFactory.make(
             botID: environment.botID, sessionID: sessionID,
             sessionEvents: sessionEvents, uiEvents: uiEvents)

@@ -23,6 +23,7 @@ import struct PhoneDSHController.RestartPolicy
 import PhoneDSHEngine
 import PhoneDSHShell
 import PhoneDSHADB
+import PhoneDSHBot
 
 // MARK: - Settings persistence
 

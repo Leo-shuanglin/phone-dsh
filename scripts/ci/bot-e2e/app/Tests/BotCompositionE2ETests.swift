@@ -164,13 +164,20 @@ final class BotCompositionE2ETests: XCTestCase {
         XCTAssertEqual(taskResult, .accepted(eventID: "action:composition-task"))
         let taskEvents = try await BotProductionEventReader.all(domain: store)
         print("TASK_E2E result=\(taskResult); modelRequests=\(mock.requestCount); toolResults=\(taskEvents.filter { $0.type == "conversation.tool_result" }.map(\.data))")
-        XCTAssertEqual(taskEvents.filter { $0.type == "task.created" }.count, 1)
-        let task = try XCTUnwrap(taskEvents.last(where: { $0.type == "task.created" }))
+        let delegatedTasks = taskEvents.filter {
+            $0.type == "task.created" && $0.data["task_id"]?.stringValue != directTask.taskId
+        }
+        XCTAssertEqual(delegatedTasks.count, 1)
+        let task = try XCTUnwrap(delegatedTasks.first)
+        let taskID = try XCTUnwrap(task.data["task_id"]?.stringValue)
         let taskSessionID = try XCTUnwrap(task.data["sessionId"]?.stringValue)
         XCTAssertNotEqual(taskSessionID, sessionID)
         XCTAssertFalse(taskSessionID.isEmpty)
-        XCTAssertEqual(task.data["status"]?.stringValue, "completed")
-        XCTAssertTrue(task.data["result"]?.stringValue?.contains("BOT_TASK_OK") == true)
+        let settled = try XCTUnwrap(taskEvents.first {
+            $0.type == "task.settled" && $0.data["task_id"]?.stringValue == taskID
+        })
+        XCTAssertEqual(settled.data["status"]?.stringValue, "completed")
+        XCTAssertTrue(settled.data["result"]?.stringValue?.contains("BOT_TASK_OK") == true)
         XCTAssertTrue(taskEvents.contains {
             $0.type == "conversation.assistant_message" && $0.data["text"]?.stringValue?.contains("TASK_PARENT_DONE") == true
         })
@@ -183,11 +190,17 @@ final class BotCompositionE2ETests: XCTestCase {
         XCTAssertTrue(routine.enabled)
         try await launch.composition.scheduler.tick()
         await launch.composition.scheduler.waitForIdle()
-        _ = try await launch.composition.outbox.runNext()
-        let effects = try await store.effects()
+        let clock = ContinuousClock()
+        let deliveryDeadline = clock.now.advanced(by: .seconds(5))
+        var deliveries = try await store.effects(state: .acked)
+        while !deliveries.contains(where: { $0.effect.kind == BotRoutineOutbox.kind }),
+              clock.now < deliveryDeadline {
+            try await Task.sleep(for: .milliseconds(50))
+            deliveries = try await store.effects(state: .acked)
+        }
         let routineEvents = try await BotProductionEventReader.all(domain: store)
-        print("ROUTINE_E2E effects=\(effects.map { [$0.effect.kind, $0.state.rawValue] }); runs=\(routineEvents.filter { $0.type == "routine.run_finished" || $0.type == "conversation.automation_run" }.map(\.data))")
-        XCTAssertTrue(effects.contains { $0.effect.kind == BotRoutineOutbox.kind && $0.state == .acked })
+        print("ROUTINE_E2E effects=\(deliveries.map { [$0.effect.kind, $0.state.rawValue] }); runs=\(routineEvents.filter { $0.type == "routine.run_finished" || $0.type == "conversation.automation_run" }.map(\.data))")
+        XCTAssertTrue(deliveries.contains { $0.effect.kind == BotRoutineOutbox.kind })
         XCTAssertTrue(routineEvents.contains {
             $0.type == "conversation.automation_run" && $0.data["text"]?.stringValue?.contains("BOT_ROUTINE_OK") == true
         })

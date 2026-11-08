@@ -124,11 +124,29 @@ final class RowHistoryTests: XCTestCase {
         XCTAssertEqual(repeatedDelta, delta)
     }
 
+    func testProjectionPreservesActionNonceOnlyInMemory() throws {
+        let line = #"{"type":"user/message","seq":26,"time":42,"surfaceOp":"append","data":{"role":"user","content":[{"type":"text","text":"测试"}],"source":{"kind":"user","rpcId":"user-action:nonce-26"}}}"#
+        let events = try BotDSHSessionEvent.parseJSONL(Data(line.utf8))
+        let rows = BotSessionLogProjector().project(
+            botID: "main", sessionID: "gb-main", sessionEvents: events, uiEvents: []).rows
+        let row = try XCTUnwrap(rows.first)
+        XCTAssertEqual(row.chatActionNonce, "nonce-26")
+        XCTAssertEqual(row.replacing(updatedSeq: 99).chatActionNonce, "nonce-26")
+        let encoded = try JSONEncoder().encode(row)
+        XCTAssertNil(try JSONDecoder().decode(BotRow.self, from: encoded).chatActionNonce)
+    }
+
     func testJSONLUsesRealSessionEventDecoder() throws {
         let events = [RowTestSupport.dshText(seq: 7, time: 42, role: "user", text: "日志")]
         let line = try JSONEncoder().encode(events[0])
-        let decoded = try BotDSHSessionEvent.parseJSONL(line + Data([0x0A]))
+        let header = Data(#"{"type":"session","version":4,"id":"main","createdAt":40,"cwd":"/dsh/workspace","isSeeded":false,"delegationDepth":0}"#.utf8)
+        let newline = Data([0x0A])
+        let decoded = try BotDSHSessionEvent.parseJSONL(header + newline + line + newline)
         XCTAssertEqual(decoded, events)
+        XCTAssertEqual(try BotDSHSessionEvent.parseJSONL(line + newline), events)
+        XCTAssertThrowsError(try BotDSHSessionEvent.parseJSONL(line + newline + header))
+        let missingSequence = Data(#"{"type":"user/message","time":42,"data":{}}"#.utf8)
+        XCTAssertThrowsError(try BotDSHSessionEvent.parseJSONL(header + newline + missingSequence))
         let snapshot = BotSessionLogProjector().project(botID: "main", sessionID: "main",
                                                         sessionEvents: decoded, uiEvents: [])
         XCTAssertEqual(snapshot.rows.map(\.id), ["e-main-7"])
