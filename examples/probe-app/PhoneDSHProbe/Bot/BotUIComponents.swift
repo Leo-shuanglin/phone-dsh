@@ -205,17 +205,30 @@ struct BotIconTile: View {
     }
 }
 
+/// The Bot's avatar: the DS big-fish character from dsh-bot, framed the way
+/// dsh-bot crops its circle avatar, on a white disc with a hairline edge.
 struct BotStaticAvatar: View {
     var size: CGFloat = 44
 
     var body: some View {
-        Text("Bot")
-            .botCaptionFont(weight: .semibold)
-            .foregroundStyle(HomeSpec.textSecondary)
-            .frame(width: size, height: size)
-            .background(HomeSpec.surface, in: Circle())
+        BotAvatarImage(size: size)
             .overlay(Circle().strokeBorder(HomeSpec.borderList, lineWidth: 0.5))
-            .accessibilityLabel("Bot 静态头像占位")
+            .accessibilityLabel("Bot 头像")
+    }
+}
+
+/// The bundled `BotAvatar` art clipped to a circle.
+struct BotAvatarImage: View {
+    var size: CGFloat
+
+    var body: some View {
+        Image("BotAvatar")
+            .resizable()
+            .scaledToFill()
+            .frame(width: size, height: size)
+            .background(Color.white)
+            .clipShape(Circle())
+            .accessibilityHidden(true)
     }
 }
 
@@ -223,14 +236,21 @@ struct BotEmptyState: View {
     let title: String
     let message: String
     var systemImage = "bubble.left.and.bubble.right"
+    /// The chat's welcome shows the Bot avatar instead of a symbol.
+    var showsAvatar = false
 
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: systemImage)
-                .font(.system(size: 28, weight: .medium))
-                .foregroundStyle(HomeSpec.textTertiary)
-                .frame(width: 56, height: 56)
-                .background(HomeSpec.surface, in: Circle())
+            if showsAvatar {
+                BotStaticAvatar(size: 72)
+                    .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
+            } else {
+                Image(systemName: systemImage)
+                    .font(.system(size: 28, weight: .medium))
+                    .foregroundStyle(HomeSpec.textTertiary)
+                    .frame(width: 56, height: 56)
+                    .background(HomeSpec.surface, in: Circle())
+            }
             Text(title)
                 .botTitleFont()
                 .foregroundStyle(HomeSpec.textPrimary)
